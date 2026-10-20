@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import GuardrailGarden from "./guardrail_garden";
@@ -28,6 +28,7 @@ const DECISION_MODEL_CARDS = ALL_CARDS.filter((c) => c.category === "decision_mo
 describe("GuardrailGarden", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    uiConfig.data = undefined;
   });
 
   const renderGarden = () => render(<GuardrailGarden accessToken="test-token" onGuardrailCreated={vi.fn()} />);
@@ -121,18 +122,22 @@ describe("GuardrailGarden", () => {
     }
   });
 
-  it("should match the SI wording a card shows when SI terminology is on", async () => {
-    uiConfig.data = { use_si_terminology: true };
+  it.each([
+    [true, "SI"],
+    [false, "AI"],
+  ])("should match the wording a card shows when SI terminology is %s", (useSi, shownTerm) => {
+    uiConfig.data = { use_si_terminology: useSi };
     const card = ALL_CARDS.find((c) => c.description.startsWith("AI security platform protecting"));
     expect(card).toBeDefined();
-    const user = userEvent.setup();
     render(
       <TerminologyProvider>
         <GuardrailGarden accessToken="test-token" onGuardrailCreated={vi.fn()} />
       </TerminologyProvider>,
     );
 
-    await user.type(screen.getByPlaceholderText("Search guardrails"), "SI security platform protecting");
+    fireEvent.change(screen.getByPlaceholderText("Search guardrails"), {
+      target: { value: `${shownTerm} security platform protecting` },
+    });
 
     expect(screen.getByText(card!.name)).toBeInTheDocument();
   });

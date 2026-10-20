@@ -414,26 +414,32 @@ describe("CommandPalette integration", () => {
     expect(mocks.push).toHaveBeenCalledWith(uiHref("logs"));
   });
 
-  it("lists and matches nav pages in SI terminology when the proxy enables it", async () => {
-    const user = userEvent.setup();
-    mocks.pathname = "/teams";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ ...UI_SETTINGS_RESPONSE, use_si_terminology: true })),
-    );
-    renderWithProviders(
-      <TerminologyProvider>
-        <CommandPaletteProvider>
-          <CommandPaletteTrigger />
-        </CommandPaletteProvider>
-      </TerminologyProvider>,
-    );
+  it.each([
+    [true, "si hub", /^SI Hub/],
+    [false, "ai hub", /^AI Hub/],
+  ])(
+    "lists and matches nav pages in the configured terminology when SI terminology is %s",
+    async (useSi, query, option) => {
+      const user = userEvent.setup();
+      mocks.pathname = "/teams";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ ...UI_SETTINGS_RESPONSE, use_si_terminology: useSi })),
+      );
+      renderWithProviders(
+        <TerminologyProvider>
+          <CommandPaletteProvider>
+            <CommandPaletteTrigger />
+          </CommandPaletteProvider>
+        </TerminologyProvider>,
+      );
 
-    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
-    await user.type(await screen.findByRole("combobox", { name: "Search" }), "si hub");
+      fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+      await user.type(await screen.findByRole("combobox", { name: "Search" }), query);
 
-    expect(await screen.findByRole("option", { name: /^SI Hub/ })).toBeVisible();
-  });
+      expect(await screen.findByRole("option", { name: option })).toBeVisible();
+    },
+  );
 
   it("clears the global query when switching to key search", async () => {
     const user = userEvent.setup();

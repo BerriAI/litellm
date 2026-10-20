@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders, screen } from "@/../tests/test-utils";
@@ -22,6 +22,10 @@ vi.mock("@/components/page_utils", () => ({
 }));
 
 describe("PageVisibilitySettings", () => {
+  beforeEach(() => {
+    uiConfig.data = undefined;
+  });
+
   it("should render the not-set tag when enabledPagesInternalUsers is null", () => {
     renderWithProviders(
       <PageVisibilitySettings enabledPagesInternalUsers={null} isUpdating={false} onUpdate={vi.fn()} />,
@@ -83,8 +87,11 @@ describe("PageVisibilitySettings", () => {
     }
   });
 
-  it("should show group names in SI terminology when the proxy enables it", async () => {
-    uiConfig.data = { use_si_terminology: true };
+  it.each([
+    [true, "SI GATEWAY", "AI GATEWAY"],
+    [false, "AI GATEWAY", "SI GATEWAY"],
+  ])("should name groups in the configured terminology when SI terminology is %s", async (useSi, shown, hidden) => {
+    uiConfig.data = { use_si_terminology: useSi };
     const user = userEvent.setup();
     renderWithProviders(
       <TerminologyProvider>
@@ -94,8 +101,8 @@ describe("PageVisibilitySettings", () => {
 
     await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
 
-    expect(screen.getByRole("group", { name: "SI GATEWAY" })).toBeInTheDocument();
-    expect(screen.queryByRole("group", { name: "AI GATEWAY" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: shown })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: hidden })).not.toBeInTheDocument();
   });
 
   it("should display the property description when provided", () => {
