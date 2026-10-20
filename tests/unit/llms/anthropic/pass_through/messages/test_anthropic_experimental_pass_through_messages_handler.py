@@ -3,11 +3,12 @@ import copy
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from typing import Any, Dict, Final, List
 
 import httpx
-import respx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -286,7 +287,9 @@ async def test_bedrock_converse_budget_tokens_preserved():
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     )
 
-    with patch("litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+    with patch(
+        "litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat", new_callable=AsyncMock
+    ) as mock_chat:
         mock_chat.return_value = mock_response
 
         try:
@@ -1183,7 +1186,10 @@ async def test_messages_streaming_reports_provider_local_model(requested_model, 
         async def __anext__(self):
             raise StopAsyncIteration
 
-    with patch("litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat", new=AsyncMock(return_value=_EmptyStream())):
+    with patch(
+        "litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat",
+        new=AsyncMock(return_value=_EmptyStream()),
+    ):
         stream = await litellm.anthropic.messages.acreate(
             max_tokens=100,
             messages=[{"role": "user", "content": "ping"}],
@@ -2325,3 +2331,64 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert "cache_control" not in captured["params"]["tools"][0]
     assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
     assert tools == tools_before
+
+
+_REASONING_RESPONSE: Final = {
+    "id": "resp_thinking",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "worked it out"}]},
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "the answer", "annotations": []}],
+        },
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+class _DeploymentHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: object) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_forced_chat_sends_openai_thinking_straight_to_responses(monkeypatch: pytest.MonkeyPatch):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        responses_route: Final = upstream.post("http://openai.test/v1/responses").mock(
+            return_value=httpx.Response(200, json=_REASONING_RESPONSE)
+        )
+        chat_route: Final = upstream.post("http://openai.test/v1/chat/completions")
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="openai/gpt-5.5",
+            api_base="http://openai.test/v1",
+            api_key="sk-test",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "think about it"}],
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
+
+    assert isinstance(response, dict)
+    assert [block["type"] for block in response["content"]] == ["thinking", "text"]
+    assert response["content"][1]["text"] == "the answer"
+    assert (responses_route.call_count, chat_route.call_count) == (1, 0)
+    assert counter.calls == 1
