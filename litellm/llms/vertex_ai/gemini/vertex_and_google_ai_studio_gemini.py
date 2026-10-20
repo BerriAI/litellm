@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -302,43 +302,77 @@ def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[
 
 _GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
 
-_GeminiSpeechFieldSchema: TypeAlias = Mapping[str, "_GeminiSpeechFieldSchema | None"]
-
-_GEMINI_VOICE_CONFIG_SCHEMA: Final[_GeminiSpeechFieldSchema] = MappingProxyType(
+_GEMINI_VOICE_CONFIG_FIELDS: Final = MappingProxyType(
     {
-        "prebuiltVoiceConfig": MappingProxyType({"voiceName": None}),
-        "replicatedVoiceConfig": MappingProxyType({"mimeType": None, "voiceSampleAudio": None}),
+        "prebuiltVoiceConfig": frozenset({"voiceName"}),
+        "replicatedVoiceConfig": frozenset({"mimeType", "voiceSampleAudio"}),
         "voice": None,
     }
 )
 
-_GEMINI_SPEECH_CONFIG_SCHEMA: Final[_GeminiSpeechFieldSchema] = MappingProxyType(
-    {
-        "voiceConfig": _GEMINI_VOICE_CONFIG_SCHEMA,
-        "multiSpeakerVoiceConfig": MappingProxyType(
-            {"speakerVoiceConfigs": MappingProxyType({"speaker": None, "voiceConfig": _GEMINI_VOICE_CONFIG_SCHEMA})}
-        ),
-        "languageCode": None,
-    }
-)
+_GEMINI_SPEAKER_VOICE_CONFIG_FIELDS: Final = frozenset({"speaker", "voiceConfig"})
 
 
-def _known_gemini_speech_field(value: object, schema: _GeminiSpeechFieldSchema | None) -> object:
-    if schema is None:
-        return value
-    if isinstance(value, list):
-        return [
-            _known_gemini_speech_field(item, schema) if as_str_mapping(item) is not None else item
-            for item in _SPEECH_CONFIG_ITEMS.validate_python(value)
-        ]
+def _known_leaf_fields(value: object, fields: frozenset[str] | None) -> object:
     mapping: Final = as_str_mapping(value)
-    return value if mapping is None else _known_gemini_speech_fields(mapping, schema)
+    if fields is None or mapping is None:
+        return value
+    return {key: item for key, item in mapping.items() if key in fields}
+
+
+def _known_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_leaf_fields(item, _GEMINI_VOICE_CONFIG_FIELDS[key])
+        for key, item in mapping.items()
+        if key in _GEMINI_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_voice_config_fields(item) if key == "voiceConfig" else item
+        for key, item in mapping.items()
+        if key in _GEMINI_SPEAKER_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_configs(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_known_speaker_voice_config_fields(item) for item in _SPEECH_CONFIG_ITEMS.validate_python(value)]
+
+
+def _known_multi_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {key: _known_speaker_voice_configs(item) for key, item in mapping.items() if key == "speakerVoiceConfigs"}
+
+
+def _known_speech_config_field(key: str, value: object) -> object:
+    match key:
+        case "voiceConfig":
+            return _known_voice_config_fields(value)
+        case "multiSpeakerVoiceConfig":
+            return _known_multi_speaker_voice_config_fields(value)
+        case _:
+            return value
 
 
 def _known_gemini_speech_fields(
-    config: Mapping[str, object], schema: _GeminiSpeechFieldSchema
+    config: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    return {key: _known_gemini_speech_field(item, schema[key]) for key, item in config.items() if key in schema}
+    return {
+        key: _known_speech_config_field(key, item)
+        for key, item in config.items()
+        if key in _GEMINI_SPEECH_CONFIG_FIELDS
+    }
 
 
 _GEMINI_TTS_VOICE_KEYS: Final = frozenset(
@@ -406,11 +440,7 @@ def normalize_gemini_speech_config(
     value: Mapping[str, object], drop_unknown_fields: bool = False
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
     speech_config: Final = _mapped_gemini_speech_config(value)
-    return (
-        _known_gemini_speech_fields(speech_config, _GEMINI_SPEECH_CONFIG_SCHEMA)
-        if drop_unknown_fields
-        else speech_config
-    )
+    return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
 
 
 def _mapped_gemini_speech_config(
@@ -1489,7 +1519,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return self._map_audio_params(value, drop_unknown_fields=False)
+        return self._map_audio_params(value)
 
     @staticmethod
     def _apply_include_server_side_tool_invocations(

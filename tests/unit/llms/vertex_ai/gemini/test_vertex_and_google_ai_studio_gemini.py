@@ -274,7 +274,8 @@ def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
             "speaker_voice_configs": [
                 {"speaker": "Joe", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck", "pitch": 2}}},
                 {"speaker_alias": "Jane", "speaker_id": "Kore", "style": "calm"},
-            ]
+            ],
+            "turn_order": "alternate",
         }
     }
 
