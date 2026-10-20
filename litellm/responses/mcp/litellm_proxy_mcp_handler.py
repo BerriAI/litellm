@@ -793,9 +793,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 ]
                 tool_logging_call_id = (
-                    f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}"
-                    if request_trace_id and litellm_call_id
-                    else litellm_call_id or str(uuid.uuid4())
+                    f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}" if litellm_call_id else str(uuid.uuid4())
                 )
                 logging_metadata: dict[str, object] = {
                     "tool_call_id": tool_call_id,
