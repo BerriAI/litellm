@@ -204,6 +204,25 @@ _STREAMED_TOOL_CALLS: Final = TypeAdapter(tuple[_StreamedToolCall, ...])
 _JSON_TEXT_STARTS: Final = ("{", "[")
 
 
+def _merged_tool_call_delta(
+    fragments: Sequence[tuple[Mapping[str, object], _StreamedToolCall]],
+) -> Mapping[str, object]:
+    first_delta, first_call = fragments[0]
+    if len(fragments) == 1:
+        return first_delta
+    arguments: Final = "".join(tool_call.arguments for _, tool_call in fragments)
+    return {**first_delta, "function": {"name": first_call.function_name, "arguments": arguments}}
+
+
+def _merged_tool_call_deltas(deltas: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    fragments: Final = tuple(zip(deltas, _STREAMED_TOOL_CALLS.validate_python(deltas), strict=True))
+    indexes: Final = tuple(dict.fromkeys(tool_call.index for _, tool_call in fragments))
+    return tuple(
+        _merged_tool_call_delta(tuple(fragment for fragment in fragments if fragment[1].index == index))
+        for index in indexes
+    )
+
+
 def _json_answer_next_to_user_tools(
     tool_calls: Sequence[DatabricksTool] | None, json_mode: bool | None
 ) -> tuple[str, DatabricksTool] | None:
@@ -824,6 +843,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
         self._json_tool_indexes: frozenset[int] = frozenset()
         self._called_user_tool = False
         self._held_text = ""
+        self._held_tool_calls: tuple[Mapping[str, object], ...] = ()
         self._streams_text = False
 
     def _record_tool_call_names(self, tool_calls: Sequence[_StreamedToolCall]) -> None:
@@ -855,14 +875,27 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
         json_arguments: Final = "".join(tool_call.arguments for tool_call in json_deltas) if json_deltas else None
         return json_arguments, user_deltas or None
 
-    def _json_mode_content(self, text: str | None, json_arguments: str | None, releases_text: bool) -> str | None:
-        if self._json_tool_indexes and not self._streams_text:
-            self._held_text = ""
-            return json_arguments
+    def _json_mode_delta(
+        self,
+        text: str | None,
+        json_arguments: str | None,
+        user_tool_calls: tuple[Mapping[str, object], ...] | None,
+        finishes: bool,
+    ) -> tuple[str | None, tuple[Mapping[str, object], ...] | None]:
+        if self._streams_text:
+            return text, user_tool_calls
         pending: Final = self._held_text + (text or "")
-        self._streams_text = self._streams_text or releases_text or pending.lstrip().startswith(_JSON_TEXT_STARTS)
-        self._held_text = "" if self._streams_text else pending
-        return (pending + (json_arguments or "") or None) if self._streams_text else json_arguments
+        tool_calls: Final = self._held_tool_calls + (user_tool_calls or ())
+        if self._json_tool_indexes:
+            self._held_text, self._held_tool_calls = "", ()
+            return json_arguments, _merged_tool_call_deltas(tool_calls) or None
+        if finishes or pending.lstrip().startswith(_JSON_TEXT_STARTS):
+            self._held_text, self._held_tool_calls, self._streams_text = "", (), True
+            return pending or None, _merged_tool_call_deltas(tool_calls) or None
+        if pending:
+            self._held_text, self._held_tool_calls = pending, tool_calls
+            return None, None
+        return None, user_tool_calls
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
@@ -874,9 +907,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     if tool_calls and self.json_mode
                     else (None, None)
                 )
-                if tool_calls and self.json_mode:
-                    choice["delta"]["tool_calls"] = json_mode_tool_calls
-                elif tool_calls:
+                if tool_calls and not self.json_mode:
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
@@ -896,15 +927,12 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["delta"].get("content"))
 
-                choice["delta"]["content"] = (
-                    self._json_mode_content(
-                        content_str,
-                        json_arguments,
-                        choice.get("finish_reason") is not None or json_mode_tool_calls is not None,
+                if self.json_mode:
+                    choice["delta"]["content"], choice["delta"]["tool_calls"] = self._json_mode_delta(
+                        content_str, json_arguments, json_mode_tool_calls, choice.get("finish_reason") is not None
                     )
-                    if self.json_mode
-                    else content_str
-                )
+                else:
+                    choice["delta"]["content"] = content_str
                 choice["delta"]["reasoning_content"] = (
                     block_reasoning_content
                     if block_reasoning_content is not None

@@ -2577,6 +2577,11 @@ def _stream_chunks(request: dict[str, object], call: str) -> list[ModelResponseS
             _sse_stream(_TEXT_ANSWER_DELTAS, "stop"),
             id="answer-as-text",
         ),
+        pytest.param(
+            _completion(_JSON_ANSWER, (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream((*_TEXT_ANSWER_DELTAS, *_json_tool_call_deltas(0)), "tool_calls"),
+            id="answer-as-text-and-json-tool",
+        ),
     ],
 )
 def test_claude_json_schema_stream_returns_the_non_stream_answer(
@@ -2608,24 +2613,34 @@ def test_claude_json_schema_stream_returns_the_non_stream_answer(
 @pytest.mark.usefixtures("_databricks_httpx_transport")
 @pytest.mark.parametrize("call", ["completion", "acompletion"])
 @pytest.mark.parametrize("json_tool_first", [False, True], ids=["user-tool-first", "json-tool-first"])
+@pytest.mark.parametrize("leading_prose", [(), _PROSE_DELTAS], ids=["no-prose", "prose-first"])
 def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
-    respx_mock: respx.MockRouter, call: str, json_tool_first: bool
+    respx_mock: respx.MockRouter, call: str, json_tool_first: bool, leading_prose: tuple[dict[str, object], ...]
 ) -> None:
     json_index: Final = 0 if json_tool_first else 1
-    user_tool_deltas: Final = (_tool_call_opening(1 - json_index, "get_weather", _GET_WEATHER_ARGUMENTS),)
+    user_tool_deltas: Final = (
+        _tool_call_opening(1 - json_index, "get_weather", ""),
+        _tool_call_fragment(1 - json_index, '{"city": '),
+        _tool_call_fragment(1 - json_index, '"Paris"}'),
+    )
     tool_calls: Final = (("get_weather", _GET_WEATHER_ARGUMENTS), ("json_tool_call", _JSON_ANSWER))
     respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
         side_effect=[
             httpx.Response(
-                200, json=_completion(None, tool_calls[::-1] if json_tool_first else tool_calls, "tool_calls")
+                200,
+                json=_completion(
+                    "".join(_PROSE_FRAGMENTS) if leading_prose else None,
+                    tool_calls[::-1] if json_tool_first else tool_calls,
+                    "tool_calls",
+                ),
             ),
             httpx.Response(
                 200,
                 content=_sse_stream(
                     (
-                        (*_json_tool_call_deltas(json_index), *user_tool_deltas)
+                        (*leading_prose, *_json_tool_call_deltas(json_index), *user_tool_deltas)
                         if json_tool_first
-                        else (*user_tool_deltas, *_json_tool_call_deltas(json_index))
+                        else (*leading_prose, *user_tool_deltas, *_json_tool_call_deltas(json_index))
                     ),
                     "tool_calls",
                 ),
