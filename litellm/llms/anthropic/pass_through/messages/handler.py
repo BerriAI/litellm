@@ -12,10 +12,12 @@ from functools import partial
 from typing import Any, Final, cast
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     strip_provider_specific_fields_from_anthropic_messages,
+    tools_marked_for_a_tool_config_point,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -603,7 +605,13 @@ def anthropic_messages_handler(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
-    local_vars.update(kwargs)
+    request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
+    marked_tools: Final = tools_marked_for_a_tool_config_point(
+        local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)
+    )
+    if marked_tools is not None:
+        AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
+    local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,

@@ -46,6 +46,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -107,7 +108,7 @@ _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
-_CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -149,6 +150,40 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     )
 
 
+def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
+    point_fields: Final = tuple(validated_object_mapping(point) for point in validated_object_list(points) or ())
+    tool_config_point: Final = next(
+        (fields for fields in point_fields if fields is not None and fields.get("location") == "tool_config"), None
+    )
+    if tool_config_point is None:
+        return None
+    control: Final = tool_config_point.get("control")
+    return {"type": "ephemeral"} if control is None else validated_object_mapping(control)
+
+
+def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple[object, ...] | None:
+    """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
+
+    Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
+    the mark, skipping tool-search tools whose transform drops cache markers. A client that
+    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    """
+    control: Final = _tool_config_point_control(points)
+    tool_list: Final = validated_object_list(tools) or ()
+    tool_fields: Final = tuple(validated_object_mapping(tool) for tool in tool_list)
+    if control is None or any(fields is not None and "cache_control" in fields for fields in tool_fields):
+        return None
+    cacheable: Final = tuple(
+        (position, fields)
+        for position, fields in enumerate(tool_fields)
+        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    )
+    if not cacheable:
+        return None
+    position, fields = cacheable[-1]
+    return (*tool_list[:position], {**fields, "cache_control": control}, *tool_list[position + 1 :])
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
     fetches, such as gateway model discovery, as `claude-code/<version>`"""
@@ -167,9 +202,9 @@ def thinking_block_binding(thinking: Mapping[object, object] | None) -> dict[str
     return {} if block_binding is None else {"block_binding": block_binding}
 
 
-def _validated_claude_code_list(value: object) -> list[object] | None:
+def validated_object_list(value: object) -> Sequence[object] | None:
     try:
-        return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
+        return OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
@@ -196,7 +231,7 @@ def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)
-    blocks: Final = _validated_claude_code_list(system)
+    blocks: Final = validated_object_list(system)
     if blocks is None:
         return None
     block_mappings: Final = tuple(validated_object_mapping(block) for block in blocks)
@@ -1916,8 +1951,8 @@ def tool_call_is_rebuilt_as_server_tool_use(tool_call_id: object, provider_speci
     return (
         find_anthropic_server_tool_result(
             tool_call_id,
-            _validated_claude_code_list(fields.get("web_search_results")),
-            _validated_claude_code_list(fields.get("tool_results")),
+            validated_object_list(fields.get("web_search_results")),
+            validated_object_list(fields.get("tool_results")),
         )
         is not None
     )
