@@ -662,6 +662,16 @@ def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None)
     return any(message.get("role") == "assistant" for message in messages)
 
 
+def _previous_response_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
+    """The Responses API `previous_response_id` on this request, or None when absent.
+
+    Read from the top-level kwargs, where both the proxy and direct Router calls
+    surface it (the same place DeploymentAffinityCheck reads it).
+    """
+    value: Final = request_kwargs.get("previous_response_id")
+    return value if isinstance(value, str) and value else None
+
+
 def _newest_turn_ask(
     messages: Sequence[Mapping[str, object]],
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
@@ -3410,6 +3420,43 @@ class ComplexityRouter(CustomLogger):
             return None
         return limit if isinstance(limit, int) else None
 
+    def _previous_response_model(
+        self, request_kwargs: Mapping[str, object]
+    ) -> tuple[str, ComplexityTier | None] | None:
+        """The model group that produced the response a continuation request references.
+
+        A Responses API tool continuation carries no human ask, because its context
+        lives server-side behind `previous_response_id`. The LiteLLM response id
+        encodes the deployment that served that response, so the decision that
+        produced it can be replayed instead of re-derived from text that is not
+        there. Returns None when the id is not a LiteLLM encoded id, names a
+        deployment outside this router's tier pools and default model, or plugins
+        are configured (a replayed decision would bypass the plugin pipeline, the
+        same reason session pins are skipped then).
+        """
+        if self.config.plugins:
+            return None
+        previous_response_id: Final = _previous_response_id_from_request_kwargs(request_kwargs)
+        if previous_response_id is None:
+            return None
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(previous_response_id)
+        if model_id is None:
+            return None
+        candidate_groups: list[str] = []
+        for pool in self._tier_pools().values():
+            candidate_groups.extend(pool)
+        if self.config.default_model and self.config.default_model not in candidate_groups:
+            candidate_groups.append(self.config.default_model)
+        for group in candidate_groups:
+            for deployment in self._group_deployments(group):
+                model_info: Final = deployment.get("model_info")
+                deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+                if deployment_id is not None and str(deployment_id) == model_id:
+                    return group, self._tier_for_model(group)
+        return None
+
     def _group_deployments(self, group: str) -> Sequence[Mapping[str, object]]:
         list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
         deployments: Final = list_models(model_name=group) if callable(list_models) else None
@@ -4366,7 +4413,10 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
         context_fit: Final = await self._request_context_fit(resolved_messages, request_kwargs)
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
-        conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
+        conversation_continuing: Final = (
+            _conversation_is_continuing(resolved_messages)
+            or _previous_response_id_from_request_kwargs(request_kwargs) is not None
+        )
 
         use_session_affinity: Final = self._uses_tier_pin
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
@@ -4678,6 +4728,26 @@ class ComplexityRouter(CustomLogger):
         classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
         if user_message is None and not classifier_images:
+            previous_response: Final = self._previous_response_model(request_kwargs)
+            if previous_response is not None:
+                reused_model, reused_tier = previous_response
+                reused_params: Final = self._litellm_params_for_model(reused_tier, reused_model)
+                verbose_router_logger.info(
+                    "ComplexityRouter: routing decision cause=previous_response_reuse, routed_model=%s",
+                    reused_model,
+                )
+                return PreRoutingHookResponse(
+                    model=reused_model,
+                    messages=messages if has_original_messages else None,
+                    routing_decision=self._build_routing_decision(
+                        routed_model=reused_model,
+                        cause="previous_response_reuse",
+                        tier=reused_tier,
+                        conversation_continuing=conversation_continuing,
+                        tier_litellm_params=reused_params,
+                    ),
+                    litellm_params=reused_params,
+                )
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             default_model_first: Final = not self.config.plugins and self.config.default_model
             if default_model_first:

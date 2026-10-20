@@ -5,6 +5,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -17345,3 +17346,129 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+class TestPreviousResponseReuse:
+    """Regression tests for Responses API tool continuations (issue #46048).
+
+    A continuation request carries only tool outputs plus `previous_response_id`,
+    so it has no human ask to classify. Before the fix it always fell to the
+    default model, even though the LiteLLM response id names the deployment that
+    produced the referenced response.
+    """
+
+    @staticmethod
+    def _encoded_response_id(model_id: str) -> str:
+        payload = f"litellm:custom_llm_provider:azure_ai;model_id:{model_id};response_id:resp_original"
+        return "resp_" + base64.b64encode(payload.encode("utf-8")).decode("utf-8")
+
+    @staticmethod
+    def _router(mock_router_instance, basic_config, **overrides) -> ComplexityRouter:
+        deployments = {
+            group: [
+                {
+                    "model_name": group,
+                    "litellm_params": {"model": group},
+                    "model_info": {"id": deployment_id},
+                }
+            ]
+            for group, deployment_id in {
+                "gpt-4o-mini": "deployment-mini",
+                "gpt-4o": "deployment-4o",
+                "claude-sonnet-4-20250514": "deployment-sonnet",
+                "o1-preview": "deployment-o1",
+            }.items()
+        }
+        mock_router_instance.get_model_list.side_effect = lambda model_name=None: deployments.get(model_name, [])
+        return ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, **overrides},
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_continuation_reuses_the_model_that_produced_the_previous_response(
+        self, mock_router_instance, basic_config
+    ):
+        router = self._router(mock_router_instance, basic_config, default_model="gpt-4o-mini")
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": self._encoded_response_id("deployment-sonnet")},
+            messages=[{"role": "tool", "content": "search results", "tool_call_id": "call_1"}],
+        )
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "previous_response_reuse", decision
+        assert decision["tier"] == "COMPLEX", decision
+        assert decision["conversation_continuing"] is True, decision
+
+    @pytest.mark.asyncio
+    async def test_unencoded_previous_response_id_still_falls_back_to_default(
+        self, mock_router_instance, basic_config
+    ):
+        router = self._router(mock_router_instance, basic_config, default_model="gpt-4o-mini")
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": "resp_plain_provider_id"},
+            messages=[{"role": "tool", "content": "search results", "tool_call_id": "call_1"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "default_fallback", decision
+
+    @pytest.mark.asyncio
+    async def test_previous_response_from_an_unserved_deployment_still_falls_back_to_default(
+        self, mock_router_instance, basic_config
+    ):
+        router = self._router(mock_router_instance, basic_config, default_model="gpt-4o-mini")
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": self._encoded_response_id("deployment-elsewhere")},
+            messages=[{"role": "tool", "content": "search results", "tool_call_id": "call_1"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "default_fallback", decision
+
+    @pytest.mark.asyncio
+    async def test_plugins_are_not_bypassed_by_previous_response_reuse(self, mock_router_instance, basic_config):
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = self._router(
+            mock_router_instance,
+            basic_config,
+            default_model="gpt-4o-mini",
+            plugins=[AllowAll()],
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": self._encoded_response_id("deployment-sonnet")},
+            messages=[{"role": "tool", "content": "search results", "tool_call_id": "call_1"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "default_fallback", decision
+
+    @pytest.mark.asyncio
+    async def test_previous_response_id_marks_conversation_as_continuing(self, mock_router_instance, basic_config):
+        router = self._router(mock_router_instance, basic_config)
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": self._encoded_response_id("deployment-4o")},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["conversation_continuing"] is True, decision

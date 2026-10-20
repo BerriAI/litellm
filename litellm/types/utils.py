@@ -3166,6 +3166,10 @@ RoutingDecisionCause = Literal[
     # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
     # every turn including new asks; this cause only appears when session_affinity is off.
     "user_turn_continuation",
+    # A Responses API continuation (previous_response_id set, no human ask) reuses the routing
+    # decision that produced the referenced response, decoded from the LiteLLM response id.
+    # Distinct from "user_turn_continuation", which replays a decision held in the session cache.
+    "previous_response_reuse",
     "default_fallback",
     "keyword",
     "quality_tier",
