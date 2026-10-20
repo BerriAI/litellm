@@ -360,6 +360,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -401,6 +402,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
+    MAX_REQUEST_SIZE_MB_SETTING,
     check_response_size_is_safe,
     is_request_body_safe,
     log_model_access_denial,
@@ -840,6 +842,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -2238,9 +2241,14 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
                 open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
             return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
-        if status_code >= 400:
-            open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
-        parent_otel_span.set_status(Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK))
+        parent_otel_span.set_status(
+            Status(
+                StatusCode.ERROR,
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code),
+            )
+            if status_code >= 400
+            else Status(StatusCode.OK)
+        )
         parent_otel_span.end()
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
@@ -2750,6 +2758,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+def configured_max_request_size_mb() -> int | float | None:
+    return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
+
+
+app.add_middleware(
+    RequestBodyDecompressionMiddleware,
+    get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -15193,7 +15209,7 @@ def _count_context_management(
     return CountContextManagement(
         spec=context_management,
         drop_invalid_edits=litellm.drop_params is True
-        or any(params.get("drop_params") is True for params in sent_params),
+        or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
 
 
@@ -17742,7 +17758,7 @@ async def model_deprecations(
 
 
 def get_model_group_info(
-    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -17755,7 +17771,7 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
             model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
@@ -17987,7 +18003,10 @@ async def model_group_info(
 
     model_groups: Final = await append_agents_to_model_group(
         model_groups=get_model_group_info(
-            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+            llm_router=llm_router,
+            all_models_str=listed_group_names,
+            model_group=model_group,
+            team_id=user_api_key_dict.team_id,
         ),
         user_api_key_dict=user_api_key_dict,
     )
@@ -21507,7 +21526,7 @@ attach_lazy_features(app)
 app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 app.add_middleware(
