@@ -10661,6 +10661,92 @@ async def test_async_streaming_retry_keeps_the_call_ids_while_read_and_restores_
     assert ids_after_reading == ("outer-trace", "outer-session")
 
 
+def _drained(ids: queue.SimpleQueue[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    return tuple(ids.get() for _ in range(ids.qsize()))
+
+
+def _with_a_proxy_style_logging_obj(request: Mapping[str, object]) -> Mapping[str, object]:
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        is_async_call=True,
+        **{**request, "litellm_call_id": "proxy-call-id"},
+    )
+    return {**data, "litellm_logging_obj": logging_obj}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_logging_obj", [False, True], ids=["sdk", "proxy-style-logging-obj"])
+async def test_async_retried_failure_keeps_the_call_ids_on_every_attempt_and_its_failure_log(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caller_logging_obj: bool
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    attempt_ids: Final = queue.SimpleQueue[tuple[str, str]]()
+    failure_log_ids: Final = queue.SimpleQueue[tuple[str, str]]()
+
+    def provider_says_retry_later(request: httpx.Request) -> httpx.Response:
+        attempt_ids.put((trace_id_var.get(), session_id_var.get()))
+        return _provider_error(429, {"retry-after": "0"})
+
+    def record_failure_log_ids(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        failure_log_ids.put((trace_id_var.get(), session_id_var.get()))
+
+    retry_upstream.post(_ANTHROPIC.url).mock(side_effect=provider_says_retry_later)
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        request: Final = {
+            "model": _ANTHROPIC.model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_base": _ANTHROPIC.api_base,
+            "api_key": "test-key",
+            "num_retries": 2,
+            "litellm_session_id": "call-session",
+            "failure_callback": [record_failure_log_ids],
+        }
+        call_request: Final = _with_a_proxy_style_logging_obj(request) if caller_logging_obj else request
+        with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(litellm.RateLimitError):
+            await litellm.acompletion(**call_request)
+        ids_after_the_call: Final = (trace_id_var.get(), session_id_var.get())
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+    attempts: Final = _drained(attempt_ids)
+    assert len(attempts) == 3
+    assert len(set(attempts)) == 1
+    assert attempts[0][0] not in ("", "outer-trace")
+    assert attempts[0][1] == "call-session"
+    assert _drained(failure_log_ids) == (attempts[0],)
+    assert ids_after_the_call == ("outer-trace", "outer-session")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_wrapper_rebound_onto_the_public_completion_runs_once_for_a_retried_call(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+    public_name: Final = "completion" if sync_mode else "acompletion"
+    public_function: Final = getattr(litellm, public_name)
+    wrapper_calls: Final = queue.SimpleQueue[object]()
+
+    def instrumented(*args: object, **kwargs: object) -> object:
+        wrapper_calls.put(kwargs)
+        return public_function(*args, **kwargs)
+
+    monkeypatch.setattr(litellm, public_name, instrumented)
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=1)
+
+    assert route.call_count == 2
+    assert isinstance(response, ModelResponse)
+    assert wrapper_calls.qsize() == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("num_retries", [None, 2], ids=["policy-only", "policy-and-num-retries"])
 async def test_aresponses_bridged_to_chat_applies_its_retry_policy_only_on_the_first_attempt(

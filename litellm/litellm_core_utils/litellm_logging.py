@@ -703,7 +703,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # ids leaking into a different, later request on the same thread. Sync
         # support is deferred to a follow-up PR with its own safe-restore
         # mechanism; async calls (the proxy's only call path) are unaffected.
-        if supports_correlation_logging and litellm.request_correlation_in_logs:
+        self._stamps_correlation_context: bool = supports_correlation_logging and litellm.request_correlation_in_logs
+        if self._stamps_correlation_context:
             set_trace_id(self.litellm_trace_id)
             set_session_id(self.litellm_session_id)
         # set_trace_id()/set_session_id() sanitize (strip control chars, bound
@@ -3029,6 +3030,11 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         trace_id_var.set(self._pre_call_trace_id)
         session_id_var.set(self._pre_call_session_id)
+
+    def _stamp_correlation_context(self) -> None:
+        if self._stamps_correlation_context:
+            trace_id_var.set(self._own_trace_id)
+            session_id_var.set(self._own_session_id)
 
     def _restore_correlation_context_if_unclaimed(self) -> None:
         """Guarded variant for __del__-triggered cleanup only.

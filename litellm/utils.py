@@ -954,6 +954,12 @@ def _restore_correlation_context_if_supported(logging_obj: object) -> None:
         restore()
 
 
+def _stamp_correlation_context_if_supported(logging_obj: object) -> None:
+    stamp: Final = getattr(logging_obj, "_stamp_correlation_context", None)
+    if stamp is not None:
+        stamp()
+
+
 def _is_streaming_response_for_correlation(result: object) -> bool:
     """True if `result` is a lazy stream wrapper rather than an already-complete response.
 
@@ -1612,6 +1618,7 @@ async def _end_async_wrapper_failure(
     unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
     if not log_failure:
         return
+    _stamp_correlation_context_if_supported(logging_obj)
     logging_obj.failure_handler(
         error, traceback_exception, start_time, end_time
     )  # DO NOT MAKE THREADED - router retry fallback relies on this!
@@ -2113,8 +2120,12 @@ def client(original_function):
                         or should_retry(status_code)
                     ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
                         kwargs["num_retries"] = num_retries
+                        from litellm.chat_completions.dispatch import completion as public_completion
+
                         return litellm.completion_with_retries(
-                            *args, original_function=litellm.completion, **{**kwargs, "_initial_exception": e}
+                            *args,
+                            original_function=public_completion,
+                            **{**kwargs, "_initial_exception": e},
                         )
                 if (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
@@ -2194,6 +2205,8 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            if is_wrapper_retry_attempt:
+                _stamp_correlation_context_if_supported(logging_obj)
             if not _is_litellm_internal_call:
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
@@ -2425,12 +2438,19 @@ def client(original_function):
             if acompletion_retried:
                 kwargs["num_retries"] = num_retries
                 _restore_correlation_context_if_supported(logging_obj)
+                from litellm.chat_completions.dispatch import acompletion as public_acompletion
+
                 try:
                     result = await litellm.acompletion_with_retries(
                         *args,
-                        original_function=litellm.acompletion,
+                        original_function=public_acompletion,
                         **{
                             **request_kwargs,
+                            "litellm_trace_id": (
+                                request_kwargs.get("litellm_trace_id")
+                                if logging_obj is None
+                                else logging_obj.litellm_trace_id
+                            ),
                             "num_retries": num_retries,
                             "_initial_exception": e,
                             _RETRY_ATTEMPT_KWARG: _RETRY_ATTEMPT_MARKER,
