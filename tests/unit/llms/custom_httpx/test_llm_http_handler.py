@@ -5,13 +5,14 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from botocore.credentials import RefreshableCredentials
 
 import litellm
@@ -66,6 +67,7 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIRe
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -1243,6 +1245,155 @@ async def test_async_anthropic_messages_handler_signs_bedrock_off_the_event_loop
     sent_headers = mock_client.post.call_args.kwargs["headers"]
     assert sent_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert probe.served_during_refresh is True
+
+
+_BEDROCK_MESSAGE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "hi"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+_BEDROCK_RESPONSE: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "openai.gpt-5.6-sol",
+    "output": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_EMPTY_S3_LISTING: Final = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+    b"<Name>batch-inputs</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>"
+)
+_BATCH_LINE: Final = json.dumps(
+    {
+        "custom_id": "1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"model": "us.anthropic.claude-sonnet-5-5", "messages": [{"role": "user", "content": "hi"}]},
+    }
+).encode()
+_BATCH_FILE_ID: Final = "s3://batch-inputs/litellm-bedrock-files/batch.jsonl"
+_BEDROCK_ENTRY_POINTS: Final[tuple[tuple[str, Callable[[], Awaitable[object]], httpx.Response], ...]] = (
+    (
+        "anthropic_messages",
+        lambda: litellm.anthropic.messages.acreate(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+        ),
+        httpx.Response(200, json=_BEDROCK_MESSAGE),
+    ),
+    (
+        "responses",
+        lambda: litellm.aresponses(model="bedrock/us.openai.gpt-5.6-sol", input="hi"),
+        httpx.Response(200, json=_BEDROCK_RESPONSE),
+    ),
+    (
+        "compact_responses",
+        lambda: litellm.acompact_responses(model="bedrock/us.openai.gpt-5.6-sol", input="hi"),
+        httpx.Response(200, json=_BEDROCK_RESPONSE),
+    ),
+    (
+        "search",
+        lambda: litellm.asearch(
+            query="hi",
+            search_provider="agentcore",
+            api_base="https://gw.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
+        ),
+        httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"content": []}}),
+    ),
+    (
+        "create_file",
+        lambda: litellm.acreate_file(
+            file=("batch.jsonl", _BATCH_LINE, "application/jsonl"),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+        ),
+        httpx.Response(200),
+    ),
+    (
+        "retrieve_file",
+        lambda: litellm.afile_retrieve(file_id=_BATCH_FILE_ID, custom_llm_provider="bedrock"),
+        httpx.Response(200, content=_BATCH_LINE),
+    ),
+    (
+        "delete_file",
+        lambda: litellm.afile_delete(file_id=_BATCH_FILE_ID, custom_llm_provider="bedrock"),
+        httpx.Response(204),
+    ),
+    (
+        "list_files",
+        lambda: litellm.afile_list(custom_llm_provider="bedrock"),
+        httpx.Response(200, content=_EMPTY_S3_LISTING),
+    ),
+    (
+        "file_content",
+        lambda: litellm.afile_content(file_id=_BATCH_FILE_ID, custom_llm_provider="bedrock"),
+        httpx.Response(200, content=_BATCH_LINE),
+    ),
+    (
+        "create_batch",
+        lambda: litellm.acreate_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id=_BATCH_FILE_ID,
+            custom_llm_provider="bedrock",
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            aws_batch_role_arn="arn:aws:iam::123456789012:role/batch",
+            s3_output_bucket_name="batch-outputs",
+        ),
+        httpx.Response(200, json={"jobArn": "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/batch"}),
+    ),
+    (
+        "vector_store_search",
+        lambda: litellm.vector_stores.asearch(vector_store_id="KBID12345", query="hi", custom_llm_provider="bedrock"),
+        httpx.Response(200, json={"retrievalResults": []}),
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "upstream_answer"),
+    [pytest.param(call, answer, id=name) for name, call, answer in _BEDROCK_ENTRY_POINTS],
+)
+async def test_bedrock_secret_lookups_leave_the_event_loop_free(
+    call: Callable[[], Awaitable[object]],
+    upstream_answer: httpx.Response,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTTESTTESTTEST")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.setenv("AWS_S3_BUCKET_NAME", "batch-inputs")
+    monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "batch-outputs")
+    vault: Final = host_in_loop_probing_vault(
+        monkeypatch,
+        "AWS_REGION_NAME",
+        "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_S3_ENCRYPTION_KEY_ID",
+        "AWS_S3_BUCKET_OWNER",
+        "AGENTCORE_MCP_PROTOCOL_VERSION",
+        "AGENTCORE_SEARCH_TOOL_NAME",
+        "AGENTCORE_GATEWAY_TOKEN",
+    )
+    upstream: Final = respx_mock.route().mock(return_value=upstream_answer)
+
+    _ = await call()
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert ".us-west-2." in upstream.calls.last.request.url.host
 
 
 @pytest.mark.asyncio

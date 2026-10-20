@@ -10,7 +10,6 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.database import read_rows
 from integration._support.forward_proxy import ForwardProxy, tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
@@ -150,12 +149,12 @@ def _spend(rig: _Rig, key: str, location: str, action: str, model: str = _MODEL)
         body: Final = response.read()
         assert response.status_code == 200, body
         call_id: Final = response.headers["x-litellm-call-id"]
-    return _logged_spend(call_id)
+    return _logged_spend(rig.proxy, call_id)
 
 
-def _logged_spend(call_id: str) -> float:
+def _logged_spend(gateway: Gateway, call_id: str) -> float:
     rows: Final = eventually(
-        lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
+        lambda: gateway.rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
@@ -193,7 +192,7 @@ def test_custom_priced_vertex_passthrough_bills_the_deployment_price_even_when_t
             call_id: Final = response.headers["x-litellm-call-id"]
             with pytest.raises(httpx.RemoteProtocolError):
                 response.read()
-        cut_off: Final = _logged_spend(call_id)
+        cut_off: Final = _logged_spend(rig.proxy, call_id)
     custom_price: Final = _PROMPT_TOKENS * _CUSTOM_INPUT_RATE + _COMPLETION_TOKENS * _CUSTOM_OUTPUT_RATE
     assert {**finished, "cut off": cut_off} == pytest.approx(
         {_GENERATE: custom_price, _STREAM: custom_price, "cut off": custom_price}

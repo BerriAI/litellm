@@ -906,9 +906,13 @@ def _bedrock_pricing_info(
     return model_info_with_pricing_overrides(profile, registration[1])
 
 
-def _declares_rates(model_info: ModelInfo | None) -> bool:
-    entry: Final = _raw_cost_map_entry(model_info["key"]) if model_info is not None else None
+def cost_map_key_prices_anything(key: str) -> bool:
+    entry: Final = _raw_cost_map_entry(key)
     return entry is not None and _cost_map_entry_prices_anything(entry)
+
+
+def _declares_rates(model_info: ModelInfo | None) -> bool:
+    return model_info is not None and cost_map_key_prices_anything(model_info["key"])
 
 
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
@@ -1642,7 +1646,7 @@ def completion_cost(
             *(((model, request_pricing_provider),) if model is not None else ()),
         )
         potential_model_names: Final = (
-            raw_candidates if explicit_pricing else _priced_candidates_before_unpriced_rules(raw_candidates)
+            raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
         for idx, (model, pricing_provider) in enumerate(potential_model_names):
