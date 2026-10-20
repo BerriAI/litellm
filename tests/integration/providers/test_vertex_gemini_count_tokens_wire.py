@@ -220,8 +220,8 @@ _CONTENT_BLOCK_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingPro
 )
 
 
-def _ai_studio_deployment(scenario: Scenario, api_base: str) -> str:
-    return scenario.model(model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key")
+def _ai_studio_deployment(scenario: Scenario, api_base: str, **parameters: JsonValue) -> str:
+    return scenario.model(model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key", **parameters)
 
 
 def _counted_contents(count_body: Mapping[str, JsonValue]) -> JsonValue:
@@ -594,3 +594,37 @@ def test_concurrent_count_waves_recover_after_vertex_count_outage(gateway: Gatew
             tuple(_json_body(request) for request in requests)
             == ({"contents": [{"role": "user", "parts": [{"text": _USER}]}]},) * 9
         )
+
+
+@pytest.mark.parametrize(
+    ("conversation", "call_endpoint"),
+    (
+        ({"messages": _MESSAGES}, True),
+        ({"contents": [{"role": "user", "parts": [{"text": _USER}]}]}, True),
+        ({"messages": _MESSAGES}, False),
+    ),
+    ids=("provider-count-messages", "provider-count-contents", "local-count-messages"),
+)
+@pytest.mark.parametrize("drop_params", (False, True), ids=("no-drop", "drop"))
+def test_utils_token_counter_counts_the_conversation_regardless_of_prompt_and_drop_params(
+    gateway: Gateway, conversation: Mapping[str, JsonValue], call_endpoint: bool, drop_params: bool
+) -> None:
+    peer: Final = _GeminiPeer()
+    params: Final = {"call_endpoint": "true" if call_endpoint else "false"}
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url, drop_params=drop_params)
+        mixed: Final = gateway.request(
+            "POST", "/utils/token_counter", {"model": model, "prompt": "hi", **conversation}, params=params
+        )
+        mixed_requests: Final = _count_requests(wire)
+        alone: Final = gateway.request("POST", "/utils/token_counter", {"model": model, **conversation}, params=params)
+        alone_requests: Final = _count_requests(wire)
+    assert mixed.status_code == 200, mixed.text
+    assert alone.status_code == 200, alone.text
+    mixed_tokens: Final = TypeAdapter(int).validate_python(_JSON_OBJECT.validate_json(mixed.content)["total_tokens"])
+    alone_tokens: Final = TypeAdapter(int).validate_python(_JSON_OBJECT.validate_json(alone.content)["total_tokens"])
+    assert mixed_tokens == alone_tokens > 0
+    assert len(mixed_requests) == len(alone_requests) == int(call_endpoint)
+    assert [_counted_contents(_json_body(request)) for request in mixed_requests] == [
+        _counted_contents(_json_body(request)) for request in alone_requests
+    ]

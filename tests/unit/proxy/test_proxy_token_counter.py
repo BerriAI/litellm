@@ -2512,42 +2512,17 @@ _CONVERSATIONS: Final = (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("conversation", _CONVERSATIONS, ids=["messages", "contents"])
-@pytest.mark.parametrize("call_endpoint", [True, False], ids=["provider", "local"])
-async def test_prompt_next_to_a_conversation_answers_400_without_drop_params(
-    conversation: dict[str, JsonValue], call_endpoint: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
-
-    with (
-        patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
-        pytest.raises(ProxyException) as rejected,
-    ):
-        await token_counter(
-            request=TokenCountRequest(model="gemini-counted", prompt="hi", **conversation), call_endpoint=call_endpoint
-        )
-
-    assert (rejected.value.code, rejected.value.param) == ("400", "prompt")
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("conversation", "call_endpoint", "global_drop_params", "deployment_drop_params"),
-    [
-        (_CONVERSATIONS[0], True, False, True),
-        (_CONVERSATIONS[1], True, False, True),
-        (_CONVERSATIONS[0], False, False, True),
-        (_CONVERSATIONS[0], False, True, False),
-    ],
-    ids=[
-        "provider_messages",
-        "provider_contents",
-        "local_messages",
-        "local_messages_global_setting",
-    ],
+    ("conversation", "call_endpoint"),
+    ((_CONVERSATIONS[0], True), (_CONVERSATIONS[1], True), (_CONVERSATIONS[0], False)),
+    ids=("provider_messages", "provider_contents", "local_messages"),
 )
-async def test_drop_params_counts_a_conversation_without_the_prompt(
+@pytest.mark.parametrize(
+    ("global_drop_params", "deployment_drop_params"),
+    ((False, False), (False, True), (True, False), (True, True)),
+    ids=("no_drop", "deployment_drop", "global_drop", "both_drop"),
+)
+async def test_conversation_takes_precedence_over_prompt_regardless_of_drop_params(
     conversation: dict[str, JsonValue],
     call_endpoint: bool,
     global_drop_params: bool,
