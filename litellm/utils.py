@@ -2623,7 +2623,7 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
         tokenizer_or_error: Final = _huggingface_tokenizer_or_load_error(kind, _huggingface_tokenizer_backend())
         if isinstance(tokenizer_or_error, Exception):
-            raise tokenizer_or_error
+            raise tokenizer_or_error.with_traceback(None)
     tokenizer: Final = tokenizer_or_error
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 

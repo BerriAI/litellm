@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
+from types import TracebackType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -941,6 +942,7 @@ def test_token_counter():
 import unittest
 
 from litellm.utils import (
+    _huggingface_tokenizer_backend,
     _huggingface_tokenizer_or_load_error,
     _load_huggingface_tokenizer,
     _select_tokenizer_helper,
@@ -1064,6 +1066,48 @@ class TestTokenizerSelection(unittest.TestCase):
             assert mock_from_pretrained.call_count == first_attempts
             assert first_count == expected
             assert second_count == expected
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _huggingface_tokenizer_or_load_error.cache_clear()
+
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_cached_huggingface_load_error_traceback_does_not_grow(self, mock_from_pretrained):
+        _load_huggingface_tokenizer.cache_clear()
+        _huggingface_tokenizer_or_load_error.cache_clear()
+        try:
+            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+            text: Final = "Count the tokens for this message."
+
+            def traceback_depth(traceback: TracebackType | None) -> int:
+                if traceback is None:
+                    return 0
+                return 1 + traceback_depth(traceback.tb_next)
+
+            litellm.token_counter(model=model, text=text)
+            error_after_first_count: Final = _huggingface_tokenizer_or_load_error(
+                "llama3", _huggingface_tokenizer_backend()
+            )
+            assert isinstance(error_after_first_count, Exception)
+            depth_after_first_count: Final = traceback_depth(error_after_first_count.__traceback__)
+
+            litellm.token_counter(model=model, text=text)
+            error_after_second_count: Final = _huggingface_tokenizer_or_load_error(
+                "llama3", _huggingface_tokenizer_backend()
+            )
+            assert isinstance(error_after_second_count, Exception)
+            depth_after_second_count: Final = traceback_depth(error_after_second_count.__traceback__)
+
+            litellm.token_counter(model=model, text=text)
+            error_after_third_count: Final = _huggingface_tokenizer_or_load_error(
+                "llama3", _huggingface_tokenizer_backend()
+            )
+            assert isinstance(error_after_third_count, Exception)
+            depth_after_third_count: Final = traceback_depth(error_after_third_count.__traceback__)
+
+            mock_from_pretrained.assert_called_once_with("Xenova/llama-3-tokenizer")
+            assert depth_after_first_count > 0
+            assert depth_after_third_count == depth_after_second_count
         finally:
             _load_huggingface_tokenizer.cache_clear()
             _huggingface_tokenizer_or_load_error.cache_clear()
