@@ -10,7 +10,7 @@ import yaml
 _WORKFLOWS_DIR: Final = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 _TIERS: Final = (
     ("test-linting.yml", "lint-passed", frozenset()),
-    ("test-unit.yml", "unit-passed", frozenset({"coverage"})),
+    ("test-unit.yml", "unit-passed", frozenset({"coverage", "rust-bridge-windows"})),
     ("test-merge-smoke.yml", "smoke-passed", frozenset()),
 )
 _Tier = tuple[str, str, frozenset[str]]
