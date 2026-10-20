@@ -1,6 +1,7 @@
 from typing import Final
 
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
@@ -59,6 +60,42 @@ def test_get_hidden_params_storage_preserves_supported_storage_identity() -> Non
 
     assert get_hidden_params_storage(dict_response) is dict_storage
     assert get_hidden_params_storage(model_response) is model_storage
+
+
+_UPSTREAM_CHUNK_FIELDS: Final = {
+    "id": "chunk",
+    "choices": [],
+    "created": 1,
+    "model": "m",
+    "object": "chat.completion.chunk",
+}
+
+
+def _chunk_with_assigned_hidden_params(hidden_params: dict[str, object]) -> ChatCompletionChunk:
+    chunk: Final = ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS)
+    setattr(chunk, HIDDEN_PARAMS_ATTR, hidden_params)
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "build_chunk",
+    [
+        _chunk_with_assigned_hidden_params,
+        lambda hidden_params: ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS, _hidden_params=hidden_params),
+        lambda hidden_params: ChatCompletionChunk.model_construct(
+            **_UPSTREAM_CHUNK_FIELDS, _hidden_params=hidden_params
+        ),
+    ],
+    ids=["assigned", "constructor_extra", "model_construct_extra"],
+)
+def test_get_hidden_params_storage_reads_upstream_chunk_hidden_params(build_chunk) -> None:
+    hidden_params: Final[dict[str, object]] = {"is_finished": True}
+
+    assert get_hidden_params_storage(build_chunk(hidden_params)) is hidden_params
+
+
+def test_get_hidden_params_storage_is_none_for_upstream_chunk_without_hidden_params() -> None:
+    assert get_hidden_params_storage(ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS)) is None
 
 
 def test_get_or_create_hidden_params_sets_empty_dict_on_plain_object() -> None:
