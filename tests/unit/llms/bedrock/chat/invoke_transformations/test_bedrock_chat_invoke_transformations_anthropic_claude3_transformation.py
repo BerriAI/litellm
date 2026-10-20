@@ -1003,8 +1003,14 @@ BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
 @pytest.mark.parametrize(
     "requested_thinking",
     (
-        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING},
-        {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+        {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "updates",
+            "block_binding": BLOCK_BINDING,
+            "future_key": 1,
+        },
     ),
     ids=("adaptive", "legacy"),
 )
@@ -1028,6 +1034,24 @@ def test_bedrock_chat_invoke_keeps_block_binding_with_display_updates(
     )
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+def test_bedrock_chat_mantle_rebuilds_display_updates_without_block_binding(
+    local_model_cost_map, local_beta_headers_config
+) -> None:
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    optional_params: Final = AmazonMantleConfig().map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+        },
+        optional_params={},
+        model="anthropic.claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "adaptive", "display": "updates"}
 
 
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"

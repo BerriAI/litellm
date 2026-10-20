@@ -17,7 +17,11 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    thinking_block_binding,
+    validated_object_mapping,
+)
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -83,7 +87,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return True
+        return type(self) is AmazonAnthropicClaudeMessagesConfig
 
     @property
     def beta_headers_provider(self) -> str:
@@ -353,9 +357,13 @@ class AmazonAnthropicClaudeMessagesConfig(
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
         thinking: Final = validated_object_mapping(anthropic_messages_request.get("thinking"))
-        carried: Final = {key: value for key, value in (thinking or {}).items() if key not in ("type", "budget_tokens")}
+        display: Final = thinking.get("display") if thinking is not None else None
         anthropic_messages_request["output_config"] = output_config
-        anthropic_messages_request["thinking"] = {**carried, "type": "adaptive"}
+        anthropic_messages_request["thinking"] = {
+            **(thinking_block_binding(thinking) if self._carries_thinking_block_binding else {}),
+            "type": "adaptive",
+            **({} if display is None else {"display": display}),
+        }
         verbose_logger.debug(
             "Bedrock clear_thinking_20251015: injected adaptive thinking with effort=%s for model=%s",
             output_config.get("effort"),
@@ -696,7 +704,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            anthropic_messages_request["thinking"] = {**translated_thinking, "display": "updates"}
+            anthropic_messages_request["thinking"] = {
+                **(thinking_block_binding(translated_thinking) if self._carries_thinking_block_binding else {}),
+                "type": "adaptive",
+                "display": "updates",
+            }
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###

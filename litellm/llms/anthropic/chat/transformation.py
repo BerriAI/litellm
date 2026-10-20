@@ -329,7 +329,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return self._resolved_provider in ("anthropic", "azure_ai")
+        return type(self) is AnthropicConfig
 
     @classmethod
     def get_config(cls, *, model: str | None = None):
@@ -1595,7 +1595,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         model=model,
                         optional_params=optional_params,
                         custom_llm_provider=self._resolved_provider,
-                        carries_block_binding=self._carries_thinking_block_binding,
+                        carry_block_binding=self._carries_thinking_block_binding,
                     )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",

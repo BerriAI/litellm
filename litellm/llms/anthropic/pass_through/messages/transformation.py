@@ -65,7 +65,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return self._resolved_provider in ("anthropic", "azure_ai")
+        return type(self) is AnthropicMessagesConfig
 
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
@@ -518,7 +518,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
-            carries_block_binding=self._carries_thinking_block_binding,
+            carry_block_binding=self._carries_thinking_block_binding,
         )
 
         self._translate_adaptive_effort_for_non_adaptive_model(

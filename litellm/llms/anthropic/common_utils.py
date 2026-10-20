@@ -134,6 +134,11 @@ def validated_object_mapping(value: object) -> dict[object, object] | None:
         return None
 
 
+def thinking_block_binding(thinking: Mapping[object, object] | None) -> dict[str, object]:
+    block_binding: Final = thinking.get("block_binding") if thinking is not None else None
+    return {} if block_binding is None else {"block_binding": block_binding}
+
+
 def _validated_claude_code_list(value: object) -> list[object] | None:
     try:
         return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
@@ -748,7 +753,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
-        carries_block_binding: bool = False,
+        carry_block_binding: bool = False,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
@@ -774,11 +779,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
-        carried_block_binding: Final = (
-            {"block_binding": thinking["block_binding"]}
-            if carries_block_binding and "block_binding" in thinking
-            else {}
-        )
+        carried_block_binding: Final = thinking_block_binding(thinking) if carry_block_binding else {}
         optional_params["thinking"] = {**carried_block_binding, "type": "adaptive", **supported_display}
         optional_params["output_config"] = {
             "effort": effort,

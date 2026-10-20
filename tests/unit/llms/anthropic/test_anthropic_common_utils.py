@@ -2558,6 +2558,7 @@ def _rebuilt_thinking(carries_block_binding: bool) -> dict[str, object]:
         ("vertex_ai", False),
         ("databricks", False),
         ("bedrock_converse", False),
+        ("bedrock_mantle", False),
     ),
 )
 def test_chat_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_supported(
@@ -2569,6 +2570,7 @@ def test_chat_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeConfig,
     )
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
     from litellm.llms.databricks.chat.transformation import DatabricksConfig
     from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 
@@ -2579,6 +2581,7 @@ def test_chat_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_
         "vertex_ai": (VertexAIAnthropicConfig(), "claude-opus-4-8"),
         "databricks": (DatabricksConfig(), "databricks-claude-opus-4-8"),
         "bedrock_converse": (AmazonConverseConfig(), "us.anthropic.claude-opus-4-8"),
+        "bedrock_mantle": (AmazonMantleConfig(), "anthropic.claude-opus-4-8"),
     }[provider]
 
     mapped: Final = config.map_openai_params(
@@ -2594,16 +2597,29 @@ def test_chat_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
     ("provider", "carries_block_binding"),
-    (("anthropic", True), ("azure_ai", True), ("bedrock_invoke", True), ("vertex_ai", False)),
+    (
+        ("anthropic", True),
+        ("azure_ai", True),
+        ("bedrock_invoke", True),
+        ("vertex_ai", False),
+        ("bedrock_mantle", False),
+        ("bedrock_mantle_provider", False),
+        ("bedrock_claude_platform", False),
+        ("openai_like", False),
+    ),
 )
 def test_messages_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_supported(
     provider: str, carries_block_binding: bool
 ) -> None:
     from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
     from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+    from litellm.llms.bedrock.claude_platform.messages_transformation import BedrockClaudePlatformMessagesConfig
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
+    from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
+    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
     from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
         VertexAIPartnerModelsAnthropicMessagesConfig,
     )
@@ -2614,6 +2630,10 @@ def test_messages_legacy_thinking_rebuild_carries_only_block_binding_and_only_wh
         "azure_ai": (AzureAnthropicMessagesConfig(), "claude-opus-4-8"),
         "bedrock_invoke": (AmazonAnthropicClaudeMessagesConfig(), "us.anthropic.claude-opus-4-8"),
         "vertex_ai": (VertexAIPartnerModelsAnthropicMessagesConfig(), "claude-opus-4-8"),
+        "bedrock_mantle": (AmazonMantleMessagesConfig(), "anthropic.claude-opus-4-8"),
+        "bedrock_mantle_provider": (BedrockMantleAnthropicMessagesConfig(), "anthropic.claude-opus-4-8"),
+        "bedrock_claude_platform": (BedrockClaudePlatformMessagesConfig(), "claude-opus-4-8"),
+        "openai_like": (OpenAILikeAnthropicMessagesConfig(), "claude-opus-4-8"),
     }[provider]
 
     request: Final = config.transform_anthropic_messages_request(
