@@ -1314,7 +1314,7 @@ class ModelResponseIterator:
             return ""
         return _split_answer_text(blocks, self.response_format_schema)
 
-    def _cut_stream_chunk(self) -> ModelResponseStream | None:
+    def cut_stream_chunk(self) -> ModelResponseStream | None:
         verdict: Final = self._response_format_verdict
         unsent: Final = "" if verdict == "pass_through" else self._response_format_buffer.getvalue()
         self._response_format_buffer = io.StringIO()
@@ -1442,7 +1442,7 @@ class ModelResponseIterator:
                     result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
                     if result is not None:
                         return result
-                cut_stream_chunk = self._cut_stream_chunk()
+                cut_stream_chunk = self.cut_stream_chunk()
                 if cut_stream_chunk is not None:
                     return cut_stream_chunk
                 raise StopIteration
@@ -1491,7 +1491,7 @@ class ModelResponseIterator:
                     result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
                     if result is not None:
                         return result
-                cut_stream_chunk = self._cut_stream_chunk()
+                cut_stream_chunk = self.cut_stream_chunk()
                 if cut_stream_chunk is not None:
                     return cut_stream_chunk
                 raise StopAsyncIteration

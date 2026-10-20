@@ -114,7 +114,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
         sanitize_vertex_anthropic_output_params(
-            data, model, drop_params=_LITELLM_PARAMS.validate_python(litellm_params).get("drop_params") is True
+            data, model, drop_params=_LITELLM_PARAMS.validate_python(litellm_params).get("drop_params")
         )
 
         tools: Final = optional_params.get("tools")

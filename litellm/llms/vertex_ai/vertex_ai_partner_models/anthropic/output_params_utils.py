@@ -45,27 +45,28 @@ def _as_output_config(value: object) -> Mapping[str, object] | None:
 
 
 def _fold_output_format_into_output_config(
-    output_config: Mapping[str, object] | None, output_format: object, model: str, drop_params: bool
+    output_config: Mapping[str, object] | None, output_format: object, model: str, drop_params: object
 ) -> Mapping[str, object] | None:
     if output_format is None:
         return output_config
     output_format_object: Final = _as_output_config(output_format)
     if output_format_object is not None:
         return {**(output_config or {}), "format": output_format_object}
-    import litellm
+    from litellm.exceptions import UnsupportedParamsError
+    from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 
-    if drop_params or litellm.drop_params is True:
+    if drops_unsupported_params(drop_params):
         return output_config
-    raise litellm.UnsupportedParamsError(
+    raise UnsupportedParamsError(
         message=(
             f"{model} on vertex_ai needs `output_format` to be a JSON object, got {type(output_format).__name__}. "
-            "To drop it, set `litellm.drop_params = True`."
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
         ),
         status_code=400,
     )
 
 
-def sanitize_vertex_anthropic_output_params(data: dict, model: str, drop_params: bool = False) -> None:
+def sanitize_vertex_anthropic_output_params(data: dict, model: str, drop_params: object = None) -> None:
     """
     Strip Vertex-unsupported keys from ``output_config`` /
     ``output_format`` in-place; forward whatever remains.
