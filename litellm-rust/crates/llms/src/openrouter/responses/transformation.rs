@@ -9,7 +9,10 @@ use crate::{
         auth::{AuthScheme, ValidatedEnvironment},
         responses::transformation::BaseResponsesApiConfig,
     },
-    openai::responses::transformation::{responses_request, responses_response},
+    openai::responses::{
+        request::ItemValidation,
+        transformation::{responses_request, responses_response},
+    },
 };
 
 const API_KEY_ENVS: [&str; 2] = ["OPENROUTER_API_KEY", "OR_API_KEY"];
@@ -77,7 +80,7 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        responses_request(model, input, params)
+        responses_request(model, input, params, ItemValidation::Lenient)
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
