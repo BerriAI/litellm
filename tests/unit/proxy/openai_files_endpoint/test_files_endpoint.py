@@ -6220,3 +6220,73 @@ def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_bat
     assert error["param"] == "passthrough"
     assert "guardrails" in error["message"]
     assert forwarded_calls == []
+
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "headers"),
+    [
+        ("/openai/v1/files", {}, {}),
+        ("/v1/files", {"provider": "openai"}, {}),
+        ("/v1/files", {}, {"custom-llm-provider": "openai"}),
+        ("/v1/files", {"target_model_names": "gpt-3.5-turbo"}, {}),
+        ("/v1/files", {}, {"x-litellm-model": "gpt-3.5-turbo"}),
+    ],
+)
+def test_require_managed_files_lists_only_the_callers_managed_files(
+    mocker: MockerFixture,
+    monkeypatch,
+    llm_router: Router,
+    path: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+):
+    import litellm.proxy.proxy_server as ps
+
+    async def _callers_page(**kwargs):
+        return FileListPage(data=[_managed_file("callers-managed-file")])
+
+    managed_files = _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _callers_page)
+    mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock(return_value=[_managed_file("file-on-the-shared-key")]))
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    try:
+        response = client.get(
+            path,
+            params={"limit": "5", "after": "callers-cursor", **params},
+            headers={"Authorization": "Bearer test-key", **headers},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["callers-managed-file"]
+    listed_for: Final = managed_files.afile_list.await_args.kwargs
+    assert (listed_for["user_api_key_dict"].user_id, listed_for["limit"], listed_for["after"]) == (
+        "test-user",
+        5,
+        "callers-cursor",
+    )
+
+
+def test_require_managed_files_list_fails_closed_without_the_managed_files_hook(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    async def _callers_page(**kwargs):
+        return FileListPage(data=[_managed_file("callers-managed-file")])
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _callers_page)
+    ps.proxy_logging_obj.proxy_hook_mapping.pop("managed_files")
+    mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock(return_value=[_managed_file("file-on-the-shared-key")]))
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    try:
+        response = client.get("/openai/v1/files", headers={"Authorization": "Bearer test-key"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 500, response.text
+    assert "file-on-the-shared-key" not in response.text
+    assert "require_managed_files cannot scope the list to the caller" in response.json()["error"]["message"]
