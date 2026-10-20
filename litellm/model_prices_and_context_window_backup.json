@@ -32674,6 +32674,7 @@
     },
     "github_copilot/gemini-3.7-flash": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -32834,6 +32835,7 @@
     },
     "github_copilot/gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
@@ -32841,6 +32843,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://github.blog/changelog/2026-10-19-github-copilot-models-deprecated-on-october-19-2026",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -32867,6 +32870,7 @@
     "github_copilot/gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_above_272k_tokens": 5e-06,
         "litellm_provider": "github_copilot",
@@ -32889,6 +32893,7 @@
     },
     "github_copilot/gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 272000,
@@ -32909,6 +32914,7 @@
     "github_copilot/gpt-5.5": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_above_272k_tokens": 1e-05,
         "litellm_provider": "github_copilot",
@@ -76034,6 +76040,7 @@
     "github_copilot/grok-4.5": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "deprecation_date": "2026-10-19",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "github_copilot",
