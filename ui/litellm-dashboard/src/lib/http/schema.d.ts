@@ -8441,7 +8441,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
          *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
-         *     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
+         *     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (Full Access in the Admin UI, skips `default_key_generate_params.allowed_routes`). When omitted, the key gets `default_key_generate_params.allowed_routes` if that is set and the request has no `allowed_routes`, else it works like "default".
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
          *     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
@@ -30073,10 +30073,25 @@ export interface components {
              */
             maximum_spend_logs_cleanup_run_budget?: string | null;
             /**
+             * Maximum Spend Logs Cleanup Target Size
+             * @description Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. Unset means the run stops as soon as the tables are back under maximum_spend_logs_size.
+             */
+            maximum_spend_logs_cleanup_target_size?: string | null;
+            /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Maximum Spend Logs Size
+             * @description Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex (heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the cleanup job deletes the oldest spend logs first until they are under maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is deleted when either rule says so. Unset means no size rule.
+             */
+            maximum_spend_logs_size?: string | null;
+            /**
+             * Maximum Spend Logs Size Check Interval
+             * @description How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup.
+             */
+            maximum_spend_logs_size_check_interval?: string | null;
             /**
              * Mcp Advertised Versions
              * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.
@@ -30199,6 +30214,11 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Request Tag Mappings
+             * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
+             */
+            request_tag_mappings?: components["schemas"]["RequestTagMapping"][] | null;
             /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
@@ -35028,6 +35048,8 @@ export interface components {
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
             aws_batch_role_arn?: string | null;
+            /** Aws Bedrock Control Plane Endpoint */
+            aws_bedrock_control_plane_endpoint?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
@@ -35162,6 +35184,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -35424,6 +35448,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -35436,6 +35464,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Token Exchange Audience */
             token_exchange_audience?: string | null;
             /** Token Exchange Endpoint */
@@ -38251,6 +38283,8 @@ export interface components {
             providers: string[];
             /** Rpm */
             rpm?: number | null;
+            /** Supported Endpoints */
+            supported_endpoints?: string[] | null;
             /**
              * Supported Openai Params
              * @default []
@@ -42642,6 +42676,36 @@ export interface components {
             failed_requests: number;
             /** Status Code */
             status_code: number;
+        };
+        /**
+         * RequestTagMapping
+         * @description An exact baggage value mapping, or a prefix for any value of a key.
+         */
+        RequestTagMapping: {
+            /**
+             * Header
+             * @default baggage
+             * @constant
+             */
+            header: "baggage";
+            /** Key */
+            key: string;
+            /**
+             * Require Budgeted Tag
+             * @default false
+             */
+            require_budgeted_tag: boolean;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /** Tag */
+            tag?: string | null;
+            /** Tag Prefix */
+            tag_prefix?: string | null;
+            /** Value */
+            value?: string | null;
         };
         /**
          * RequestType
@@ -50050,6 +50114,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */
@@ -50058,6 +50124,8 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /** Max Embedding Batch Size */
+            max_embedding_batch_size?: number | null;
             /**
              * Member Auto Router
              * @default false
@@ -50067,6 +50135,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Pricing Provider */
+            pricing_provider?: string | null;
             /** Ptu Count */
             ptu_count?: number | null;
             /** Ptu Effective From */
@@ -50270,6 +50340,8 @@ export interface components {
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
             aws_batch_role_arn?: string | null;
+            /** Aws Bedrock Control Plane Endpoint */
+            aws_bedrock_control_plane_endpoint?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
@@ -50404,6 +50476,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -50666,6 +50740,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -50678,6 +50756,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Token Exchange Audience */
             token_exchange_audience?: string | null;
             /** Token Exchange Endpoint */

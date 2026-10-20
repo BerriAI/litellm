@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -369,6 +369,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        return dict(
+            self.map_openai_params_for_deployment(
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=()
+            )
+        )
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
         GPT-5 models have restrictions on temperature and top_p (only temperature=1
@@ -405,6 +419,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if (
                 isinstance(reasoning, dict)
                 and isinstance(requested_effort, str)
+                and requested_effort not in declared_reasoning_efforts
                 and self._effort_level_is_disabled(lookup_name, requested_effort)
             ):
                 if not (drop_params or litellm.drop_params):

@@ -86,6 +86,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -2457,6 +2458,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
+        None,
+        description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
+    )
+
+    @field_validator("request_tag_mappings")
+    @classmethod
+    def validate_request_tag_mapping_duplicates(
+        cls, rules: Sequence[RequestTagMapping] | None
+    ) -> Sequence[RequestTagMapping] | None:
+        if rules is not None and len({(rule.key, rule.value) for rule in rules}) != len(rules):
+            raise ValueError("Only one mapping is allowed for each baggage key/value, including its any-value fallback")
+        return rules
+
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
@@ -2867,6 +2882,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
             "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
             "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
+        ),
+    )
+    maximum_spend_logs_size: str | None = Field(
+        None,
+        description=(
+            "Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex "
+            "(heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the "
+            "cleanup job deletes the oldest spend logs first until they are under "
+            "maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is "
+            "deleted when either rule says so. Unset means no size rule."
+        ),
+    )
+    maximum_spend_logs_cleanup_target_size: str | None = Field(
+        None,
+        description=(
+            "Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. "
+            "Unset means the run stops as soon as the tables are back under maximum_spend_logs_size."
+        ),
+    )
+    maximum_spend_logs_size_check_interval: str | None = Field(
+        None,
+        description=(
+            "How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when "
+            "maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(

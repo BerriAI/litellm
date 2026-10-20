@@ -52,12 +52,15 @@ def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
 
 def _to_bedrock_tool_spec(tool: JsonValue) -> dict[str, JsonValue]:
     fields: Final = _json_dict(tool)
-    name: Final = _sanitized_bedrock_tool_name(fields.get("name", ""))
+    chat_function: Final = _json_dict(fields.get("function"))
+    spec: Final = chat_function or fields
+    name: Final = _sanitized_bedrock_tool_name(spec.get("name", ""))
+    schema_field: Final = "parameters" if chat_function else "input_schema"
     return {
         "toolSpec": {
             "name": name,
-            "description": fields.get("description") or name,
-            "inputSchema": {"json": fields.get("input_schema", {"type": "object", "properties": {}})},
+            "description": spec.get("description") or name,
+            "inputSchema": {"json": spec.get(schema_field, {"type": "object", "properties": {}})},
         }
     }
 

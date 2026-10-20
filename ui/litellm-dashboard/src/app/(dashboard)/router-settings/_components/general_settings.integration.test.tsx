@@ -253,3 +253,33 @@ it("should delete only the Default setting and retain explicit false and zero", 
     ["token", "synthetic_count", 0],
   ]);
 });
+
+it("keeps a new baggage mapping unsaved until every field the backend requires is filled in", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "request_tag_mappings",
+      field_type: "List",
+      field_value: [],
+      field_description: "baggage mappings",
+      stored_in_db: true,
+      editable: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  await user.click(await screen.findByRole("button", { name: "Add mapping" }));
+  const update = within(screen.getByRole("row", { name: /request_tag_mappings/ })).getByRole("button", {
+    name: "Update",
+  });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+  fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "a" } });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "usecase:support" } });
+  await user.click(update);
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    ["token", "request_tag_mappings", [{ header: "baggage", key: "entrypoint", value: "a", tag: "usecase:support" }]],
+  ]);
+});

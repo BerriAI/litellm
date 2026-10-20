@@ -4,6 +4,13 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
+<!-- Two or three plain sentences a teammate can read in 10 seconds, written the way you'd explain it in Slack
+     Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
+     No headings, bullets, tables, or code names here. Everything else goes inside the Details block below -->
+
+<details>
+<summary>Details</summary>
+
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
@@ -164,3 +171,5 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+
+</details>

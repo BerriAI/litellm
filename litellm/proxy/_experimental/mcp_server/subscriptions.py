@@ -51,6 +51,9 @@ from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES, MCP_TOOL_LISTING_TIMEO
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server import operations
 from litellm.proxy._experimental.mcp_server.catalog import (
+    ToolListingFailedOutright,
+)
+from litellm.proxy._experimental.mcp_server.catalog import (
     _configuration_identity as configuration_identity,  # pyright: ignore[reportPrivateUsage]  # reuse catalog-owned configuration identity without treating discovered metadata as configuration
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
@@ -283,9 +286,12 @@ async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
     cursor: str | None = None  # rebind-ok: advance the signed gateway cursor for each catalog page
     with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
         for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
-            result = await gateway.execute(
-                operation.model_copy(update={"params": PaginatedRequestParams(cursor=cursor)}), context
-            )
+            try:
+                result = await gateway.execute(
+                    operation.model_copy(update={"params": PaginatedRequestParams(cursor=cursor)}), context
+                )
+            except ToolListingFailedOutright:
+                return digest.hexdigest()
             items = (
                 result.tools
                 if isinstance(result, ListToolsResult)

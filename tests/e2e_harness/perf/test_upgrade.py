@@ -295,22 +295,31 @@ def test_invalid_200_is_not_an_allowed_non_200(failed: WireRecord) -> None:
         _ = Probe().monitor().poll((failed,))
 
 
+def _ceiling(metric: str, percentile: int | None = None) -> float:
+    return next(
+        limit.max for limit in upgrade_case().limits if limit.metric == metric and limit.percentile == percentile
+    )
+
+
 @pytest.mark.parametrize(
-    "failures,overhead,ttft,growth,expected",
+    "over,expected",
     [
-        (3, 0.29, 3.7, 100, ()),
-        (4, 0.29, 3.7, 100, ("unexpected_status_count",)),
-        (3, 0.30, 3.7, 100, ("gateway_added_seconds percentile 50",)),
-        (3, 0.29, 3.8, 100, ("time_to_first_token_seconds percentile 99",)),
-        (3, 0.29, 3.7, 101, ("memory_growth_megabytes",)),
+        ("", ()),
+        ("unexpected_status_count", ("unexpected_status_count",)),
+        ("gateway_added_seconds", ("gateway_added_seconds percentile 50",)),
+        ("time_to_first_token_seconds", ("time_to_first_token_seconds percentile 99",)),
+        ("memory_growth_megabytes", ("memory_growth_megabytes",)),
     ],
 )
 def test_upgrade_verdict_uses_regular_limits_without_cpu_or_datastore_samples(
-    failures: int, overhead: float, ttft: float, growth: float, expected: tuple[str, ...]
+    over: str, expected: tuple[str, ...]
 ) -> None:
-    nonstream: Final = tuple(
-        record(i).model_copy(update={"total_s": overhead, "mock_delay_s": 0}) for i in range(100)
-    )
+    """Each sample sits exactly on the case's ceiling, so only the one nudged past it goes over."""
+    failures: Final = int(_ceiling("unexpected_status_count")) + (over == "unexpected_status_count")
+    overhead: Final = _ceiling("gateway_added_seconds", 50) * (1.01 if over == "gateway_added_seconds" else 1)
+    ttft: Final = _ceiling("time_to_first_token_seconds", 99) * (1.01 if over == "time_to_first_token_seconds" else 1)
+    growth: Final = _ceiling("memory_growth_megabytes") + (over == "memory_growth_megabytes")
+    nonstream: Final = tuple(record(i).model_copy(update={"total_s": overhead, "mock_delay_s": 0}) for i in range(100))
     stream: Final = record(100).model_copy(update={"stream": True, "first_token_s": ttft})
     observed: Final = Observation(
         records=(*nonstream, stream, *(failed_record(i) for i in range(101, 101 + failures))),

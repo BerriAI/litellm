@@ -918,6 +918,44 @@ def test_sanitize_folds_output_format_into_output_config(model: str, data: dict,
     assert request["output_config"] == expected_output_config
 
 
+def _vertex_chat_request_with_output_format(
+    output_format: object, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        optional_params={"max_tokens": 64, "output_format": output_format},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_per_request_drop_params():
+    request: Final = _vertex_chat_request_with_output_format("json", {"drop_params": True})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_the_global_drop_params_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    request: Final = _vertex_chat_request_with_output_format("json", {})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_rejects_a_malformed_output_format_without_drop_params_naming_the_proxy_setting():
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _vertex_chat_request_with_output_format("json", {})
+
+    assert error.value.status_code == 400
+    assert "litellm_settings:\n drop_params: true" in str(error.value)
+
+
 def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(local_model_cost_map):
     config = VertexAIAnthropicConfig()
     schema: Final = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
