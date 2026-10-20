@@ -918,7 +918,9 @@ def test_sanitize_folds_output_format_into_output_config(model: str, data: dict,
     assert request["output_config"] == expected_output_config
 
 
-def _vertex_chat_request_with_output_format(output_format: object, litellm_params: Mapping[str, object]) -> dict:
+def _vertex_chat_request_with_output_format(
+    output_format: object, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
     return VertexAIAnthropicConfig().transform_request(
         model="claude-opus-4-6",
         messages=[{"role": "user", "content": "What is 6 times 7?"}],

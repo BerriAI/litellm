@@ -3126,6 +3126,15 @@ def test_streamed_json_mode_unwrapped_answer_keeps_non_ascii_text():
     assert json.loads("".join(contents)) == answer
 
 
+def test_streamed_json_mode_unwrapped_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+    envelope = json.dumps({"input": answer})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents).encode("utf-8")) == answer
+
+
 _CUT_STREAM_FRAGMENTS: Final = (
     pytest.param(
         json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})[:-1],
@@ -3166,6 +3175,14 @@ async def test_async_streamed_json_mode_text_is_delivered_when_the_stream_ends_b
     iterator = _cut_stream_iterator(False, lines())
 
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in iterator]) == sent
+
+
+def test_streamed_json_mode_complete_envelope_is_unwrapped_when_the_stream_ends_before_the_block_stops():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(envelope)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
 
 
 def test_streamed_json_mode_answer_keyed_by_a_required_only_name_is_kept_whole():

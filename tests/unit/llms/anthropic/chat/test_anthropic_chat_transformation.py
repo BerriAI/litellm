@@ -2251,6 +2251,38 @@ def test_effort_with_other_features():
     assert "thinking" in result
 
 
+_OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.parametrize(
+    ("output_format", "request_drop_params", "global_drop_params", "forwarded"),
+    [
+        pytest.param("json", True, False, False, id="string_dropped_under_request_drop_params"),
+        pytest.param("json", None, True, False, id="string_dropped_under_global_drop_params"),
+        pytest.param("json", None, False, True, id="string_forwarded_without_drop_params"),
+        pytest.param(_OBJECT_OUTPUT_FORMAT, True, False, True, id="object_kept_under_drop_params"),
+    ],
+)
+def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_drop_params(
+    output_format: object,
+    request_drop_params: bool | None,
+    global_drop_params: bool,
+    forwarded: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result = AnthropicConfig().transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_format": output_format},
+        litellm_params={"drop_params": request_drop_params},
+        headers={},
+    )
+
+    assert result.get("output_format") == (output_format if forwarded else None)
+
+
 def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
     """``drop_params=True`` strips unsupported ``output_config`` for pre-4.5 models."""
     config = AnthropicConfig()
@@ -7925,6 +7957,18 @@ def test_convert_tool_response_to_message_keeps_non_ascii_text_in_an_unwrapped_a
     assert message is not None
     assert "Hôtel Lutetia, 東京" in message.content
     assert json.loads(message.content) == answer
+
+
+def test_convert_tool_response_to_message_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert json.loads(message.content.encode("utf-8")) == answer
 
 
 _TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000

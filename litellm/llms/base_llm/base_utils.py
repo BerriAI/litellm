@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import itertools
 import json
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -297,6 +298,14 @@ def response_format_envelope_contents(payload: object, schema: ResponseFormatSch
     if schema_object is not None:
         return schema_object
     return None if "values" in schema.declared_names else payload_object.get("values")
+
+
+_LONE_SURROGATE: Final = re.compile("[\ud800-\udfff]")
+
+
+def response_format_answer_json(value: object) -> str:
+    text: Final = json.dumps(value, ensure_ascii=False)
+    return json.dumps(value) if _LONE_SURROGATE.search(text) else text
 
 
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:

@@ -28,6 +28,7 @@ from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     names_a_response_format_property,
     partial_response_format_answer,
+    response_format_answer_json,
     response_format_envelope_contents,
     split_response_format_answer,
 )
@@ -172,13 +173,13 @@ def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
     except (json.JSONDecodeError, RecursionError):
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
-    return held if contents is None else json.dumps(contents, ensure_ascii=False)
+    return held if contents is None else response_format_answer_json(contents)
 
 
 def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
     answer: Final = split_response_format_answer(blocks, schema)
     if answer is not None:
-        return json.dumps(answer, ensure_ascii=False)
+        return response_format_answer_json(answer)
     return "".join(_held_answer(block, schema) for block in blocks)
 
 
@@ -1283,7 +1284,7 @@ class ModelResponseIterator:
             return None
         self._streamed_answer_keys = streamed | frozenset(fields)
         separator: Final = ", " if streamed else ""
-        return f"{separator}{json.dumps(fields, ensure_ascii=False)[1:-1]}" if fields else ""
+        return f"{separator}{response_format_answer_json(fields)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
         schema: Final = self.response_format_schema
@@ -1316,7 +1317,9 @@ class ModelResponseIterator:
 
     def cut_stream_chunk(self) -> ModelResponseStream | None:
         verdict: Final = self._response_format_verdict
-        unsent: Final = "" if verdict == "pass_through" else self._response_format_buffer.getvalue()
+        held: Final = "" if verdict == "pass_through" else self._response_format_buffer.getvalue()
+        schema: Final = self.response_format_schema
+        unsent: Final = _held_answer(held, schema) if held and schema is not None else held
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
         text: Final = self._release_answer_close() + self._drain_split_answer_blocks() + unsent

@@ -2,6 +2,7 @@
 Tests for structured outputs support in Anthropic /v1/messages endpoint.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -119,7 +120,9 @@ def test_output_format_works_with_bedrock_and_azure():
 _OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
 
 
-def _request_with_output_format(output_format: object, litellm_params: GenericLiteLLMParams) -> dict:
+def _request_with_output_format(
+    output_format: object, litellm_params: GenericLiteLLMParams
+) -> Mapping[str, object]:
     return AnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "What is 6 times 7?"}],
