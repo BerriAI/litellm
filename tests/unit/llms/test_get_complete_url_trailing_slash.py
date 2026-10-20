@@ -1,6 +1,7 @@
 import copy
 import importlib
 import inspect
+import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,7 +189,7 @@ def _defined_builders(module: ModuleType) -> tuple[type, ...]:
 
 
 def _all_builders() -> tuple[type, ...]:
-    builders: Final = (cls for module in _builder_modules() for cls in _defined_builders(module))
+    builders: Final = itertools.chain.from_iterable(_defined_builders(module) for module in _builder_modules())
     return tuple(sorted(builders, key=_builder_id))
 
 

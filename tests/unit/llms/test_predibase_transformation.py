@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -86,7 +87,7 @@ def test_predibase_get_complete_url_stream_and_non_stream():
 
 @pytest.mark.parametrize(("model", "stream"), [("generate", False), ("generate_stream", True)])
 def test_predibase_get_complete_url_appends_the_route_to_a_model_named_like_it(model: str, stream: bool) -> None:
-    url = PredibaseConfig().get_complete_url(
+    url: Final = PredibaseConfig().get_complete_url(
         api_base="https://serving.example.com",
         api_key="test-key",
         model=model,
