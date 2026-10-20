@@ -1415,7 +1415,7 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
     )
 
 
-def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_the_video():
+def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_the_video() -> None:
     from litellm.types.videos.utils import encode_video_id_with_provider
 
     llm_router: Final = Router(
@@ -1442,7 +1442,7 @@ def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_
     )
 
 
-def test_get_model_from_request_checks_a_video_created_through_a_provider_wildcard_by_its_own_name():
+def test_get_model_from_request_checks_a_video_created_through_a_provider_wildcard_by_its_own_name() -> None:
     from litellm.types.videos.utils import encode_video_id_with_provider
 
     llm_router: Final = Router(
@@ -1472,7 +1472,7 @@ def test_get_model_from_request_checks_a_video_created_through_a_provider_wildca
     )
 
 
-def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not_route_by_its_prefixed_name():
+def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not_route_by_its_prefixed_name() -> None:
     from litellm.types.videos.utils import encode_video_id_with_provider
 
     llm_router: Final = Router(

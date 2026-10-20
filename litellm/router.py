@@ -504,6 +504,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _CallbackT = TypeVar("_CallbackT")
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
@@ -5935,7 +5936,7 @@ class Router:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
                 deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
-                    model=self._video_deployment_to_pin(model, kwargs) or model,
+                    model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
                     input=kwargs.get("input", None),
@@ -6636,35 +6637,22 @@ class Router:
             )
         return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
-    def _video_deployment_to_pin(self, model: str, kwargs: Mapping[str, object]) -> str | None:
+    @staticmethod
+    def _narrow_to_video_deployment(
+        healthy_deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object] | None
+    ) -> Sequence[_DeploymentT]:
         """
-        A video lives on the provider account of the deployment that created it, so a call on an id that names
-        a deployment the caller may use in the requested group goes to that deployment instead of any member.
+        A video lives on the provider account of the deployment that created it, so a call on an id naming a
+        deployment that every routing filter kept goes to that deployment, else to whichever one routing picks.
         """
-        video_id: Final = kwargs.get("video_id")
+        video_id: Final = (request_kwargs or {}).get("video_id")
         deployment_id: Final = (
             decode_video_id_with_provider(video_id).get("deployment_id") if isinstance(video_id, str) else None
         )
-        if not deployment_id:
-            return None
-        model_group: Final = self.get_model_from_alias(model=model) or model
-        request_team_id: Final = get_request_team_id(kwargs)
-        routing_group_deployments: Final = self._get_routing_group_deployments(
-            model=model_group, team_id=request_team_id
+        creating: Final = tuple(
+            deployment for deployment in healthy_deployments if deployment_id in Router._deployment_ids((deployment,))
         )
-        callable_ids: Final = self._deployment_ids(
-            self._filter_deployments_by_model_access_groups(
-                model=model_group,
-                healthy_deployments=(
-                    routing_group_deployments
-                    if routing_group_deployments is not None
-                    else list(self.deployments_for_request(model, kwargs))
-                ),
-                request_kwargs=kwargs,
-                request_team_id=request_team_id,
-            )
-        )
-        return deployment_id if deployment_id in callable_ids else None
+        return creating or healthy_deployments
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
@@ -6688,7 +6676,7 @@ class Router:
                 metadata_variable_name=metadata_variable_name,
             )
             deployment: Final = self.get_available_deployment(
-                model=self._video_deployment_to_pin(model, kwargs) or model,
+                model=model,
                 messages=kwargs.get("messages", None),
                 input=kwargs.get("input", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -14360,7 +14348,8 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
+            list(self._narrow_to_video_deployment(cast(list[dict[str, object]], healthy_deployments), request_kwargs)),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15548,7 +15537,7 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            healthy_deployments, target_order=_target_order
+            list(self._narrow_to_video_deployment(healthy_deployments, request_kwargs)), target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in

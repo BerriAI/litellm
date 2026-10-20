@@ -830,6 +830,20 @@ async def test_get_character__plain_id_defaults_openai_no_encode(harness):
     assert resp["id"] == "char_raw3"
 
 
+@pytest.mark.asyncio
+async def test_get_character__model_served_only_by_a_provider_wildcard_routes_through_it(harness: Harness) -> None:
+    router: Final = Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "key-w"}}]
+    )
+    harness.base_process.return_value = {"id": "char_raw4"}
+    character_id: Final = encode_character_id_with_provider("char_orig", "openai", "sora-2")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call_get_character(harness, character_id)
+
+    assert harness.processor_data()["model"] == "sora-2"
+
+
 # =========================================================================== #
 #   POST /v1/videos/extensions  -  video_extension                            #
 # =========================================================================== #

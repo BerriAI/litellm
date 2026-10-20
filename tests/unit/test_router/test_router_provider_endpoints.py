@@ -796,6 +796,37 @@ def test_sync_video_status_polls_the_deployment_that_created_the_video(respx_moc
 
 
 @pytest.mark.asyncio
+async def test_video_status_on_a_wildcard_polls_the_deployment_that_created_the_video(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": key}, "model_info": {"id": dep}}
+            for dep, key in (("wc-a", "key-a"), ("wc-b", "key-b"))
+        ]
+    )
+
+    keys: Final = await _poll_status_keys(router, "openai/sora-2", "wc-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_never_pins_to_a_deployment_in_cooldown(respx_mock: respx.MockRouter) -> None:
+    router: Final = _two_account_sora_router()
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="dep-b",
+        original_exception=litellm.RateLimitError(message="upstream 429", llm_provider="openai", model="sora-2"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+
+    keys: Final = await _poll_status_keys(router, "sora", "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-a"}
+
+
+@pytest.mark.asyncio
 async def test_video_status_on_a_routing_group_polls_the_member_deployment_that_created_the_video(
     respx_mock: respx.MockRouter,
 ) -> None:
