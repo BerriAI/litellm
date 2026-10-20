@@ -1711,10 +1711,13 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
         ([{"type": "text", "text": "Checking."}, {"type": "redacted_thinking", "data": "abc"}], [0]),
         ([{"type": "redacted_thinking", "data": "abc"}], []),
         ([{"type": "thinking", "thinking": "hm", "signature": "s"}], []),
+        ([{"type": "text", "text": "Checking."}, "not a content block"], [0]),
     ],
-    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only"],
+    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only", "text-before-a-string"],
 )
-def test_assistant_injection_never_marks_a_thinking_part(content: list[dict[str, str]], marked_parts: list[int]):
+def test_assistant_injection_never_marks_a_thinking_part(
+    content: list[dict[str, str] | str], marked_parts: list[int]
+):
     """Claude 400s a cache_control on a thinking or redacted_thinking block, and Bedrock Converse 400s a cache
     point after reasoning, so the breakpoint goes on the last part that can carry one."""
     messages: Final[list[AllMessageValues]] = [

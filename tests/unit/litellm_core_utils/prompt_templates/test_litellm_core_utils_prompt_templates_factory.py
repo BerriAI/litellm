@@ -1141,9 +1141,9 @@ def test_anthropic_messages_pt_drops_cache_control_from_thinking_blocks_only_und
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])
-@pytest.mark.parametrize("data", ["", "  "], ids=["empty", "whitespace"])
+@pytest.mark.parametrize("data", ["", "  ", None], ids=["empty", "whitespace", "null"])
 def test_anthropic_messages_pt_drops_a_blank_redacted_thinking_block_only_under_drop_params(
-    data: str, placement: str, drop_params: bool
+    data: str | None, placement: str, drop_params: bool
 ):
     """Claude 400s "Invalid `data` in `redacted_thinking` block" on blank data, so drop_params drops the block
     and without it the request reaches Claude as sent."""
