@@ -104,7 +104,7 @@ def test_the_default_priority_is_taken_as_an_integer_or_an_integer_like_value(
     assert parse_default_priority(configured) == expected
 
 
-@pytest.mark.parametrize("configured", ["high", "", "1.5", 1.5, [3], {"level": 3}])
+@pytest.mark.parametrize("configured", ["high", "", "1.5", 1.5, [3], {"level": 3}, True, False])
 def test_any_other_default_priority_is_invalid(configured: object) -> None:
     parsed: Final = parse_default_priority(configured)
     assert isinstance(parsed, InvalidPriority)

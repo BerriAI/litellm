@@ -25600,6 +25600,33 @@ async def test_acompletion_without_any_priority_never_enters_the_scheduler() -> 
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
 
 
+@pytest.mark.parametrize(
+    ("default_priority", "request_kwargs"), [(3, {}), (None, {"priority": 3})], ids=["default", "explicit"]
+)
+async def test_a_request_pinned_to_a_deployment_id_is_served_while_an_earlier_one_waits_in_the_queue(
+    default_priority: int | None, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire"},
+                "model_info": {"id": "qa-chat-deployment"},
+            }
+        ],
+        default_priority=default_priority,
+    )
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="ahead", model_name="qa-chat-deployment"))
+    response: Final = await asyncio.wait_for(
+        router.acompletion(
+            model="qa-chat-deployment", messages=_PRIORITY_MESSAGES, mock_response="pong", **request_kwargs
+        ),
+        timeout=5,
+    )
+    assert response.choices[0].message.content == "pong"
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
 @pytest.mark.parametrize("priority", ["high", [1], 1.5])
 async def test_acompletion_rejects_a_non_integer_priority_before_the_provider_sees_it(
     priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -25761,7 +25788,7 @@ def test_the_router_parses_default_priority_once_at_init(configured: object, exp
     assert _priority_router(configured).default_priority == expected
 
 
-@pytest.mark.parametrize("configured", ["high", 1.5, [3]], ids=["word", "float", "list"])
+@pytest.mark.parametrize("configured", ["high", 1.5, [3], False], ids=["word", "float", "list", "yaml-off"])
 def test_an_invalid_default_priority_is_ignored_with_a_warning(
     configured: object, caplog: pytest.LogCaptureFixture
 ) -> None:

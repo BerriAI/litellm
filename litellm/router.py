@@ -5120,7 +5120,11 @@ class Router:
     async def _wait_for_scheduler_turn(
         self, model: str, priority: int, parent_otel_span: Span | None, request_kwargs: Mapping[str, object]
     ) -> None:
+        pinned: Final = self._pinned_deployment(model)
+
         async def healthy_deployments() -> Sequence[object]:
+            if pinned is not None:
+                return (pinned,)
             deployments, _ = await self._async_get_healthy_deployments(
                 model=model,
                 parent_otel_span=parent_otel_span,
@@ -5146,8 +5150,11 @@ class Router:
         split_litellm_model: Final = litellm_model.split("/")[0]
         return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
 
+    def _pinned_deployment(self, model: str) -> Deployment | None:
+        return self.get_deployment(model_id=model) if model not in self.model_names else None
+
     def _request_deployment_params(self, model: str, kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-        deployment: Final = self.get_deployment(model_id=model) if model not in self.model_names else None
+        deployment: Final = self._pinned_deployment(model)
         if deployment is not None:
             return (deployment.litellm_params.model_dump(exclude_none=True),)
         return tuple(

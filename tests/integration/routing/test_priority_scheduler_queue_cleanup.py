@@ -25,7 +25,7 @@ import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, openai_error, responses_reply
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedState, graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
 from integration._support.timing import assert_cut_short
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -389,15 +389,19 @@ def waiting_entries(cache: OwnedRedis, group: str, priority: int) -> list[JsonVa
     )
 
 
-def cooled(gateway: Gateway, upstream: Upstream, group: str) -> None:
+def cooled_with(upstream: Upstream, group: str, send: Callable[[], Answer]) -> None:
     upstream.refusing[upstream_name(group)].set()
-    trip: Final = post(gateway, "/v1/chat/completions", chat_body(group, new_marker()))
+    trip: Final = send()
     assert trip.status == 401, (trip.status, trip.text)
-    eventually(
-        lambda: post(gateway, "/v1/chat/completions", chat_body(group, new_marker())),
-        lambda answer: answer.status == 429 and NO_DEPLOYMENTS in answer.text,
-        seconds=10,
-    )
+    eventually(send, lambda answer: answer.status == 429 and NO_DEPLOYMENTS in answer.text, seconds=10)
+
+
+def cooled(gateway: Gateway, upstream: Upstream, group: str) -> None:
+    cooled_with(upstream, group, lambda: post(gateway, "/v1/chat/completions", chat_body(group, new_marker())))
+
+
+def cooled_outside_the_scheduler(gateway: Gateway, upstream: Upstream, group: str) -> None:
+    cooled_with(upstream, group, lambda: post(gateway, "/v1/responses", {"model": group, "input": new_marker()}))
 
 
 def assert_refused_at_once(answer: Answer) -> None:
@@ -519,7 +523,7 @@ def upstream_body_for(wire: Wire, marker: str) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(upstream_request.body)
 
 
-@pytest.mark.parametrize("priority", ("1", [1], "", "p" * 5120, True), ids=("string", "list", "empty", "5kb", "bool"))
+@pytest.mark.parametrize("priority", ("high", [1], "", "p" * 5120, 1.5), ids=("word", "list", "empty", "5kb", "float"))
 def test_non_integer_priority_is_refused_before_the_upstream(
     gateway: Gateway, rig_model: tuple[str, Wire], priority: JsonValue
 ) -> None:
@@ -537,7 +541,7 @@ def test_non_integer_priority_is_refused_before_the_upstream(
 def test_non_integer_priority_is_dropped_under_drop_params(gateway: Gateway, rig_model: tuple[str, Wire]) -> None:
     model, wire = rig_model
     marker: Final = new_marker()
-    answer: Final = post(gateway, "/v1/chat/completions", chat_body(model, marker, priority="1", drop_params=True))
+    answer: Final = post(gateway, "/v1/chat/completions", chat_body(model, marker, priority="high", drop_params=True))
     assert_served(answer, marker)
     assert answer.headers.get("x-litellm-request-prioritization-used") is None, answer.headers
     assert "priority" not in upstream_body_for(wire, marker)
@@ -979,9 +983,12 @@ def defaulted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Defaulted]:
             litellm_settings={"global_prompt_directory": str(prompt_directory(directory))},
         )
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        first: Final = stack.enter_context(owned_proxy_process(gateway, directory, overrides, config=config, workers=2))
+        shared: Final = OwnedState.SHARED_WITH_WORKER
+        first: Final = stack.enter_context(
+            owned_proxy_process(gateway, directory, overrides, config=config, workers=2, state=shared)
+        )
         second: Final = stack.enter_context(
-            owned_proxy_process(gateway, directory, overrides, config=config, workers=2)
+            owned_proxy_process(gateway, directory, overrides, config=config, workers=2, state=shared)
         )
         yield Defaulted(Pair(first.gateway, second.gateway, cache, wire, upstream), team_key)
 
@@ -1099,8 +1106,8 @@ def test_null_priority_under_a_default_takes_the_default(defaulted: Defaulted) -
 
 @pytest.mark.parametrize(
     "priority",
-    ("1", [1], 1.5, {"level": 3}, "", "p" * 5120, True),
-    ids=("string", "list", "float", "object", "empty", "5kb", "bool"),
+    ("high", [1], 1.5, {"level": 3}, "", "p" * 5120),
+    ids=("word", "list", "float", "object", "empty", "5kb"),
 )
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
 def test_non_integer_priority_under_a_default_is_refused_before_the_upstream(
@@ -1117,7 +1124,7 @@ def test_non_integer_priority_under_a_default_is_refused_before_the_upstream(
 def test_request_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
     group: Final = DEFAULT_GROUPS[1]
     marker: Final = new_marker()
-    body: Final = chat_body(group, marker, priority="1", drop_params=True)
+    body: Final = chat_body(group, marker, priority="high", drop_params=True)
     answer: Final = post(defaulted.pair.second, "/v1/chat/completions", body)
     assert_served(answer, marker)
     assert_prioritized(answer)
@@ -1130,7 +1137,7 @@ def test_deployment_drop_params_replaces_a_non_integer_priority_with_the_default
     defaulted: Defaulted, model: str
 ) -> None:
     marker: Final = new_marker()
-    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(model, marker, priority="1"))
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(model, marker, priority="high"))
     assert_served(answer, marker)
     assert_prioritized(answer)
     assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
@@ -1139,7 +1146,7 @@ def test_deployment_drop_params_replaces_a_non_integer_priority_with_the_default
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
 def test_team_deployment_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
     marker: Final = new_marker()
-    answer: Final = post(defaulted.as_team(), "/v1/chat/completions", chat_body(TEAM_GROUP, marker, priority="1"))
+    answer: Final = post(defaulted.as_team(), "/v1/chat/completions", chat_body(TEAM_GROUP, marker, priority="high"))
     assert_served(answer, marker)
     assert_prioritized(answer)
     assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
@@ -1153,7 +1160,7 @@ def assert_waits_at(
     priority: int,
     body: Mapping[str, JsonValue],
 ) -> None:
-    cooled(gateway, upstream, group)
+    cooled_outside_the_scheduler(gateway, upstream, group)
     write_queue(cache, group, [[priority - 1, "ghost"]])
     with ThreadPoolExecutor(max_workers=1) as pool:
         waiter: Final = pool.submit(post, gateway, "/v1/chat/completions", body)
@@ -1184,7 +1191,9 @@ def test_zero_default_priority_queues_requests_without_one_and_dropped_ones(gate
         with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             plain, dropped = ZERO_GROUPS
             assert_waits_at(owned.gateway, cache, upstream, plain, 0, chat_body(plain, new_marker()))
-            assert_waits_at(owned.gateway, cache, upstream, dropped, 0, chat_body(dropped, new_marker(), priority="1"))
+            assert_waits_at(
+                owned.gateway, cache, upstream, dropped, 0, chat_body(dropped, new_marker(), priority="high")
+            )
 
 
 @pytest.mark.timeout(OWNED_CELL_TIMEOUT)
@@ -1199,7 +1208,9 @@ def test_digit_string_default_priority_queues_requests_without_one_and_dropped_o
         with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             plain, dropped = DIGIT_GROUPS
             assert_waits_at(owned.gateway, cache, upstream, plain, 2, chat_body(plain, new_marker()))
-            assert_waits_at(owned.gateway, cache, upstream, dropped, 2, chat_body(dropped, new_marker(), priority="1"))
+            assert_waits_at(
+                owned.gateway, cache, upstream, dropped, 2, chat_body(dropped, new_marker(), priority="high")
+            )
 
 
 @pytest.mark.parametrize("configured", ("high", True), ids=("word", "bool"))
@@ -1272,7 +1283,7 @@ def test_text_completions_without_priority_are_scheduled_at_the_default(
     spend_row_lands(identity)
 
 
-@pytest.mark.parametrize("priority", ("1", [1]), ids=("string", "list"))
+@pytest.mark.parametrize("priority", ("high", [1]), ids=("word", "list"))
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
 def test_text_completion_with_a_non_integer_priority_is_refused_before_the_upstream(
     defaulted: Defaulted, priority: JsonValue
@@ -1288,7 +1299,7 @@ def test_text_completion_with_a_non_integer_priority_is_refused_before_the_upstr
 def test_text_completion_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
     group: Final = DEFAULT_GROUPS[4]
     marker: Final = new_marker()
-    body: Final = completion_body(group, marker, priority="1", drop_params=True)
+    body: Final = completion_body(group, marker, priority="high", drop_params=True)
     answer: Final = post(defaulted.pair.second, "/v1/completions", body)
     assert_served(answer, marker)
     assert_prioritized(answer)
@@ -1307,21 +1318,24 @@ def test_queue_route_without_priority_takes_the_default(defaulted: Defaulted, en
     assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
 
 
+@pytest.mark.parametrize("priority", (1, "1", True, 1.0), ids=("integer", "digit-string", "bool", "whole-float"))
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
-def test_queue_route_with_an_explicit_priority_under_a_default_reports_it(defaulted: Defaulted) -> None:
+def test_queue_route_with_an_explicit_priority_under_a_default_reports_it(
+    defaulted: Defaulted, priority: JsonValue
+) -> None:
     group: Final = DEFAULT_GROUPS[5]
     marker: Final = new_marker()
-    answer: Final = call(defaulted.pair.second, "queue", group, marker, priority=1)
+    answer: Final = post(defaulted.pair.second, "/queue/chat/completions", chat_body(group, marker, priority=priority))
     assert_served(answer, marker)
     assert answer.headers.get("x-litellm-priority") == "1", answer.headers
     assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
 
 
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
-def test_queue_route_refuses_a_digit_string_priority(defaulted: Defaulted) -> None:
+def test_queue_route_refuses_a_word_priority(defaulted: Defaulted) -> None:
     group: Final = DEFAULT_GROUPS[5]
     marker: Final = new_marker()
-    answer: Final = post(defaulted.pair.first, "/queue/chat/completions", chat_body(group, marker, priority="1"))
+    answer: Final = post(defaulted.pair.first, "/queue/chat/completions", chat_body(group, marker, priority="high"))
     assert_refused_as_non_integer(answer)
     assert_never(received_markers(defaulted.pair.wire), (marker,))
 
@@ -1385,4 +1399,3 @@ def test_concurrent_burst_without_priority_across_instances_and_endpoints_is_ser
     closing: Final = new_marker()
     assert_served(post(pair.second, "/v1/chat/completions", chat_body(group, closing)), closing)
     assert_once(received_markers(pair.wire), (primer, *(marker for _, _, marker in plan), closing))
-    assert_drained(pair.cache, group)

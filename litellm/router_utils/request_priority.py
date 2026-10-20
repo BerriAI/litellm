@@ -48,7 +48,11 @@ def resolve_request_priority(
 
 
 def parse_default_priority(value: object) -> int | None | InvalidPriority:
-    return None if value is None else _as_priority(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return InvalidPriority(value=value)
+    return _as_priority(value)
 
 
 def unqueueable_priority_message(requested: object) -> str:
