@@ -1600,7 +1600,9 @@ async def test_env_budget_above_a_models_output_limit_sends_that_limit_instead(
 
 
 @pytest.mark.asyncio
-async def test_env_budget_never_goes_above_the_cost_map_limit_when_a_deployment_overrides_it(monkeypatch: pytest.MonkeyPatch):
+async def test_env_budget_never_goes_above_the_cost_map_limit_when_a_deployment_overrides_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
     model: Final = "gemini/gemini-2.5-flash"
     model_limit: Final = _cost_map_max_output_tokens(model)
     monkeypatch.setenv(BUDGET_ENV, str(2 * model_limit))
