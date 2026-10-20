@@ -5401,6 +5401,90 @@ def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: 
     assert result.choices[0].delta.content == "hello"
 
 
+def _later_chunk_outputs(
+    custom_llm_provider: str, later_chunks: Sequence[ChatCompletionChunk], logging_obj: Logging
+) -> tuple[ModelResponseStream, ...]:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_openai_chunk("chunk-0", {"role": "assistant", "content": ""}))
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+    return tuple(output for output in outputs if output is not None)
+
+
+def _wire_dump(chunk: ModelResponseStream) -> dict[str, object]:
+    return chunk.model_dump(exclude_none=True, exclude_unset=True)
+
+
+def test_openai_chunk_creator_keeps_single_choice_logprobs_on_later_chunks(logging_obj: Logging) -> None:
+    logprobs: Final = {"content": [{"token": "hello", "logprob": -0.25, "bytes": [104], "top_logprobs": []}]}
+    chunk: Final = ChatCompletionChunk(
+        id="chunk-1",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 0, "delta": {"content": "hello"}, "finish_reason": None, "logprobs": logprobs}],
+    )
+
+    outputs: Final = _later_chunk_outputs("openai", [chunk], logging_obj)
+
+    assert [_wire_dump(output)["choices"][0]["logprobs"] for output in outputs] == [logprobs]
+
+
+def test_azure_chunk_creator_streams_choice_content_filter_results_on_later_chunks(logging_obj: Logging) -> None:
+    filter_results: Final = {"hate": {"filtered": False, "severity": "safe"}}
+    chunk: Final = ChatCompletionChunk(
+        id="chunk-1",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[
+            {"index": 0, "delta": {"content": "hello"}, "finish_reason": None, "content_filter_results": filter_results}
+        ],
+    )
+
+    outputs: Final = _later_chunk_outputs("azure", [chunk], logging_obj)
+
+    assert [_wire_dump(output)["choices"][0]["content_filter_results"] for output in outputs] == [filter_results]
+    assert ["content_filter_results" in output.choices[0].model_fields_set for output in outputs] == [True]
+
+
+@pytest.mark.parametrize(
+    "special_delta",
+    [
+        pytest.param({"audio": {"id": "audio_1", "data": "AAAA", "transcript": "hi"}}, id="audio"),
+        pytest.param({"images": [{"type": "image_url", "image_url": {"url": "data:,"}, "index": 0}]}, id="images"),
+    ],
+)
+def test_openai_chunk_creator_dumps_special_delta_attributes_like_other_deltas(
+    logging_obj: Logging, special_delta: dict[str, object]
+) -> None:
+    chunk: Final = ChatCompletionChunk.model_construct(
+        id="chunk-1",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 0, "delta": special_delta, "finish_reason": None}],
+    )
+
+    outputs: Final = _later_chunk_outputs("openai", [chunk], logging_obj)
+
+    assert [output.model_dump()["choices"][0]["delta"] for output in outputs] == [
+        {
+            "audio": None,
+            "content": None,
+            "function_call": None,
+            "provider_specific_fields": None,
+            "role": None,
+            "tool_calls": None,
+            **special_delta,
+        }
+    ]
+
+
 def test_openai_chunk_creator_keeps_custom_tool_name_key_on_later_chunks(
     logging_obj: Logging,
 ) -> None:
