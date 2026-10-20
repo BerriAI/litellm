@@ -331,6 +331,45 @@ def test_get_proxy_model_info_names_config_model_info_pricing_as_an_override(mon
     assert info["output_cost_per_token"] == 7e-06
 
 
+def _cost_map_chat_model_listing_batch(provider: str) -> str:
+    return next(
+        f"{provider}/{name.removeprefix(f'{provider}/')}"
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == provider
+        and info.get("mode") == "chat"
+        and "/v1/batch" in (info.get("supported_endpoints") or ())
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "deployment_mode", "lists_batch"),
+    (("azure", "chat", False), ("azure", "batch", True), ("openai", "chat", True)),
+)
+def test_get_proxy_model_info_lists_batch_only_for_deployments_that_can_run_it(
+    monkeypatch, local_model_cost_map, provider, deployment_mode, lists_batch
+):
+    """An Azure chat deployment cannot run batches, which need a separate batch deployment, though the cost map
+    lists /v1/batch for its model. OpenAI batches through any deployment, so its cost map listing stands."""
+    info = _enriched_model_info(
+        monkeypatch,
+        {"model": _cost_map_chat_model_listing_batch(provider)},
+        {"id": "dep-endpoints", "db_model": False, "mode": deployment_mode},
+    )
+    assert ("/v1/batch" in info["supported_endpoints"]) is lists_batch
+    assert "/v1/chat/completions" in info["supported_endpoints"]
+
+
+def test_get_proxy_model_info_lists_batch_for_a_batch_deployment_missing_from_the_cost_map(
+    monkeypatch, local_model_cost_map
+):
+    """``/model_group/info`` lists /v1/batch for a group holding a ``mode: batch`` deployment, and that
+    deployment's own ``/model/info`` row must agree even when the cost map has no entry for it."""
+    info = _enriched_model_info(
+        monkeypatch, {"model": "azure/unmapped-batch-sku"}, {"id": "dep-batch", "db_model": False, "mode": "batch"}
+    )
+    assert info["supported_endpoints"] == ["/v1/batch"]
+
+
 def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as, monkeypatch, local_model_cost_map):
     """LIT-8064. The Admin UI model page reads ``GET /v2/model/info``, so the override report
     has to ride that route too, not only ``/model/info``."""

@@ -189,7 +189,6 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     batch_create_routing,
-    batch_deployment_position,
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
@@ -11367,16 +11366,13 @@ class Router:
         credentials.
         """
         indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
-        usable: Final = tuple(
+        usable: Final = (
             self.model_list[idx] for idx in indices if self.deployment_usable_by_team(self.model_list[idx], team_id)
         )
-        if not usable:
+        first_usable: Final = next(usable, None)
+        if first_usable is None:
             return None
-        usable_mappings: Final = cast(  # cast-ok: model_list holds deployment dicts
-            Sequence[Mapping[str, object]], usable
-        )
-        preferred: Final = usable[batch_deployment_position(usable_mappings)]
-        return Deployment(**preferred) if isinstance(preferred, dict) else preferred
+        return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
@@ -11639,9 +11635,7 @@ class Router:
         model id or model name: by deployment id first, then by model_name, then by
         the team's exact public model name, then by wildcard pattern (team wildcards
         before global ones, so a global "openai/*" never shadows the team's own
-        entry). Name and wildcard lookups never resolve another team's deployment, and
-        prefer a deployment marked `model_info.mode: batch`, so every file and batch
-        call addressed by a mixed group's name lands on the deployment that can run batches.
+        entry). Name and wildcard lookups never resolve another team's deployment.
 
         Returns None when nothing matches or the match is paused via
         `LiteLLM_ProxyModelTable.blocked`, so callers cannot bypass an admin pause
@@ -11663,11 +11657,7 @@ class Router:
         team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
         if not team_indices:
             return None
-        deployments: Final = cast(  # cast-ok: model_list holds deployment dicts
-            Sequence[Mapping[str, object]], self.model_list
-        )
-        team_position: Final = batch_deployment_position(tuple(deployments[idx] for idx in team_indices))
-        team_model: Final = self.model_list[team_indices[team_position]]
+        team_model: Final = self.model_list[team_indices[0]]
         return Deployment(**team_model) if isinstance(team_model, dict) else team_model
 
     def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
@@ -11681,10 +11671,7 @@ class Router:
         potential_wildcard_models: Final = team_wildcard_models or global_wildcard_models
         if not potential_wildcard_models:
             return None
-        wildcard_mappings: Final = cast(  # cast-ok: pattern routes are deployment dicts
-            Sequence[Mapping[str, object]], potential_wildcard_models
-        )
-        wildcard_deployment: Final = potential_wildcard_models[batch_deployment_position(wildcard_mappings)]
+        wildcard_deployment: Final = potential_wildcard_models[0]
         if isinstance(wildcard_deployment, dict):
             return Deployment(**wildcard_deployment)
         if isinstance(wildcard_deployment, Deployment):
@@ -12219,7 +12206,7 @@ class Router:
                     dict.fromkeys(
                         (
                             *(model_group_info.supported_endpoints or ()),
-                            *deployment_supported_endpoints(model_info.get("supported_endpoints"), model),
+                            *deployment_supported_endpoints(model_info.get("supported_endpoints"), model, llm_provider),
                         )
                     )
                 )
@@ -14379,7 +14366,11 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=list(
+                prefer_batch_deployments(
+                    cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
+                )
+            ),
             parent_otel_span=parent_otel_span,
             health_check_probe=health_check_probe,
         )
@@ -14456,11 +14447,7 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(  # cast-ok: the tag and plugin filters keep a list, which prefer_batch_deployments returns as a list
-                list[dict[str, object]],
-                prefer_batch_deployments(cast(Sequence[dict[str, object]], healthy_deployments)),  # cast-ok: same list
-            ),
-            target_order=_target_order,
+            cast(list[dict], healthy_deployments), target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15618,7 +15605,11 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=list(
+                prefer_batch_deployments(
+                    cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
+                )
+            ),
             parent_otel_span=parent_otel_span,
         )
 
@@ -15654,11 +15645,7 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(  # cast-ok: the pre-call checks keep a list, which prefer_batch_deployments returns as a list
-                list[dict[str, object]],
-                prefer_batch_deployments(cast(Sequence[dict[str, object]], healthy_deployments)),  # cast-ok: same list
-            ),
-            target_order=_target_order,
+            healthy_deployments, target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
