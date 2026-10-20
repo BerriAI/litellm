@@ -2,8 +2,6 @@
 Gemini Image Edit Cost Calculator
 """
 
-from typing import Any
-
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as image_generation_cost_calculator,
 )
@@ -12,7 +10,7 @@ from litellm.types.utils import ModelInfo
 
 def cost_calculator(
     model: str,
-    image_response: Any,
+    image_response: object,
     model_info: ModelInfo | None = None,
 ) -> float:
     """

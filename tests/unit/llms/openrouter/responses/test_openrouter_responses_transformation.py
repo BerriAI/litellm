@@ -9,11 +9,21 @@ reasoning.encrypted_content for multi-turn stateless workflows.
 Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
+from unittest.mock import MagicMock
+
+import httpx
 import pytest
 
 import litellm
+from litellm.cost_calculator import get_response_cost_from_hidden_params
+from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.llms.openrouter.responses.transformation import (
     OpenRouterResponsesAPIConfig,
+)
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -116,3 +126,66 @@ class TestOpenRouterResponsesAPIRegistration:
         # The URL should point to OpenRouter's responses endpoint
         url = config.get_complete_url(api_base=None, litellm_params={})
         assert "/responses" in url
+
+
+@pytest.mark.parametrize("cost", [1.23e-5, None])
+def test_openrouter_responses_returns_provider_reported_cost(cost):
+    usage: dict[str, object] = {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 5,
+    }
+    if cost is not None:
+        usage["cost"] = cost
+    response = OpenRouterResponsesAPIConfig().transform_response_api_response(
+        model="openrouter/unmapped-model",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "id": "resp_test",
+                "created_at": 1,
+                "model": "unmapped-model",
+                "object": "response",
+                "output": [],
+                "status": "completed",
+                "usage": usage,
+            },
+        ),
+        logging_obj=MagicMock(),
+    )
+
+    assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["response.completed", "response.incomplete", "response.failed"],
+)
+def test_openrouter_terminal_stream_events_return_provider_reported_cost(event_type):
+    event = OpenRouterResponsesAPIConfig().transform_streaming_response(
+        model="openrouter/unmapped-model",
+        parsed_chunk={
+            "type": event_type,
+            "response": {
+                "id": "resp_test",
+                "created_at": 1,
+                "model": "unmapped-model",
+                "object": "response",
+                "output": [],
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 3,
+                    "total_tokens": 5,
+                    "cost": 1.23e-5,
+                },
+            },
+        },
+        logging_obj=MagicMock(),
+    )
+    assert isinstance(
+        event,
+        (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+    )
+
+    assert event.response.hidden_params["additional_headers"][RESPONSE_COST_HEADER] == 1.23e-5

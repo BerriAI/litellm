@@ -2,7 +2,10 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -10,18 +13,18 @@ from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -46,9 +49,10 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
     spend_log_error,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    _sanitize_error_information_for_spend_logs,
+from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
+    _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_model_access_groups,
+    sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
@@ -98,6 +102,49 @@ def _proxy_stamped_used_client_oauth_token(
     proxy_metadata: Final = request_data.get(proxy_bucket)
     stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
     return stamped if isinstance(stamped, bool) else None
+
+
+def _str_keyed_fields(value: object) -> Mapping[str, object]:
+    return value if is_str_keyed_mapping(value) else {}
+
+
+def _is_model_group(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+_TAG_LIST: Final = TypeAdapter(list[str])
+
+
+def _is_tag_list(value: object) -> bool:
+    try:
+        return bool(_TAG_LIST.validate_python(value, strict=True))
+    except ValidationError:
+        return False
+
+
+_ROUTED_METADATA_FIELD_CHECKS: Final = MappingProxyType({"model_group": _is_model_group, "tags": _is_tag_list})
+
+
+def _routed_metadata_fallback(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    caller_metadata: Final = _str_keyed_fields(request_data.get("metadata"))
+    routed_metadata: Final = _str_keyed_fields(request_data.get("litellm_metadata"))
+    return {
+        field: routed_metadata[field]
+        for field, is_valid in _ROUTED_METADATA_FIELD_CHECKS.items()
+        if not caller_metadata.get(field) and is_valid(routed_metadata.get(field))
+    }
+
+
+def _failure_snapshot_with_guardrails_recorded_after_it(
+    failure_snapshot: object, recorded_guardrail_information: object
+) -> Mapping[str, object] | None:
+    if (
+        not recorded_guardrail_information
+        or not isinstance(failure_snapshot, dict)
+        or failure_snapshot.get("guardrail_information")
+    ):
+        return None
+    return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -153,7 +200,7 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
-    ):
+    ) -> None:
         try:
             await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
@@ -169,11 +216,13 @@ class _ProxyDBLogger(CustomLogger):
 
         request_route: Final = user_api_key_dict.request_route
         if (
-            _ProxyDBLogger._should_track_errors_in_db() is False
+            ProxyDBLogger._should_track_errors_in_db() is False
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
             )
+            or request_route is not None
+            and RouteChecks.is_dashboard_session_info_route(request_route, user_api_key_dict.team_id)
         ):
             return
 
@@ -198,18 +247,19 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
+            sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 
-        _metadata = await _ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
+        _metadata = await ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(  # rebind-ok: pre-existing rebinding on a rename-only line
             metadata=_metadata, original_exception=original_exception
         )
 
-        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data, request_route)
+        request_fields: Final = _str_keyed_fields(request_data)
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
+        existing_metadata.update({**_routed_metadata_fallback(request_fields), **_metadata})
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
         if (
@@ -275,13 +325,22 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
+        failure_snapshot_with_late_guardrails: Final = _failure_snapshot_with_guardrails_recorded_after_it(
+            request_data.get("standard_logging_object"),
+            existing_metadata.get("standard_logging_guardrail_information"),
+        )
+
         await self._spend_writer().update_database(
             token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
-            end_user_id=user_api_key_dict.end_user_id,
+            end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
-            kwargs=request_data,
+            kwargs=(
+                request_data
+                if failure_snapshot_with_late_guardrails is None
+                else {**request_data, "standard_logging_object": failure_snapshot_with_late_guardrails}
+            ),
             completion_response=original_exception,
             start_time=actual_start_time,
             end_time=datetime.now(),
@@ -289,11 +348,10 @@ class _ProxyDBLogger(CustomLogger):
             project_id=user_api_key_dict.project_id,
         )
 
-    @log_db_metrics
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: litellm.ModelResponse | Any | None,  # response from completion
+        completion_response: litellm.ModelResponse | object | None,  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -311,14 +369,14 @@ class _ProxyDBLogger(CustomLogger):
                 kwargs.get("stream", None),
                 kwargs.get("complete_streaming_response", None),
             )
-            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
             # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
             # Avoids a cache/DB lookup on every normal LLM request.
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
-                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
+                metadata = await ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
                     metadata=metadata,
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
@@ -399,7 +457,6 @@ class _ProxyDBLogger(CustomLogger):
                         update_cache_read_keys=update_cache_read_keys(
                             user_id=user_id,
                             end_user_id=end_user_id,
-                            team_id=team_id,
                             tags=tags,
                             response_cost=response_cost,
                         ),
@@ -449,11 +506,7 @@ class _ProxyDBLogger(CustomLogger):
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
-                # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
-                # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
-                if sl_object is None and (
-                    not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
-                ):
+                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") == "_arealtime"):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),
@@ -505,7 +558,7 @@ class _ProxyDBLogger(CustomLogger):
     ) -> dict[str, object]:
         if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
-        return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+        return await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:
@@ -596,6 +649,9 @@ class _ProxyDBLogger(CustomLogger):
         return
 
 
+ProxyDBLogger: Final = _ProxyDBLogger
+
+
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
@@ -611,7 +667,7 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 async def run_spend_event(line: bytes) -> None:
-    await _ProxyDBLogger().run_spend_event(line)
+    await ProxyDBLogger().run_spend_event(line)
 
 
 def _is_unbilled_interaction_response(completion_response: object) -> bool:

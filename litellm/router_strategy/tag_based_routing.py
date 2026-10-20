@@ -5,6 +5,7 @@ Use this to route requests between Teams
 - if deployments are set with default tags, return all default deployment
 - If no default_deployments are set, return all deployments
 - A "!tag" excludes deployments carrying that tag; a "&tag" requires it
+- With tag_routing_prefix set, only prefixed request tags and key/team/project tags route
 """
 
 import re
@@ -383,7 +384,7 @@ def _all_deployments_or_fallback(
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
     try:
-        return llm_router_instance._get_all_deployments(model_name=model)
+        return llm_router_instance.get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
         return fallback
 
@@ -432,6 +433,15 @@ def _inherited_constraint_sets(
     return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
+def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_prefix: str) -> tuple[str, ...]:
+    if not routing_prefix:
+        return tuple(request_tags)
+    policy_tags: Final = frozenset(_tags_in_metadata(metadata, key="inherited_tags"))
+    return tuple(
+        tag.removeprefix(routing_prefix) for tag in request_tags if tag.startswith(routing_prefix) or tag in policy_tags
+    )
+
+
 def _tag_known_to_group(
     llm_router_instance: LitellmRouter,
     model: str,
@@ -442,7 +452,7 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+        all_deployments: Final = llm_router_instance.get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
@@ -525,12 +535,13 @@ async def get_deployments_for_tag(
 
         # A tag_routing_prefix-marked tag is stripped before matching -- everything
         # downstream (_split_tags, deployment matching) works off the unprefixed
-        # value, exactly as if the caller had sent it unprefixed -- and its
-        # post-strip value is remembered in routing_confirmed as an explicit,
-        # caller-declared routing directive, exempt from the "maybe foreign to this
-        # group" heuristics that unprefixed tags still go through unchanged below.
-        rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
-        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        # value -- and its post-strip value is remembered in routing_confirmed as an
+        # explicit, caller-declared routing directive, exempt from the "maybe
+        # foreign to this group" heuristics below.
+        routing_confirmed: Final = _strip_routing_prefix(request_tags or [], routing_prefix)[1]
+        required_tags, positive_tags, excluded_patterns = _split_tags(
+            _tags_that_route(request_tags or (), metadata, routing_prefix)
+        )
         inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
             metadata.get("inherited_tags"), routing_prefix
         )
@@ -665,9 +676,9 @@ def _tags_in_metadata(metadata: object, key: str = "tags") -> list[str]:
     return [tag for tag in typed_tags if isinstance(tag, str)]
 
 
-def _get_tags_from_request_kwargs(
+def get_tags_from_request_kwargs(
     request_kwargs: Mapping[str, object] | None = None,
-    metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
+    metadata_variable_name: str | None = None,
 ) -> list[str]:
     """
     Helper to get tags from request kwargs
@@ -693,3 +704,6 @@ def _get_tags_from_request_kwargs(
         typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
+
+
+_get_tags_from_request_kwargs = get_tags_from_request_kwargs

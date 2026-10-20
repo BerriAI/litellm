@@ -2,13 +2,19 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
+from fastapi import HTTPException
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import (
+    UnresolvableSecretReference,
+    get_secret_str,
+    resolve_local_oidc_reference,
+)
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
@@ -37,6 +43,19 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
     return credentials
 
 
+def _resolve_oidc_reference(credential: str | None) -> str | None:
+    if credential is None:
+        return None
+    match resolve_local_oidc_reference(credential):
+        case UnresolvableSecretReference(kind=kind, reason=reason):
+            raise HTTPException(
+                status_code=401,
+                detail=f"pass-through credential {kind} secret reference could not be resolved: {reason}",
+            )
+        case str() as resolved:
+            return resolved
+
+
 class PassthroughEndpointRouter:
     """
     Use this class to Get credentials for pass-through endpoints
@@ -60,14 +79,14 @@ class PassthroughEndpointRouter:
             region_name=region_name,
         )
         if deployment_api_key is not None:
-            return deployment_api_key
+            return _resolve_oidc_reference(deployment_api_key)
         verbose_router_logger.debug(
             "No pass-through deployment credentials found for %s, looking for env variable", custom_llm_provider
         )
         _env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
             custom_llm_provider=custom_llm_provider,
         )
-        return get_secret_str(_env_variable_name)
+        return _resolve_oidc_reference(get_secret_str(_env_variable_name))
 
     def _get_deployment_api_key(
         self,

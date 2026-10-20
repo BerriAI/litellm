@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # Add the parent directory to the system path
-
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -97,7 +97,7 @@ class TestCooldownCacheExceptionMasking:
     def test_exception_with_api_keys_masked(self, cooldown_cache):
         """Test that API keys in exceptions are properly masked"""
         exception_with_key = (
-            "Authentication failed with api_key=sk-1234567890abcdefghijklmnopqrstuvwxyz "
+            "Authentication failed with api_key=sk-9876567890abcdefghijklmnopqrstuvwxyz "
             "and token=bearer_token_123456789 for model gpt-4"
         )
 
@@ -115,7 +115,7 @@ class TestCooldownCacheExceptionMasking:
         masked_exception = cooldown_data["exception_received"]
 
         # Should mask the sensitive content while preserving structure
-        assert masked_exception.startswith("Authentication failed with api_key=sk-12345678")
+        assert masked_exception.startswith("Authentication failed with api_key=sk-98765678")
         assert "*" in masked_exception
         assert len(masked_exception) == len(exception_with_key)
 
@@ -240,7 +240,7 @@ class TestCooldownCacheExceptionMasking:
 
         # Test masking behavior with these settings
         long_string = "A" * 100  # 100 character string
-        masked = cache.exception_masker._mask_value(long_string)
+        masked = cache.exception_masker.mask_value(long_string)
 
         # Should show first 50 characters, then all asterisks
         expected = "A" * 50 + "*" * 50
@@ -582,3 +582,48 @@ class TestCooldownSurvivesUnrelatedCacheTraffic:
         assert [model_id] == [entry[0] for entry in active], (
             "unrelated router cache traffic must not evict a cooldown that is still running"
         )
+
+
+class TestCooldownStoreCallsDeclareTheirKeyFamily:
+    """Every cooldown store call runs inside ``service_target("router_cooldowns")`` so the
+    Redis service spans read ``redis.set router_cooldowns`` / ``redis.mget router_cooldowns``,
+    the sync paths included (the async MGET already did)."""
+
+    def _cooldown_cache_with_recording_store(self, seen: list[tuple[str, str | None]]) -> CooldownCache:
+        cc = CooldownCache(cache=DualCache(in_memory_cache=InMemoryCache()), default_cooldown_time=60.0)
+        store = MagicMock()
+
+        def _set_cache(**_kwargs):
+            seen.append(("set", current_service_target()))
+
+        def _batch_get_cache(**_kwargs):
+            seen.append(("mget", current_service_target()))
+            return []
+
+        store.set_cache.side_effect = _set_cache
+        store.batch_get_cache.side_effect = _batch_get_cache
+        cc._cooldown_store = store
+        return cc
+
+    def test_sync_cooldown_write_runs_under_router_cooldowns(self):
+        seen: list[tuple[str, str | None]] = []
+        cc = self._cooldown_cache_with_recording_store(seen)
+
+        cc.add_deployment_to_cooldown(
+            model_id="dep-1",
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=30.0,
+        )
+
+        assert seen == [("set", "router_cooldowns")]
+        assert current_service_target() is None
+
+    def test_sync_cooldown_reads_run_under_router_cooldowns(self):
+        seen: list[tuple[str, str | None]] = []
+        cc = self._cooldown_cache_with_recording_store(seen)
+
+        assert cc.get_active_cooldowns(["dep-1"], parent_otel_span=None) == []
+        assert cc.get_min_cooldown(["dep-1"], parent_otel_span=None) == 60.0
+
+        assert seen == [("mget", "router_cooldowns"), ("mget", "router_cooldowns")]

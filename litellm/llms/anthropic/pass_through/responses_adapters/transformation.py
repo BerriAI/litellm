@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
@@ -18,14 +18,16 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_budget,
+    reasoning_effort_from_thinking,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
 )
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -74,8 +76,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
-        return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
+        chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+        return LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage(chat_usage)
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #
@@ -94,6 +96,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         elif source_type == "url":
             return source.get("url")
         return None
+
+    @staticmethod
+    def _input_image_part(url: str) -> dict[str, object]:  # mutable-ok: API message payload
+        return {"type": "input_image", "image_url": url, "detail": "auto"}
 
     @staticmethod
     def _translate_anthropic_document_block_to_file_part(
@@ -115,7 +121,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             raw_title: Final = block.get("title")
             filename: Final = raw_title if isinstance(raw_title, str) and raw_title else "document.pdf"
-            return {  # mutable-ok: API message payload
+            return {
                 "type": "input_file",
                 "filename": filename,
                 "file_data": f"data:{media_type};base64,{data}",
@@ -124,21 +130,99 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             url: Final = source.get("url")
             if not isinstance(url, str) or not url:
                 return None
-            return {"type": "input_file", "file_url": url}  # mutable-ok: API message payload
+            return {"type": "input_file", "file_url": url}
         return None
+
+    @staticmethod
+    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
+            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
+            if isinstance(block, dict)
+        )
+
+    @classmethod
+    def _tool_result_image_parts(
+        cls, blocks: Sequence[Mapping[str, object]]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: json parts
+        """Each image block as an input_image part, keeping a breakpoint the image carries."""
+        sources: Final = tuple(
+            (cls._translate_anthropic_image_source_to_url(block.get("source")), block.get("prompt_cache_breakpoint"))
+            for block in blocks
+            if block.get("type") == "image"
+        )
+        return tuple(
+            with_prompt_cache_breakpoint(cls._input_image_part(url), breakpoint) for url, breakpoint in sources if url
+        )
+
+    @classmethod
+    def _tool_result_images_by_breakpoint(
+        cls, block: Mapping[str, object]
+    ) -> tuple[object, tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:  # mutable-ok: json parts
+        """The breakpoint covering a tool_result, its images at or before that breakpoint, and its images after it.
+
+        A mark on the tool_result covers all its images, and a mark on a block inside it covers the images up to that
+        block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
+        the mark covers whole.
+        """
+        inner: Final = cls._content_blocks(block.get("content"))
+        own_breakpoint: Final = block.get("prompt_cache_breakpoint")
+        if own_breakpoint is not None:
+            return own_breakpoint, cls._tool_result_image_parts(inner), ()
+        last_marked: Final = next(
+            (
+                position
+                for position in reversed(range(len(inner)))
+                if inner[position].get("prompt_cache_breakpoint") is not None
+            ),
+            None,
+        )
+        if last_marked is None:
+            return None, (), cls._tool_result_image_parts(inner)
+        return (
+            inner[last_marked].get("prompt_cache_breakpoint"),
+            cls._tool_result_image_parts(inner[: last_marked + 1]),
+            cls._tool_result_image_parts(inner[last_marked + 1 :]),
+        )
+
+    @staticmethod
+    def _tool_result_images_message(
+        image_parts: Sequence[Mapping[str, object]],
+        prompt_cache_breakpoint: object,
+    ) -> dict[str, object]:  # mutable-ok: API message payload
+        """Tool result images as one user message, the tool_result's breakpoint on the last image.
+
+        OpenAI caches only up to a breakpoint, so a marked result's images go right after its output and ahead of any
+        later output, the images Anthropic caches for that mark.
+        """
+        *earlier_images, last_image = image_parts
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+                *earlier_images,
+                with_prompt_cache_breakpoint(last_image, prompt_cache_breakpoint),
+            ],
+        }
 
     @staticmethod
     def _tool_result_output_value(
         output_text: str,
         file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
+        prompt_cache_breakpoint: object,
     ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
-        """Plain string output, or a part list when document file parts are present."""
-        if not file_parts:
+        """Plain string output, or a part list when document file parts or a cache breakpoint are present.
+
+        OpenAI reads a breakpoint only on a part, so a marked result ends on a part that carries it.
+        """
+        text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
+        parts: Final = [*text_parts, *file_parts]
+        if not parts or (not file_parts and prompt_cache_breakpoint is None):
             return output_text
-        text_parts: Final = (
-            [{"type": "input_text", "text": output_text}] if output_text else []  # mutable-ok: API message payload
-        )
-        return [*text_parts, *file_parts]  # mutable-ok: API message payload
+        return [*parts[:-1], with_prompt_cache_breakpoint(parts[-1], prompt_cache_breakpoint)]
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
@@ -146,12 +230,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
         """Convert in-sequence system content to Responses input-text parts."""
         if isinstance(content, str):
-            return (
-                [{"type": "input_text", "text": content}] if content else []  # mutable-ok: API message payload
-            )
+            return [{"type": "input_text", "text": content}] if content else []
         if not isinstance(content, list):
-            return []  # mutable-ok: API message payload
-        return [  # mutable-ok: API message payload
+            return []
+        return [
             with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
@@ -203,14 +285,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
-            return tuple(dict(item) for item in replayed)  # mutable-ok: API message payload
+            return tuple(dict(item) for item in replayed)
         if btype == "tool_use":
             return (
-                {  # mutable-ok: API message payload
+                {
                     "type": "function_call",
                     "call_id": first.get("id", ""),
                     "name": first.get("name", ""),
-                    "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
+                    "arguments": json.dumps(first.get("input", {})),
                 },
             )
         return ()
@@ -239,7 +321,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 system_parts = self._translate_midturn_system_content_to_responses(m.get("content"))
                 if system_parts:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "system",
                             "content": system_parts,
@@ -261,7 +343,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     user_parts: list[Mapping[str, object]] = []
-                    tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
+                    tool_image_parts: list[dict[str, object]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -278,7 +360,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             if url:
                                 user_parts.append(
                                     with_prompt_cache_breakpoint(
-                                        {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
+                                        self._input_image_part(url), block.get("prompt_cache_breakpoint")
                                     )
                                 )
                         elif btype == "document":
@@ -290,6 +372,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                            tool_breakpoint, covered_image_parts, later_image_parts = (
+                                self._tool_result_images_by_breakpoint(tool_result_block)
+                            )
                             document_candidates = (
                                 tuple(
                                     self._translate_anthropic_document_block_to_file_part(c)
@@ -305,48 +391,38 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
-                                ]
-                                output_text = "\n".join(parts)
-                                image_candidates = tuple(
-                                    self._translate_anthropic_image_source_to_url(c.get("source"))
-                                    for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "image"
-                                )
-                                image_urls = tuple(url for url in image_candidates if url)
-                                if image_urls:
+                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
+                                if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
-                                    tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
-                                        for url in image_urls
-                                    )
                             else:
                                 output_text = str(inner)
+                            images_inside_breakpoint = (
+                                (*tool_image_parts, *covered_image_parts) if tool_breakpoint is not None else ()
+                            )
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
-                                    "output": self._tool_result_output_value(output_text, tool_file_parts),
+                                    "output": self._tool_result_output_value(
+                                        output_text,
+                                        tool_file_parts,
+                                        None if images_inside_breakpoint else tool_breakpoint,
+                                    ),
                                 }
                             )
+                            if images_inside_breakpoint:
+                                input_items.append(
+                                    self._tool_result_images_message(images_inside_breakpoint, tool_breakpoint)
+                                )
+                                tool_image_parts.clear()
+                            tool_image_parts.extend(later_image_parts)
                     if tool_image_parts:
-                        boundary_part = {  # mutable-ok: json content part
-                            "type": "input_text",
-                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
-                        }
-                        input_items.append(
-                            {  # mutable-ok: json input item
-                                "type": "message",
-                                "role": "user",
-                                "content": [boundary_part, *tool_image_parts],  # mutable-ok: json content list
-                            }
-                        )
+                        input_items.append(self._tool_result_images_message(tool_image_parts, None))
                     if user_parts:
                         input_items.append(
                             {
@@ -372,8 +448,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
                         for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
-                    asst_parts: list[dict[str, Any]] = [  # mutable-ok: API message payload
-                        {"type": "output_text", "text": block.get("text", "")}  # mutable-ok: API message payload
+                    asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
+                        {"type": "output_text", "text": block.get("text", "")}
                         for block in blocks
                         if block.get("type") == "text"
                     ]
@@ -412,7 +488,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
-                func_tool["parameters"] = tool_dict["input_schema"]
+                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
             result.append(func_tool)
         return result
 
@@ -465,6 +541,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        auto_summary_level: str = "detailed",
+        *,
+        drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -485,9 +564,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            raw_budget: Final = thinking.get("budget_tokens", 0)
-            budget_tokens: Final = int(raw_budget) if isinstance(raw_budget, (int, float)) else 0
-            effort = reasoning_effort_from_thinking_budget(budget_tokens)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            if budget_effort is None:
+                return None
+            effort = budget_effort
         else:
             return None
 
@@ -497,13 +577,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if summary:
             result["summary"] = summary
         elif auto_summary:
-            result["summary"] = "detailed"
+            result["summary"] = auto_summary_level
         return result
+
+    @classmethod
+    def system_blocks_to_instructions(cls, system: object) -> str:
+        return "\n".join(
+            text
+            for block in cls._content_blocks(system)
+            if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
+        )
 
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        auto_summary_level: str = "detailed",
+        *,
+        drop_params: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -512,7 +603,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
-        Responses API rejects ``include``.
+        Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
+        opt-in auto summary injects when the client sent none.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -531,27 +623,25 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if developer_parts:
             input_items.insert(
                 0,
-                {  # mutable-ok: API message payload
+                {
                     "type": "message",
                     "role": "developer",
                     "content": developer_parts,
                 },
             )
 
-        responses_kwargs: Final[dict[str, Any]] = {
+        responses_kwargs: Final[dict[str, object]] = {
             "model": model,
             "input": input_items,
         }
         if include_encrypted_reasoning:
-            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: API request payload
+            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]
 
         if system and not developer_parts:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
             elif isinstance(system, list):
-                responses_kwargs["instructions"] = "\n".join(
-                    filter(None, (b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"))
-                )
+                responses_kwargs["instructions"] = self.system_blocks_to_instructions(system)
 
         # max_tokens -> max_output_tokens
         max_tokens: Final = anthropic_request.get("max_tokens")
@@ -585,6 +675,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
+                auto_summary_level=auto_summary_level,
+                drop_params=drop_params,
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning

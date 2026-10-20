@@ -5,15 +5,18 @@ services:
     build:
       context: ..
       target: runtime
+      args:
+        LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:-}
     command: ["--config", "/app/tracing-config.yaml", "--port", "4000"]
     environment:
-      LITELLM_MASTER_KEY: local-tracing-master-key
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: sk-local-tracing-salt-key
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
-      CLICKHOUSE_URL: http://default:local-tracing@clickhouse:8123
-      CLICKHOUSE_READER_URL: http://default:local-tracing@clickhouse:8123
-      CLICKHOUSE_DATABASE: litellm
+      LITELLM_LENS_URL: ${LITELLM_LENS_URL:?set the Lens URL reachable from the gateway container}
+      LITELLM_LENS_PUBLIC_URL: ${LITELLM_LENS_PUBLIC_URL:?set the Lens URL reachable from your browser and agents}
+      LITELLM_LENS_SERVICE_TOKEN: ${LITELLM_LENS_SERVICE_TOKEN:?set LITELLM_LENS_SERVICE_TOKEN}
+      LENS_GATEWAY_SECRET: ${LENS_GATEWAY_SECRET:?set the same signing secret on Lens and the gateway}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ./tracing-config.yaml:/app/tracing-config.yaml:ro
@@ -21,8 +24,6 @@ services:
       - "127.0.0.1:4002:4000"
     depends_on:
       db:
-        condition: service_healthy
-      clickhouse:
         condition: service_healthy
 
   db:
@@ -41,22 +42,5 @@ services:
       timeout: 5s
       retries: 10
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:26.9.6.6
-    environment:
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: local-tracing
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-    ports:
-      - "127.0.0.1:18123:8123"
-    healthcheck:
-      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "local-tracing", "--query", "SELECT 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
 volumes:
   postgres_data:
-  clickhouse_data:
