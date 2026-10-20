@@ -15,7 +15,6 @@ are checked by the genuine decode round-trip.
 """
 
 from typing import Final
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -425,23 +424,20 @@ def test_encode_video__non_video_object_passthrough(response: object) -> None:
     assert encode_video_id_in_response(response, "openai", "sora-2") is response
 
 
-def _router_resolving(names: dict[str, str]) -> MagicMock:
-    router: Final = MagicMock()
-    router.resolve_model_name_from_model_id = MagicMock(
-        side_effect=lambda model_id, custom_llm_provider=None: names.get(model_id)
+def _router_with_groups(*names: str) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/sora-2", "api_key": "group-key"}} for name in names
+        ]
     )
-    return router
 
 
 def test_routable_model_name__keeps_a_name_the_router_resolves() -> None:
-    router: Final = _router_resolving({"sora-alias": "sora-alias"})
-
-    assert routable_model_name("sora-alias", router, "openai") == "sora-alias"
-    router.resolve_model_name_from_model_id.assert_called_once_with("sora-alias", "openai")
+    assert routable_model_name("sora-alias", _router_with_groups("sora-alias"), "openai") == "sora-alias"
 
 
 def test_routable_model_name__drops_a_name_the_router_cannot_route() -> None:
-    assert routable_model_name("team-public-name", _router_resolving({}), "openai") is None
+    assert routable_model_name("team-public-name", _router_with_groups("sora-alias"), "openai") is None
 
 
 def test_routable_model_name__keeps_the_name_without_a_router() -> None:
@@ -450,7 +446,7 @@ def test_routable_model_name__keeps_the_name_without_a_router() -> None:
 
 @pytest.mark.parametrize("model", [None, "", 7, "sora;model_id:evil"])
 def test_routable_model_name__never_returns_a_name_unsafe_for_the_id(model: object) -> None:
-    assert routable_model_name(model, _router_resolving({"sora;model_id:evil": "x"}), "openai") is None
+    assert routable_model_name(model, _router_with_groups("sora;model_id:evil"), "openai") is None
 
 
 def _two_groups_sharing_sora() -> Router:
@@ -533,10 +529,10 @@ def _fallback_router() -> Router:
                 "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
                 "model_info": {"id": f"dep-{name}"},
             }
-            for name in ("sora-pair", "sora-backup")
+            for name in ("sora-pair", "sora-backup", "sora-last")
         ],
         model_group_alias={"sora-alias": "sora-pair"},
-        fallbacks=[{"sora-pair": ["sora-backup"]}],
+        fallbacks=[{"sora-pair": ["sora-backup"]}, {"sora-backup": ["sora-last"]}],
     )
 
 
@@ -556,12 +552,22 @@ def _wildcard_router() -> Router:
     ("requested_model", "answering_deployment", "expected"),
     [
         ("sora-pair", "dep-sora-backup", "sora-pair"),
+        ("sora-pair", "dep-sora-last", "sora-pair"),
+        ("sora-backup", "dep-sora-pair", None),
         ("sora-pair", "dep-sora-pair", None),
         ("sora-alias", "dep-sora-pair", None),
         ("sora-pair", None, None),
         (None, "dep-sora-backup", None),
     ],
-    ids=["fallback-served", "served-by-own-group", "served-by-alias-target", "unrouted", "no-requested-model"],
+    ids=[
+        "fallback-served",
+        "chained-fallback-served",
+        "served-by-a-group-it-never-falls-back-to",
+        "served-by-own-group",
+        "served-by-alias-target",
+        "unrouted",
+        "no-requested-model",
+    ],
 )
 def test_fallback_requested_model__names_the_asked_group_only_when_another_group_served_the_create(
     requested_model: str | None, answering_deployment: str | None, expected: str | None
