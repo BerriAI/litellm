@@ -29,7 +29,7 @@ without the optional STT extras installed.
 import asyncio
 import inspect
 from collections.abc import Callable, Iterable, Mapping
-from types import MappingProxyType, ModuleType
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -100,11 +100,37 @@ class _AudioEncoding(Protocol):
     def LINEAR_PCM(self) -> object: ...
 
 
-def _auth_factory(riva_module: ModuleType) -> Callable[..., _RivaAuth]:
+class _RivaClientModule(Protocol):
+    """The ``riva.client`` entry points this handler calls."""
+
+    @property
+    def Auth(self) -> Callable[..., _RivaAuth]: ...
+
+    @property
+    def ASRService(self) -> Callable[[_RivaAuth], _AsrService]: ...
+
+
+class _RivaAsrModule(Protocol):
+    """The protobuf constructors this handler calls, from whichever module exposes them."""
+
+    @property
+    def AudioEncoding(self) -> _AudioEncoding: ...
+
+    @property
+    def RecognitionConfig(self) -> Callable[..., _RecognitionConfig]: ...
+
+    @property
+    def StreamingRecognitionConfig(self) -> Callable[..., _StreamingRecognitionConfig]: ...
+
+    @property
+    def EndpointingConfig(self) -> Callable[..., _EndpointingConfig]: ...
+
+
+def _auth_factory(riva_module: _RivaClientModule) -> Callable[..., _RivaAuth]:
     return riva_module.Auth
 
 
-def _audio_encoding(riva_asr_module: ModuleType) -> _AudioEncoding:
+def _audio_encoding(riva_asr_module: _RivaAsrModule) -> _AudioEncoding:
     return riva_asr_module.AudioEncoding
 
 
@@ -230,7 +256,7 @@ class NvidiaRivaAudioTranscription:
                 message="NvidiaRivaAudioTranscriptionConfig produced an unexpected request payload type.",
             )
 
-        recognition_config_dict: Final[dict[str, Any]] = request_payload["recognition_config"]
+        recognition_config_dict: Final[dict[str, object]] = request_payload["recognition_config"]
         # The wire format is fixed by our resampler; override anything stale
         # the caller passed in so the gRPC config matches the bytes we send.
         recognition_config_dict["sample_rate_hertz"] = RIVA_TARGET_SAMPLE_RATE_HZ
@@ -239,7 +265,7 @@ class NvidiaRivaAudioTranscription:
 
         response_format: Final = request_payload.get("response_format") or "json"
         timestamp_granularities: Final = request_payload.get("timestamp_granularities")
-        riva_offline: Final = bool(request_payload.get("riva_offline", False))
+        riva_offline: Final = bool(optional_params.get("riva_offline", False))
 
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(
@@ -325,7 +351,7 @@ class NvidiaRivaAudioTranscription:
 
     def _construct_auth(
         self,
-        riva_module: ModuleType,
+        riva_module: _RivaClientModule,
         api_base: str,
         api_key: str | None,
         optional_params: dict,
@@ -357,7 +383,7 @@ class NvidiaRivaAudioTranscription:
             return _auth_factory(riva_module)(None, use_ssl, api_base, metadata)
 
     def _build_recognition_config_proto(
-        self, riva_asr_module: ModuleType, recognition_config_dict: dict[str, Any]
+        self, riva_asr_module: _RivaAsrModule, recognition_config_dict: dict[str, Any]
     ) -> _RecognitionConfig:
         encoding_name: Final = (recognition_config_dict.get("encoding") or "LINEAR_PCM").upper()
         encoding_enum: Final[object] = getattr(
@@ -395,7 +421,7 @@ class NvidiaRivaAudioTranscription:
     def _streaming_responses(
         self,
         asr_service: _AsrService,
-        riva_asr_module: ModuleType,
+        riva_asr_module: _RivaAsrModule,
         pcm_bytes: bytes,
         recognition_config: _RecognitionConfig,
         timeout: float | None,
@@ -485,7 +511,7 @@ class NvidiaRivaAudioTranscription:
         return final_results
 
 
-def _import_riva() -> tuple[ModuleType, ModuleType]:
+def _import_riva() -> tuple[_RivaClientModule, _RivaAsrModule]:
     """
     Lazy import of ``riva.client`` and ``riva.client.proto.riva_asr_pb2``.
 

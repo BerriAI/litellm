@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
@@ -44,6 +44,15 @@ const SETTINGS_FIXTURE = [
     field_options: ["5m", "1h"],
     field_tab: "prompt_caching",
     field_default_value: null,
+  },
+  {
+    field_name: "openai_system_messages_first",
+    field_type: "Boolean",
+    field_value: false,
+    field_description: "openai system first toggle",
+    stored_in_db: null,
+    field_tab: "prompt_caching",
+    field_default_value: false,
   },
   {
     field_name: "max_ui_session_budget",
@@ -101,6 +110,39 @@ describe("GeneralSettings General tab", () => {
   });
 });
 
+describe("GeneralSettings Prompt Caching tab", () => {
+  beforeEach(() => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
+    vi.mocked(updateConfigFieldSetting).mockClear();
+    vi.mocked(deleteConfigFieldSetting).mockClear();
+  });
+
+  it("persists openai_system_messages_first when its switch is turned on", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(await screen.findByRole("tab", { name: "Prompt Caching" }));
+    const toggle = await screen.findByRole("switch", { name: "System messages first for OpenAI" });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(updateConfigFieldSetting).toHaveBeenCalledWith("token", "openai_system_messages_first", true);
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prompt caching rows off the General tab table", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(screen.getByText("General"));
+    await settingsRow("max_ui_session_budget");
+
+    expect(screen.queryByText("openai_system_messages_first")).not.toBeInTheDocument();
+  });
+});
+
 // The five tabs here are proxy-wide settings. Auto-routers moved to Models + Endpoints.
 describe("GeneralSettings tabs", () => {
   beforeEach(() => {
@@ -115,6 +157,56 @@ describe("GeneralSettings tabs", () => {
     }
     expect(screen.queryByRole("tab", { name: /auto.?router/i })).not.toBeInTheDocument();
   });
+});
+
+it("persists a List setting typed as comma-separated text as a trimmed string array", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "transcribe_media_buckets",
+      field_type: "List",
+      field_value: ["old-bucket"],
+      field_description: "buckets",
+      stored_in_db: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  const input = await screen.findByRole("textbox", { name: "transcribe_media_buckets" });
+  expect(input).toHaveValue("old-bucket");
+  fireEvent.change(input, { target: { value: " team-audio, shared.audio ,, " } });
+  await user.click(
+    within(screen.getByRole("row", { name: /transcribe_media_buckets/ })).getByRole("button", { name: "Update" }),
+  );
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    ["token", "transcribe_media_buckets", ["team-audio", "shared.audio"]],
+  ]);
+});
+
+it("clears a stored List setting when Update is clicked on an emptied input", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "transcribe_media_buckets",
+      field_type: "List",
+      field_value: ["old-bucket"],
+      field_description: "buckets",
+      stored_in_db: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  vi.mocked(deleteConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  const input = await screen.findByRole("textbox", { name: "transcribe_media_buckets" });
+  fireEvent.change(input, { target: { value: " , " } });
+  await user.click(
+    within(screen.getByRole("row", { name: /transcribe_media_buckets/ })).getByRole("button", { name: "Update" }),
+  );
+  expect(vi.mocked(deleteConfigFieldSetting).mock.calls).toEqual([["token", "transcribe_media_buckets"]]);
+  expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox", { name: "transcribe_media_buckets" })).toHaveValue("");
 });
 
 it("should delete only the Default setting and retain explicit false and zero", async () => {
@@ -159,5 +251,35 @@ it("should delete only the Default setting and retain explicit false and zero", 
   expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
     ["token", "synthetic_flag", false],
     ["token", "synthetic_count", 0],
+  ]);
+});
+
+it("keeps a new baggage mapping unsaved until every field the backend requires is filled in", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "request_tag_mappings",
+      field_type: "List",
+      field_value: [],
+      field_description: "baggage mappings",
+      stored_in_db: true,
+      editable: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  await user.click(await screen.findByRole("button", { name: "Add mapping" }));
+  const update = within(screen.getByRole("row", { name: /request_tag_mappings/ })).getByRole("button", {
+    name: "Update",
+  });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+  fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "a" } });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "usecase:support" } });
+  await user.click(update);
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    ["token", "request_tag_mappings", [{ header: "baggage", key: "entrypoint", value: "a", tag: "usecase:support" }]],
   ]);
 });

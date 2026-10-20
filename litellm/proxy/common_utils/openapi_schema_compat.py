@@ -5,9 +5,32 @@ FastAPI 0.120+ has stricter schema generation that fails on certain types like o
 This module provides a compatibility layer to handle these cases gracefully.
 """
 
-from typing import Any, Final
+import contextvars
+import functools
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
+
+_BUILDING_OPENAPI_SCHEMA: Final = contextvars.ContextVar("building_openapi_schema", default=False)
+
+
+@functools.cache
+def _accept_unknown_types_while_building() -> None:
+    from pydantic._internal._generate_schema import GenerateSchema
+    from pydantic_core import core_schema
+
+    reject_unknown_type: Final = (
+        GenerateSchema._unknown_type_schema  # pyright: ignore[reportPrivateUsage]  # Pydantic schema internals
+    )
+
+    def unknown_type_schema(self: GenerateSchema, obj: object) -> core_schema.CoreSchema:
+        if not _BUILDING_OPENAPI_SCHEMA.get():
+            return reject_unknown_type(self, obj)
+        if getattr(obj, "__module__", "") == "openai" and "Timeout" in str(obj):
+            return core_schema.str_schema()
+        return core_schema.any_schema()
+
+    setattr(GenerateSchema, "_unknown_type_schema", unknown_type_schema)
 
 
 def get_openapi_schema_with_compat(
@@ -16,7 +39,7 @@ def get_openapi_schema_with_compat(
     version: str,
     description: str,
     routes: list,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Generate OpenAPI schema with compatibility handling for FastAPI 0.120+.
 
@@ -33,38 +56,9 @@ def get_openapi_schema_with_compat(
     Returns:
         OpenAPI schema dictionary
     """
-    # FastAPI 0.120+ may fail schema generation for certain types (e.g., openai.Timeout)
-    # Patch Pydantic's schema generation to handle unknown types gracefully
     try:
-        from pydantic._internal._generate_schema import GenerateSchema
-        from pydantic_core import core_schema
-
-        # Store original method
-        original_unknown_type_schema: Final = GenerateSchema._unknown_type_schema
-
-        def patched_unknown_type_schema(self, obj):
-            """Patch to handle openai.Timeout and other non-serializable types"""
-            # Check if it's openai.Timeout or similar types
-            obj_str: Final = str(obj)
-            obj_module: Final = getattr(obj, "__module__", "")
-
-            if (obj_module == "openai" and "Timeout" in obj_str) or (
-                hasattr(obj, "__name__") and obj.__name__ == "Timeout" and obj_module == "openai"
-            ):
-                # Return a simple string schema for Timeout types
-                return core_schema.str_schema()
-
-            # For other unknown types, try to return a default schema
-            # This prevents the error from propagating
-            try:
-                return core_schema.any_schema()
-            except Exception:
-                # Last resort: return string schema
-                return core_schema.str_schema()
-
-        # Apply patch
-        setattr(GenerateSchema, "_unknown_type_schema", patched_unknown_type_schema)
-
+        _accept_unknown_types_while_building()
+        building: Final = _BUILDING_OPENAPI_SCHEMA.set(True)
         try:
             openapi_schema: Final = get_openapi_func(
                 title=title,
@@ -73,8 +67,7 @@ def get_openapi_schema_with_compat(
                 routes=routes,
             )
         finally:
-            # Restore original method
-            setattr(GenerateSchema, "_unknown_type_schema", original_unknown_type_schema)
+            _BUILDING_OPENAPI_SCHEMA.reset(building)
 
         return openapi_schema
 

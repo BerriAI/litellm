@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock("./model_info/KubernetesPodsCard", () => ({
+  default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
+}));
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../tests/mocks/complexityScorerDefaults"),
@@ -40,6 +43,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 const mockUseModelCostMap = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
+}));
+
+const mockUseTeams = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
 }));
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -102,6 +110,7 @@ describe("ModelInfoView", () => {
     });
     vi.clearAllMocks();
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
+    mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -188,6 +197,91 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("shows Kubernetes pods for discovery-enabled models", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("shows Kubernetes pods for admin viewers", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Admin Viewer" isViewOnly={true} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("hides Kubernetes pods for non-admin users", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal User" />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is disabled", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: false },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is not configured", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
   });
 
   it("should display loading state when model data is loading", () => {
@@ -287,6 +381,35 @@ describe("ModelInfoView", () => {
     const modelInfoArg = callArgs[2] as Record<string, unknown>;
     expect(modelInfoArg).toBeDefined();
     expect(modelInfoArg.id).toBe("123");
+  });
+
+  it("does not echo the displayed mode into the test connection request", async () => {
+    // /model/info fills model_info.mode in from the cost map for display. Sending that
+    // value back would pin the probe to it and skip the mode the provider requires,
+    // so the page forwards only the row's id and lets the proxy resolve the mode.
+    const user = userEvent.setup();
+    const displayedModel = {
+      ...defaultModelData,
+      litellm_params: { ...defaultModelData.litellm_params, model: "bedrock_mantle/anthropic.claude-haiku-4-5" },
+      model_info: { ...defaultModelData.model_info, mode: "chat", key: "anthropic.claude-haiku-4-5" },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false, error: null });
+    mockModelInfoV1Call.mockResolvedValue({ data: [displayedModel] });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+    });
+
+    const [, , modelInfoArg, modeArg] = mockTestConnectionRequest.mock.calls[0];
+    expect(modelInfoArg).toEqual({ id: "123" });
+    expect(modeArg).toBeUndefined();
   });
 
   it("should display error notification when connection test fails", async () => {
@@ -424,6 +547,37 @@ describe("ModelInfoView", () => {
       expect(screen.getByText("LiteLLM Model")).toBeInTheDocument();
       expect(screen.getByText("Pricing")).toBeInTheDocument();
     });
+  });
+
+  it("shows per-second pricing with resolution tiers instead of $0.00 per 1M tokens for a video model", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            model_name: "veo-3.1-fast",
+            litellm_params: { model: "vertex_ai/veo-3.1-fast-generate-001" },
+            model_info: {
+              ...defaultModelData.model_info,
+              input_cost_per_token: 0,
+              output_cost_per_token: 0,
+              output_cost_per_second: 0.1,
+              output_cost_per_second_1080p: 0.12,
+              output_cost_per_second_4k: 0.3,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Output: $0.10/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
   });
 
   it("should display edit settings button when user can edit model", async () => {
@@ -618,7 +772,7 @@ describe("ModelInfoView", () => {
     });
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
-    expect(updatePayload.litellm_params.litellm_credential_name).toBe("selected-credential");
+    expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
@@ -1305,6 +1459,78 @@ describe("ModelInfoView", () => {
     });
   });
 
+  describe("team alias", () => {
+    const teamModel = {
+      ...defaultModelData,
+      model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+    };
+
+    beforeEach(() => {
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+    });
+
+    const readRawJson = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(await screen.findByRole("tab", { name: /raw json/i }));
+      const pre = await screen.findByText(/"model_name": "GPT-4"/, { selector: "pre" });
+      return JSON.parse(pre.textContent ?? "");
+    };
+
+    it("shows the team alias next to the team id and adds team_alias to the raw JSON", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-0", team_alias: "other" },
+          { team_id: "team-1", team_alias: "alpha" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("alpha (team-1)")).toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info).toMatchObject({ team_id: "team-1", team_alias: "alpha" });
+      const keys = Object.keys(raw.model_info);
+      expect(keys.indexOf("team_alias")).toBe(keys.indexOf("team_id") + 1);
+    });
+
+    it("falls back to the bare team id when the team is not in the caller's team list", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-0", team_alias: "other" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("team-1")).toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info.team_id).toBe("team-1");
+      expect(raw.model_info).not.toHaveProperty("team_alias");
+    });
+
+    it("shows Not Set and no team_alias for a model without a team", async () => {
+      mockUseModelsInfo.mockReturnValue({ data: { data: [defaultModelData] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [defaultModelData] });
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("Team")).toBeInTheDocument();
+      expect(screen.queryByText(/alpha/)).not.toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info).not.toHaveProperty("team_alias");
+    });
+  });
+
   it("renders the provider card logo from the bundled provider map", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -1404,6 +1630,27 @@ describe("ModelInfoView", () => {
       expect(screen.getByTestId("reuse-credentials-button")).toBeInTheDocument();
     });
 
+    it("names the attached credential by its display name in the re-use dialog", async () => {
+      mockCredentialListCall.mockResolvedValue({
+        credentials: [
+          {
+            credential_name: "selected-credential",
+            display_name: "Selected Label",
+            credential_values: {},
+            credential_info: {},
+          },
+        ],
+      } as never);
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await user.click(await screen.findByTestId("reuse-credentials-button"));
+
+      const dialog = await screen.findByRole("dialog", { name: "Using Existing Credential" });
+      await vi.waitFor(() => expect(dialog).toHaveTextContent("Selected Label"));
+      expect(dialog).toHaveTextContent("selected-credential");
+    });
+
     it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
       "offers no Test Connection for %s, whose targets it cannot build",
       async (model) => {
@@ -1431,6 +1678,23 @@ describe("ModelInfoView", () => {
       expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     };
 
+    const openSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText: string) => {
+      await user.click(await screen.findByText(triggerText));
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
+    const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
+      const trigger = screen
+        .getAllByRole("combobox")
+        .filter((element) => element.getAttribute("placeholder") === "Select or search for existing credentials")
+        .find((element) => triggerText === undefined || (element as HTMLInputElement).value.includes(triggerText));
+      if (trigger === undefined) {
+        throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
+      }
+      await user.click(trigger);
+      await screen.findByRole("option", { name: "None" });
+    };
+
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
@@ -1452,7 +1716,6 @@ describe("ModelInfoView", () => {
           model: "gpt-4",
           api_base: "https://api.openai.com/v1",
           custom_llm_provider: "openai",
-          litellm_credential_name: "selected-credential",
           tags: [],
           guardrails: [],
         },
@@ -1520,13 +1783,54 @@ describe("ModelInfoView", () => {
       const [cacheRead, cacheWrite] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
       await user.type(cacheRead, "5");
       await user.type(cacheWrite, "9");
+      await user.type(screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"), "15");
 
       const payload = await save(user);
 
-      expect(payload.litellm_params).toMatchObject({
+      const expectedPricing = {
         output_cost_per_token: 0.000012,
         cache_read_input_token_cost: 0.000005,
         cache_creation_input_token_cost: 0.000009,
+        cache_creation_input_token_cost_above_1hr: 0.000015,
+      };
+      expect(payload.litellm_params).toMatchObject(expectedPricing);
+    });
+
+    describe("1 hour cache write tier", () => {
+      const withCacheWriteTiers = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          cache_creation_input_token_cost: 0.00000375,
+          cache_creation_input_token_cost_above_1hr: 0.000006,
+        },
+      };
+
+      beforeEach(() => {
+        mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheWriteTiers] }, isLoading: false, error: null });
+        mockModelInfoV1Call.mockResolvedValue({ data: [withCacheWriteTiers] });
+      });
+
+      it("shows both configured cache write rates per million tokens", async () => {
+        render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+        expect(await screen.findByText("Cache Write Cost (1 hour, per 1M tokens)")).toBeInTheDocument();
+        expect(screen.getByText("3.7500")).toBeInTheDocument();
+        expect(screen.getByText("6.0000")).toBeInTheDocument();
+      });
+
+      it("clearing the 1 hour rate sends an explicit null and keeps the 5 minute rate", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        const oneHour = screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost");
+        expect(oneHour).toHaveValue(6);
+        await user.clear(oneHour);
+
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_creation_input_token_cost_above_1hr).toBeNull();
+        expect(payload.litellm_params.cache_creation_input_token_cost).toBe(0.00000375);
       });
     });
 
@@ -1564,6 +1868,97 @@ describe("ModelInfoView", () => {
       expect(payload.model_info).toMatchObject({ team_id: "team-7" });
     });
 
+    it("sends the team picked in the Team ID selector", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.team_id).toBe("team-2");
+    });
+
+    it("shows the picked team in read mode right after saving", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+      await save(user);
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      expect(screen.getByText("beta (team-2)")).toBeInTheDocument();
+      expect(screen.queryByText("alpha (team-1)")).not.toBeInTheDocument();
+    });
+
+    it("shows the Team ID placeholder for a model with no team", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      expect(screen.getByText("Select a team")).toBeInTheDocument();
+    });
+
+    it.each(["Internal User", "Org Admin"])("only offers a %s the teams they administer", async (userRole) => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
+          { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
+          { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByText("alpha (team-1)"));
+
+      expect(await screen.findByRole("option", { name: "gamma (team-3)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta (team-2)" })).not.toBeInTheDocument();
+    });
+
     it("sends the edited LiteLLM extra params", async () => {
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1592,12 +1987,109 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(await screen.findByText("selected-credential"));
-      await user.click(await screen.findByText("other-credential"));
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "other-credential" }));
 
       const payload = await save(user);
 
       expect(payload.litellm_params.litellm_credential_name).toBe("other-credential");
+    });
+
+    it("sends explicit null when None is picked for a model with a stored credential", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.litellm_credential_name).toBeNull();
+      expect("litellm_credential_name" in payload.litellm_params).toBe(true);
+    });
+
+    it("omits the credential when it is cleared and then restored before saving", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "selected-credential" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+    });
+
+    it("omits the credential when None is picked for a model that never had one", async () => {
+      const { litellm_credential_name: _storedCredential, ...litellmParamsWithoutCredential } =
+        defaultModelData.litellm_params;
+      const modelWithoutCredential = {
+        ...defaultModelData,
+        litellm_params: litellmParamsWithoutCredential,
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [modelWithoutCredential] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [modelWithoutCredential] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+      expect(payload.litellm_params.litellm_credential_name).not.toBe("");
+    });
+
+    it("restores the stored credential in the selector after cancel", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const credentialTrigger = screen
+        .getAllByRole("combobox")
+        .find((element) => element.getAttribute("placeholder") === "Select or search for existing credentials");
+      expect(credentialTrigger).toHaveValue("selected-credential");
+    });
+
+    it("shows Manual in read mode after saving None", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await save(user);
+
+      expect(await screen.findByText("Manual")).toBeInTheDocument();
+      expect(screen.queryByText("selected-credential")).not.toBeInTheDocument();
+    });
+
+    it("keeps showing the stored credential in read mode after an untouched save", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      await save(user);
+
+      expect(await screen.findByText("selected-credential")).toBeInTheDocument();
+    });
+
+    it("keeps the form open and surfaces the error when the backend rejects the detach", async () => {
+      mockModelPatchUpdateCall.mockRejectedValueOnce(new Error("403 Only a proxy admin can detach"));
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockToast.fromError).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      expect(mockToast.success).not.toHaveBeenCalledWith("Model settings updated successfully");
     });
 
     it("sends the vector stores picked in the knowledge base selector", async () => {
@@ -1628,7 +2120,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(screen.getByText("Select existing health check model"));
+      await openSelect(user, "Select existing health check model");
       await user.click(await screen.findByText("openai/gpt-4o"));
 
       const payload = await save(user);
@@ -1707,7 +2199,7 @@ describe("ModelInfoView", () => {
         expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", role: "user" }]);
       });
 
-      it("drops the stored injection points when the operator turns the toggle off", async () => {
+      it("sends an explicit null when the operator turns the toggle off so the backend clears the stored points", async () => {
         withCachePoints([{ location: "message", role: "user" }]);
         const user = userEvent.setup();
         await enterEditMode(user);
@@ -1715,7 +2207,7 @@ describe("ModelInfoView", () => {
         await user.click(screen.getByRole("switch"));
         const payload = await save(user);
 
-        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+        expect(payload.litellm_params.cache_control_injection_points).toBeNull();
       });
 
       it("adds a typed index as a string, matching what the deployment already stores", async () => {
@@ -1742,6 +2234,72 @@ describe("ModelInfoView", () => {
 
       expect(mockModelPatchUpdateCall.mock.calls[0][2]).toBe("123");
       expect(payload.litellm_params.input_cost_per_token).toBe(5 / 1_000_000);
+    });
+
+    const pricingInputs = () => [
+      screen.getByPlaceholderText("Enter input cost"),
+      screen.getByPlaceholderText("Enter output cost"),
+      ...screen.getAllByPlaceholderText("Defaults to Input Cost if blank"),
+      screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"),
+    ];
+
+    it("refuses a negative price on every pricing field and never calls the API", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      for (const input of pricingInputs()) {
+        fireEvent.change(input, { target: { value: "-5" } });
+      }
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findAllByText("Enter a price of 0 or more")).toHaveLength(5);
+      expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
+    });
+
+    it("sends a zero price as 0 and lets the cache read cost follow a zero input cost", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("0");
+      fireEvent.change(screen.getByPlaceholderText("Enter output cost"), { target: { value: "0" } });
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).toMatchObject({
+        input_cost_per_token: 0,
+        output_cost_per_token: 0,
+        cache_read_input_token_cost: 0,
+      });
+    });
+
+    it("sends an explicit null for a cleared cache read cost instead of falling back to the input cost", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("2");
+      const [cacheRead] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
+      fireEvent.change(cacheRead, { target: { value: "1" } });
+      fireEvent.change(cacheRead, { target: { value: "" } });
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.000002);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBeNull();
+    });
+
+    it("keeps a stored cache read cost when only the input cost changes", async () => {
+      const withCacheRead = {
+        ...defaultModelData,
+        litellm_params: { ...defaultModelData.litellm_params, cache_read_input_token_cost: 0.000001 },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheRead] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [withCacheRead] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("2");
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.000002);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBe(0.000001);
     });
 
     it.fails(

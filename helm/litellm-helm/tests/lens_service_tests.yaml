@@ -1,0 +1,167 @@
+suite: Lens service isolation and ingestion routing
+templates:
+- configmap-litellm.yaml
+- deployment.yaml
+- ingress.yaml
+- lens/ingress.yaml
+- lens/service.yaml
+- lens/deployment.yaml
+tests:
+- it: connects deployment.yaml to the shared Lens service
+  template: deployment.yaml
+  set: &id001
+    fullnameOverride: lens-test
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://gateway.example/lens-ingest
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_URL
+        value: http://lens-test-lens-worker:4318
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_PUBLIC_URL
+        value: https://gateway.example/lens-ingest
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_GATEWAY_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: lens-test-lens-gateway
+            key: gateway-secret
+- it: routes uploads directly to Lens instead of the gateway
+  template: ingress.yaml
+  set:
+    fullnameOverride: lens-test
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://gateway.example/lens-ingest
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+    ingress.enabled: true
+    ingress.hosts:
+    - host: gateway.example
+      paths:
+      - path: /
+        pathType: Prefix
+  asserts:
+  - contains:
+      path: spec.rules[0].http.paths
+      content:
+        path: /lens-ingest
+        pathType: Prefix
+        backend:
+          service:
+            name: lens-test-lens-worker
+            port:
+              number: 4318
+- it: keeps internal routes out of a dedicated ingestion hostname
+  template: lens/ingress.yaml
+  set:
+    fullnameOverride: lens-test
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://gateway.example/lens-ingest
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+    lensWorker.ingress.enabled: true
+    lensWorker.ingress.host: traces.example
+  asserts:
+  - equal:
+      path: spec.rules[0].http.paths
+      value:
+      - path: /v1/
+        pathType: Prefix
+        backend:
+          service:
+            name: lens-test-lens-worker
+            port:
+              name: otlp
+- it: maps the Lens service to the ingestion listener
+  template: lens/service.yaml
+  set: *id001
+  asserts:
+  - equal:
+      path: spec.selector
+      value:
+        app.kubernetes.io/instance: RELEASE-NAME
+        app.kubernetes.io/component: lens-worker
+  - equal:
+      path: spec.ports
+      value:
+      - name: otlp
+        port: 4318
+        targetPort: otlp
+- it: gives only Lens the ClickHouse secret
+  template: lens/deployment.yaml
+  set: *id001
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: CLICKHOUSE_URL
+        valueFrom:
+          secretKeyRef:
+            name: lens-storage
+            key: url
+- it: requires an agent reachable ingestion URL
+  template: deployment.yaml
+  set:
+    fullnameOverride: lens-test
+    lensWorker.enabled: true
+    lensWorker.publicUrl: ''
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.publicUrl is required when there is no single ingress hostname
+- it: omits Lens connection settings when disabled in deployment.yaml
+  template: deployment.yaml
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_URL
+      any: true
+- it: preserves an existing ClickHouse database and retention
+  template: lens/deployment.yaml
+  set:
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://traces.example
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+    lensWorker.clickhouseDatabase: existing_traces
+    lensWorker.retentionDays: 45
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: CLICKHOUSE_DATABASE
+        value: existing_traces
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: AGENT_TRACING_RETENTION_DAYS
+        value: '45'
+- it: keeps Lens pods outside the gateway autoscaling selector
+  template: lens/deployment.yaml
+  set: &id002
+    nameOverride: inference
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://traces.example
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - equal:
+      path: spec.template.metadata.labels["app.kubernetes.io/name"]
+      value: inference-lens-worker
+- it: preserves the existing gateway deployment selector
+  template: deployment.yaml
+  set: *id002
+  asserts:
+  - equal:
+      path: spec.selector.matchLabels["app.kubernetes.io/name"]
+      value: inference

@@ -3,11 +3,12 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -51,6 +52,7 @@ from .claude_settings import (
     refuse_while_owned,
     settings_file_owners,
 )
+from .config import pkce_default
 from .pkce_login import (
     Http,
     PkceFailure,
@@ -95,6 +97,24 @@ class CliContextObj(TypedDict):
     api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
+class _CliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj: ...
+
+
+class _OptionalCliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj | None: ...
+
+
+def cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+    return view.obj
+
+
+def _optional_cli_context_obj(view: _OptionalCliContextObjView) -> CliContextObj | None:
+    return view.obj
+
+
 class CliPollData(TypedDict, total=False):
     status: str
     key: str
@@ -120,6 +140,8 @@ class CliAuthResult(TypedDict):
 
 
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -170,31 +192,31 @@ def storage_notice(outcome: SecretSave) -> str:
             )
 
 
-def keychain_unreadable_notice(vault: SecretVault) -> str:
+def keychain_unreadable_notice(vault: SecretVault, login_command: str = "lite login") -> str:
     """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
     match vault.read():
         case KeyringNotInstalled():
             return (
                 "Your credential is in your OS keychain, which this install cannot read without the "
-                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run '{login_command}' to start over."
             )
         case KeyringDisabled():
             return (
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
-                "Unset it, or run 'lite login' to start over."
+                f"Unset it, or run '{login_command}' to start over."
             )
         case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
-                "'lite login' to start over."
+                f"'{login_command}' to start over."
             )
         case SecretFound() | SecretMissing():
-            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+            return f"Your credential could not be read from your OS keychain. Run '{login_command}' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
     """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
-    ctx_obj: Final[CliContextObj | None] = ctx.obj
+    ctx_obj: Final = _optional_cli_context_obj(ctx)
     if ctx_obj is None:
         return SYSTEM_KEYRING
     return ctx_obj.get("secret_vault") or SYSTEM_KEYRING
@@ -485,7 +507,7 @@ def prompt_team_selection_fallback(
 
 def _response_error_detail(response: requests.Response) -> str | None:
     try:
-        body: Final[dict[str, object] | list[object] | str | int | float | bool | None] = response.json()
+        body: Final = _JSON_OBJECT.validate_python(response.json())
     except ValueError:
         return None
     detail: Final = body.get("detail") if isinstance(body, dict) else None
@@ -863,21 +885,20 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     ),
 )
 @click.option(
-    "--pkce",
-    is_flag=True,
-    default=False,
+    "--pkce/--no-pkce",
+    default=None,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
         "with a refresh token that renews the key automatically. Requires a proxy that serves "
-        "/.well-known/litellm-cli-auth."
+        "/.well-known/litellm-cli-auth. Make it the default with `lite config set pkce true`."
     ),
 )
 @click.pass_context
-def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
+def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     if config_claude:
         settings_path: Final = claude_settings_path(os.environ)
@@ -887,7 +908,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
             raise click.ClickException(f"Cannot configure Claude Code, so not logging in: {e}")
 
     try:
-        if pkce:
+        if pkce if pkce is not None else pkce_default():
             _pkce_login(base_url, config_claude, context_secret_vault(ctx))
             return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
@@ -1027,7 +1048,7 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)

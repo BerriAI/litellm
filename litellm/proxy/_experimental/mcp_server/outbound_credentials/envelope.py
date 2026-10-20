@@ -38,9 +38,10 @@ from datetime import datetime, timedelta
 from typing import Final, Literal, TypeAlias
 
 import jwt
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, ValidationError
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
+from litellm.types.llms.base import LiteLLMBaseModel
 
 ENVELOPE_PREFIX: Final = "llm_env_"
 """Marker prefix on every serialized ACCESS envelope so the edge can cheaply tell an envelope
@@ -98,7 +99,7 @@ runs both through the same live-policy gate, so team/org/budget/revocation enfor
 identical either way."""
 
 
-class EnvelopeIdentity(BaseModel):
+class EnvelopeIdentity(LiteLLMBaseModel):
     """The litellm principal the envelope binds the inner grant to.
 
     ``subject`` is the principal identifier and ``subject_type`` says how to resolve it: a
@@ -125,7 +126,7 @@ def user_identity(server_id: str, user_id: str) -> EnvelopeIdentity:
     return EnvelopeIdentity(server_id=server_id, subject_type="user_id", subject=user_id)
 
 
-class UpstreamTokenGrant(BaseModel):
+class UpstreamTokenGrant(LiteLLMBaseModel):
     """The upstream OAuth token response fields sealed inside the envelope.
 
     ``expires_in`` must be positive when present; a non-positive value is a programmer
@@ -141,7 +142,7 @@ class UpstreamTokenGrant(BaseModel):
     expires_in: int | None = Field(default=None, gt=0)
 
 
-class RefreshCredential(BaseModel):
+class RefreshCredential(LiteLLMBaseModel):
     """The upstream refresh grant sealed inside a refresh envelope.
 
     Only the refresh token (plus the scope to re-request and the refresh token's own lifetime, when the
@@ -156,7 +157,7 @@ class RefreshCredential(BaseModel):
     expires_in: int | None = Field(default=None, gt=0)
 
 
-class EnvelopeKeys(BaseModel):
+class EnvelopeKeys(LiteLLMBaseModel):
     """Injected key material: the HS256 signing key and the symmetric encryption key.
 
     ``signing_key`` must be at least 32 bytes: HS256's HMAC-SHA256 has a 256-bit
@@ -169,7 +170,7 @@ class EnvelopeKeys(BaseModel):
     encryption_key: SecretStr = Field(min_length=1)
 
 
-class SealedEnvelope(BaseModel):
+class SealedEnvelope(LiteLLMBaseModel):
     """A minted envelope: the client-held bearer value and when it expires."""
 
     model_config = ConfigDict(frozen=True)
@@ -177,7 +178,7 @@ class SealedEnvelope(BaseModel):
     expires_at: datetime
 
 
-class OpenedEnvelope(BaseModel):
+class OpenedEnvelope(LiteLLMBaseModel):
     """A validated access envelope: the identity it was minted for and the recovered grant."""
 
     model_config = ConfigDict(frozen=True)
@@ -185,7 +186,7 @@ class OpenedEnvelope(BaseModel):
     grant: UpstreamTokenGrant
 
 
-class OpenedRefreshEnvelope(BaseModel):
+class OpenedRefreshEnvelope(LiteLLMBaseModel):
     """A validated refresh envelope: the identity it was minted for and the recovered refresh grant."""
 
     model_config = ConfigDict(frozen=True)
@@ -193,7 +194,7 @@ class OpenedRefreshEnvelope(BaseModel):
     refresh: RefreshCredential
 
 
-class EnvelopeTooLarge(BaseModel):
+class EnvelopeTooLarge(LiteLLMBaseModel):
     """The serialized envelope exceeded ``MAX_ENVELOPE_BYTES``; carries sizes only."""
 
     model_config = ConfigDict(frozen=True)
@@ -202,7 +203,7 @@ class EnvelopeTooLarge(BaseModel):
     max_bytes: int
 
 
-class EnvelopeLifetimeUnrepresentable(BaseModel):
+class EnvelopeLifetimeUnrepresentable(LiteLLMBaseModel):
     """A positive provider lifetime cannot be represented as a Python datetime."""
 
     model_config = ConfigDict(frozen=True)
@@ -213,28 +214,28 @@ class EnvelopeLifetimeUnrepresentable(BaseModel):
 EnvelopeMintError: TypeAlias = EnvelopeTooLarge | EnvelopeLifetimeUnrepresentable
 
 
-class NotAnEnvelope(BaseModel):
+class NotAnEnvelope(LiteLLMBaseModel):
     """The candidate does not carry the envelope prefix."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["not_an_envelope"] = "not_an_envelope"
 
 
-class BadSignature(BaseModel):
+class BadSignature(LiteLLMBaseModel):
     """The JWT signature does not verify under the provided signing key."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["bad_signature"] = "bad_signature"
 
 
-class Expired(BaseModel):
+class Expired(LiteLLMBaseModel):
     """The envelope's ``exp`` is not in the future relative to the provided ``now``."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["expired"] = "expired"
 
 
-class MalformedPayload(BaseModel):
+class MalformedPayload(LiteLLMBaseModel):
     """The token is not a well-formed envelope: undecodable JWT, wrong issuer, missing
     or mistyped claims, or a decrypted grant that fails validation."""
 
@@ -242,7 +243,7 @@ class MalformedPayload(BaseModel):
     tag: Literal["malformed_payload"] = "malformed_payload"
 
 
-class DecryptFailed(BaseModel):
+class DecryptFailed(LiteLLMBaseModel):
     """The signed ``grant`` blob could not be decrypted under the provided key."""
 
     model_config = ConfigDict(frozen=True)
@@ -252,7 +253,7 @@ class DecryptFailed(BaseModel):
 EnvelopeOpenError: TypeAlias = NotAnEnvelope | BadSignature | Expired | MalformedPayload | DecryptFailed
 
 
-class _EnvelopeClaims(BaseModel):
+class _EnvelopeClaims(LiteLLMBaseModel):
     """Decoded-claims boundary that pins the exact shape :func:`mint_envelope` emits.
 
     ``server_id``/``key_hash`` mirror the ``min_length`` constraints of
@@ -279,7 +280,7 @@ class _EnvelopeClaims(BaseModel):
     grant: str = Field(min_length=1)
 
 
-class _GrantWire(BaseModel):
+class _GrantWire(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     access_token: str
     token_type: str
@@ -288,7 +289,7 @@ class _GrantWire(BaseModel):
     expires_in: int | None = None
 
 
-class _RefreshWire(BaseModel):
+class _RefreshWire(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     refresh_token: str
     scope: str | None = None
