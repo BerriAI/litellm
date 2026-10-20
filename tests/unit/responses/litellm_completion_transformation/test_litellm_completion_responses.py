@@ -6665,6 +6665,45 @@ def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None
     ]
 
 
+
+@pytest.mark.parametrize(
+    ("call", "output"),
+    [
+        pytest.param(
+            {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_weather", "output": "Rain."},
+            id="function_call",
+        ),
+        pytest.param(
+            {"type": "custom_tool_call", "call_id": "call_patch", "name": "apply_patch", "input": "*** Begin Patch"},
+            {"type": "custom_tool_call_output", "call_id": "call_patch", "output": "Done."},
+            id="custom_tool_call",
+        ),
+    ],
+)
+def test_summary_replay_keeps_a_call_its_compaction_item_replaces_when_a_later_output_answers_it(
+    call: Mapping[str, str], output: Mapping[str, str]
+) -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                call,
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                output,
+            ],
+        ),
+        responses_api_request=_COMPACTION_REQUESTED,
+    )["messages"]
+
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "tool"]
+    assert dict(messages[1]) == _SUMMARY_AS_TEXT
+    assert [tool_call["id"] for tool_call in messages[2]["tool_calls"]] == [output["call_id"]]
+    assert messages[3]["tool_call_id"] == output["call_id"]
+
 def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         assert previous_response_id == "resp_turn_1"

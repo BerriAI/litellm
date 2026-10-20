@@ -2,6 +2,8 @@ import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
@@ -192,11 +194,29 @@ def instruction_items(input: object) -> tuple[object, ...]:
     return tuple(item for item in input_items(input) if _is_instruction_item(item))
 
 
+def _call_id(item: object) -> str | None:
+    fields: Final = _json_object(item)
+    call_id: Final = None if fields is None else fields.get("call_id")
+    return call_id if isinstance(call_id, str) else None
+
+
+def _with_its_earlier_call(item: _Item, earlier_calls: Mapping[str, _Item]) -> tuple[_Item, ...]:
+    call_id: Final = _call_id(item)
+    call: Final = None if call_id is None else earlier_calls.get(call_id)
+    return (item,) if call is None else (call, item)
+
+
 def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:
     newest: Final = next(
         (index for index in range(len(input) - 1, 0, -1) if compaction_summary(input[index]) is not None), 0
     )
-    return (*(item for item in input[:newest] if _is_instruction_item(item)), *input[newest:])
+    earlier_calls: Final = MappingProxyType(
+        {call_id: item for item in input[:newest] if (call_id := _call_id(item)) is not None}
+    )
+    return (
+        *(item for item in input[:newest] if _is_instruction_item(item)),
+        *chain.from_iterable(_with_its_earlier_call(item, earlier_calls) for item in input[newest:]),
+    )
 
 
 def without_items_before_compaction(input: str | ResponseInputParam) -> str | ResponseInputParam:
