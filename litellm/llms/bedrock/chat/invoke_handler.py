@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -75,8 +75,6 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
-_EVENT_STREAM_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
-_EVENT_STREAM_BYTES: Final = TypeAdapter(bytes, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class AmazonCohereChatConfig:
@@ -854,7 +852,7 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = _EVENT_STREAM_OBJECT.validate_python(json.loads(message))
+                    _data = json.loads(message)
                     yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
@@ -875,7 +873,7 @@ class AWSEventStreamDecoder:
             for event in event_stream_buffer:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
-                    _data = _EVENT_STREAM_OBJECT.validate_python(json.loads(message))
+                    _data = json.loads(message)
                     yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
@@ -911,7 +909,7 @@ class AWSEventStreamDecoder:
         response_stream_shape: "Shape",
         request_id_headers: httpx.Headers | None = None,
     ) -> str | None:
-        parsed_response_raw: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape, headers=request_id_headers)
@@ -921,14 +919,11 @@ class AWSEventStreamDecoder:
             raise build_bedrock_stream_event_error(
                 event_type, event_error_status, response_dict["body"], headers=request_id_headers
             )
-        parsed_response: Final = _EVENT_STREAM_OBJECT.validate_python(parsed_response_raw)
         if "chunk" in parsed_response:
-            chunk_payload = parsed_response.get("chunk")
-            if not chunk_payload:
+            chunk = parsed_response.get("chunk")
+            if not chunk:
                 return None
-            chunk_mapping: Final = _EVENT_STREAM_OBJECT.validate_python(chunk_payload)
-            chunk_bytes: Final = _EVENT_STREAM_BYTES.validate_python(chunk_mapping.get("bytes"))
-            return chunk_bytes.decode()
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:

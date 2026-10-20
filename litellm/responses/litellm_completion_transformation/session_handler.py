@@ -3,8 +3,6 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from pydantic import ConfigDict, TypeAdapter
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
@@ -30,9 +28,6 @@ else:
 # Cold Storage Handler
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
-_PROXY_SERVER_REQUEST: Final = TypeAdapter[dict[str, object] | None](
-    dict[str, object] | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
-)
 ########################################################
 
 
@@ -223,7 +218,7 @@ class ResponsesSessionHandler:
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
         else:
-            proxy_server_request_dict = _PROXY_SERVER_REQUEST.validate_python(json.loads(proxy_server_request))
+            proxy_server_request_dict = json.loads(proxy_server_request)
 
         ############################################################
         # Check if user has setup cold storage for session handling
