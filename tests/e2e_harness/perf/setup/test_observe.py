@@ -36,7 +36,12 @@ def served(seq: int, total_s: float) -> WireRecord:
 
 
 def _key_lookup(calls: int) -> StatementCalls:
-    return StatementCalls(queryid=1, query='SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1', calls=calls)
+    return StatementCalls(
+        queryid=1,
+        query='SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1',
+        calls=calls,
+        total_exec_ms=calls * 2.0,
+    )
 
 
 def test_junit_properties_carry_each_observed_metric_and_each_limit_including_unobserved_ones() -> None:
@@ -71,6 +76,8 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         "perf_postgres_background_calls_per_request": 0.0,
         "perf_postgres_max_statement_per_request": 10.0,
         "perf_postgres_max_background_statement_per_request": 0.0,
+        "perf_postgres_active_sessions": 0.02,
+        "perf_postgres_slowest_statement_seconds": 0.002,
         "perf_redis_calls_per_request_limit": 35.0,
     }
 

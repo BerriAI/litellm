@@ -18,7 +18,7 @@ from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
 from proxy_client import ProxyClient
-from setup.datastore import read_db_counters, read_redis_counters, redis_monitor
+from setup.datastore import connections_sampler, read_db_counters, read_redis_counters, redis_monitor
 from setup.event_loop import (
     LOG_FILE_ENV,
     OPT_IN_ENV,
@@ -44,6 +44,7 @@ from setup.plan import PlannedRequest, build_plan
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
+from setup.telemetry import read_gateway_telemetry
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 _SPEND_SAMPLE: Final = 40
@@ -108,16 +109,18 @@ def test_perf_case(
     _ = run_plan(case, _warmup_plan(case, plan), setup)
     _arm_mocks(mock_urls, case.mock_latency)
     rss_before: Final = read_rss_everywhere(proxy)
+    telemetry_before: Final = read_gateway_telemetry(proxy)
     db_before: Final = read_db_counters()
     redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
     traffic_started_at: Final = datetime.now(tz=UTC)
-    with gateway_cpu_sampler() as cpu, redis_monitor() as monitor:
+    with gateway_cpu_sampler() as cpu, redis_monitor() as monitor, connections_sampler() as connections:
         outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
     db_after: Final = read_db_counters()
     redis_after: Final = read_redis_counters()
     rss_after: Final = read_rss_everywhere(proxy)
+    telemetry_after: Final = read_gateway_telemetry(proxy)
     rss_read: Final = time.monotonic()
     assert outcome.records, f"locust wrote no records (exit {outcome.locust_exit}):\n{outcome.locust_output}"
     served_call_ids: Final = tuple(
@@ -144,6 +147,9 @@ def test_perf_case(
         redis_after=redis_after,
         redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
+        telemetry_before=telemetry_before,
+        telemetry_after=telemetry_after,
+        peak_connections=connections.peak,
     )
     rows, exceeded_limits = evaluate(case, observation)
     stall_rows: Final = _event_loop_rows(case, traffic_started_at) if case.event_loop is not None else ()
