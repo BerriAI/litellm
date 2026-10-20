@@ -313,6 +313,11 @@ def _spend_tables_left_to_send(
     return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
 
 
+def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
+    """An earlier billed retry attempt's own spend row, not a request the caller sent."""
+    return BILLED_RETRY_ATTEMPT_METADATA_KEY in metadata and metadata[BILLED_RETRY_ATTEMPT_METADATA_KEY] is True
+
+
 def _timed_request_duration_ms(
     payload: dict | SpendLogsPayload,
     request_status: Literal["success", "failure"],
@@ -2873,7 +2878,7 @@ class DBSpendUpdateWriter:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
-            caller_request: Final = not is_internal_call and not _metadata.get(BILLED_RETRY_ATTEMPT_METADATA_KEY)
+            caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
