@@ -8,33 +8,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
-import litellm
-
-_INFERENCE_CONTEXT: Final = frozenset(
-    {
-        "model",
-        "messages",
-        "input",
-        "api_key",
-        "api_base",
-        "base_url",
-        "custom_llm_provider",
-        "extra_headers",
-        "timeout",
-        "request_timeout",
-        "callbacks",
-        "success_callback",
-        "failure_callback",
-        "metadata",
-        "litellm_metadata",
-        "litellm_call_id",
-        "litellm_trace_id",
-        "litellm_logging_obj",
-        "litellm_credential_name",
-        "proxy_server_request",
-    }
-)
-
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(legacy)
@@ -75,19 +48,6 @@ def known_params(names: Collection[str], request: Mapping[str, object]) -> Mappi
     return {name: value for name, value in request.items() if name in names and value is not None}
 
 
-def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
-    if litellm.drop_params or litellm.modify_params:
-        return "native inference does not implement the configured parameter rewrites"
-    for name, value in kwargs.items():
-        if value is None:
-            continue
-        if name in {"cache", "caching"}:
-            continue
-        if name not in parameters and name not in _INFERENCE_CONTEXT:
-            return f"native inference does not implement {name}"
-    return None
-
-
 _BAGS: Final = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 
 
@@ -111,6 +71,32 @@ class NativeCall:
 
 def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncFlag:
+    """The keyword that makes a sync entry hand off to its async entry, as in ``completion(..., acompletion=True)``.
+
+    ``is_set`` is the route's own reading of the flag. ``@client`` hands off on ``is True``, the Messages handler on truthiness.
+
+    Completion uses ``AsyncFlag("acompletion", sync=signature(_PYTHON_COMPLETION))``.
+    Messages uses ``AsyncFlag("is_async", sync=signature(_PYTHON_MESSAGES), is_set=bool)``.
+    """
+
+    name: str
+    sync: inspect.Signature
+    is_set: Callable[[object], bool] = lambda value: value is True
+
+    def requested(self, kwargs: Mapping[str, object]) -> bool:
+        return self.is_set(kwargs.get(self.name))
+
+    def dropped(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType({name: value for name, value in kwargs.items() if name != self.name})
+
+    def keywords(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        """Name positionals by the sync signature, since the async entry may order its parameters differently."""
+        named: Final = _without_bags(self.sync, self.sync.bind_partial(*args, **kwargs).arguments)
+        return self.dropped({**named, **kwargs})
 
 
 def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:

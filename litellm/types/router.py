@@ -1184,6 +1184,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
