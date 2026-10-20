@@ -7882,6 +7882,24 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"summary": "likes tea"},
             id="tool_name_envelope_on_a_schema_allowing_extra_keys",
         ),
+        pytest.param(
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]},
+            {"payload": {"id": "abc", "rows": 3}},
+            {"payload": {"id": "abc", "rows": 3}},
+            id="key_listed_only_in_required",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="tool_name_envelope_around_an_input_wrapper",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _PER_USER_ANSWER},
+            _PER_USER_ANSWER,
+            id="tool_name_envelope_around_an_answer_with_one_allowed_key",
+        ),
     ],
 )
 def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
@@ -7894,6 +7912,19 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 
     assert message is not None
     assert json.loads(message.content) == expected_content
+
+
+def test_convert_tool_response_to_message_keeps_non_ascii_text_in_an_unwrapped_answer():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert "Hôtel Lutetia, 東京" in message.content
+    assert json.loads(message.content) == answer
 
 
 _TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
