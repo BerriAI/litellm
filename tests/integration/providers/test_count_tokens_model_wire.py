@@ -105,6 +105,9 @@ _TOOL_TURNS: Final[list[JsonValue]] = [
     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Sunny"}]},
 ]
 _LOCAL_SOURCE: Final = {"litellm_count_source": "local_estimate"}
+_COUNT_ITSELF: Final[dict[str, JsonValue]] = {"token_count_model": {}}
+_COUNT_LOCALLY: Final[dict[str, JsonValue]] = {"token_count_model": {"litellm_provider": "local"}}
+_CANNOT_ESTIMATE: Final = "locally and could not estimate this request"
 
 
 def _prompt(status: int, count_model_status: int | None = None) -> str:
@@ -279,15 +282,19 @@ def _messages_estimate(gateway: Gateway, model: str) -> tuple[int, JsonValue]:
     return counted.input_tokens, (counted.model_extra or {}).get("litellm_count_source")
 
 
-def _utils_estimate(gateway: Gateway, model: str) -> tuple[int, JsonValue]:
+def _utils_estimate(gateway: Gateway, model: str, path: str = "/utils/token_counter") -> tuple[int, JsonValue]:
     response: Final = gateway.request(
-        "POST", "/utils/token_counter", {"model": model, "messages": [{"role": "user", "content": _prompt(400)}]}
+        "POST", path, {"model": model, "messages": [{"role": "user", "content": _prompt(400)}]}
     )
     assert response.status_code == 200, response.text
     body: Final = _JSON_OBJECT.validate_json(response.content)
     total: Final = body["total_tokens"]
     assert isinstance(total, int), body
     return total, body.get("count_source")
+
+
+def _utils_endpoint_estimate(gateway: Gateway, model: str) -> tuple[int, JsonValue]:
+    return _utils_estimate(gateway, model, "/utils/token_counter?call_endpoint=true")
 
 
 def _shipped_framing(model: str) -> JsonValue:
@@ -355,9 +362,11 @@ def test_framing_is_added_to_the_local_estimate_when_the_runtime_cannot_count(
         gateway.scenario() as scenario,
     ):
         framed: Final = _count(
-            gateway, _deployment(scenario, runtime_port, _NOVA, {"token_count_framing": _FRAMING}), 400
+            gateway, _deployment(scenario, runtime_port, _NOVA, {**_COUNT_ITSELF, "token_count_framing": _FRAMING}), 400
         )
-        unframed: Final = _count(gateway, _deployment(scenario, runtime_port, _NOVA, {"token_count_framing": 0}), 400)
+        unframed: Final = _count(
+            gateway, _deployment(scenario, runtime_port, _NOVA, {**_COUNT_ITSELF, "token_count_framing": 0}), 400
+        )
         assert (framed.model_extra, unframed.model_extra) == (_LOCAL_SOURCE, _LOCAL_SOURCE), (framed, unframed)
         assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
         assert _runtime_models(runtime) == (_NOVA, _NOVA)
@@ -373,8 +382,8 @@ def test_framing_on_one_deployment_leaves_a_sibling_of_the_same_model_raising_th
         wire_server(_mantle, port=mantle_port) as mantle,
         gateway.scenario() as scenario,
     ):
-        framed: Final = _deployment(scenario, runtime_port, _NOVA, {"token_count_framing": _FRAMING})
-        sibling: Final = _deployment(scenario, runtime_port, _NOVA)
+        framed: Final = _deployment(scenario, runtime_port, _NOVA, {**_COUNT_ITSELF, "token_count_framing": _FRAMING})
+        sibling: Final = _deployment(scenario, runtime_port, _NOVA, _COUNT_ITSELF)
         assert _count(gateway, framed, 400).model_extra == _LOCAL_SOURCE
         with pytest.raises(anthropic.BadRequestError, match=re.escape(_UNSUPPORTED)):
             _count(gateway, sibling, 400)
@@ -421,16 +430,13 @@ def test_inference_profile_arn_counts_with_the_token_count_model_of_its_base_mod
 
 
 @pytest.mark.parametrize(
-    ("estimate", "runtime_calls"),
-    [(_messages_estimate, (_KIMI_BASE, _KIMI_BASE)), (_utils_estimate, ())],
-    ids=["messages_count_tokens", "utils_token_counter"],
+    "estimate", [_messages_estimate, _utils_estimate], ids=["messages_count_tokens", "utils_token_counter"]
 )
 def test_shipped_framing_is_added_to_the_estimate_and_a_configured_zero_turns_it_off(
     counting_proxy: OwnedProxy,
     runtime_port: int,
     mantle_port: int,
     estimate: Callable[[Gateway, str], tuple[int, JsonValue]],
-    runtime_calls: tuple[str, ...],
 ) -> None:
     gateway: Final = counting_proxy.gateway
     with (
@@ -444,7 +450,30 @@ def test_shipped_framing_is_added_to_the_estimate_and_a_configured_zero_turns_it
         framing: Final = _shipped_framing(_KIMI)
         assert isinstance(framing, int) and framing > 0, framing
         assert shipped[0] - unframed[0] == framing, (shipped, unframed)
-        assert _runtime_models(runtime) == runtime_calls
+        assert _runtime_models(runtime) == ()
+        assert _mantle_models(mantle) == ()
+
+
+@pytest.mark.parametrize(
+    "estimate", [_messages_estimate, _utils_endpoint_estimate], ids=["messages_count_tokens", "utils_token_counter"]
+)
+def test_local_marker_counts_locally_without_asking_the_runtime_or_mantle(
+    counting_proxy: OwnedProxy,
+    runtime_port: int,
+    mantle_port: int,
+    estimate: Callable[[Gateway, str], tuple[int, JsonValue]],
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        shipped: Final = estimate(gateway, _deployment(scenario, runtime_port, _NOVA))
+        configured: Final = estimate(gateway, _deployment(scenario, runtime_port, _SONNET, _COUNT_LOCALLY))
+        assert shipped[0] > 0 and configured[0] > 0, (shipped, configured)
+        assert (shipped[1], configured[1]) == ("local_estimate", "local_estimate"), (shipped, configured)
+        assert _runtime_models(runtime) == ()
         assert _mantle_models(mantle) == ()
 
 
@@ -613,8 +642,20 @@ def _count_answer(response: httpx.Response, source_key: str) -> tuple[int, str]:
 
 @pytest.mark.parametrize("endpoint", sorted(_COUNT_ENDPOINTS))
 @pytest.mark.parametrize("unreadable", sorted(_UNREADABLE_BODIES))
+@pytest.mark.parametrize(
+    ("model_info", "runtime_calls", "rejection"),
+    [(None, (), _CANNOT_ESTIMATE), (_COUNT_ITSELF, (_KIMI_BASE,), _UNSUPPORTED)],
+    ids=["shipped_local_marker", "counting_itself_on_the_runtime"],
+)
 def test_shipped_framing_never_answers_a_500_for_a_body_the_local_count_cannot_read(
-    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int, unreadable: str, endpoint: str
+    counting_proxy: OwnedProxy,
+    runtime_port: int,
+    mantle_port: int,
+    unreadable: str,
+    endpoint: str,
+    model_info: dict[str, JsonValue] | None,
+    runtime_calls: tuple[str, ...],
+    rejection: str,
 ) -> None:
     gateway: Final = counting_proxy.gateway
     path, source_key = _COUNT_ENDPOINTS[endpoint]
@@ -624,14 +665,16 @@ def test_shipped_framing_never_answers_a_500_for_a_body_the_local_count_cannot_r
         gateway.scenario() as scenario,
     ):
         response: Final = gateway.request(
-            "POST", path, {"model": _deployment(scenario, runtime_port, _KIMI), **_UNREADABLE_BODIES[unreadable]}
+            "POST",
+            path,
+            {"model": _deployment(scenario, runtime_port, _KIMI, model_info), **_UNREADABLE_BODIES[unreadable]},
         )
         status, answer = _count_answer(response, source_key)
-        assert (status, answer) == (200, "local_estimate") or (status == 400 and _UNSUPPORTED in answer), (
+        assert (status, answer) == (200, "local_estimate") or (status == 400 and rejection in answer), (
             response.status_code,
             response.text,
         )
-        assert _runtime_models(runtime) == (_KIMI_BASE,)
+        assert _runtime_models(runtime) == runtime_calls
         assert _mantle_models(mantle) == ()
 
 

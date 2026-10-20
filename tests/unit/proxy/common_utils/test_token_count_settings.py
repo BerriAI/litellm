@@ -6,6 +6,7 @@ import pytest
 
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy.common_utils.token_count_settings import (
+    LocalTokenCount,
     ProviderCountFailure,
     TokenCountModel,
     TokenCountSettings,
@@ -19,6 +20,7 @@ _DEFAULT: Final = {
     "token_count_framing": 97,
     "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"},
 }
+_LOCAL_DEFAULT: Final = {"token_count_framing": 97, "token_count_model": {"litellm_provider": "local"}}
 _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.json"
 
 
@@ -68,6 +70,15 @@ def _in_us_west_2() -> str:
             {"token_count_model": {"model": "  ", "region": "us-east-1"}},
             TokenCountSettings(framing=97, count_model=None),
         ),
+        (
+            {"token_count_model": {"litellm_provider": "local"}},
+            TokenCountSettings(framing=97, count_model=LocalTokenCount()),
+        ),
+        (
+            {"token_count_model": {"litellm_provider": "local", "model": "custom-model", "region": "us-east-1"}},
+            TokenCountSettings(framing=97, count_model=LocalTokenCount()),
+        ),
+        ({"token_count_model": {"litellm_provider": "bedrock"}}, TokenCountSettings(framing=97, count_model=None)),
     ],
 )
 def test_config_overrides_the_cost_map_default_key_by_key(
@@ -77,6 +88,37 @@ def test_config_overrides_the_cost_map_default_key_by_key(
         resolve_token_count_settings(configured=configured, default=_DEFAULT, deployment_region=_in_us_west_2)
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({}, LocalTokenCount()),
+        ({"token_count_framing": 0}, LocalTokenCount()),
+        (
+            {"token_count_model": {"model": "custom-model", "litellm_provider": "bedrock"}},
+            TokenCountModel(model="custom-model", region=None, litellm_provider="bedrock"),
+        ),
+        ({"token_count_model": {"model": "custom-model"}}, TokenCountModel(model="custom-model", region=None)),
+        ({"token_count_model": {}}, None),
+    ],
+)
+def test_shipped_local_marker_counts_locally_until_the_config_routes_the_count_to_a_provider(
+    configured: dict[str, object], expected: TokenCountModel | LocalTokenCount | None
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default=_LOCAL_DEFAULT, deployment_region=lambda: "eu-central-1"
+    )
+    assert (settings.count_model, settings.framing) == (expected, 0 if "token_count_framing" in configured else 97)
+
+
+def test_region_on_a_shipped_local_marker_never_routes_the_count_anywhere() -> None:
+    settings: Final = resolve_token_count_settings(
+        configured={},
+        default={"token_count_model": {"litellm_provider": "local", "region": "us-east-1"}},
+        deployment_region=lambda: "eu-central-1",
+    )
+    assert settings.count_model == LocalTokenCount()
 
 
 @pytest.mark.parametrize(
@@ -180,10 +222,14 @@ def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> Non
         if isinstance(entry, dict) and "token_count_model" in entry
     }
     assert count_models
+    assert any(count_model.get("litellm_provider") == "local" for count_model in count_models.values())
     for name, count_model in count_models.items():
+        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
+        if count_model.get("litellm_provider") == "local":
+            assert count_model == {"litellm_provider": "local"}, name
+            continue
         model: Final = count_model["model"]
         assert get_bedrock_base_model(model) in aws_models
-        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
         assert "region" not in count_model or count_model["region"].strip()
 
 

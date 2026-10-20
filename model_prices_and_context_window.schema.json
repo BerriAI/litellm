@@ -1248,9 +1248,6 @@
         },
         "token_count_model": {
           "type": "object",
-          "required": [
-            "model"
-          ],
           "additionalProperties": false,
           "properties": {
             "model": {
@@ -1265,11 +1262,33 @@
               "type": "string",
               "enum": [
                 "bedrock",
-                "bedrock_mantle"
+                "bedrock_mantle",
+                "local"
               ]
             }
           },
-          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in."
+          "if": {
+            "required": [
+              "litellm_provider"
+            ],
+            "properties": {
+              "litellm_provider": {
+                "const": "local"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": false,
+              "region": false
+            }
+          },
+          "else": {
+            "required": [
+              "model"
+            ]
+          },
+          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in. The provider \"local\" marks a model no provider API can count, so litellm estimates its requests locally without calling the provider and takes no model or region."
         },
         "token_count_tokenizer": {
           "type": "string",

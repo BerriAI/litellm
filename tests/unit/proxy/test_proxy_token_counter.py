@@ -1644,6 +1644,14 @@ def _provider_reply(
     )
 
 
+def _kimi_counting_itself(**model_info: object) -> dict[str, object]:
+    return {
+        "model_name": "kimi",
+        "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+        "model_info": {"token_count_model": {}, **model_info},
+    }
+
+
 _COUNT_REQUEST = TokenCountRequest(
     model="sonnet-5-5",
     messages=[{"role": "user", "content": "hello"}],
@@ -1994,7 +2002,7 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+        Router(model_list=[_kimi_counting_itself()]),
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
@@ -2068,11 +2076,7 @@ async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_
         "llm_router",
         Router(
             model_list=[
-                {
-                    "model_name": "kimi",
-                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
-                    "model_info": {"custom_tokenizer": {"identifier": "moonshotai/kimi-k3", "revision": "main"}},
-                }
+                _kimi_counting_itself(custom_tokenizer={"identifier": "moonshotai/kimi-k3", "revision": "main"})
             ]
         ),
     )
@@ -2111,11 +2115,10 @@ def _framed_kimis_with_custom_tokenizers(
                 },
                 *(
                     {
+                        **_kimi_counting_itself(
+                            custom_tokenizer={"identifier": identifier, "revision": revision, "auth_token": None}
+                        ),
                         "model_name": name,
-                        "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
-                        "model_info": {
-                            "custom_tokenizer": {"identifier": identifier, "revision": revision, "auth_token": None}
-                        },
                     }
                     for name, (identifier, revision) in tokenizers.items()
                 ),
@@ -2373,7 +2376,7 @@ def _framed_kimi(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+        Router(model_list=[_kimi_counting_itself()]),
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
@@ -2467,7 +2470,7 @@ async def test_swallowed_estimate_error_is_logged_by_type_without_the_request_co
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+        Router(model_list=[_kimi_counting_itself()]),
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
@@ -2744,15 +2747,7 @@ async def test_uncountable_model_keeps_the_provider_error_when_local_counting_is
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "kimi",
-                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
-                    "model_info": {"token_count_framing": 78},
-                }
-            ]
-        ),
+        Router(model_list=[_kimi_counting_itself(token_count_framing=78)]),
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
@@ -3892,3 +3887,201 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+_LOCAL_MARKED: Final = "litellm-test.local-marked-chat-v1:0"
+_BEDROCK_ROUTED: Final = "litellm-test.bedrock-routed-chat-v1:0"
+_LOCAL_MARKED_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "token_count_model": {"litellm_provider": "local"},
+    }
+)
+_BEDROCK_ROUTED_ENTRY: Final = MappingProxyType(
+    {**_LOCAL_MARKED_ENTRY, "token_count_model": {"model": _BEDROCK_ROUTED, "litellm_provider": "bedrock"}}
+)
+_HELLO: Final = [{"role": "user", "content": "Hello, how many tokens is this?"}]
+_CANNOT_ESTIMATE: Final = f"LiteLLM counts tokens for {_LOCAL_MARKED} locally and could not estimate this request"
+_WEB_SEARCH_REPLAY: Final = [
+    {"role": "user", "content": "What is the newest LiteLLM release?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "LiteLLM"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://docs.litellm.ai/release_notes",
+                        "title": "Release notes",
+                        "encrypted_content": "",
+                    }
+                ],
+            },
+            {"type": "text", "text": "The newest release is in the release notes."},
+        ],
+    },
+    {"role": "user", "content": "Thanks."},
+]
+_BOOLEAN_SUBSCHEMA_TOOL: Final = {"name": "search", "input_schema": {"type": "object", "properties": {"query": True}}}
+
+
+def _bedrock_count_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(url__regex=r"^https://bedrock-count-tokens\.test/model/.+/count-tokens$").mock(
+        return_value=httpx.Response(200, json={"inputTokens": 999})
+    )
+
+
+def _uncountable_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    entry: Mapping[str, object],
+    model_info: Mapping[str, object] | None = None,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, dict(entry))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "uncountable",
+                    "litellm_params": {
+                        "model": f"bedrock/{model}",
+                        "api_base": "https://bedrock-count-tokens.test",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                        "aws_region_name": "us-east-1",
+                    },
+                    "model_info": dict(model_info or {}),
+                }
+            ]
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "entry", "model_info", "expected"),
+    [
+        pytest.param(_LOCAL_MARKED, _LOCAL_MARKED_ENTRY, {}, ("local_estimate", 0), id="shipped_local_marker"),
+        pytest.param(
+            _LOCAL_MARKED,
+            _LOCAL_MARKED_ENTRY,
+            {"token_count_model": {"model": _LOCAL_MARKED, "litellm_provider": "bedrock"}},
+            ("token_count_model", 1),
+            id="config_routes_a_local_marked_model_to_bedrock",
+        ),
+        pytest.param(
+            _LOCAL_MARKED,
+            _LOCAL_MARKED_ENTRY,
+            {"token_count_model": {}},
+            ("provider", 1),
+            id="config_makes_a_local_marked_model_count_itself",
+        ),
+        pytest.param(_BEDROCK_ROUTED, _BEDROCK_ROUTED_ENTRY, {}, ("token_count_model", 1), id="shipped_bedrock_route"),
+        pytest.param(
+            _BEDROCK_ROUTED,
+            _BEDROCK_ROUTED_ENTRY,
+            {"token_count_model": {"litellm_provider": "local"}},
+            ("local_estimate", 0),
+            id="config_marks_a_bedrock_routed_model_local",
+        ),
+    ],
+)
+async def test_config_flips_the_cost_maps_local_marker_in_both_directions(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    entry: Mapping[str, object],
+    model_info: dict[str, object],
+    expected: tuple[str, int],
+):
+    _uncountable_deployment(monkeypatch, model, entry, model_info)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = _bedrock_count_route(respx_mock)
+        counted: Final = await count_request_tokens(
+            request=TokenCountRequest(model="uncountable", messages=_HELLO), call_endpoint=True
+        )
+
+    assert (counted.count_source, route.call_count) == expected
+    assert counted.total_tokens == (999 if route.called else litellm.token_counter(model=model, messages=_HELLO))
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_of_a_local_marked_model_says_the_count_is_a_local_estimate(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _uncountable_deployment(monkeypatch, _LOCAL_MARKED, _LOCAL_MARKED_ENTRY)
+    body: Final = {
+        "model": "uncountable",
+        "system": "Be terse.",
+        "messages": _HELLO,
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = _bedrock_count_route(respx_mock)
+        response: Final = await anthropic_count_tokens(
+            _json_request(body, "claude-cli/2.1.0 (external, cli)"), UserAPIKeyAuth()
+        )
+
+    input_tokens: Final = response["input_tokens"]
+    assert (response["litellm_count_source"], route.called) == ("local_estimate", False)
+    assert isinstance(input_tokens, int) and input_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_local_marked_model_answers_503_when_local_counting_is_disabled(monkeypatch: pytest.MonkeyPatch):
+    _uncountable_deployment(monkeypatch, _LOCAL_MARKED, _LOCAL_MARKED_ENTRY)
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = _bedrock_count_route(respx_mock)
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(model="uncountable", messages=_HELLO), call_endpoint=True
+            )
+
+    assert (raised.value.code, raised.value.type, route.called) == ("503", "token_counting_disabled", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable_body",
+    [
+        pytest.param({"messages": _WEB_SEARCH_REPLAY}, id="web_search_replay"),
+        pytest.param({"messages": _HELLO, "tools": [_BOOLEAN_SUBSCHEMA_TOOL]}, id="boolean_subschema_tool"),
+    ],
+)
+async def test_local_marked_model_answers_a_400_not_a_500_for_a_body_the_estimate_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, unreadable_body: dict[str, list[dict[str, object]]]
+):
+    _uncountable_deployment(monkeypatch, _LOCAL_MARKED, _LOCAL_MARKED_ENTRY)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = _bedrock_count_route(respx_mock)
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(model="uncountable", **unreadable_body),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+
+    assert (raised.value.code, raised.value.type, raised.value.message, route.called) == (
+        "400",
+        "token_counting_error",
+        _CANNOT_ESTIMATE,
+        False,
+    )
