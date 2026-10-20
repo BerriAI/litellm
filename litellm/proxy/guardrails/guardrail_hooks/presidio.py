@@ -1,3 +1,4 @@
+import copy
 # +-----------------------------------------------+
 # |                                               |
 # |               PII Masking                     |
@@ -1192,6 +1193,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Masks the input and output before logging to langfuse, datadog, etc.
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+            # Operates on defensive copies so the client-facing request and response are not modified in-place
+            try:
+                kwargs = copy.deepcopy(kwargs)
+            except Exception:
+                kwargs = dict(kwargs)
+                if "messages" in kwargs and isinstance(kwargs["messages"], list):
+                    kwargs["messages"] = copy.deepcopy(kwargs["messages"])
+            try:
+                result = copy.deepcopy(result)
+            except Exception:
+                pass
+
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task

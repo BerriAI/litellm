@@ -633,6 +633,56 @@ async def test_logging_hook_masks_the_response_too(presidio_guardrail):
     assert "[CREDIT_CARD]" in result_response.choices[0].message.content
     assert "4111-1111-1111-1111" not in result_response.choices[0].message.content
 
+@pytest.mark.asyncio
+async def test_logging_hook_does_not_mutate_client_request_or_response(presidio_guardrail):
+    """
+    Issue #47605: Presidio guardrail in logging_only mode must not mutate the client-facing
+    request kwargs or response object in place. Logging redaction must operate on defensive copies
+    so the live response and request are returned unmasked to the client.
+    """
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]").replace("user@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "My email is user@example.com"}],
+        "model": "gpt-4",
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Sure, your card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+
+    # 1. The returned logging objects MUST be redacted
+    assert "[EMAIL]" in result_kwargs["messages"][0]["content"]
+    assert "[CREDIT_CARD]" in result_response.choices[0].message.content
+
+    # 2. The original client-facing request kwargs and response MUST NOT be mutated in-place
+    assert "user@example.com" in test_kwargs["messages"][0]["content"]
+    assert "[EMAIL]" not in test_kwargs["messages"][0]["content"]
+    assert "4111-1111-1111-1111" in response.choices[0].message.content
+    assert "[CREDIT_CARD]" not in response.choices[0].message.content
+
+
 
 @pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
