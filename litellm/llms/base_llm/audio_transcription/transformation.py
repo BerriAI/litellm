@@ -50,6 +50,64 @@ def sdk_compatible_transcription_response(response: object) -> BaseModel | str:
     return _TRANSCRIPTION_TEXT.validate_python(response, strict=True)
 
 
+def _content_type(http_response: httpx.Response) -> str:
+    return next(iter(http_response.headers.get_list("content-type")), "")
+
+
+def _is_event_stream(http_response: httpx.Response) -> bool:
+    return _content_type(http_response).startswith("text/event-stream")
+
+
+def _unstreamed_transcription_response(http_response: httpx.Response) -> BaseModel | str:
+    if _content_type(http_response).startswith("application/json"):
+        return Transcription.model_validate_json(http_response.content)
+    return http_response.text
+
+
+def _non_streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsBase:
+    return cast(  # cast-ok: SDK file handles have no runtime validation schema
+        TranscriptionCreateParamsBase, {key: value for key, value in data.items() if key != "stream"}
+    )
+
+
+def _streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsStreaming:
+    return cast(  # cast-ok: SDK file handles have no runtime validation schema
+        TranscriptionCreateParamsStreaming, data
+    )
+
+
+def create_sdk_transcription(
+    client: OpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
+) -> tuple[dict[str, str], Stream[TranscriptionStreamEvent] | BaseModel | str]:
+    if data.get("stream") is not True:
+        raw_response: Final = client.audio.transcriptions.with_raw_response.create(
+            **_non_streaming_params(data), timeout=timeout
+        )
+        return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
+    raw_stream: Final = client.audio.transcriptions.with_raw_response.create(**_streaming_params(data), timeout=timeout)
+    if _is_event_stream(raw_stream.http_response):
+        return dict(raw_stream.headers), raw_stream.parse(to=Stream[TranscriptionStreamEvent])
+    raw_stream.http_response.read()
+    return dict(raw_stream.headers), _unstreamed_transcription_response(raw_stream.http_response)
+
+
+async def acreate_sdk_transcription(
+    client: AsyncOpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
+) -> tuple[dict[str, str], AsyncStream[TranscriptionStreamEvent] | BaseModel | str]:
+    if data.get("stream") is not True:
+        raw_response: Final = await client.audio.transcriptions.with_raw_response.create(
+            **_non_streaming_params(data), timeout=timeout
+        )
+        return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
+    raw_stream: Final = await client.audio.transcriptions.with_raw_response.create(
+        **_streaming_params(data), timeout=timeout
+    )
+    if _is_event_stream(raw_stream.http_response):
+        return dict(raw_stream.headers), raw_stream.parse(to=AsyncStream[TranscriptionStreamEvent])
+    await raw_stream.http_response.aread()
+    return dict(raw_stream.headers), _unstreamed_transcription_response(raw_stream.http_response)
+
+
 @dataclass
 class AudioTranscriptionRequestData:
     """

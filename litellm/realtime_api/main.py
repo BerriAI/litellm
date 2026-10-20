@@ -249,6 +249,14 @@ def _get_realtime_http_extra_headers(
     )
 
 
+def _client_secret_session_body(req: RealtimeClientSecretRequest, model_name: str) -> Mapping[str, object] | None:
+    if req.session is not None:
+        return with_resolved_session_model(req.session.model_dump(exclude_unset=True), model_name)
+    if req.model is not None:
+        return {"type": "realtime", "model": model_name}
+    return None
+
+
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: str | None = None,
@@ -305,20 +313,16 @@ async def acreate_realtime_client_secret(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    if isinstance(request_data.get("session"), dict):
-        request_data["session"] = with_resolved_session_model(request_data["session"], model_name)
-    elif req.model is not None:
-        request_data["session"] = {
-            "type": "realtime",
-            "model": model_name,
-        }
+    session_body: Final = _client_secret_session_body(req, model_name)
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
             custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
         ),
-        request_data=request_data,
+        request_data={
+            **req.model_dump(exclude_none=True, exclude={"model", "session"}),
+            **({} if session_body is None else {"session": session_body}),
+        },
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
@@ -384,18 +388,16 @@ async def acreate_realtime_translation_client_secret(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data: Final = req.model_dump(
-        exclude_none=True,
-        exclude={"model"},
-    )
-    request_data["session"] = with_resolved_session_model(request_data["session"], model_name)
-    request_data["session"].pop("type", None)
+    translation_session: Final = with_resolved_session_model(session_config.model_dump(exclude_unset=True), model_name)
     return await base_llm_http_handler.async_realtime_translation_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
             custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
         ),
-        request_data=request_data,
+        request_data={
+            **req.model_dump(exclude_none=True, exclude={"model", "session"}),
+            "session": {key: value for key, value in translation_session.items() if key != "type"},
+        },
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
@@ -404,6 +406,22 @@ async def acreate_realtime_translation_client_secret(
         client=client if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler)) else None,
         api_version=litellm_params.api_version,
     )
+
+
+def _with_upstream_transcription_model(request_data: Mapping[str, object], model_name: str) -> dict[str, object]:
+    flat: Final = as_str_mapping(request_data.get("input_audio_transcription"))
+    audio: Final = as_str_mapping(request_data.get("audio")) or {}
+    audio_input: Final = as_str_mapping(audio.get("input")) or {}
+    nested: Final = as_str_mapping(audio_input.get("transcription"))
+    return {
+        **request_data,
+        **({} if flat is None else {"input_audio_transcription": {**flat, "model": model_name}}),
+        **(
+            {}
+            if nested is None
+            else {"audio": {**audio, "input": {**audio_input, "transcription": {**nested, "model": model_name}}}}
+        ),
+    }
 
 
 @wrapper_client
@@ -464,13 +482,11 @@ async def acreate_realtime_transcription_session(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    # Ensure the upstream body's input_audio_transcription.model matches the
-    # authorized routing model. This prevents a caller from supplying an allowed
-    # top-level model for auth while sneaking a different model into the nested
-    # transcription config that gets forwarded to the provider.
-    if isinstance(request_data.get("input_audio_transcription"), dict):
-        request_data["input_audio_transcription"]["model"] = model_name
+    # The upstream transcription model must match the authorized routing model, so a
+    # caller cannot pass auth with an allowed top-level model and forward a different one.
+    request_data: Final = _with_upstream_transcription_model(
+        req.model_dump(exclude_unset=True, exclude={"model"}), model_name
+    )
     return await base_llm_http_handler.async_realtime_transcription_session_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(

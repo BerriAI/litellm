@@ -18,6 +18,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final, NamedTuple
 
 GATED_METHODS: Final = frozenset({"post"})
+SCHEMA_MEDIA_TYPES: Final = ("application/json", "application/sdp")
 
 
 class Violation(NamedTuple):
@@ -32,7 +33,10 @@ def _as_mapping(node: object) -> Mapping[str, object]:
 
 def _content_schema(container: object) -> object:
     content: Final = _as_mapping(_as_mapping(container).get("content"))
-    return next((schema for media in content.values() if (schema := _as_mapping(media).get("schema"))), None)
+    return next(
+        (schema for media_type in SCHEMA_MEDIA_TYPES if (schema := _as_mapping(content.get(media_type)).get("schema"))),
+        None,
+    )
 
 
 def _operation_codes(operation: Mapping[str, object]) -> Iterator[str]:

@@ -10991,7 +10991,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_6"];
+        get: operations["websocket_realtime_websocket_endpoint_get_5"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11058,26 +11058,6 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/openai/v1/realtime/translations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: realtime_websocket_endpoint
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_realtime_websocket_endpoint_get_3"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13991,7 +13971,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_4"];
+        get: operations["websocket_realtime_websocket_endpoint_get_3"];
         put?: never;
         post?: never;
         delete?: never;
@@ -21759,7 +21739,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_5"];
+        get: operations["websocket_realtime_websocket_endpoint_get_4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -66833,7 +66813,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_6: {
+    websocket_realtime_websocket_endpoint_get_5: {
         parameters: {
             query?: never;
             header?: never;
@@ -66908,24 +66888,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
                 };
-            };
-        };
-    };
-    websocket_realtime_websocket_endpoint_get_3: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -70206,7 +70168,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_4: {
+    websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -70369,7 +70331,7 @@ export interface operations {
                                 } | null;
                                 transcription?: ({
                                     /** Delay */
-                                    delay?: ("minimal" | "low" | "medium" | "high" | "xhigh") | null;
+                                    delay?: string | null;
                                     /** Keywords */
                                     keywords?: string[] | null;
                                     /** Language */
@@ -70432,7 +70394,7 @@ export interface operations {
                         /** Truncation */
                         truncation?: unknown | null;
                         /** Type */
-                        type?: ("realtime" | "transcription" | "translation") | null;
+                        type?: string | null;
                     } & {
                         [key: string]: unknown;
                     }) | null;
@@ -81276,7 +81238,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_5: {
+    websocket_realtime_websocket_endpoint_get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -81439,7 +81401,7 @@ export interface operations {
                                 } | null;
                                 transcription?: ({
                                     /** Delay */
-                                    delay?: ("minimal" | "low" | "medium" | "high" | "xhigh") | null;
+                                    delay?: string | null;
                                     /** Keywords */
                                     keywords?: string[] | null;
                                     /** Language */
@@ -81502,7 +81464,7 @@ export interface operations {
                         /** Truncation */
                         truncation?: unknown | null;
                         /** Type */
-                        type?: ("realtime" | "transcription" | "translation") | null;
+                        type?: string | null;
                     } & {
                         [key: string]: unknown;
                     }) | null;

@@ -536,7 +536,7 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
     array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
     normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
-    normalized_keys: Final = frozenset(key for key, _ in normalized_items)
+    normalized_keys: Final = tuple(dict.fromkeys(key for key, _ in normalized_items))
     return {
         key: [value for item_key, value in normalized_items if item_key == key]
         if key in array_keys

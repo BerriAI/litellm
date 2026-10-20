@@ -9999,6 +9999,92 @@ def test_realtime_translation_duration_cost_ignores_malformed_provider_usage(
     assert output_invalid_cost == pytest.approx(2.0 * litellm.model_cost[model]["input_cost_per_second"])
 
 
+def _translation_session_cost(deployment_id: str) -> float:
+    one_minute_session: Final = LiteLLMRealtimeStreamLoggingObject(
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        results=[
+            {"type": "session.created", "session": {"model": "gpt-realtime-translate"}},
+            {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 60.0, "output_seconds": 60.0}},
+        ],
+    )
+    return completion_cost(
+        completion_response=one_minute_session,
+        model="gpt-realtime-translate",
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+
+def test_realtime_translation_deployment_per_second_rate_replaces_both_public_rates(_local_model_cost_map) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-translate",
+                    "api_key": "sk-test",
+                    "input_cost_per_second": 0.001,
+                },
+                "model_info": {"id": "translate-input-priced"},
+            }
+        ]
+    )
+
+    assert _translation_session_cost("translate-input-priced") == pytest.approx(60 * 0.001)
+
+
+def test_realtime_translation_deployment_without_per_second_rates_bills_public_rates(_local_model_cost_map) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-translate",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {"id": "translate-token-priced"},
+            }
+        ]
+    )
+    public_entry: Final = litellm.model_cost["gpt-realtime-translate"]
+    public_cost: Final = 60 * (public_entry.get("input_cost_per_second") or 0.0) + 60 * (
+        public_entry.get("output_cost_per_second") or 0.0
+    )
+
+    assert public_cost > 0
+    assert _translation_session_cost("translate-token-priced") == pytest.approx(public_cost)
+
+
+def test_realtime_translation_spend_usage_carries_the_billed_output_seconds(_local_model_cost_map) -> None:
+    logging_obj: Final = Logging(
+        model="gpt-realtime-translate",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.arealtime.value,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="translation-spend-usage",
+        function_id="translation-spend-usage",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-realtime-translate", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 30.0, "output_seconds": 42.5}}
+    ]
+
+    logging_obj.success_handler(result=events, start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
+
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["metadata"]["usage_object"]["seconds"] == pytest.approx(42.5)
+    assert payload["response_cost"] == pytest.approx(
+        42.5 * litellm.model_cost["gpt-realtime-translate"]["output_cost_per_second"]
+    )
+
+
 @pytest.mark.parametrize("profile_prefix", ("us", "global"))
 @pytest.mark.parametrize(
     "model_name",

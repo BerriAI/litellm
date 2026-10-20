@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import traceback
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from typing import Final, Protocol
 
 from openai import AsyncStream, Stream
@@ -11,11 +11,9 @@ from openai.types.audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
-from pydantic import TypeAdapter
 
-from litellm.types.utils import TranscriptionDetectedLanguage, TranscriptionResponse
-
-_DETECTED_LANGUAGES: Final = TypeAdapter(list[TranscriptionDetectedLanguage])
+from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.types.utils import TranscriptionResponse
 
 
 class TranscriptionStreamLogging(Protocol):
@@ -71,15 +69,10 @@ class _TranscriptionEventCollector:
 
     def response(self) -> TranscriptionResponse:
         done_event: Final = self.done_event
-        done_languages: Final = getattr(done_event, "languages", None) if done_event is not None else None
         response: Final = TranscriptionResponse(
             text=done_event.text if done_event is not None else "".join(self.text_deltas),
             usage=done_event.usage.model_dump() if done_event is not None and done_event.usage is not None else None,
-            languages=(
-                _DETECTED_LANGUAGES.validate_python(done_languages, from_attributes=True)
-                if done_languages is not None
-                else None
-            ),
+            languages=getattr(done_event, "languages", None) if done_event is not None else None,
         )
         if self.duration is not None:
             response.set_audio_transcription_duration(self.duration)
@@ -94,7 +87,9 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         start_time: datetime.datetime,
     ) -> None:
         self.__dict__.update(stream.__dict__)
-        self._hidden_params: Mapping[str, object] = {}
+        self._hidden_params: dict[str, object] = {  # mutable-ok: ResponseMetadata fills in the call's metadata
+            "additional_headers": process_response_headers(stream.response.headers)
+        }
         self._logging_obj = logging_obj
         self._start_time = start_time
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
@@ -122,8 +117,6 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         if self._finalized or self._failed:
             return
         self._finalized = True
-        if self._collector.done_event is None and self._collector.duration is None:
-            return
         self._logging_obj.success_handler(
             self._collector.response(),
             self._start_time,
@@ -136,6 +129,10 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         finally:
             self._finalize()
 
+    @property
+    def logging_obj(self) -> TranscriptionStreamLogging:
+        return self._logging_obj
+
 
 class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
     def __init__(
@@ -145,7 +142,9 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         start_time: datetime.datetime,
     ) -> None:
         self.__dict__.update(stream.__dict__)
-        self._hidden_params: Mapping[str, object] = {}
+        self._hidden_params: dict[str, object] = {  # mutable-ok: ResponseMetadata fills in the call's metadata
+            "additional_headers": process_response_headers(stream.response.headers)
+        }
         self._logging_obj = logging_obj
         self._start_time = start_time
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
@@ -179,8 +178,6 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         if self._finalized or self._failed:
             return
         self._finalized = True
-        if self._collector.done_event is None and self._collector.duration is None:
-            return
         response: Final = self._collector.response()
         end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
         self._logging_obj.handle_sync_success_callbacks_for_async_calls(
@@ -199,6 +196,10 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
             await super().close()
         finally:
             await self._finalize()
+
+    @property
+    def logging_obj(self) -> TranscriptionStreamLogging:
+        return self._logging_obj
 
 
 def wrap_transcription_stream(

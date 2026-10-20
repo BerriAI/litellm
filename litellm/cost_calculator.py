@@ -352,22 +352,24 @@ def _transcription_uses_token_pricing(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def _transcription_duration_for_cost(
-    completion_response: object, model: str | None, custom_llm_provider: str | None
-) -> float:
-    provider_duration: Final = _get_transcription_usage_duration(completion_response)
-    transcription_info: Final = (
-        _get_model_info_or_none(model, custom_llm_provider)
-        if model is not None and custom_llm_provider is not None
-        else None
-    )
+def _bills_transcription_usage_duration(pricing_model: str | None, custom_llm_provider: str | None) -> bool:
+    if pricing_model is None or custom_llm_provider is None:
+        return False
+    transcription_info: Final = _get_model_info_or_none(pricing_model, custom_llm_provider)
     transcription_metadata: Final = (
         as_str_mapping(transcription_info.get("provider_specific_entry")) if transcription_info is not None else None
     )
+    return transcription_metadata is not None and transcription_metadata.get("transcription_usage_duration") == 1
+
+
+def _transcription_duration_for_cost(
+    completion_response: object, pricing_model: str | None, model: str | None, custom_llm_provider: str | None
+) -> float:
+    provider_duration: Final = _get_transcription_usage_duration(completion_response)
     if (
         provider_duration is not None
-        and transcription_metadata is not None
-        and transcription_metadata.get("transcription_usage_duration") == 1
+        and provider_duration > 0
+        and any(_bills_transcription_usage_duration(name, custom_llm_provider) for name in (pricing_model, model))
     ):
         return provider_duration
     hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
@@ -1907,7 +1909,7 @@ def completion_cost(
                     prompt_characters = litellm.utils.count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = _transcription_duration_for_cost(
-                        completion_response, requested_model, custom_llm_provider
+                        completion_response, model, requested_model, custom_llm_provider
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -3213,8 +3215,11 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
     def create_logging_realtime_object(
         usage: Usage, results: OpenAIRealtimeStreamList
     ) -> LiteLLMRealtimeStreamLoggingObject:
+        _, translated_output_seconds = _translation_session_seconds(results)
         return LiteLLMRealtimeStreamLoggingObject(
-            usage=usage,
+            usage=usage.model_copy(update={"seconds": translated_output_seconds})
+            if translated_output_seconds > 0
+            else usage,
             results=results,
         )
 
@@ -3661,12 +3666,7 @@ def handle_realtime_stream_cost_calculation(
     return total_cost
 
 
-def handle_realtime_translation_cost_calculation(
-    results: OpenAIRealtimeStreamList,
-    custom_llm_provider: str,
-    litellm_model_name: str,
-    potential_model_names: Sequence[str | None] = (),
-) -> float:
+def _translation_session_seconds(results: OpenAIRealtimeStreamList) -> tuple[float, float]:
     usage_events: Final = tuple(
         usage
         for result in results
@@ -3684,6 +3684,19 @@ def handle_realtime_translation_cost_calculation(
         for usage in usage_events
         if (output_duration := normalized_audio_duration_seconds(usage.get("output_seconds"))) is not None
     )
+    return float(input_seconds), float(output_seconds)
+
+
+_TRANSLATION_RATE_KEYS: Final = ("input_cost_per_second", "output_cost_per_second")
+
+
+def handle_realtime_translation_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+    potential_model_names: Sequence[str | None] = (),
+) -> float:
+    input_seconds, output_seconds = _translation_session_seconds(results)
     if input_seconds <= 0 and output_seconds <= 0:
         return 0.0
     model_infos: Final = tuple(
@@ -3691,22 +3704,12 @@ def handle_realtime_translation_cost_calculation(
         for model in (*potential_model_names, litellm_model_name)
         if model is not None
     )
-    input_cost_per_second: Final = next(
-        (
-            rate
-            for info in model_infos
-            if (rate := _declared_transcription_rate(info, ("input_cost_per_second",))) is not None
-        ),
-        0.0,
+    priced_info: Final = next(
+        (info for info in model_infos if _declared_transcription_rate(info, _TRANSLATION_RATE_KEYS) is not None),
+        None,
     )
-    output_cost_per_second: Final = next(
-        (
-            output_rate
-            for info in model_infos
-            if (output_rate := _declared_transcription_rate(info, ("output_cost_per_second",))) is not None
-        ),
-        0.0,
-    )
+    input_cost_per_second: Final = _declared_transcription_rate(priced_info, ("input_cost_per_second",)) or 0.0
+    output_cost_per_second: Final = _declared_transcription_rate(priced_info, ("output_cost_per_second",)) or 0.0
     return input_seconds * input_cost_per_second + output_seconds * output_cost_per_second
 
 

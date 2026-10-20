@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal
 
 from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
@@ -13,7 +13,6 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
-RealtimeSessionType: TypeAlias = Literal["realtime", "transcription", "translation"]
 
 
 class RealtimeResponseTransformInput(TypedDict):
@@ -72,7 +71,7 @@ class RealtimeAudioTranscriptionConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     model: str | None = None
-    delay: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    delay: str | None = None
     keywords: Sequence[str] | None = None
     language: str | None = None
     languages: Sequence[str] | None = None
@@ -114,7 +113,7 @@ class RealtimeSessionConfig(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    type: RealtimeSessionType | None = None
+    type: str | None = None
     model: str | None = None
     instructions: str | None = None
     audio: RealtimeSessionAudioConfig | None = None

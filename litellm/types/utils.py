@@ -44,6 +44,8 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -775,10 +777,8 @@ MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
     "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
-    "/openai/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
     "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
-    "/openai/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -1102,7 +1102,6 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/openai/v1/realtime": (CallTypes.arealtime,),
     "/realtime/translations": (CallTypes.arealtime,),
     "/v1/realtime/translations": (CallTypes.arealtime,),
-    "/openai/v1/realtime/translations": (CallTypes.arealtime,),
     "/live/sessions": (CallTypes.arealtime,),
     "/v1/live/sessions": (CallTypes.arealtime,),
     "/openai/v1/live/sessions": (CallTypes.arealtime,),
@@ -2884,6 +2883,9 @@ class TranscriptionDetectedLanguage(LiteLLMBaseModel):
     code: str
 
 
+_DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ...])
+
+
 class TranscriptionResponse(OpenAIObject):
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
@@ -2907,7 +2909,18 @@ class TranscriptionResponse(OpenAIObject):
         languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
         **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
     ) -> None:
-        super().__init__(text=text, usage=usage, languages=languages, **kwargs)
+        super().__init__(
+            text=text, usage=usage, languages=TranscriptionResponse.detected_languages(languages), **kwargs
+        )
+        if self.languages is None:
+            del self.languages
+
+    @staticmethod
+    def detected_languages(value: object) -> tuple[TranscriptionDetectedLanguage, ...] | None:
+        try:
+            return _DETECTED_LANGUAGES.validate_python(value, from_attributes=True)
+        except ValidationError:
+            return None
 
     def set_audio_transcription_duration(self, duration: float) -> None:
         self._hidden_params["audio_transcription_duration"] = duration

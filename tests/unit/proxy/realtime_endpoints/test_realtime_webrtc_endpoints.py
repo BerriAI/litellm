@@ -7,7 +7,7 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 import functools
 import json
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -863,20 +863,6 @@ async def test_realtime_transcription_websocket_default_model_checks_key_scope()
     assert "is not available for this API key" in close_kwargs["reason"]
 
 
-def test_realtime_transcription_upstream_query_omits_model():
-    from litellm.proxy import proxy_server
-
-    assert (
-        proxy_server._resolve_realtime_upstream_query_model(
-            model="gpt-live-transcribe",
-            intent="transcription",
-            is_translation=False,
-            route_model="gpt-live-transcribe",
-        )
-        is None
-    )
-
-
 @pytest.mark.asyncio
 async def test_realtime_transcription_websocket_default_model_checks_team_scope():
     from litellm.proxy import proxy_server
@@ -1619,6 +1605,61 @@ _AZURE_REALTIME_DEPLOYMENTS: Final = (
 )
 
 
+def _post_through_the_azure_deployments(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: object,
+) -> tuple[httpx.Response, respx.Route]:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model_list: Final = [  # mutable-ok: Router takes a list of deployments
+        {
+            "model_name": alias,
+            "litellm_params": {
+                "model": deployment,
+                "api_base": "https://realtime-qa.openai.azure.com",
+                "api_key": "azure-test-key",
+            },
+        }
+        for alias, deployment in _AZURE_REALTIME_DEPLOYMENTS
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    upstream: Final = respx_mock.route(host="realtime-qa.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"value": "ek_azure", "expires_at": int(time.time()) + 3600})
+    )
+    monkeypatch.setitem(
+        proxy_app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_id="test-user", models=[alias for alias, _ in _AZURE_REALTIME_DEPLOYMENTS]),
+    )
+    with (
+        patch(  # test-quality-ok: endpoint test isolates request metadata enrichment
+            "litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data
+        ),
+        patch(  # test-quality-ok: endpoint test isolates the process-wide proxy logger
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as logging,
+    ):
+        logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        logging.post_call_failure_hook = AsyncMock()
+        response: Final = TestClient(proxy_app).post(
+            path, headers={"Authorization": "Bearer sk-test-master-key"}, json=body
+        )
+    return response, upstream
+
+
+def _upstream_session_value(upstream: respx.Route, session_path: tuple[str, ...]) -> object:
+    return functools.reduce(
+        lambda node, key: node[key], session_path, json.loads(upstream.calls.last.request.content)["session"]
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "body", "upstream_model_path", "expected_model"),
     (
@@ -1651,6 +1692,15 @@ _AZURE_REALTIME_DEPLOYMENTS: Final = (
             ("model",),
             "qa-translate-deployment",
         ),
+        (
+            "/v1/realtime/translations/client_secrets",
+            {
+                "model": "azure-translate-alias",
+                "session": {"audio": {"input": {"transcription": {"model": "azure-transcribe-alias"}}}},
+            },
+            ("audio", "input", "transcription", "model"),
+            "qa-whisper-deployment",
+        ),
     ),
 )
 def test_client_secrets_mint_a_secret_for_the_azure_deployment_model(
@@ -1664,46 +1714,95 @@ def test_client_secrets_mint_a_secret_for_the_azure_deployment_model(
     upstream_model_path: tuple[str, ...],
     expected_model: str,
 ) -> None:
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    model_list: Final = [  # mutable-ok: Router takes a list of deployments
-        {
-            "model_name": alias,
-            "litellm_params": {
-                "model": deployment,
-                "api_base": "https://realtime-qa.openai.azure.com",
-                "api_key": "azure-test-key",
-            },
-        }
-        for alias, deployment in _AZURE_REALTIME_DEPLOYMENTS
-    ]
-    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
-    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
-    upstream: Final = respx_mock.route(host="realtime-qa.openai.azure.com").mock(
-        return_value=httpx.Response(200, json={"value": "ek_azure", "expires_at": int(time.time()) + 3600})
+    response, upstream = _post_through_the_azure_deployments(
+        proxy_app, mock_add_litellm_data, mock_pre_call_hook, respx_mock, monkeypatch, path, body
     )
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", models=[alias for alias, _ in _AZURE_REALTIME_DEPLOYMENTS]
-    )
-    try:
-        with (
-            patch(  # test-quality-ok: endpoint test isolates request metadata enrichment
-                "litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data
-            ),
-            patch(  # test-quality-ok: endpoint test isolates the process-wide proxy logger
-                "litellm.proxy.proxy_server.proxy_logging_obj"
-            ) as logging,
-        ):
-            logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
-            logging.post_call_failure_hook = AsyncMock()
-            response: Final = TestClient(proxy_app).post(
-                path, headers={"Authorization": "Bearer sk-test-master-key"}, json=body
-            )
-    finally:
-        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    upstream_session: Final = json.loads(upstream.calls.last.request.content)["session"]
-    upstream_model: Final = functools.reduce(lambda node, key: node[key], upstream_model_path, upstream_session)
-    assert upstream_model == expected_model
+    assert _upstream_session_value(upstream, upstream_model_path) == expected_model
+
+
+@pytest.mark.parametrize(
+    ("body", "session_path", "expected"),
+    (
+        (
+            {
+                "session": {
+                    "type": "realtime",
+                    "model": "azure-realtime-alias",
+                    "audio": {"input": {"turn_detection": None}},
+                }
+            },
+            ("audio", "input", "turn_detection"),
+            None,
+        ),
+        (
+            {
+                "session": {
+                    "type": "transcription",
+                    "audio": {"input": {"transcription": {"model": "azure-transcribe-alias"}, "turn_detection": None}},
+                }
+            },
+            ("audio", "input", "turn_detection"),
+            None,
+        ),
+        ({"session": {"type": "conversation", "model": "azure-realtime-alias"}}, ("type",), "realtime"),
+        (
+            {
+                "session": {
+                    "type": "transcription",
+                    "audio": {"input": {"transcription": {"model": "azure-transcribe-alias", "delay": "auto"}}},
+                }
+            },
+            ("audio", "input", "transcription", "delay"),
+            "auto",
+        ),
+    ),
+)
+def test_client_secrets_forward_every_session_value_the_caller_set(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, object],
+    session_path: tuple[str, ...],
+    expected: object,
+) -> None:
+    response, upstream = _post_through_the_azure_deployments(
+        proxy_app,
+        mock_add_litellm_data,
+        mock_pre_call_hook,
+        respx_mock,
+        monkeypatch,
+        "/v1/realtime/client_secrets",
+        body,
+    )
+
+    assert response.status_code == 200, response.text
+    assert _upstream_session_value(upstream, session_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    (
+        ("/v1/realtime/client_secrets", {"session": "not-a-session"}),
+        ("/v1/realtime/translations/client_secrets", {"session": {"audio": {"input": "not-an-input"}}}),
+        ("/v1/realtime/transcription_sessions", {"audio": {"input": {"transcription": "not-a-transcription"}}}),
+    ),
+)
+def test_realtime_session_routes_answer_400_for_a_malformed_body(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: Mapping[str, object],
+) -> None:
+    response, upstream = _post_through_the_azure_deployments(
+        proxy_app, mock_add_litellm_data, mock_pre_call_hook, respx_mock, monkeypatch, path, body
+    )
+
+    assert (response.status_code, response.json()["error"]["type"]) == (400, "invalid_request_error")
+    assert upstream.called is False

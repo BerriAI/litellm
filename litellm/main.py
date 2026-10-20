@@ -8252,37 +8252,25 @@ async def atranscription(
 
 def _validate_gpt_transcription_request(
     model: str,
+    pricing_model: str,
     custom_llm_provider: str,
-    language: str | None,
-    languages: Sequence[str] | None,
     response_format: str | None,
     drop_params: object,
 ) -> str | None:
     model_cost_key: Final = next(
         (
             key
-            for key in (f"{custom_llm_provider}/{model}", model)
+            for key in (f"{custom_llm_provider}/{pricing_model}", pricing_model)
             if (as_str_mapping(litellm.model_cost.get(key)) or {}).get("litellm_provider") == custom_llm_provider
         ),
         None,
     )
     model_info: Final = (
-        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_cost_key is not None else None
+        get_model_info(model=pricing_model, custom_llm_provider=custom_llm_provider)
+        if model_cost_key is not None
+        else None
     )
-    supported_endpoints: Final = model_info.get("supported_endpoints") if model_info is not None else None
     provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
-    if language is not None and languages is not None:
-        raise litellm.UnsupportedParamsError(
-            message="language and languages cannot be used together",
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
-    if supported_endpoints is not None and "/v1/audio/transcriptions" not in supported_endpoints:
-        raise litellm.UnsupportedParamsError(
-            message=f"{model} is available through the Realtime API, not file transcription",
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
     if (
         provider_specific_entry is None
         or provider_specific_entry.get("transcription_json_or_text_only") != 1
@@ -8363,11 +8351,18 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    configured_base_model: Final = litellm_params_dict.get("base_model")
+    pricing_model: Final = (
+        configured_base_model.removeprefix(f"{custom_llm_provider}/")
+        if isinstance(configured_base_model, str)
+        else model
+    )
+
     supported_response_format: Final = _validate_gpt_transcription_request(
         model=model,
+        pricing_model=pricing_model,
         custom_llm_provider=custom_llm_provider,
-        language=language,
-        languages=languages,
         response_format=response_format,
         drop_params=kwargs.get("drop_params"),
     )
@@ -8385,8 +8380,6 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     litellm_logging_obj.update_environment_variables(
         model=model,
@@ -8415,6 +8408,7 @@ def transcription(
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
         provider=LlmProviders(custom_llm_provider),
+        base_model=pricing_model,
     )
 
     uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (

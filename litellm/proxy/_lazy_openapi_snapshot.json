@@ -53586,13 +53586,6 @@
                                                     "delay": {
                                                       "anyOf": [
                                                         {
-                                                          "enum": [
-                                                            "minimal",
-                                                            "low",
-                                                            "medium",
-                                                            "high",
-                                                            "xhigh"
-                                                          ],
                                                           "type": "string"
                                                         },
                                                         {
@@ -53877,11 +53870,6 @@
                             "type": {
                               "anyOf": [
                                 {
-                                  "enum": [
-                                    "realtime",
-                                    "transcription",
-                                    "translation"
-                                  ],
                                   "type": "string"
                                 },
                                 {
@@ -54152,13 +54140,6 @@
                                                     "delay": {
                                                       "anyOf": [
                                                         {
-                                                          "enum": [
-                                                            "minimal",
-                                                            "low",
-                                                            "medium",
-                                                            "high",
-                                                            "xhigh"
-                                                          ],
                                                           "type": "string"
                                                         },
                                                         {
@@ -54443,11 +54424,6 @@
                             "type": {
                               "anyOf": [
                                 {
-                                  "enum": [
-                                    "realtime",
-                                    "transcription",
-                                    "translation"
-                                  ],
                                   "type": "string"
                                 },
                                 {

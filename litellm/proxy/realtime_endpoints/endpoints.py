@@ -2,14 +2,17 @@
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import PlainTextResponse
+from pydantic import ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
@@ -49,6 +52,14 @@ _NON_BILLABLE_REALTIME_PROTOCOL_MESSAGE: Final = (
     "Realtime WebRTC endpoints are disabled because provider usage bypasses LiteLLM billing. "
     "Set general_settings.allow_non_billable_realtime_protocols to true to opt in"
 )
+
+
+@contextmanager
+def _invalid_request_body_answers_400() -> Generator[None, None, None]:
+    try:
+        yield
+    except ValidationError as error:
+        raise ProxyException(message=str(error), type="invalid_request_error", param=None, code=400) from error
 
 
 _TRANSLATION_SECRET_BODY: Final = {
@@ -151,6 +162,16 @@ def _set_transcription_model_on_session(
     }
 
 
+def nested_transcription_upstream_model(model: str, team_id: str | None, llm_router: "Router | None") -> str:
+    deployment_model: Final = llm_router.get_routable_upstream_model(model, team_id) if llm_router is not None else None
+    if deployment_model is None:
+        return model
+    try:
+        return litellm.get_llm_provider(model=deployment_model)[0]
+    except litellm.BadRequestError:
+        return deployment_model
+
+
 async def _authorize_and_bind_nested_transcription_models(
     session_data: dict,  # mutable-ok: session payload is rewritten in place for provider serialization
     user_api_key_dict: UserAPIKeyAuth,
@@ -168,7 +189,7 @@ async def _authorize_and_bind_nested_transcription_models(
     if nested_models:
         _set_transcription_model_on_session(
             session=session_data,
-            model=nested_models[0],
+            model=nested_transcription_upstream_model(nested_models[0], user_api_key_dict.team_id, llm_router),
         )
 
 
@@ -184,7 +205,7 @@ async def _prepare_client_secret_session(
         raise HTTPException(status_code=400, detail="Translation sessions require the translations endpoint")
     session_type: Final = forced_session_type or _coerce_realtime_session_type(requested_session_type)
     session_data: Final[dict | None] = (
-        req.session.model_dump(exclude_none=True) if req.session else ({} if session_type == "translation" else None)
+        req.session.model_dump(exclude_unset=True) if req.session else ({} if session_type == "translation" else None)
     )
     if session_data is not None:
         session_data["type"] = session_type
@@ -334,7 +355,8 @@ async def create_realtime_client_secret(
     data: dict = {}
     try:
         body: Final = await read_request_body(request=request)
-        req: Final = RealtimeClientSecretRequest(**body)
+        with _invalid_request_body_answers_400():
+            req: Final = RealtimeClientSecretRequest.model_validate(body)
         is_translation_request: Final = "/realtime/translations/client_secrets" in request.url.path
 
         model, session_data, session_type = await _prepare_client_secret_session(
@@ -683,7 +705,8 @@ async def create_realtime_transcription_session(
     data: dict = {}
     try:
         body: Final = await read_request_body(request=request)
-        req: Final = RealtimeTranscriptionSessionRequest(**body)
+        with _invalid_request_body_answers_400():
+            req: Final = RealtimeTranscriptionSessionRequest.model_validate(body)
 
         model: Final[str] = req.resolved_model() or "gpt-realtime-whisper"
         await can_key_call_resolved_model(

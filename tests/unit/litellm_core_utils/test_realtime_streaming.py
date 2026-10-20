@@ -3,7 +3,6 @@ import base64
 import json
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,7 +19,6 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
@@ -31,14 +29,10 @@ from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
-from litellm.realtime_api.main import _build_litellm_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
-from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
-from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
 
 def _mock_logging() -> MagicMock:
@@ -515,6 +509,74 @@ async def test_backend_to_client_beta_receives_normalized_events():
     sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
     assert sent["type"] == "response.function_call_arguments.delta"
     assert sent["output_index"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ("session.created", "session.updated"))
+async def test_beta_client_bridged_to_a_ga_backend_receives_the_beta_session_shape(event_type: str) -> None:
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": event_type,
+                    "event_id": "e1",
+                    "session": {
+                        "type": "realtime",
+                        "object": "realtime.session",
+                        "id": "sess_1",
+                        "model": "gpt-realtime-2.1-mini",
+                        "instructions": "Answer briefly",
+                        "output_modalities": ["audio"],
+                        "max_output_tokens": "inf",
+                        "tools": [],
+                        "audio": {
+                            "input": {
+                                "format": {"type": "audio/pcmu"},
+                                "transcription": {"model": "gpt-transcribe"},
+                                "noise_reduction": None,
+                                "turn_detection": {"type": "server_vad", "create_response": True},
+                            },
+                            "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": "marin", "speed": 1.1},
+                        },
+                    },
+                }
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=False)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["type"] == event_type
+    assert sent["session"] == {
+        "object": "realtime.session",
+        "id": "sess_1",
+        "model": "gpt-realtime-2.1-mini",
+        "instructions": "Answer briefly",
+        "modalities": ["audio", "text"],
+        "max_response_output_tokens": "inf",
+        "tools": [],
+        "input_audio_format": "g711_ulaw",
+        "input_audio_transcription": {"model": "gpt-transcribe"},
+        "input_audio_noise_reduction": None,
+        "turn_detection": {"type": "server_vad", "create_response": True},
+        "output_audio_format": "pcm16",
+        "voice": "marin",
+        "speed": 1.1,
+    }, (
+        "Beta and GA session fields, checked 2026-10-20: "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/beta/realtime/session.py and "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/realtime/realtime_session_create_response.py"
+    )
 
 
 @pytest.mark.asyncio
@@ -1246,12 +1308,52 @@ async def test_translation_session_update_rejects_disallowed_nested_transcriptio
     assert client_ws.close.await_args.kwargs["code"] == 1008
 
 
+def _translation_transcription_update(transcription: Mapping[str, object]) -> str:
+    return json.dumps(
+        {
+            "type": "session.update",
+            "session": {"type": "translation", "audio": {"input": {"transcription": transcription}}},
+        }
+    )
+
+
 @pytest.mark.asyncio
-async def test_translation_session_update_binds_nested_transcription_model() -> None:
-    backend_ws = MagicMock()
-    backend_ws.send = AsyncMock()
-    streaming = RealTimeStreaming(
+async def test_translation_session_update_authorizes_each_new_nested_transcription_model() -> None:
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
         MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(
+            models=["gpt-realtime-translate", "gpt-realtime-whisper", "gpt-live-transcribe"]
+        ),
+        translation_session=True,
+    )
+
+    for transcription in (
+        {"model": "gpt-realtime-whisper", "language": "en"},
+        {"model": "gpt-live-transcribe", "language": "fr"},
+        {"language": "de"},
+    ):
+        await streaming._send_to_backend(_translation_transcription_update(transcription))
+
+    assert [
+        json.loads(call.args[0])["session"]["audio"]["input"]["transcription"]
+        for call in backend_ws.send.await_args_list
+    ] == [
+        {"model": "gpt-realtime-whisper", "language": "en"},
+        {"model": "gpt-live-transcribe", "language": "fr"},
+        {"model": "gpt-live-transcribe", "language": "de"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_refuses_a_later_nested_transcription_model_the_key_cannot_call() -> None:
+    client_ws: Final = MagicMock(send_text=AsyncMock(), close=AsyncMock())
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws,
         backend_ws,
         MagicMock(),
         model="gpt-realtime-translate",
@@ -1259,45 +1361,59 @@ async def test_translation_session_update_binds_nested_transcription_model() -> 
         translation_session=True,
     )
 
-    await streaming._send_to_backend(
-        json.dumps(
-            {
-                "type": "session.update",
-                "session": {
-                    "type": "translation",
-                    "audio": {
-                        "input": {
-                            "transcription": {"model": "gpt-realtime-whisper", "language": "en"},
-                        }
-                    },
-                },
-            }
-        )
+    first_sent: Final = await streaming._send_to_backend(
+        _translation_transcription_update({"model": "gpt-realtime-whisper", "language": "en"})
     )
-    await streaming._send_to_backend(
-        json.dumps(
-            {
-                "type": "session.update",
-                "session": {
-                    "type": "translation",
-                    "audio": {
-                        "input": {
-                            "transcription": {"model": "gpt-live-transcribe", "language": "fr"},
-                        }
-                    },
-                },
-            }
-        )
+    second_sent: Final = await streaming._send_to_backend(
+        _translation_transcription_update({"model": "gpt-live-transcribe", "language": "fr"})
     )
 
-    first_sent = json.loads(backend_ws.send.await_args_list[0].args[0])
-    second_sent = json.loads(backend_ws.send.await_args_list[1].args[0])
-    assert first_sent["session"]["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
-    assert second_sent["session"]["audio"]["input"]["transcription"] == {
-        "model": "gpt-realtime-whisper",
-        "language": "fr",
-    }
-    assert streaming._is_transcription_session is False
+    assert (first_sent, second_sent) == (True, False)
+    assert backend_ws.send.await_count == 1
+    error: Final = json.loads(client_ws.send_text.await_args.args[0])
+    assert error["error"]["type"] == "permission_error"
+    assert "gpt-live-transcribe" in error["error"]["message"]
+    assert client_ws.close.await_args.kwargs["code"] == 1008
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_sends_the_deployment_model_for_a_nested_transcription_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    model_list: Final = [
+        {
+            "model_name": "whisper-alias",
+            "litellm_params": {
+                "model": "azure/qa-whisper-deployment",
+                "api_base": "https://realtime-qa.openai.azure.com",
+                "api_key": "azure-test-key",
+            },
+        }
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate", "whisper-alias"]),
+        translation_session=True,
+    )
+
+    await streaming._send_to_backend(_translation_transcription_update({"model": "whisper-alias", "language": "en"}))
+    await streaming._send_to_backend(_translation_transcription_update({"language": "fr"}))
+
+    assert [
+        json.loads(call.args[0])["session"]["audio"]["input"]["transcription"]
+        for call in backend_ws.send.await_args_list
+    ] == [
+        {"model": "qa-whisper-deployment", "language": "en"},
+        {"model": "qa-whisper-deployment", "language": "fr"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -3279,80 +3395,7 @@ async def test_translation_rejects_applicable_guardrails_before_forwarding_audio
     await streaming.bidirectional_forward()
 
     messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
-    if default_on or requested:
-        assert messages[0]["error"]["type"] == "guardrail_error"
-        client.close.assert_awaited_once_with(
-            code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
-        )
-        backend.send.assert_not_awaited()
-    else:
-        assert output_event in messages
-        backend.send.assert_awaited_once_with(input_event)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
-@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
-@pytest.mark.parametrize("selected,condition_matches", ((True, True), (True, False), (False, True)))
-async def test_translation_rejects_selected_pipeline_guardrails_before_forwarding_audio(
-    monkeypatch: pytest.MonkeyPatch,
-    metadata_bucket: str,
-    mode: Literal["pre_call", "post_call"],
-    selected: bool,
-    condition_matches: bool,
-) -> None:
-    guardrail: Final = CustomGuardrail(
-        guardrail_name="speech-policy", event_hook=GuardrailEventHooks(mode), default_on=False
-    )
-    monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    request_data: Final[dict[str, object]] = {"metadata": {}, "litellm_metadata": {"user_id": "qa-user"}}
-    _apply_resolved_guardrails_to_metadata(
-        data=request_data,
-        metadata_variable_name=metadata_bucket,
-        context=PolicyMatchContext(model="qa-translation"),
-        policy_names=["translation-policy"] if selected else [],
-        policies={
-            "translation-policy": Policy(
-                condition=PolicyCondition(model="qa-translation" if condition_matches else "unrelated-model"),
-                pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="speech-policy", on_fail="block")]),
-            )
-        },
-    )
-    input_event: Final = json.dumps(
-        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(4800)).decode()}
-    )
-    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(4800)).decode()}
-    client: Final = _ga_client_ws()
-    client.receive_text = AsyncMock(side_effect=[input_event, ConnectionClosed(None, None)])
-    client.send_text = AsyncMock()
-    client.close = AsyncMock()
-    backend: Final = MagicMock()
-    backend.send = AsyncMock()
-    backend.recv = AsyncMock(side_effect=[json.dumps(output_event), ConnectionClosed(None, None)])
-    logging_obj: Final = Logging(
-        model="gpt-realtime-translate",
-        messages=[],
-        stream=True,
-        call_type="_arealtime",
-        start_time=datetime(2026, 1, 1, tzinfo=UTC),
-        litellm_call_id="pipeline-rejection",
-        function_id="pipeline-rejection",
-    )
-    worker: Final = _InlineLoggingWorker()
-    streaming: Final = RealTimeStreaming(
-        websocket=client,
-        backend_ws=backend,
-        logging_obj=logging_obj,
-        translation_session=True,
-        request_data={"litellm_metadata": _build_litellm_metadata(request_data)},
-        logging_worker=worker,
-    )
-
-    await streaming.bidirectional_forward()
-    await worker.drain()
-
-    messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
-    if selected and condition_matches:
+    if (default_on or requested) and event_hook is not GuardrailEventHooks.post_call:
         assert messages[0]["error"]["type"] == "guardrail_error"
         client.close.assert_awaited_once_with(
             code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"

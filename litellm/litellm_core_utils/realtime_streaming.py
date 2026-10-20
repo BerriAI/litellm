@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
+    from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
     CLIENT_CONNECTION_CLASS = ClientConnection
@@ -149,6 +150,52 @@ def _json_object(value: object) -> Mapping[str, object] | None:
 
 def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
     return _json_object(container.get(key))
+
+
+_BETA_AUDIO_FORMAT_BY_GA_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {"audio/pcm": "pcm16", "audio/pcmu": "g711_ulaw", "audio/pcma": "g711_alaw"}
+)
+_GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"output_modalities": "modalities", "max_output_tokens": "max_response_output_tokens"}
+)
+_GA_TO_BETA_AUDIO_INPUT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "format": "input_audio_format",
+        "transcription": "input_audio_transcription",
+        "noise_reduction": "input_audio_noise_reduction",
+        "turn_detection": "turn_detection",
+    }
+)
+_GA_TO_BETA_AUDIO_OUTPUT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"format": "output_audio_format", "voice": "voice", "speed": "speed"}
+)
+_GA_ONLY_SESSION_FIELDS: Final = frozenset(("type", "audio", *_GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS))
+
+
+def _beta_session_value(ga_field: str, value: object) -> object:
+    if ga_field == "output_modalities":
+        return ["audio", "text"] if value == ["audio"] else value
+    if ga_field != "format":
+        return value
+    ga_format: Final = _json_object(value)
+    format_type: Final = None if ga_format is None else ga_format.get("type")
+    return _BETA_AUDIO_FORMAT_BY_GA_TYPE.get(format_type, value) if isinstance(format_type, str) else value
+
+
+def _beta_session_fields(ga_fields: Mapping[str, object], beta_names: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        beta_names[name]: _beta_session_value(name, value) for name, value in ga_fields.items() if name in beta_names
+    }
+
+
+def ga_session_to_beta(session: Mapping[str, object]) -> Mapping[str, object]:
+    audio: Final = _mapping_field(session, "audio") or _EMPTY_SESSION
+    return {
+        **{key: value for key, value in session.items() if key not in _GA_ONLY_SESSION_FIELDS},
+        **_beta_session_fields(session, _GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "input") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_INPUT_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "output") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_OUTPUT_FIELDS),
+    }
 
 
 def _guardrail_event_id() -> str:
@@ -265,26 +312,29 @@ def _guardrails_run_for_event_hooks(
     )
 
 
+def _realtime_runner_guardrail(
+    callback: object,
+    check_data: Mapping[str, object],
+    event_hooks: Sequence["GuardrailEventHooks"],
+) -> "CustomGuardrail | None":
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    if not isinstance(callback, CustomGuardrail) or callback.use_native_lifecycle_hooks:
+        return None
+    runs: Final = any(
+        callback.should_run_guardrail(data=check_data, event_type=event_hook) for event_hook in event_hooks
+    )
+    return callback if runs else None
+
+
 def realtime_guardrails_apply(request_data: Mapping[str, object]) -> bool:
     from litellm.types.guardrails import GuardrailEventHooks
 
-    if any(
-        isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
-        for bucket in (request_data.get("metadata"), request_data.get("litellm_metadata"))
-    ):
-        from litellm.proxy.utils import pipeline_managed_guardrail_names
-
-        if pipeline_managed_guardrail_names(request_data, "pre_call") or pipeline_managed_guardrail_names(
-            request_data, "post_call"
-        ):
-            return True
-    return _guardrails_run_for_event_hooks(
-        request_data,
-        (
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ),
+    check_data: Final = {**request_data, "stream": True}
+    runner_event_hooks: Final = (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call)
+    return any(
+        _realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None
+        for callback in litellm.callbacks
     )
 
 
@@ -933,40 +983,43 @@ class RealTimeStreaming:
         return self._rewrite_session_update_transcription_model(message, self._force_transcription_model)
 
     async def _enforce_translation_nested_transcription_model(self, message: str) -> str:
-        if self._bound_nested_transcription_model is not None:
-            return self._rewrite_session_update_transcription_model(message, self._bound_nested_transcription_model)
-
         message_obj: Final = self._session_update_message_obj(message)
-        if message_obj is None:
-            return message
-        session: Final = as_str_mapping(message_obj.get("session"))
-        if session is None:
-            return message
-        nested_models: Final = self._nested_transcription_models_from_session(session)
-        if not nested_models:
-            return message
+        session: Final = as_str_mapping(message_obj.get("session")) if message_obj is not None else None
+        bound_model: Final = self._bound_nested_transcription_model
+        requested_models: Final = (
+            tuple(model for model in self._nested_transcription_models_from_session(session) if model != bound_model)
+            if session is not None
+            else ()
+        )
+        if not requested_models:
+            return (
+                message
+                if bound_model is None
+                else self._rewrite_session_update_transcription_model(message, bound_model)
+            )
 
         valid_token: Final = self.user_api_key_dict
-        if valid_token is None:
-            return message
 
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
         from litellm.proxy.proxy_server import llm_model_list, llm_router
+        from litellm.proxy.realtime_endpoints.endpoints import nested_transcription_upstream_model
 
         if not isinstance(valid_token, UserAPIKeyAuth):
             return message
 
-        for nested_model in nested_models:
+        for requested_model in requested_models:
             await can_key_call_resolved_model(
-                model=nested_model,
+                model=requested_model,
                 valid_token=valid_token,
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
             )
-        bound_model: Final = nested_models[0]
-        self._bound_nested_transcription_model = bound_model
-        return self._rewrite_session_update_transcription_model(message, bound_model)
+        upstream_model: Final = nested_transcription_upstream_model(
+            requested_models[0], valid_token.team_id, llm_router
+        )
+        self._bound_nested_transcription_model = upstream_model
+        return self._rewrite_session_update_transcription_model(message, upstream_model)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
@@ -1087,7 +1140,18 @@ class RealTimeStreaming:
         return event
 
     def _event_to_client_json(self, event: dict) -> str:
-        return json.dumps(self._normalize_event_for_ga_client(event))
+        return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
+
+    def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
+        if (
+            not self._client_wants_beta
+            or self._backend_uses_beta_protocol
+            or self._is_translation_session
+            or event.get("type") not in self._SESSION_EVENT_TYPES
+        ):
+            return event
+        session: Final = _mapping_field(event, "session")
+        return event if session is None else {**event, "session": ga_session_to_beta(session)}
 
     async def _send_event_to_client(self, event: object, event_str: str) -> bool:
         if self._should_drop_event_from_client(event):
@@ -1100,7 +1164,7 @@ class RealTimeStreaming:
                 translated: Final = self._translate_event_to_beta(event)
                 if translated is None:
                     return False
-                await self.websocket.send_text(json.dumps(translated))
+                await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
                 return True
             except Exception as e:
                 verbose_logger.warning(
@@ -1253,7 +1317,6 @@ class RealTimeStreaming:
         transcript completion uses ``realtime_input_transcription`` only;
         typed user messages and tool outputs use ``pre_call``.
         """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
         if event_hooks is None:
@@ -1262,14 +1325,11 @@ class RealTimeStreaming:
         _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
         _already_run: Final[set] = set()
 
-        for callback in litellm.callbacks:
-            if not isinstance(callback, CustomGuardrail):
-                continue
-            if callback.use_native_lifecycle_hooks:
-                continue
-            if id(callback) in _already_run:
-                continue
-            if not any(callback.should_run_guardrail(data=_check_data, event_type=et) for et in _realtime_event_types):
+        runner_guardrails: Final = (
+            _realtime_runner_guardrail(callback, _check_data, _realtime_event_types) for callback in litellm.callbacks
+        )
+        for callback in runner_guardrails:
+            if callback is None or id(callback) in _already_run:
                 continue
             _already_run.add(id(callback))
             try:
@@ -1547,7 +1607,7 @@ class RealTimeStreaming:
                 translated = self._translate_event_to_beta(event)
                 if translated is None:
                     continue
-                await self.websocket.send_text(json.dumps(translated))
+                await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
 
     async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets

@@ -10,7 +10,8 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
-from collections.abc import Callable, Mapping
+import json
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -475,3 +476,114 @@ def test_streamed_transcription_honors_a_deployment_post_call_guardrail(
     else:
         assert response.headers["content-type"].startswith("text/event-stream")
         assert '"text":"my pin is 1234"' in response.text
+
+
+def _streams_chat_and_transcription(request: httpx.Request) -> httpx.Response:
+    sse_body: Final = (
+        b'data: {"id":"chat-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o",'
+        b'"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+        if request.url.path.endswith("/chat/completions")
+        else b'data: {"type":"transcript.text.done","text":"hello world"}\n\n'
+    )
+    return httpx.Response(
+        200,
+        content=sse_body,
+        headers={"content-type": "text/event-stream", "x-ratelimit-remaining-requests": "99"},
+    )
+
+
+def _litellm_header_names(response: httpx.Response) -> frozenset[str]:
+    return frozenset(name for name in response.headers if name.startswith("x-litellm-"))
+
+
+def test_streamed_transcription_carries_the_headers_a_streamed_chat_completion_carries(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.route(host="stream-upstream.example").mock(side_effect=_streams_chat_and_transcription)
+    upstream: Final = {"api_key": "sk-test", "api_base": "https://stream-upstream.example/v1"}
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", **upstream}},
+                {"model_name": "gpt-transcribe", "litellm_params": {"model": "openai/gpt-transcribe", **upstream}},
+            ]
+        ),
+    )
+
+    with auth_as():
+        chat: Final = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        transcription: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert chat.status_code == 200
+    assert transcription.status_code == 200
+    assert transcription.headers["content-type"].startswith("text/event-stream")
+    assert _litellm_header_names(chat) - _litellm_header_names(transcription) <= {"x-litellm-overhead-duration-ms"}
+    assert transcription.headers["x-litellm-model-name"] == "openai/gpt-transcribe"
+    assert transcription.headers["llm_provider-x-ratelimit-remaining-requests"] == "99"
+    assert ("x-litellm-response-cost" in transcription.headers) == ("x-litellm-response-cost" in chat.headers)
+
+
+class _FailsAfterTwoDeltas(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type":"transcript.text.delta","delta":"hello "}\n\n'
+        yield b'data: {"type":"transcript.text.delta","delta":"world"}\n\n'
+        raise httpx.ReadError("upstream connection dropped")
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_runs_the_failure_hook(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, stream=_FailsAfterTwoDeltas(), headers={"content-type": "text/event-stream"}
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(model="openai/gpt-transcribe", file=data["file"], stream=True, client=upstream)
+
+    failure_hook: Final = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", failure_hook)
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    frames: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")
+    )
+    assert response.status_code == 200
+    assert tuple(frame.get("delta") for frame in frames[:2]) == ("hello ", "world")
+    assert len(frames) == 3
+    assert "upstream connection dropped" in frames[2]["error"]["message"]
+    assert set(frames[2]["error"]) == {"message", "type", "param", "code"}
+    failure_hook.assert_awaited_once()
+    assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)

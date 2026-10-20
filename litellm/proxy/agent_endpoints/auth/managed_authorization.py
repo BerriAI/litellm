@@ -18,7 +18,6 @@ _MANAGED_REALTIME_ROUTES: Final = frozenset(
         "/openai/v1/realtime",
         "/realtime/translations",
         "/v1/realtime/translations",
-        "/openai/v1/realtime/translations",
     )
 )
 _MANAGED_LIVE_ROUTES: Final = frozenset(("/live/sessions", "/v1/live/sessions", "/openai/v1/live/sessions"))

@@ -476,9 +476,7 @@ def test_managed_live_upgrade_defers_the_model_to_the_session_start_frame(route:
     ) == {"model": "frame-model"}
 
 
-@pytest.mark.parametrize(
-    "route", ("/realtime/translations", "/v1/realtime/translations", "/openai/v1/realtime/translations")
-)
+@pytest.mark.parametrize("route", ("/realtime/translations", "/v1/realtime/translations"))
 @pytest.mark.parametrize("query_model", (None, "requested"))
 def test_managed_translation_authorizes_the_same_model_as_the_endpoint(route: str, query_model: str | None) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request

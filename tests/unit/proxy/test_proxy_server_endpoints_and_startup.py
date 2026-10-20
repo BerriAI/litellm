@@ -10772,7 +10772,7 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
 
 
 def test_realtime_websocket_route_aliases_registered():
-    """Realtime sessions reach the proxy via six path aliases stacked on
+    """Realtime sessions reach the proxy via five path aliases stacked on
     `realtime_websocket_endpoint`. Dropping any of them silently 405s
     WebSocket upgrades because the catch-all `/openai/{endpoint:path}`
     HTTP passthrough only declares HTTP methods. The aliases must also be
@@ -10792,7 +10792,6 @@ def test_realtime_websocket_route_aliases_registered():
         "/openai/v1/realtime",
         "/v1/realtime",
         "/realtime",
-        "/openai/v1/realtime/translations",
         "/v1/realtime/translations",
         "/realtime/translations",
     ):

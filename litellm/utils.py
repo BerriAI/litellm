@@ -9781,6 +9781,7 @@ class ProviderConfigManager:
     def get_provider_audio_transcription_config(
         model: str,
         provider: LlmProviders,
+        base_model: str | None = None,
     ) -> BaseAudioTranscriptionConfig | None:
         model_cost_entry: Final = _get_model_cost_entry_for_provider_config(
             model=model,
@@ -9808,7 +9809,7 @@ class ProviderConfigManager:
 
             return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
-            if model == "gpt-transcribe":
+            if "gpt-transcribe" in (model, base_model):
                 from litellm.llms.openai.transcriptions.gpt_transformation import (
                     OpenAIGPTTranscribeAudioTranscriptionConfig,
                 )

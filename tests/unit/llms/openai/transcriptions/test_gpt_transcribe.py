@@ -13,6 +13,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, Open
 import litellm
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTTranscribeAudioTranscriptionConfig,
 )
@@ -64,7 +65,7 @@ def test_gpt_transcribe_optional_params_are_preserved():
 
 def test_transcription_response_preserves_empty_languages():
     response = TranscriptionResponse(text="hello", languages=[])
-    assert response.model_dump()["languages"] == []
+    assert json.loads(response.model_dump_json())["languages"] == []
 
 
 def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
@@ -97,7 +98,7 @@ def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
     logged_response: Final = logging_obj.success_handler.call_args.args[0]
     assert logged_response.text == "hello world"
     assert logged_response.usage.model_dump(exclude_none=True) == {"type": "duration", "seconds": 2.5}
-    assert logged_response.model_dump()["languages"] == [{"code": "en"}]
+    assert json.loads(logged_response.model_dump_json())["languages"] == [{"code": "en"}]
     logging_obj.failure_handler.assert_not_called()
 
 
@@ -162,38 +163,7 @@ async def test_openai_handler_returns_native_typed_stream():
     logging_obj.async_success_handler.assert_awaited_once()
     logged_response = logging_obj.async_success_handler.await_args.kwargs["result"]
     assert logged_response.text == "hello world"
-    assert logged_response.languages == []
-
-
-@pytest.mark.asyncio
-async def test_closed_transcription_stream_without_usage_or_duration_does_not_log_success():
-    async def send_response(request: httpx.Request) -> httpx.Response:
-        events = (
-            {"type": "transcript.text.delta", "delta": "hello"},
-            {"type": "transcript.text.done", "text": "hello", "usage": {"type": "duration", "seconds": 1}},
-        )
-        content = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
-        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
-    client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
-    stream = await client.audio.transcriptions.create(
-        model="gpt-transcribe", file=("sample.webm", b"audio"), stream=True
-    )
-    logging_obj = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.async_failure_handler = AsyncMock()
-    wrapped_stream = wrap_transcription_stream(stream, logging_obj, datetime.now())
-
-    async for event in wrapped_stream:
-        assert event.type == "transcript.text.delta"
-        break
-    await wrapped_stream.close()
-    await client.close()
-
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
-    logging_obj.async_success_handler.assert_not_awaited()
-    logging_obj.async_failure_handler.assert_not_awaited()
+    assert logged_response.languages == ()
 
 
 @pytest.mark.asyncio
@@ -247,19 +217,6 @@ async def test_atranscription_stream_preserves_duration_for_callback_cost():
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.000075)
     assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(0.000075)
     assert logged_response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0)
-
-
-def test_gpt_transcribe_rejects_conflicting_language_inputs():
-    audio_file = io.BytesIO(b"audio")
-    audio_file.name = "sample.wav"
-    with pytest.raises(litellm.UnsupportedParamsError, match="cannot be used together"):
-        litellm.transcription(
-            model="gpt-transcribe",
-            file=audio_file,
-            language="en",
-            languages=["fr"],
-            api_key="sk-test",
-        )
 
 
 @pytest.mark.parametrize("model", ["gpt-transcribe", "azure/gpt-transcribe"])
@@ -350,15 +307,48 @@ def test_gpt_transcribe_sends_text_response_format_to_the_provider(
     assert b'name="response_format"\r\n\r\ntext\r\n' in sent_bodies[0]
 
 
-def test_gpt_live_transcribe_rejects_file_transcription(local_model_cost_map: None) -> None:
-    audio_file = io.BytesIO(b"audio")
-    audio_file.name = "sample.wav"
-    with pytest.raises(litellm.UnsupportedParamsError, match="Realtime API"):
-        litellm.transcription(
-            model="gpt-live-transcribe",
-            file=audio_file,
-            api_key="sk-test",
+def test_file_transcription_reaches_models_whose_cost_map_lists_other_endpoints(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent_requests: Final[list[httpx.Request]] = []  # mutable-ok: collects what the mock upstreams received
+
+    def send_gemini_response(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "interaction-1",
+                "status": "completed",
+                "steps": [
+                    {"type": "model_generation", "content": [{"type": "text", "text": "hello", "annotations": []}]}
+                ],
+            },
         )
+
+    def send_whisper_response(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json={"text": "hello"})
+
+    gemini_response: Final = litellm.transcription(
+        model="gemini/gemini-2.5-flash",
+        file=_one_second_wav(),
+        api_key="gemini-test-key",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send_gemini_response))),
+    )
+    monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=httpx.MockTransport(send_whisper_response)))
+    whisper_response: Final = litellm.transcription(
+        model="openai/gpt-realtime-whisper",
+        file=_one_second_wav(),
+        api_key="self-hosted-whisper-key",
+        api_base="https://whisper.self-hosted.example/v1",
+    )
+
+    assert gemini_response.text == "hello"
+    assert whisper_response.text == "hello"
+    assert tuple(str(request.url.host) for request in sent_requests) == (
+        "generativelanguage.googleapis.com",
+        "whisper.self-hosted.example",
+    )
 
 
 def test_azure_gpt_transcribe_uses_deployment_scoped_route():
@@ -616,3 +606,160 @@ def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_ca
     assert unstreamed_spend.cost > 0
     assert unstreamed_spend.usage
     assert streamed_spend == unstreamed_spend
+
+
+class _LoggedResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: Final[queue.Queue[object]] = queue.Queue()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.responses.put(kwargs["standard_logging_object"]["response"])
+
+
+@pytest.mark.parametrize(
+    "provider_body",
+    ({"text": "hello"}, {"text": "hello", "languages": ["en"]}, {"text": "hello", "languages": None}),
+)
+def test_transcription_without_parsed_languages_has_no_languages_key(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, provider_body: dict[str, object]
+) -> None:
+    recorder: Final = _LoggedResponseRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    with _openai_transcription_client(
+        httpx.MockTransport(lambda request: httpx.Response(200, json=provider_body))
+    ) as client:
+        response: Final = litellm.transcription(model="openai/whisper-1", file=_one_second_wav(), client=client)
+    logged_response: Final = recorder.responses.get(timeout=5)
+
+    assert response.text == "hello"
+    assert "languages" not in json.loads(response.model_dump_json())
+    assert isinstance(logged_response, dict)
+    assert "languages" not in logged_response
+
+
+def test_unstreamed_transcription_sends_no_stream_field(local_model_cost_map: None) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return httpx.Response(200, json={"text": "hello"})
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        response: Final = litellm.transcription(model="openai/whisper-1", file=_one_second_wav(), client=client)
+
+    assert response.text == "hello"
+    assert len(sent_bodies) == 1
+    assert b'name="stream"' not in sent_bodies[0]
+
+
+def test_transcription_forwards_both_language_and_languages(local_model_cost_map: None) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return httpx.Response(200, json={"text": "hello", "usage": {"type": "duration", "seconds": 1}})
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        response: Final = litellm.transcription(
+            model="openai/gpt-transcribe", file=_one_second_wav(), language="en", languages=["fr"], client=client
+        )
+
+    assert response.text == "hello"
+    assert len(sent_bodies) == 1
+    assert b'name="language"\r\n\r\nen\r\n' in sent_bodies[0]
+    assert b'name="languages[]"\r\n\r\nfr\r\n' in sent_bodies[0]
+
+
+def _gpt_transcribe_cost_per_second() -> float:
+    rate: Final = litellm.model_cost["gpt-transcribe"]["input_cost_per_second"]
+    assert isinstance(rate, float)
+    return rate
+
+
+async def _spend_for_one_second_wav(
+    monkeypatch: pytest.MonkeyPatch, provider_body: dict[str, object], router: litellm.Router | None
+) -> _LoggedSpend:
+    recorder: Final = _SuccessSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_body))
+        ),
+    )
+    if router is None:
+        await litellm.atranscription(model="openai/gpt-transcribe", file=_one_second_wav(), client=client)
+    else:
+        await router.atranscription(model="my-transcribe", file=_one_second_wav(), client=client)
+    spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
+    await client.close()
+    return spend
+
+
+@pytest.mark.asyncio
+async def test_custom_named_gpt_transcribe_deployment_bills_the_provider_seconds(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-transcribe",
+                "litellm_params": {"model": "openai/my-transcribe", "api_key": "sk-test"},
+                "model_info": {"base_model": "gpt-transcribe"},
+            }
+        ]
+    )
+
+    spend: Final = await _spend_for_one_second_wav(
+        monkeypatch, {"text": "hello", "usage": {"type": "duration", "seconds": 2}}, router
+    )
+
+    assert spend.cost == pytest.approx(2 * _gpt_transcribe_cost_per_second())
+
+
+@pytest.mark.asyncio
+async def test_gpt_transcribe_bills_the_file_length_when_the_provider_reports_zero_seconds(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spend: Final = await _spend_for_one_second_wav(
+        monkeypatch, {"text": "hello", "usage": {"type": "duration", "seconds": 0}}, None
+    )
+
+    assert spend.cost == pytest.approx(_gpt_transcribe_cost_per_second())
+
+
+@pytest.mark.asyncio
+async def test_m4a_transcription_stream_that_ends_early_logs_one_spend_row_like_the_unstreamed_call(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        if not _asks_for_stream(await request.aread()):
+            return httpx.Response(200, json={"text": "hello"})
+        return httpx.Response(
+            200,
+            content=f"data: {json.dumps({'type': 'transcript.text.delta', 'delta': 'hello'})}\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    recorder: Final = _SuccessSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
+    )
+    await litellm.atranscription(model="openai/gpt-transcribe", file=("sample.m4a", b"m4a audio"), client=client)
+    unstreamed_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=("sample.m4a", b"m4a audio"), stream=True, client=client
+    )
+    events: Final = [event.type async for event in stream]
+    streamed_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
+    await asyncio.sleep(0.2)
+    await client.close()
+
+    assert events == ["transcript.text.delta"]
+    assert streamed_spend.cost == unstreamed_spend.cost
+    assert recorder.async_spends.empty()

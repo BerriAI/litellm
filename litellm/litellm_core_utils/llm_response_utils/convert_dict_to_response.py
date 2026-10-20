@@ -44,7 +44,6 @@ from litellm.types.utils import (
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
-    TranscriptionDetectedLanguage,
     TranscriptionResponse,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -947,11 +946,9 @@ def convert_to_model_response_object(
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
 
-            if "languages" in response_object and response_object["languages"] is not None:
-                transcription_response: Final = model_response_object
-                transcription_response.languages = TypeAdapter(
-                    tuple[TranscriptionDetectedLanguage, ...]
-                ).validate_python(response_object["languages"])
+            detected_languages: Final = TranscriptionResponse.detected_languages(response_object.get("languages"))
+            if detected_languages is not None:
+                model_response_object.languages = detected_languages
 
             if "usage" in response_object and response_object["usage"] is not None:
                 tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None

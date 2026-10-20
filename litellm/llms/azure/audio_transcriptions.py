@@ -1,7 +1,7 @@
 from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI, Stream
+from openai import AsyncAzureOpenAI, AsyncStream, AzureOpenAI, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from openai.types.audio.transcription_create_params import (
     TranscriptionCreateParamsBase,
@@ -9,7 +9,6 @@ from openai.types.audio.transcription_create_params import (
 )
 from pydantic import BaseModel
 
-import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -55,9 +54,6 @@ class AzureAudioTranscription(AzureChatCompletion):
     ):
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
-        resolved_api_version: Final = (
-            litellm.AZURE_DEFAULT_API_VERSION if api_version in ("v1", "latest", "preview") else api_version
-        )
 
         if atranscription is True:
             return self.async_audio_transcriptions(
@@ -67,7 +63,6 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=resolved_api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -77,7 +72,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=resolved_api_version,
+            api_version=None if self._is_azure_v1_api_version(api_version) else api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -85,7 +80,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             client=client,
             litellm_params=litellm_params,
         )
-        if not isinstance(azure_client, (AzureOpenAI, OpenAI)):
+        if not isinstance(azure_client, AzureOpenAI):
             raise AzureOpenAIError(
                 status_code=500,
                 message="azure_client is not an instance of AzureOpenAI",
@@ -169,7 +164,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 client=client,
                 litellm_params=litellm_params,
             )
-            if not isinstance(async_azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
+            if not isinstance(async_azure_client, AsyncAzureOpenAI):
                 raise AzureOpenAIError(
                     status_code=500,
                     message="async_azure_client is not an instance of AsyncAzureOpenAI",

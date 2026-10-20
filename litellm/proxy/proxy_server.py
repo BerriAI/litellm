@@ -10382,6 +10382,23 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
+def _sse_error_frame(client_error: Exception) -> str:
+    error_returned: Final = json.dumps(
+        {
+            "error": sse_error_payload(client_error)[1]
+            if isinstance(client_error, HTTPException)
+            else ProxyException(
+                message=getattr(client_error, "message", str(client_error)),
+                type=getattr(client_error, "type", "None"),
+                param=getattr(client_error, "param", "None"),
+                code=getattr(client_error, "status_code", 500),
+            ).to_dict()
+        },
+        default=str,
+    )
+    return f"data: {error_returned}\n\n"
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -10623,21 +10640,8 @@ async def async_data_generator(
             return
         if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
             raise client_error
-        error_returned: Final = json.dumps(
-            {
-                "error": sse_error_payload(client_error)[1]
-                if isinstance(client_error, HTTPException)
-                else ProxyException(
-                    message=getattr(client_error, "message", str(client_error)),
-                    type=getattr(client_error, "type", "None"),
-                    param=getattr(client_error, "param", "None"),
-                    code=getattr(client_error, "status_code", 500),
-                ).to_dict()
-            },
-            default=str,
-        )
         stream_completed = True
-        yield f"data: {error_returned}\n\n"
+        yield _sse_error_frame(client_error)
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     finally:
@@ -13466,6 +13470,7 @@ async def audio_transcriptions(
         response_cost: Final = hidden_params.get("response_cost", None) or ""
         response_call_id: Final = hidden_params.get("litellm_call_id", None) or litellm_call_id
         additional_headers: Final[dict] = hidden_params.get("additional_headers", {}) or {}
+        stream_logging_obj: Final = getattr(response, "logging_obj", None)
 
         custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
@@ -13478,6 +13483,7 @@ async def audio_transcriptions(
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
+            litellm_logging_obj=stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None,
             **additional_headers,
         )
 
@@ -13499,6 +13505,13 @@ async def audio_transcriptions(
                 try:
                     async for event in stream:
                         yield f"data: {event.model_dump_json()}\n\n"
+                except Exception as stream_error:  # noqa: BLE001  # stream boundary: a mid-stream failure ends the SSE body as an error event
+                    replacement: Final = await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=stream_error,
+                        request_data=data,
+                    )
+                    yield _sse_error_frame(stream_error if replacement is None else replacement)
                 finally:
                     close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
                     if callable(close):
@@ -13659,23 +13672,9 @@ async def _reject_realtime_session(
         await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
-def _resolve_realtime_upstream_query_model(
-    model: str | None,
-    intent: str | None,
-    is_translation: bool,
-    route_model: str,
-) -> str | None:
-    if intent == "transcription":
-        return None
-    if is_translation:
-        return route_model
-    return model
-
-
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
-@app.websocket("/openai/v1/realtime/translations")
 @app.websocket("/v1/realtime/translations")
 @app.websocket("/realtime/translations")
 async def realtime_websocket_endpoint(
@@ -13738,12 +13737,7 @@ async def _route_realtime_websocket_session(
     is_translation: bool = False,
 ) -> None:
     # Only use explicit parameters, not all query params
-    query_model: Final = _resolve_realtime_upstream_query_model(
-        model=model,
-        intent=intent,
-        is_translation=is_translation,
-        route_model=route_model,
-    )
+    query_model: Final = route_model if is_translation else model
     query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
         RealtimeQueryParams,
         dict(_realtime_query_params_template(query_model, intent)),

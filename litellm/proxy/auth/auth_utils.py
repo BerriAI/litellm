@@ -1958,6 +1958,7 @@ _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
 # can_key_call_model() validates the real target model.
 _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
+    "/realtime/translations/client_secrets",
     "/realtime/calls",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
