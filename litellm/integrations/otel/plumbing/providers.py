@@ -694,7 +694,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
         self._pending: OrderedDict[_RequestKey, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by request
         self._open: OrderedDict[_RequestKey, int] = OrderedDict()  # mutable-ok: bounded, spans in flight by request
-        self._roots: OrderedDict[int, int] = OrderedDict()  # mutable-ok: bounded, root span id by open span id
+        self._roots: OrderedDict[int, _RequestKey] = OrderedDict()  # mutable-ok: bounded, request by open span id
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
@@ -705,9 +705,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:
                 self._span_roots[span] = request[1]
-                self._roots[context.span_id] = request[1]
+                self._roots[context.span_id] = request
                 while len(self._roots) > _MAX_OPEN_SPANS:
-                    self._roots.popitem(last=False)
+                    self._open.pop(self._roots.popitem(last=False)[1], None)
             self._open[request] = self._open.get(request, 0) + 1
             while len(self._open) > _MAX_OPEN_REQUESTS:
                 self._open.popitem(last=False)
@@ -741,22 +741,22 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             self._forward(held_span, held_destination)
 
     def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
-        """The request ``span`` belongs to, read under ``_lock``: the root recorded while it
-        is open, else the span itself when its parent is remote or missing, else its
-        parent's root, recorded while the parent is open or on ``parent_span`` for a child
-        starting under a parent that has ended, else the parent itself."""
+        """The request ``span`` belongs to, read under ``_lock``: the request recorded while
+        it is open, else the span itself when its parent is remote or missing, else its
+        parent's request, recorded while the parent is open or on ``parent_span`` for a
+        child starting under a parent that has ended, else the parent itself."""
         context: Final = span.context
         if context is None:
             return (0, 0)
         recorded: Final = self._roots.get(context.span_id)
         if recorded is not None:
-            return (context.trace_id, recorded)
+            return recorded
         parent: Final = span.parent
         if parent is None or parent.is_remote:
             return (context.trace_id, context.span_id)
-        root: Final = self._roots.get(parent.span_id)
-        if root is not None:
-            return (context.trace_id, root)
+        parent_request: Final = self._roots.get(parent.span_id)
+        if parent_request is not None:
+            return parent_request
         if isinstance(parent_span, SDKSpan):
             return (context.trace_id, self._span_roots.get(parent_span, parent.span_id))
         return (context.trace_id, parent.span_id)

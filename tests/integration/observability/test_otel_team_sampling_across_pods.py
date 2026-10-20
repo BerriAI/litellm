@@ -643,28 +643,31 @@ def test_a_stalled_team_space_during_a_burst_keeps_serving_and_each_trace_whole(
 
 
 def _write_config(directory: Path, sinks: SpanSinks, provider: Wire) -> Path:
-    config: Final = object_value(
+    shared: Final = object_value(
         JSON.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     )
-    config["model_list"] = [
-        *list_value(config.get("model_list") or []),
-        {
-            "model_name": MODEL,
-            "litellm_params": {
-                "model": "openai/gpt-4o-mini",
-                "api_key": "integration-provider-key",
-                "api_base": provider.url + "/v1",
+    config: Final = {
+        **shared,
+        "model_list": [
+            *list_value(shared.get("model_list") or []),
+            {
+                "model_name": MODEL,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": provider.url + "/v1",
+                },
             },
+        ],
+        "litellm_settings": {
+            **object_value(shared.get("litellm_settings") or {}),
+            "callbacks": ["langfuse_otel"],
+            "otel_tenant_destination_mode": "additive",
+            "provider_url_destination_allowed_hosts": [urlparse(sinks.operator).netloc, urlparse(sinks.arize).netloc],
         },
-    ]
-    config["litellm_settings"] = {
-        **object_value(config.get("litellm_settings") or {}),
-        "callbacks": ["langfuse_otel"],
-        "otel_tenant_destination_mode": "additive",
-        "provider_url_destination_allowed_hosts": [urlparse(sinks.operator).netloc, urlparse(sinks.arize).netloc],
+        "router_settings": {**object_value(shared.get("router_settings") or {}), "num_retries": 0},
+        "general_settings": {**object_value(shared.get("general_settings") or {}), "user_api_key_cache_ttl": 2},
     }
-    config["router_settings"] = {**object_value(config.get("router_settings") or {}), "num_retries": 0}
-    config["general_settings"] = {**object_value(config.get("general_settings") or {}), "user_api_key_cache_ttl": 2}
     path: Final = directory / "team-sampling.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
