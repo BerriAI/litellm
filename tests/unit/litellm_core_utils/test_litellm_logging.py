@@ -2541,6 +2541,44 @@ async def test_async_success_handler_runs_async_callbacks_in_the_post_response_p
     assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streaming", "non_streaming"])
+def test_reused_logging_obj_does_not_report_the_previous_attempts_first_token(logging_obj, stream: bool):
+    """A fallback reuses the request's logging object but runs in its own window.
+
+    When the first attempt already recorded a first-token time, the fallback must not
+    report it. Otherwise ``completion_start_time`` lands before the attempt's
+    ``start_time``, the callbacks see a negative TTFT, and latency-based routing caches
+    a negative sample that empties its buffer window.
+    """
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    first_attempt_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    logging_obj.update_completion_start_time(first_attempt_start + datetime.timedelta(seconds=1))
+    fallback_start: Final = first_attempt_start + datetime.timedelta(seconds=600)
+    fallback_end: Final = fallback_start + datetime.timedelta(seconds=5)
+
+    observed: dict[str, object] = {}
+
+    class Recorder(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            observed["completion_start_time"] = kwargs.get("completion_start_time")
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[Recorder()]):
+        logging_obj.success_handler(
+            result=_success_response(),
+            start_time=fallback_start,
+            end_time=fallback_end,
+        )
+
+    completion_start_time: Final = observed["completion_start_time"]
+    assert isinstance(completion_start_time, datetime.datetime)
+    assert completion_start_time >= fallback_start, (
+        "the fallback attempt reported a first-token time that predates its own start"
+    )
+
+
 def test_is_sync_litellm_request():
     assert LitellmLogging.is_sync_litellm_request({}) is True
     assert LitellmLogging.is_sync_litellm_request({"acompletion": True}) is False

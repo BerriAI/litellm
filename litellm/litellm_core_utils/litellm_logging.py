@@ -2736,7 +2736,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time = self.start_time
             if end_time is None:
                 end_time = datetime.datetime.now()
-            if self.completion_start_time is None:
+            # A request re-dispatched to a fallback reuses this logging object but runs in
+            # its own window, so a first-token time from the previous attempt cannot belong
+            # to it. Keeping it makes the attempt report a negative TTFT.
+            first_token_seconds: Final = _timestamp_seconds(self.completion_start_time)
+            attempt_start_seconds: Final = _timestamp_seconds(start_time)
+            if first_token_seconds is None or (
+                attempt_start_seconds is not None and first_token_seconds < attempt_start_seconds
+            ):
                 self.completion_start_time = end_time
                 self.model_call_details["completion_start_time"] = self.completion_start_time
 
