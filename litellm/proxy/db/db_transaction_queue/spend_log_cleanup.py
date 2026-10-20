@@ -66,8 +66,8 @@ class StorageProbe:
     """
     What the catalog says about the spend-log tables, read without scanning them.
 
-    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
-    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs,
+    LiteLLM_SpendLogToolIndex and LiteLLM_SpendLogGuardrailIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
     tuples, autovacuum later turns them into free space that new rows reuse, and only VACUUM FULL or pg_repack
     hands the bytes back to the filesystem. Neither dead tuples nor free space are live data, and Postgres
     tracks only the former (`n_dead_tup`, zeroed by vacuum), so the size rule keeps its own count of the
@@ -277,7 +277,7 @@ _SAVE_SIZE_STATE_SQL: Final = """
     """
 
 
-_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogGuardrailIndex")
 
 # Partition children are counted with their parent: a partitioned parent has no storage of its own.
 _STORAGE_SQL: Final = """
@@ -791,6 +791,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_guardrail_index_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_SpendLogGuardrailIndex",
+            key_columns=("request_id", "guardrail_id"),
+            time_column="start_time",
+            deadline=deadline,
+        )
+
     async def _delete_old_autorouter_session_rows(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
     ) -> TableCleanupResult:
@@ -855,7 +867,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
         """
-        Prune the spend logs and the tool index rows derived from them.
+        Prune the spend logs and the tool and guardrail index rows derived from them.
 
         When the table is range-partitioned, whole expired partitions are dropped
         first because that reclaims disk immediately. Expired rows can still sit in
@@ -883,13 +895,20 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=3)
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
-        index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
-        verbose_proxy_logger.info("Deleted %s expired tool index rows", index_result.rows_deleted)
-        return (logs_result, index_result)
+        tool_index_result: Final = await self._delete_old_tool_index_rows(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+        )
+        verbose_proxy_logger.info("Deleted %s expired tool index rows", tool_index_result.rows_deleted)
+
+        guardrail_index_result: Final = await self._delete_old_guardrail_index_rows(
+            prisma_client, cutoff_date, deadline
+        )
+        verbose_proxy_logger.info("Deleted %s expired guardrail index rows", guardrail_index_result.rows_deleted)
+        return (logs_result, tool_index_result, guardrail_index_result)
 
     async def _clean_session_rollup(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float

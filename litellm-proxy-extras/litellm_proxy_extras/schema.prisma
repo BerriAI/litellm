@@ -1310,6 +1310,7 @@ model LiteLLM_SpendLogGuardrailIndex {
   @@id([request_id, guardrail_id])
   @@index([guardrail_id, start_time])
   @@index([policy_id, start_time])
+  @@index([start_time])
 }
 
 // Index for fast "last N logs for tool" from SpendLogs – see how a tool is called in production

@@ -258,8 +258,8 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     _wire_tx(mock_db)
 
     # Mock execute_raw to return deleted counts (3 spend-log batches, then the
-    # tool-index cleanup's first batch returning 0)
-    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0, 0])
+    # tool-index and guardrail-index cleanups' first batches returning 0)
+    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0, 0, 0])
 
     # Wire up mocks
     mock_prisma_client.db = mock_db
@@ -279,7 +279,7 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
     # Validate batching and deletion via raw SQL
-    assert mock_db.execute_raw.call_count == 4
+    assert mock_db.execute_raw.call_count == 5
 
     # Check the first call argument
     call_args_sql = mock_db.execute_raw.call_args_list[0][0][0]
@@ -417,7 +417,7 @@ async def test_cleanup_uses_delete_when_not_partitioned():
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0, 0])
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0, 0, 0])
 
     partition_manager = MagicMock()
     partition_manager.is_partitioned = AsyncMock(return_value=False)
@@ -436,7 +436,7 @@ async def test_cleanup_uses_delete_when_not_partitioned():
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
     partition_manager.drop_partitions_older_than.assert_not_awaited()
-    assert mock_prisma_client.db.execute_raw.await_count == 3
+    assert mock_prisma_client.db.execute_raw.await_count == 4
     delete_sql = mock_prisma_client.db.execute_raw.call_args_list[0][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in delete_sql
 
@@ -600,6 +600,46 @@ async def test_delete_old_tool_index_rows_deletes_on_composite_key():
     assert 'WHERE ("request_id", "tool_name") IN' in delete_sql
     assert '"start_time" <' in delete_sql
     assert mock_db.execute_raw.call_args_list[0][0][1] == cutoff_date
+
+
+@pytest.mark.asyncio
+async def test_spend_log_retention_prunes_expired_guardrail_index_rows_on_the_same_cutoff():
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    deletes = {
+        call.args[0].split('"')[1]: call
+        for call in mock_db.execute_raw.call_args_list
+        if call.args[0].lstrip().startswith("DELETE")
+    }
+    guardrail_delete = deletes.get("LiteLLM_SpendLogGuardrailIndex")
+    assert guardrail_delete is not None, f"no guardrail index delete was issued: {sorted(deletes)}"
+    assert 'WHERE ("request_id", "guardrail_id") IN' in guardrail_delete.args[0]
+    assert '"start_time" <' in guardrail_delete.args[0]
+    assert guardrail_delete.args[1] == deletes["LiteLLM_SpendLogs"].args[1]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_index_is_not_pruned_when_spend_log_retention_is_unset():
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+    cleaner = SpendLogCleanup(general_settings={"maximum_health_check_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    statements = [call.args[0] for call in mock_db.execute_raw.call_args_list]
+    assert not any("LiteLLM_SpendLogGuardrailIndex" in sql for sql in statements), statements
 
 
 @pytest.mark.asyncio
@@ -1524,7 +1564,7 @@ async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatc
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, 0, 0])
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, 0, 0, 0])
     cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
@@ -1559,7 +1599,7 @@ async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
     slow_client.db.execute_raw = _slow_execute_raw
     fast_client = MagicMock()
     _wire_tx(fast_client.db)
-    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0])
+    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0, 0])
 
     cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     cleaner.pod_lock_manager = None
@@ -1608,6 +1648,7 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
     tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
     assert tables.count("LiteLLM_SpendLogs") > 0
     assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
+    assert tables.count("LiteLLM_SpendLogGuardrailIndex") > 0, "guardrail index cleanup was starved by the backlog"
     assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
 
 
@@ -1800,7 +1841,11 @@ async def test_probe_storage_reads_the_catalog_row_for_both_tables_and_a_failed_
         20_000,
         0,
     )
-    assert prisma_client.db.query_raw.call_args.args[1] == ["LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"]
+    assert prisma_client.db.query_raw.call_args.args[1] == [
+        "LiteLLM_SpendLogs",
+        "LiteLLM_SpendLogToolIndex",
+        "LiteLLM_SpendLogGuardrailIndex",
+    ]
 
     prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("pg_stat_user_tables unavailable"))
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
