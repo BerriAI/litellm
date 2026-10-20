@@ -1136,6 +1136,55 @@ async def test_route_request_never_forwards_router_settings_override(
     )
 
 
+@pytest.mark.parametrize("extra_body", [{}, {"api_key": "sk-from-pre-call-hook"}], ids=["router", "clientside-api-key"])
+@pytest.mark.asyncio
+async def test_route_request_treats_null_router_settings_override_as_absent(
+    monkeypatch: pytest.MonkeyPatch, extra_body: dict[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": None,
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-3.5-turbo")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert response.choices[0].message.content == "hi", response
+    assert "router_settings_override" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.parametrize("override", ["fallbacks", ["num_retries"], 3])
+@pytest.mark.asyncio
+async def test_route_request_rejects_non_object_router_settings_override(
+    monkeypatch: pytest.MonkeyPatch, override: object
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": override,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-3.5-turbo")
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "router_settings_override"
+    assert upstream.call_count == 0
+
+
 @pytest.mark.parametrize(
     "credential",
     [

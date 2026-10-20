@@ -216,6 +216,9 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -664,11 +667,17 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
-    router_settings_override: Final = (
-        JSON_OBJECT_ADAPTER.validate_python(data.pop("router_settings_override"))
-        if "router_settings_override" in data
-        else None
-    )
+    try:
+        router_settings_override: Final = _OPTIONAL_JSON_OBJECT_ADAPTER.validate_python(
+            data.pop("router_settings_override", None)
+        )
+    except ValidationError:
+        raise ProxyException(
+            message="router_settings_override must be a JSON object.",
+            type="invalid_request_error",
+            param="router_settings_override",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from None
     if router_settings_override is not None:
         data.update(
             {
