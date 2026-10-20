@@ -278,8 +278,7 @@ class BedrockBatchesHandler:
         batch_id: str,
         aws_region_name: str | None = None,
         logging_obj=None,
-        aws_bedrock_control_plane_endpoint: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> "LiteLLMBatch":
         """
         Handle ``GetModelInvocationJob`` status check for AWS Bedrock bulk batch
@@ -298,14 +297,15 @@ class BedrockBatchesHandler:
             aws_region_name: Region for the boto3 ``bedrock`` client. If omitted,
                 we fall back to parsing the region out of ``batch_id`` itself.
             logging_obj: Optional litellm logging object.
-            aws_bedrock_control_plane_endpoint: Sends the call to a VPC endpoint
-                or gateway instead of the regional ``bedrock`` host.
             **kwargs: Optional AWS credential overrides
                 (``aws_access_key_id``, ``aws_secret_access_key``,
                 ``aws_session_token``, ``aws_profile_name``,
                 ``aws_role_name``, ``aws_session_name``,
                 ``aws_web_identity_token``, ``aws_sts_endpoint``,
-                ``aws_external_id``, ``aws_session_tags``). Unknown keys are ignored.
+                ``aws_external_id``, ``aws_session_tags``), plus
+                ``aws_bedrock_control_plane_endpoint`` to send the call to a VPC
+                endpoint or gateway instead of the regional ``bedrock`` host.
+                Unknown keys are ignored.
 
         Returns:
             ``LiteLLMBatch`` shaped like an OpenAI Batch resource.
@@ -329,11 +329,14 @@ class BedrockBatchesHandler:
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
         creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
+        control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
+            kwargs.get("aws_bedrock_control_plane_endpoint")
+        )
 
         client: Final = boto3.client(
             "bedrock",
             region_name=region,
-            endpoint_url=configured_bedrock_control_plane_endpoint(aws_bedrock_control_plane_endpoint),
+            endpoint_url=control_plane_endpoint,
             aws_access_key_id=creds.access_key,
             aws_secret_access_key=creds.secret_key,
             aws_session_token=creds.token,
@@ -351,7 +354,7 @@ class BedrockBatchesHandler:
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": f"{bedrock_control_plane_base_url(aws_bedrock_control_plane_endpoint, region)}/model-invocation-job/{url_path_id}",
+                    "api_base": f"{bedrock_control_plane_base_url(control_plane_endpoint, region)}/model-invocation-job/{url_path_id}",
                 },
             )
 
