@@ -131,6 +131,7 @@ _TOOL_COUNTS: Final[Mapping[str, tuple[str, str]]] = {
     **{f"{route}-azure_ai-v4": (route, _DEEPSEEK_V4) for route in _COUNT_ROUTES},
     "messages-count-tokens-deepseek-chat": ("messages-count-tokens", "deepseek/deepseek-chat"),
     "messages-count-tokens-deepseek-reasoner": ("messages-count-tokens", "deepseek/deepseek-reasoner"),
+    "messages-count-tokens-openrouter-deepseek-chat": ("messages-count-tokens", "openrouter/deepseek/deepseek-chat"),
 }
 
 
