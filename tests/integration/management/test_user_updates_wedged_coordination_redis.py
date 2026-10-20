@@ -16,8 +16,16 @@ from pydantic import JsonValue
 from redis import Redis
 from redis.client import PubSub
 
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
 from tests.integration._support.budget import case_timeout_seconds
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.client import (
+    GATEWAY_LIMITS,
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
@@ -27,6 +35,8 @@ _BURST: Final = 30
 _WEDGED_PUBLISHES_PER_BURST_USER: Final = 2
 _HANDLER_BUDGET_SECONDS: Final = 0.75
 _BULK_BUDGET_SECONDS: Final = 2.0
+_COORDINATION_SOCKET_TIMEOUT_SECONDS: Final = 5.0
+_SHORTEST_REDIS_WAIT_SECONDS: Final = min(_BULK_EVICTION_WAIT_SECONDS, _COORDINATION_SOCKET_TIMEOUT_SECONDS)
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 
 
@@ -102,6 +112,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         "DATABASE_URL": database_url,
                         "REDIS_HOST": coordination.host,
                         "REDIS_PORT": str(coordination.port),
+                        "COORDINATION_REDIS_SOCKET_TIMEOUT": str(_COORDINATION_SOCKET_TIMEOUT_SECONDS),
                     },
                     config=Path("tests/integration/coordination_redis_proxy_config.yaml"),
                     remove_environment=("DATABASE_URL_READ_REPLICA",),
@@ -154,125 +165,135 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 )
                 with owned.replacing_worker(min(owned.worker_pids())) as kill, coordination.paused():
                     kill()
-                    timings["s2_wedged_control"] = _timed_post(
-                        candidate, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
-                    )
-                    assert timings["s2_wedged_control"] < _HANDLER_BUDGET_SECONDS, (
-                        f"control update without a cache-relevant field took {timings['s2_wedged_control']:.3f}s"
-                    )
-                    timings["s1_user_update"] = _timed_post(
-                        candidate, "/user/update", {"user_id": users[0], "max_budget": 98.0}
-                    )
-                    assert timings["s1_user_update"] < _HANDLER_BUDGET_SECONDS, (
-                        f"/user/update with max_budget took {timings['s1_user_update']:.3f}s "
-                        "with a wedged coordination Redis"
-                    )
-                    timings["s3_bulk_update"] = _timed_post(
-                        candidate, "/user/bulk_update", {"all_users": True, "user_updates": {"max_budget": 79.0}}
-                    )
-                    assert timings["s3_bulk_update"] < _BULK_BUDGET_SECONDS, (
-                        f"/user/bulk_update over {_USERS} users took {timings['s3_bulk_update']:.3f}s "
-                        "with a wedged coordination Redis"
-                    )
-                    timings["s4_key_update"] = _timed_post(
-                        candidate, "/key/update", {"key": key, "max_budget": 6.0}, timeout=60
-                    )
-                    assert timings["s4_key_update"] < 30, (
-                        f"/key/update hung for {timings['s4_key_update']:.3f}s with a wedged coordination Redis"
-                    )
-                    timings["s5_team_update"] = _timed_post(
-                        candidate, "/team/update", {"team_id": team_id, "max_budget": 6.0}, timeout=60
-                    )
-                    assert timings["s5_team_update"] < 30, (
-                        f"/team/update hung for {timings['s5_team_update']:.3f}s with a wedged coordination Redis"
-                    )
-                    timings["s6_customer_update"] = _timed_post(
-                        candidate, "/customer/update", {"user_id": customer_id, "max_budget": 6.0}
-                    )
-                    assert timings["s6_customer_update"] < _HANDLER_BUDGET_SECONDS, (
-                        f"/customer/update took {timings['s6_customer_update']:.3f}s with a wedged coordination Redis"
-                    )
-                    timings["s7_reset_spend"] = _timed_post(candidate, f"/key/{key}/reset_spend", {"reset_to": 0})
-                    assert timings["s7_reset_spend"] < _HANDLER_BUDGET_SECONDS, (
-                        f"/key/<key>/reset_spend took {timings['s7_reset_spend']:.3f}s with a wedged coordination Redis"
-                    )
-                    missing_started: Final = time.monotonic()
-                    missing: Final = candidate.request(
-                        "POST", "/user/update", {"user_id": users[0], "max_budget": "not-a-number"}
-                    )
-                    timings["s8_invalid_body"] = time.monotonic() - missing_started
-                    assert missing.status_code // 100 == 4, (
-                        f"/user/update with an invalid body returned {missing.status_code} "
-                        f"in {timings['s8_invalid_body']:.3f}s"
-                    )
-                    assert timings["s8_invalid_body"] < _HANDLER_BUDGET_SECONDS, (
-                        f"/user/update with an invalid body took {timings['s8_invalid_body']:.3f}s"
-                    )
-
-                    def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[int, float]:
-                        started: Final = time.monotonic()
-                        response: Final = candidate.client.request(
-                            "POST",
-                            path,
-                            json=body,
-                            headers={"Authorization": f"Bearer {candidate.key}"},
-                            timeout=60,
+                    with httpx.Client(
+                        base_url=candidate.client.base_url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+                    ) as fresh:
+                        survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
+                        timings["s2_wedged_control"] = _timed_post(
+                            survivor, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
                         )
-                        return response.status_code, time.monotonic() - started
-
-                    with ThreadPoolExecutor(_BURST) as pool:
-                        futures: Final = [
-                            pool.submit(
-                                burst_request,
-                                *_burst_call(i, users, key, team_id, customer_id),
-                            )
-                            for i in range(_BURST)
-                        ]
-                        results: Final = [future.result() for future in futures]
-                    failures: Final = [status for status, _elapsed in results if status != 200]
-                    assert not failures, f"burst responses that were not 200: {failures}"
-                    elapsed_sorted: Final = sorted(
-                        elapsed for i, (status, elapsed) in enumerate(results) if i % 5 in (0, 1, 4) and status == 200
-                    )
-                    timings["c1_burst_p95"] = elapsed_sorted[int(len(elapsed_sorted) * 0.95) - 1]
-                    assert timings["c1_burst_p95"] < _HANDLER_BUDGET_SECONDS, (
-                        f"burst p95 {timings['c1_burst_p95']:.3f}s"
-                    )
-                    eventually(
-                        lambda: candidate.request("GET", "/health/liveliness").status_code,
-                        lambda status: status == 200,
-                        seconds=15,
-                    )
-                    timings["c1_survivor"] = _timed_post(
-                        candidate, "/user/update", {"user_id": users[0], "tpm_limit": 2000}
-                    )
-                    assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
-                        f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
-                    )
-                    wedged_users: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0}
-                    wedged_team_keys: Final = {f"team_id:{team_id}", f"team_alias:{identity}"}
-                    wedged_keys: Final = wedged_users | wedged_team_keys
-                    wedged_team_updates: Final = 1 + sum(1 for i in range(_BURST) if i % 5 == 3)
-
-                    def proxy_log() -> str:
-                        return "".join(
-                            path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
+                        assert timings["s2_wedged_control"] < _HANDLER_BUDGET_SECONDS, (
+                            f"control update without a cache-relevant field took {timings['s2_wedged_control']:.3f}s"
+                        )
+                        timings["s1_user_update"] = _timed_post(
+                            survivor, "/user/update", {"user_id": users[0], "max_budget": 98.0}
+                        )
+                        assert timings["s1_user_update"] < _HANDLER_BUDGET_SECONDS, (
+                            f"/user/update with max_budget took {timings['s1_user_update']:.3f}s "
+                            "with a wedged coordination Redis"
+                        )
+                        timings["s3_bulk_update"] = _timed_post(
+                            survivor, "/user/bulk_update", {"all_users": True, "user_updates": {"max_budget": 79.0}}
+                        )
+                        assert timings["s3_bulk_update"] < _BULK_BUDGET_SECONDS, (
+                            f"/user/bulk_update over {_USERS} users took {timings['s3_bulk_update']:.3f}s "
+                            "with a wedged coordination Redis"
+                        )
+                        timings["s4_key_update"] = _timed_post(
+                            survivor, "/key/update", {"key": key, "max_budget": 6.0}, timeout=60
+                        )
+                        assert timings["s4_key_update"] < 30, (
+                            f"/key/update hung for {timings['s4_key_update']:.3f}s with a wedged coordination Redis"
+                        )
+                        timings["s5_team_update"] = _timed_post(
+                            survivor, "/team/update", {"team_id": team_id, "max_budget": 6.0}, timeout=60
+                        )
+                        assert timings["s5_team_update"] < 30, (
+                            f"/team/update hung for {timings['s5_team_update']:.3f}s with a wedged coordination Redis"
+                        )
+                        timings["s6_customer_update"] = _timed_post(
+                            survivor, "/customer/update", {"user_id": customer_id, "max_budget": 6.0}
+                        )
+                        assert timings["s6_customer_update"] < _HANDLER_BUDGET_SECONDS, (
+                            f"/customer/update took {timings['s6_customer_update']:.3f}s with a wedged coordination Redis"
+                        )
+                        timings["s7_reset_spend"] = _timed_post(survivor, f"/key/{key}/reset_spend", {"reset_to": 0})
+                        assert timings["s7_reset_spend"] < _HANDLER_BUDGET_SECONDS, (
+                            f"/key/<key>/reset_spend took {timings['s7_reset_spend']:.3f}s "
+                            "with a wedged coordination Redis"
+                        )
+                        missing_started: Final = time.monotonic()
+                        missing: Final = survivor.request(
+                            "POST", "/user/update", {"user_id": users[0], "max_budget": "not-a-number"}
+                        )
+                        timings["s8_invalid_body"] = time.monotonic() - missing_started
+                        assert missing.status_code // 100 == 4, (
+                            f"/user/update with an invalid body returned {missing.status_code} "
+                            f"in {timings['s8_invalid_body']:.3f}s"
+                        )
+                        assert timings["s8_invalid_body"] < _HANDLER_BUDGET_SECONDS, (
+                            f"/user/update with an invalid body took {timings['s8_invalid_body']:.3f}s"
                         )
 
-                    eventually(
-                        proxy_log,
-                        lambda text: (
-                            all(
-                                text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
-                                for user in wedged_users
+                        def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[int, float]:
+                            started: Final = time.monotonic()
+                            response: Final = survivor.client.request(
+                                "POST",
+                                path,
+                                json=body,
+                                headers={"Authorization": f"Bearer {survivor.key}"},
+                                timeout=60,
                             )
-                            and all(
-                                text.count(f"publish for {team_key} failed") >= wedged_team_updates
-                                for team_key in wedged_team_keys
+                            return response.status_code, time.monotonic() - started
+
+                        with ThreadPoolExecutor(_BURST) as pool:
+                            futures: Final = [
+                                pool.submit(
+                                    burst_request,
+                                    *_burst_call(i, users, key, team_id, customer_id),
+                                )
+                                for i in range(_BURST)
+                            ]
+                            results: Final = [future.result() for future in futures]
+                        failures: Final = [status for status, _elapsed in results if status != 200]
+                        assert not failures, f"burst responses that were not 200: {failures}"
+                        elapsed_sorted: Final = sorted(
+                            elapsed
+                            for i, (status, elapsed) in enumerate(results)
+                            if i % 5 in (0, 1, 4) and status == 200
+                        )
+                        timings["c1_burst_p95"] = elapsed_sorted[int(len(elapsed_sorted) * 0.95) - 1]
+                        assert timings["c1_burst_p95"] < _SHORTEST_REDIS_WAIT_SECONDS, (
+                            f"burst p95 {timings['c1_burst_p95']:.3f}s reached the {_SHORTEST_REDIS_WAIT_SECONDS}s "
+                            "shortest wait the proxy puts on Redis, so burst updates waited on the wedged Redis"
+                        )
+                        eventually(
+                            lambda: survivor.request("GET", "/health/liveliness").status_code,
+                            lambda status: status == 200,
+                            seconds=15,
+                        )
+                        timings["c1_survivor"] = _timed_post(
+                            survivor, "/user/update", {"user_id": users[0], "tpm_limit": 2000}
+                        )
+                        assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
+                            f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
+                        )
+                        wedged_users: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0}
+                        wedged_team_keys: Final = {f"team_id:{team_id}", f"team_alias:{identity}"}
+                        wedged_keys: Final = wedged_users | wedged_team_keys
+                        wedged_team_updates: Final = 1 + sum(1 for i in range(_BURST) if i % 5 == 3)
+
+                        def proxy_log() -> str:
+                            return "".join(
+                                path.read_text()
+                                for path in results_dir.glob("owned-proxy-*.log")
+                                if path not in prior_logs
                             )
-                        ),
-                        seconds=45,
-                    )
+
+                        eventually(
+                            proxy_log,
+                            lambda text: (
+                                all(
+                                    text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                    for user in wedged_users
+                                )
+                                and all(
+                                    text.count(f"publish for {team_key} failed") >= wedged_team_updates
+                                    for team_key in wedged_team_keys
+                                )
+                            ),
+                            seconds=45,
+                        )
                 marker: Final = len(received)
                 drained()
                 recovered_keys: Final = {str(message.get("cache_key")) for message in received[marker:]}

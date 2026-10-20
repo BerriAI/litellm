@@ -11,6 +11,7 @@ Routes covered:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import normalize
@@ -477,6 +478,12 @@ def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _set_throttle_clock(monkeypatch, now: float) -> None:
+    from litellm.proxy.auth import login_throttle
+
+    monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: now))
+
+
 def _install_real_auth(monkeypatch, **settings):
     """Run the real authenticate_user so the throttle inside it is exercised.
 
@@ -556,11 +563,12 @@ def test_budget_is_shared_across_username_casing(client, monkeypatch, reset_logi
 
 
 def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_throttle):
-    """The 429 tells the caller how long the block has left."""
+    """The 429 tells the caller how long the block has left, rounded up to whole seconds."""
+    _set_throttle_clock(monkeypatch, 1_000.0)
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
-
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     refused = client.post("/v2/login", json={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("retry-after") == "77"
@@ -568,10 +576,11 @@ def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_
 
 def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, reset_login_throttle):
     """The no-JavaScript form must render a wait page when its POST is throttled."""
+    _set_throttle_clock(monkeypatch, 1_000.0)
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
-
     assert [_form_login(client) for _ in range(2)] == [401, 401]
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     refused = client.post("/login", data={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("content-type", "").startswith("text/html")
@@ -670,12 +679,7 @@ def test_the_master_key_as_a_bearer_token_still_works_while_the_ui_password_is_b
 def test_a_database_users_correct_password_is_refused_while_blocked(client, monkeypatch, reset_login_throttle):
     """The block is hard: while it lasts, nothing from that source signs in as that user, right password or not,
     and the block is not extended by the refused attempts."""
-    from types import SimpleNamespace
-
-    from litellm.proxy.auth import login_throttle
-
-    frozen_now = login_throttle.time.time()
-    monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: frozen_now))
+    _set_throttle_clock(monkeypatch, 1_000.0)
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=64)
     _db_user(monkeypatch, "user@corp.com")
 
