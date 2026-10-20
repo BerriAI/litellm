@@ -139,15 +139,15 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
-    "prefer_batch_deployments",  # Tested through the mixed and wildcard group acreate_batch tests in test_router.py
+    "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
     "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
     "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
     "is_batch_capable",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
+    "is_usable_by_team",  # Tested through the team-owned batch deployment model group info test in test_router.py
     "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
-    "_configured_model_info",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
-    "_declares_batch_endpoint",  # Tested through the declared-endpoint mixed-group acreate_batch test in test_router.py
-    "model_info_with_deployment_endpoints",  # Tested through the /model/info batch endpoint tests in test_routes_model_info.py
-    "_listed_endpoints",  # Read by model_info_with_deployment_endpoints, tested through the /model/info batch endpoint tests in test_routes_model_info.py
+    "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
+    "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
+    "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
 ]
 
 

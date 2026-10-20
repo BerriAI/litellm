@@ -192,9 +192,10 @@ from litellm.router_utils.batch_utils import (
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
-    prefer_batch_deployments,
+    is_usable_by_team,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
+    without_deployments_that_cannot_batch,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
@@ -11992,7 +11993,9 @@ class Router:
             )
         return model_info
 
-    def _set_model_group_info(self, model_group: str, user_facing_model_group_name: str) -> ModelGroupInfo | None:
+    def _set_model_group_info(
+        self, model_group: str, user_facing_model_group_name: str, team_id: str | None = None
+    ) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
@@ -12206,7 +12209,13 @@ class Router:
                     dict.fromkeys(
                         (
                             *(model_group_info.supported_endpoints or ()),
-                            *deployment_supported_endpoints(model_info.get("supported_endpoints"), model, llm_provider),
+                            *(
+                                deployment_supported_endpoints(
+                                    model_info.get("supported_endpoints"), model, llm_provider
+                                )
+                                if is_usable_by_team(model, team_id)
+                                else ()
+                            ),
                         )
                     )
                 )
@@ -12270,7 +12279,9 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(self, model_group: str, *, include_hidden: bool = False) -> ModelGroupInfo | None:
+    def get_model_group_info(
+        self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None
+    ) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
@@ -12294,10 +12305,13 @@ class Router:
             return self._set_model_group_info(
                 model_group=_router_model_group,
                 user_facing_model_group_name=model_group,
+                team_id=team_id,
             )
 
         ## Check if actual model
-        return self._set_model_group_info(model_group=model_group, user_facing_model_group_name=model_group)
+        return self._set_model_group_info(
+            model_group=model_group, user_facing_model_group_name=model_group, team_id=team_id
+        )
 
     async def get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """
@@ -14367,7 +14381,7 @@ class Router:
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=list(
-                prefer_batch_deployments(
+                without_deployments_that_cannot_batch(
                     cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
                 )
             ),
@@ -15606,7 +15620,7 @@ class Router:
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
             healthy_deployments=list(
-                prefer_batch_deployments(
+                without_deployments_that_cannot_batch(
                     cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
                 )
             ),

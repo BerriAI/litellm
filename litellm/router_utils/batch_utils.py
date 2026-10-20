@@ -13,10 +13,10 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes, LlmProviders
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
-_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(Mapping[str, object])
-_LISTED_ENDPOINTS: Final = TypeAdapter(tuple[object, ...])
+_DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
 
 BATCH_ENDPOINT: Final = "/v1/batch"
+_AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
@@ -87,23 +87,40 @@ def is_batch_create_routing() -> bool:
     return _batch_create_routing.get()
 
 
-def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
-    return _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {})
-
-
-def _declares_batch_endpoint(deployment: Mapping[str, object]) -> bool:
-    configured_endpoints: Final = _configured_model_info(deployment).get("supported_endpoints")
-    return isinstance(configured_endpoints, list | tuple) and BATCH_ENDPOINT in configured_endpoints
+def _deployment_field(deployment: Mapping[str, object], field: str) -> Mapping[str, object]:
+    return _DEPLOYMENT_FIELD.validate_python(deployment.get(field) or {})
 
 
 def is_batch_capable(deployment: Mapping[str, object]) -> bool:
-    return _configured_model_info(deployment).get("mode") == "batch" or _declares_batch_endpoint(deployment)
+    return _deployment_field(deployment, "model_info").get("mode") == "batch"
 
 
-def prefer_batch_deployments(deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
-    if not is_batch_create_routing():
+def is_usable_by_team(deployment: Mapping[str, object], team_id: str | None) -> bool:
+    owner_team_id: Final = _deployment_field(deployment, "model_info").get("team_id")
+    return owner_team_id is None or owner_team_id == team_id
+
+
+def _deployment_provider(deployment: Mapping[str, object]) -> str | None:
+    litellm_params: Final = _deployment_field(deployment, "litellm_params")
+    configured_provider: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(configured_provider, str):
+        return configured_provider
+    model: Final = litellm_params.get("model")
+    return model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
+
+
+def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) -> bool:
+    return provider in _AZURE_PROVIDERS and not is_batch_capable(deployment)
+
+
+def without_deployments_that_cannot_batch(deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
+    if not is_batch_create_routing() or not any(is_batch_capable(deployment) for deployment in deployments):
         return deployments
-    return [deployment for deployment in deployments if is_batch_capable(deployment)] or deployments
+    return [
+        deployment
+        for deployment in deployments
+        if not _cannot_run_batches(deployment, _deployment_provider(deployment))
+    ]
 
 
 def deployment_supported_endpoints(
@@ -112,32 +129,9 @@ def deployment_supported_endpoints(
     endpoints: Final = tuple(resolved_endpoints or ())
     if is_batch_capable(deployment):
         return endpoints if BATCH_ENDPOINT in endpoints else (*endpoints, BATCH_ENDPOINT)
-    if provider == LlmProviders.AZURE.value:
+    if _cannot_run_batches(deployment, provider):
         return tuple(endpoint for endpoint in endpoints if endpoint != BATCH_ENDPOINT)
     return endpoints
-
-
-def _listed_endpoints(model_info: Mapping[str, object]) -> tuple[str, ...]:
-    if not isinstance(model_info.get("supported_endpoints"), list | tuple):
-        return ()
-    listed: Final = _LISTED_ENDPOINTS.validate_python(model_info.get("supported_endpoints"))
-    return tuple(endpoint for endpoint in listed if isinstance(endpoint, str))
-
-
-def model_info_with_deployment_endpoints(
-    model_info: Mapping[str, object], deployment: Mapping[str, object]
-) -> Mapping[str, object]:
-    if model_info.get("supported_endpoints") is None and not is_batch_capable(deployment):
-        return model_info
-    provider: Final = model_info.get("litellm_provider")
-    return {
-        **model_info,
-        "supported_endpoints": list(
-            deployment_supported_endpoints(
-                _listed_endpoints(model_info), deployment, provider if isinstance(provider, str) else None
-            )
-        ),
-    }
 
 
 def should_replace_model_in_jsonl(

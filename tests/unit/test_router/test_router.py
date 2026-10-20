@@ -2406,7 +2406,7 @@ def test_model_group_info_lists_no_batch_for_a_chat_only_group():
     assert undeclared is not None and undeclared.supported_endpoints is None
 
 
-@pytest.mark.parametrize(("provider", "lists_batch"), [("azure", False), ("openai", True)])
+@pytest.mark.parametrize(("provider", "lists_batch"), [("azure", False), ("azure_ai", False), ("openai", True)])
 def test_model_group_info_lists_cost_map_batch_only_for_providers_that_batch_on_any_deployment(
     provider: str, lists_batch: bool
 ):
@@ -2437,11 +2437,13 @@ def test_model_group_info_lists_cost_map_batch_only_for_providers_that_batch_on_
     )
 
 
-def test_model_group_info_lists_batch_for_a_deployment_that_declares_it():
+def test_model_group_info_ignores_a_stored_batch_endpoint_on_an_azure_chat_deployment():
+    """Admin UI saves before v1.104.0 stored the cost map's endpoint list, /v1/batch included, on Azure chat rows,
+    so a stored list cannot mark a deployment as one that runs batches."""
     router: Final = Router(
         model_list=[
             _azure_sku_deployment(
-                "gpt-declared-batch",
+                "gpt-stored-endpoints",
                 "unmapped-chat-sku",
                 "chat",
                 supported_endpoints=["/v1/chat/completions", "/v1/batch"],
@@ -2449,9 +2451,26 @@ def test_model_group_info_lists_batch_for_a_deployment_that_declares_it():
         ]
     )
 
-    info: Final = router.get_model_group_info("gpt-declared-batch")
+    info: Final = router.get_model_group_info("gpt-stored-endpoints")
 
-    assert info is not None and info.supported_endpoints == ("/v1/chat/completions", "/v1/batch")
+    assert info is not None and info.supported_endpoints == ("/v1/chat/completions",)
+
+
+@pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-b", False), ("team-a", True)])
+def test_model_group_info_lists_batch_only_to_callers_that_may_use_the_batch_deployment(
+    team_id: str | None, lists_batch: bool
+):
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-mixed", team_id=team_id)
+
+    assert info is not None
+    assert ("/v1/batch" in (info.supported_endpoints or ())) is lists_batch
 
 
 def _alias_cost_router() -> Router:
@@ -13024,17 +13043,25 @@ async def _create_batches(router: Router, model_group: str, attempts: int) -> No
         )
 
 
-_BATCH_MARKERS: Final = {
-    "mode-batch": {"mode": "batch"},
-    "declared-endpoint": {"mode": "chat", "supported_endpoints": ["/v1/chat/completions", "/v1/batch"]},
+def _azure_chat_row_with_provider_param() -> dict[str, object]:
+    row: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
+    return {**row, "litellm_params": {**row["litellm_params"], "model": "chat-sku", "custom_llm_provider": "azure"}}
+
+
+_AZURE_CHAT_ROWS: Final = {
+    "no-stored-list": lambda: _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+    "stored-cost-map-list": lambda: _azure_sku_deployment(
+        "gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions", "/v1/batch"]
+    ),
+    "custom-llm-provider-param": _azure_chat_row_with_provider_param,
 }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("batch_marker", _BATCH_MARKERS.values(), ids=_BATCH_MARKERS.keys())
+@pytest.mark.parametrize("build_chat_row", _AZURE_CHAT_ROWS.values(), ids=_AZURE_CHAT_ROWS.keys())
 @pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "latency-based-routing", "usage-based-routing"])
 async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
-    monkeypatch: pytest.MonkeyPatch, routing_strategy: str, batch_marker: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str, build_chat_row: Callable[[], dict[str, object]]
 ):
     """Azure answers 400 invalid_deployment_type when a batch is created on a GlobalStandard
     (chat) deployment, so a group mixing chat and batch deployments must send every batch
@@ -13042,8 +13069,8 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
         model_list=[
-            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
-            {**_azure_sku_deployment("gpt-mixed", "batch-sku", "batch"), "model_info": batch_marker},
+            build_chat_row(),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
         ],
         routing_strategy=routing_strategy,
         num_retries=0,
@@ -13253,6 +13280,39 @@ async def test_acreate_batch_on_a_mixed_group_never_falls_back_to_chat_while_its
             await _create_batches(router, "gpt-mixed", attempts=1)
 
     assert chat_route.call_count == 0
+
+
+def _openai_deployment(model_group: str, host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": model_group,
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_base": f"https://{host}/v1", "api_key": "dummy-key"},
+        "model_info": {"mode": mode, **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_batch_deployment_cools_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenAI runs batches on the deployment that serves chat, so only Azure groups skip chat deployments for
+    batch creates and an OpenAI group keeps serving them while its batch deployment cools down."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _openai_deployment("gpt-mixed", "chat.openai.test", "chat"),
+            _openai_deployment("gpt-mixed", "batch.openai.test", "batch"),
+        ],
+        num_retries=0,
+    )
+    _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route = respx_mock.post(host="chat.openai.test").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "gpt-mixed", attempts=5)
+
+    assert chat_route.call_count == 5
 
 
 @pytest.mark.asyncio

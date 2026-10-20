@@ -186,7 +186,6 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
-from litellm.router_utils.batch_utils import model_info_with_deployment_endpoints
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -15855,17 +15854,14 @@ def _enrich_model_info_with_litellm_data(
     stamped_model_info: Final = MappingProxyType(
         {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
     )
-    model["model_info"] = model_info_with_deployment_endpoints(
-        {
-            **stamped_model_info,
-            **{
-                k: None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
-                for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
-                if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
-            },
+    model["model_info"] = {
+        **stamped_model_info,
+        **{
+            k: None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
+            for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
+            if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
-        model,
-    )
+    }
     # don't return the api key / vertex credentials
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
@@ -17665,7 +17661,7 @@ async def model_deprecations(
 
 
 def get_model_group_info(
-    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -17678,7 +17674,7 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
             model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
@@ -17910,7 +17906,10 @@ async def model_group_info(
 
     model_groups: Final = await append_agents_to_model_group(
         model_groups=get_model_group_info(
-            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+            llm_router=llm_router,
+            all_models_str=listed_group_names,
+            model_group=model_group,
+            team_id=user_api_key_dict.team_id,
         ),
         user_api_key_dict=user_api_key_dict,
     )

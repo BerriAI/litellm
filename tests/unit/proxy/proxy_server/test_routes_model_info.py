@@ -331,45 +331,6 @@ def test_get_proxy_model_info_names_config_model_info_pricing_as_an_override(mon
     assert info["output_cost_per_token"] == 7e-06
 
 
-def _cost_map_chat_model_listing_batch(provider: str) -> str:
-    return next(
-        f"{provider}/{name.removeprefix(f'{provider}/')}"
-        for name, info in litellm.model_cost.items()
-        if info.get("litellm_provider") == provider
-        and info.get("mode") == "chat"
-        and "/v1/batch" in (info.get("supported_endpoints") or ())
-    )
-
-
-@pytest.mark.parametrize(
-    ("provider", "deployment_mode", "lists_batch"),
-    (("azure", "chat", False), ("azure", "batch", True), ("openai", "chat", True)),
-)
-def test_get_proxy_model_info_lists_batch_only_for_deployments_that_can_run_it(
-    monkeypatch, local_model_cost_map, provider, deployment_mode, lists_batch
-):
-    """An Azure chat deployment cannot run batches, which need a separate batch deployment, though the cost map
-    lists /v1/batch for its model. OpenAI batches through any deployment, so its cost map listing stands."""
-    info = _enriched_model_info(
-        monkeypatch,
-        {"model": _cost_map_chat_model_listing_batch(provider)},
-        {"id": "dep-endpoints", "db_model": False, "mode": deployment_mode},
-    )
-    assert ("/v1/batch" in info["supported_endpoints"]) is lists_batch
-    assert "/v1/chat/completions" in info["supported_endpoints"]
-
-
-def test_get_proxy_model_info_lists_batch_for_a_batch_deployment_missing_from_the_cost_map(
-    monkeypatch, local_model_cost_map
-):
-    """``/model_group/info`` lists /v1/batch for a group holding a ``mode: batch`` deployment, and that
-    deployment's own ``/model/info`` row must agree even when the cost map has no entry for it."""
-    info = _enriched_model_info(
-        monkeypatch, {"model": "azure/unmapped-batch-sku"}, {"id": "dep-batch", "db_model": False, "mode": "batch"}
-    )
-    assert info["supported_endpoints"] == ["/v1/batch"]
-
-
 def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as, monkeypatch, local_model_cost_map):
     """LIT-8064. The Admin UI model page reads ``GET /v2/model/info``, so the override report
     has to ride that route too, not only ``/model/info``."""
@@ -840,7 +801,7 @@ def model_group_info_router(monkeypatch):
     router.get_model_access_groups.return_value = {}
     router.get_model_list.return_value = []
 
-    def model_group_info(*, llm_router, all_models_str, model_group):
+    def model_group_info(*, llm_router, all_models_str, model_group, team_id=None):
         return [ModelGroupInfoProxy(model_group=name, providers=[]) for name in all_models_str]
 
     async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
@@ -903,6 +864,53 @@ def test_model_group_info_internal_user_key_model_restriction_applies(client, au
 
     assert response.status_code == 200
     assert [model["model_group"] for model in response.json()["data"]] == ["gpt-4"]
+
+
+def _azure_group_deployment(sku_host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": "gpt-mixed",
+        "litellm_params": {
+            "model": f"azure/{sku_host}",
+            "api_base": f"https://{sku_host}.openai.azure.com",
+            "api_key": "dummy-key",
+            "api_version": "2025-04-01-preview",
+        },
+        "model_info": {"mode": mode, **model_info},
+    }
+
+
+@pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-a", True)])
+def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deployment(
+    client, auth_as, monkeypatch, team_id: str | None, lists_batch: bool
+):
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.agent_endpoints import model_list_helpers
+
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_group_deployment("chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_group_deployment("batch-sku", "batch", team_id="team-a"),
+        ]
+    )
+
+    async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
+        return model_groups
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        model_list_helpers, "append_agents_to_model_group", AsyncMock(side_effect=append_agents_to_model_group)
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN, team_id=team_id):
+        response = client.get("/model_group/info")
+
+    assert response.status_code == 200
+    groups: Final = {group["model_group"]: group for group in response.json()["data"]}
+    assert ("/v1/batch" in (groups["gpt-mixed"]["supported_endpoints"] or ())) is lists_batch
 
 
 # ---------------------------------------------------------------------------
