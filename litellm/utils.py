@@ -1865,6 +1865,17 @@ def _get_call_type_from_public_name(function_name: str) -> str:
             return function_name
 
 
+def _context_window_fallback_applies(
+    error: Exception, context_window_fallback_dict: object, model: str, *, is_router_call: bool
+) -> bool:
+    return (
+        not is_router_call
+        and isinstance(error, litellm.exceptions.ContextWindowExceededError)
+        and isinstance(context_window_fallback_dict, dict)
+        and model in context_window_fallback_dict
+    )
+
+
 def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> bool:
     """Router completion uses metadata. Async generic calls retry with litellm_metadata; sync generic calls need SDK retries."""
     metadata_buckets: Final = (
@@ -2111,8 +2122,11 @@ def client(original_function):
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
+                context_window_fallback_applies: Final = isinstance(model, str) and _context_window_fallback_applies(
+                    e, context_window_fallback_dict, model, is_router_call=is_completion_litellm_router_call
+                )
                 if (
-                    num_retries and not is_completion_litellm_router_call
+                    num_retries and not is_completion_litellm_router_call and not context_window_fallback_applies
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     status_code: Final[object] = getattr(e, "status_code", None)
                     if (
@@ -2128,12 +2142,7 @@ def client(original_function):
                             original_function=public_completion,
                             **{**kwargs, "_initial_exception": e},
                         )
-                if (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
-                    and context_window_fallback_dict
-                    and model in context_window_fallback_dict
-                    and not is_completion_litellm_router_call
-                ):
+                if context_window_fallback_applies:
                     fallback_model: Final = context_window_fallback_dict[model]
                     fallback_kwargs: Final = _with_retry_policy_spent(kwargs)
                     if args:
@@ -2427,8 +2436,17 @@ def client(original_function):
             if retries_apply:
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
             status_code: Final[object] = getattr(e, "status_code", None)
+            context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
+            context_window_fallback_applies: Final = (
+                call_type == CallTypes.acompletion.value
+                and isinstance(model, str)
+                and _context_window_fallback_applies(
+                    e, context_window_fallback_dict, model, is_router_call=is_acompletion_litellm_router_call
+                )
+            )
             acompletion_retried: Final = (
                 retries_apply
+                and not context_window_fallback_applies
                 and (
                     _get_retry_policy_num_retries(kwargs, e) is not None
                     or not isinstance(status_code, int)
@@ -2490,21 +2508,13 @@ def client(original_function):
             if isinstance(wrapper_num_retries, Exception):
                 raise wrapper_num_retries
 
-            if call_type == CallTypes.acompletion.value:
-                context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
-                if (
-                    not acompletion_retried
-                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
-                    and context_window_fallback_dict
-                    and model in context_window_fallback_dict
-                    and not is_acompletion_litellm_router_call
-                ):
-                    fallback_model: Final = context_window_fallback_dict[model]
-                    fallback_kwargs: Final = _with_retry_policy_spent(kwargs)
-                    if args:
-                        return await original_function(fallback_model, *args[1:], **fallback_kwargs)
-                    return await original_function(*args, **{**fallback_kwargs, "model": fallback_model})
-            elif call_type == CallTypes.aresponses.value:
+            if context_window_fallback_applies:
+                fallback_model: Final = context_window_fallback_dict[model]
+                fallback_kwargs: Final = _with_retry_policy_spent(kwargs)
+                if args:
+                    return await original_function(fallback_model, *args[1:], **fallback_kwargs)
+                return await original_function(*args, **{**fallback_kwargs, "model": fallback_model})
+            if call_type == CallTypes.aresponses.value:
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
