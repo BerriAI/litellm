@@ -78,9 +78,7 @@ class TestColdStorageObjectKeyIntegration:
         metadata = {"user_api_key": "test_key", "user_api_key_team_id": "test_team"}
 
         # Call the function
-        result = _get_spend_logs_metadata(
-            metadata=metadata, cold_storage_object_key="test/path/to/object.json"
-        )
+        result = _get_spend_logs_metadata(metadata=metadata, cold_storage_object_key="test/path/to/object.json")
 
         # Verify the object key is stored in the result
         assert result.get("cold_storage_object_key") == "test/path/to/object.json"
@@ -104,11 +102,7 @@ class TestColdStorageObjectKeyIntegration:
         }
 
         # Test the extraction method
-        object_key = (
-            ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(
-                spend_log
-            )
-        )
+        object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
 
         assert object_key == "test/path/to/object.json"
 
@@ -128,11 +122,7 @@ class TestColdStorageObjectKeyIntegration:
         }
 
         # Test the extraction method
-        object_key = (
-            ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(
-                spend_log
-            )
-        )
+        object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
 
         assert object_key == "test/path/to/object.json"
 
@@ -148,20 +138,17 @@ class TestColdStorageObjectKeyIntegration:
 
         # Mock the custom logger
         mock_logger = AsyncMock()
-        mock_logger.get_proxy_server_request_from_cold_storage_with_object_key = (
-            AsyncMock(return_value={"test": "data"})
+        mock_logger.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value={"test": "data"}
         )
 
         with (
-            patch.object(
-                handler, "_select_custom_logger_for_cold_storage", return_value="s3_v2"
-            ),
+            patch.object(handler, "_select_custom_logger_for_cold_storage", return_value="s3_v2"),
             patch(
                 "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name",
                 return_value=mock_logger,
             ),
         ):
-
             result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
                 object_key="test/path/to/object.json"
             )
@@ -184,9 +171,7 @@ class TestColdStorageObjectKeyIntegration:
         s3_logger = S3Logger(s3_bucket_name="test-bucket")
 
         # Mock the _download_object_from_s3 method
-        with patch.object(
-            s3_logger, "_download_object_from_s3", return_value={"test": "data"}
-        ) as mock_download:
+        with patch.object(s3_logger, "_download_object_from_s3", return_value={"test": "data"}) as mock_download:
             result = await s3_logger.get_proxy_server_request_from_cold_storage_with_object_key(
                 object_key="test/path/to/object.json"
             )
