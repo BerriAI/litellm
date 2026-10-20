@@ -157,6 +157,14 @@ HOST_NAMED_LIKE_A_STRIPPED_SUFFIX_IS_NOT_KEPT: Final[Mapping[str, str]] = Mappin
         "minimax.videos.transformation.MinimaxVideoConfig": "strips-surface-suffixes-to-the-scheme-on-main-too",
         "volcengine.videos.transformation.VolcEngineVideoConfig": "strips-surface-suffixes-to-the-scheme-on-main-too",
         "vertex_ai.audio_transcription.realtime_transformation.VertexChirpRealtimeConfig": "returns-a-grpc-host",
+        "azure.realtime.http_transformation.AzureRealtimeHTTPConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "bedrock.responses.transformation.BedrockOpenAIResponsesConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "bedrock_mantle.chat.claude_transformation.BedrockMantleClaudeChatConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "bedrock_mantle.messages.transformation.BedrockMantleAnthropicMessagesConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "bedrock_mantle.responses.transformation.BedrockMantleResponsesAPIConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "deepseek.messages.transformation.DeepSeekAnthropicMessagesConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "ragflow.chat.transformation.RAGFlowConfig": "replaces-the-host-with-a-route-segment-on-main-too",
+        "scaledown.chat.transformation.ScaleDownChatConfig": "replaces-the-host-with-a-route-segment-on-main-too",
     }
 )
 
@@ -250,7 +258,6 @@ def test_get_complete_url_sends_the_same_url_with_or_without_a_trailing_slash(bu
         assert with_slash == without_slash
 
 
-
 def _host_preserving_builder_param(cls: type) -> ParameterSet:
     reason: Final = HOST_NAMED_LIKE_A_STRIPPED_SUFFIX_IS_NOT_KEPT.get(_builder_id(cls))
     if reason is None:
@@ -262,5 +269,9 @@ def _host_preserving_builder_param(cls: type) -> ParameterSet:
 @pytest.mark.parametrize("builder_class", [_host_preserving_builder_param(cls) for cls in _all_builders()])
 def test_get_complete_url_keeps_a_host_named_like_the_suffix_it_strips(builder_class: type, api_base: str) -> None:
     url: Final = _built_url(builder_class, api_base)
+    follows_the_api_base_host: Final = (
+        urlsplit(_built_url(builder_class, "https://gateway.test/v1")).netloc == "gateway.test"
+    )
 
     assert urlsplit(url).netloc, url
+    assert not follows_the_api_base_host or urlsplit(url).netloc == urlsplit(api_base).netloc, url

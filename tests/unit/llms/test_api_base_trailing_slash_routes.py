@@ -1,14 +1,11 @@
 import asyncio
 import contextlib
-import threading
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
 
 import pytest
+import respx
 
 import litellm
 from litellm.evals.main import cancel_run, create_run, get_run
@@ -21,46 +18,16 @@ MESSAGES: Final = ({"role": "user", "content": "hi"},)
 GATEWAY_PATH: Final = "/gw/"
 
 
-@dataclass(frozen=True, slots=True)
-class RecordingServer:
-    port: int
-    requests: SimpleQueue[str]
-
-    def received_paths(self) -> tuple[str, ...]:
-        return tuple(self.requests.get_nowait() for _ in range(self.requests.qsize()))
-
-
-def _recording_handler(requests: SimpleQueue[str]) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        def _answer_not_found(self) -> None:
-            requests.put(self.path.split("?", 1)[0])
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"error": {"message": "not found", "code": 404}}')
-
-        def do_GET(self) -> None:
-            self._answer_not_found()
-
-        def do_POST(self) -> None:
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            self._answer_not_found()
-
-        def do_DELETE(self) -> None:
-            self._answer_not_found()
-
-    return Handler
+GATEWAY_HOST: Final = "gateway.test"
 
 
 @pytest.fixture
-def server() -> Iterator[RecordingServer]:
-    requests: Final[SimpleQueue[str]] = SimpleQueue()
-    httpd: Final = ThreadingHTTPServer(("127.0.0.1", 0), _recording_handler(requests))
-    thread: Final = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    yield RecordingServer(port=httpd.server_address[1], requests=requests)
-    httpd.shutdown()
-    httpd.server_close()
+def received_paths() -> Iterator[Callable[[], tuple[str, ...]]]:
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.route(host=GATEWAY_HOST).respond(
+            404, json={"error": {"message": "not found", "code": 404}}
+        )
+        yield lambda: tuple(call.request.url.raw_path.decode().split("?", 1)[0] for call in route.calls)
 
 
 def _drain(result: object) -> None:
@@ -140,12 +107,13 @@ ROUTES: Final[Mapping[str, Callable[[str], object]]] = MappingProxyType(
 
 @pytest.mark.parametrize("route", ROUTES.values(), ids=ROUTES.keys())
 def test_api_base_with_a_trailing_slash_reaches_the_gateway_path_with_single_slashes(
-    server: RecordingServer, route: Callable[[str], object], monkeypatch: pytest.MonkeyPatch
+    received_paths: Callable[[], tuple[str, ...]], route: Callable[[str], object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", FAKE_KEY)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with contextlib.suppress(Exception):
-        route(f"http://127.0.0.1:{server.port}{GATEWAY_PATH}")
+        route(f"http://{GATEWAY_HOST}{GATEWAY_PATH}")
 
-    paths: Final = server.received_paths()
+    paths: Final = received_paths()
     assert paths, "the route never reached the api_base"
     assert all(path.startswith(GATEWAY_PATH) and "//" not in path for path in paths), paths

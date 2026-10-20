@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from itertools import chain, repeat
 from typing import Final, TypeAlias
 
 import anthropic
@@ -40,7 +41,7 @@ def _deploy(scenario: Scenario, model: str, api_base: str) -> str:
 def _spend_api_bases(identities: tuple[str, ...]) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
-            'SELECT request_id, api_base FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(string_to_array(%s, \',\'))',
+            "SELECT request_id, api_base FROM \"LiteLLM_SpendLogs\" WHERE request_id = ANY(string_to_array(%s, ','))",
             (",".join(identities),),
         ),
         lambda found: len(found) == len(identities),
@@ -117,7 +118,8 @@ def test_mixed_burst_on_slash_bases_lands_each_call_once_on_its_single_slash_url
             ("/db/serving-endpoints/chat/completions", chat(databricks)),
             ("/mi/v1/embeddings", embed),
         )
-        calls: Final = tuple((target, call, new_marker()) for target, call in kinds for _ in range(_PER_KIND))
+        repeated_kinds: Final = tuple(chain.from_iterable(repeat(kind, _PER_KIND) for kind in kinds))
+        calls: Final = tuple((target, call, new_marker()) for target, call in repeated_kinds)
 
         async def burst() -> list[Answer]:
             return await asyncio.gather(*(call(marker) for _, call, marker in calls))

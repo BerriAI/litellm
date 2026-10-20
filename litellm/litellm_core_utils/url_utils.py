@@ -134,7 +134,10 @@ def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
     parts: Final = urlsplit(stripped)
     if parts.scheme and not (parts.netloc or parts.path or parts.query or parts.fragment):
         return f"{stripped}/"
-    return stripped
+    if not parts.query or not parts.path.endswith("/"):
+        return stripped
+    url_before_query, _, query = stripped.partition("?")
+    return f"{url_before_query.rstrip('/')}?{query}"
 
 
 def join_api_base(api_base: str, route: str) -> str:
