@@ -50,6 +50,7 @@ from typing import (
 )
 
 import anyio
+import httpx
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -1013,12 +1014,17 @@ def _failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
+    provider_billed: bool = False,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
-    estimated input-side Usage with zero cost. The raw request body backfills
+    estimated input-side Usage. When the failure is one the provider bills
+    anyway (``provider_billed``: a read timeout, where the provider had the
+    prompt and kept working after LiteLLM hung up) that
+    usage is priced at the model's input rate; any other post-dispatch failure
+    stays at zero cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
@@ -1046,7 +1052,27 @@ def _failure_usage_to_lift(
     )
     if estimated_usage is None:
         return None
-    return estimated_usage, 0.0
+    if not provider_billed:
+        return estimated_usage, 0.0
+    return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens)
+
+
+def _estimated_input_cost(model_call_details: Mapping[str, object], prompt_tokens: int) -> float:
+    """Input price for the estimated prompt at the cost map's rate; an unmapped model keeps the
+    row at $0 rather than dropping the failure row."""
+    try:
+        model: Final = str(model_call_details.get("model") or "")
+        estimated_input_cost, _ = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
+            prompt_tokens=prompt_tokens,
+        )
+    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
+        verbose_proxy_logger.debug(
+            "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
+        )
+        return 0.0
+    return estimated_input_cost
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
@@ -1161,7 +1187,28 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
+_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
+
+
+def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
+    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
+    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
+        following = chain[-1].__cause__ or chain[-1].__context__
+        if following is None or following in chain:
+            break
+        chain.append(following)
+    return tuple(chain)
+
+
+def _timed_out_reading_from_provider(exception: Exception) -> bool:
+    """A read timeout means the request was sent and the provider was working on it; a connect
+    timeout (``httpx.ConnectTimeout``) never reached the provider, so it is not billed."""
+    return isinstance(exception, litellm.Timeout) and any(
+        isinstance(cause, httpx.ReadTimeout) for cause in _exception_chain(exception)
+    )
+
+
+def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1177,6 +1224,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
+        provider_billed=provider_billed,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3400,7 +3448,11 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
+        request_data.update(
+            await offload_token_count(_failure_fields_to_lift)(
+                request_data, provider_billed=_timed_out_reading_from_provider(original_exception)
+            )
+        )
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -4167,6 +4219,49 @@ class ProxyLogging:
         await ProxyLogging._record_served_stream_output(request_data, served_chunks)
         ProxyLogging.fire_deferred_stream_logging(request_data)
 
+    async def async_post_call_event_stream_iterator_hook(
+        self,
+        response: AsyncIterable[object],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
+        guardrails: Sequence[tuple[CustomGuardrail, bool]],
+    ) -> AsyncGenerator[object, None]:
+        """
+        Run post_call guardrails over a provider event stream the proxy relays as it arrives, such as a Bedrock
+        Converse stream on the passthrough route. Each guardrail scans the stream through the unified guardrail, as
+        on /v1/messages; its flag says whether it holds the stream until moderated by default.
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        merged_request_data: Final[dict[str, object]] = check_and_merge_model_level_guardrails(  # pyright: ignore[reportUnknownVariableType]  # returns the untyped request dict  # mutable-ok: same request-payload shape the hooks mutate
+            data=request_data, llm_router=llm_router
+        )
+        current_response: AsyncIterable[object] = response  # rebind-ok: each guardrail wraps the previous layer
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
+        for guardrail, holds_until_moderated in guardrails:
+            if guarded_layers:
+                current_response = ProxyLogging._released_copies(current_response)
+                guarded_layers.append(current_response)
+            current_response = self._wrap_streaming_iterator_with_enrichment(
+                guardrail,
+                current_response,
+                partial(
+                    unified_guardrail.async_post_call_streaming_iterator_hook,  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=merged_request_data,
+                    guardrail_to_apply=guardrail,
+                    buffer_until_moderated_default=holds_until_moderated,
+                ),
+                request_data=merged_request_data,
+            )
+            guarded_layers.append(current_response)
+        try:
+            async for item in current_response:
+                yield item
+        except (GeneratorExit, asyncio.CancelledError):
+            await ProxyLogging._close_guarded_layers(guarded_layers)
+            raise
+
     async def _pipeline_gated_stream(
         self,
         response: "AsyncGenerator[object, None]",
@@ -4350,6 +4445,13 @@ class ProxyLogging:
                         guardrail_status="guardrail_failed_to_respond",
                         event_type=GuardrailEventHooks.post_call,
                     )
+
+    @staticmethod
+    async def _released_copies(items: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+        """Each item a guardrail layer released, copied for the next layer, so a rewrite the earlier layer writes
+        back once its stream ends never reaches items the next layer is still holding."""
+        async for item in items:
+            yield copy.copy(item)
 
     @staticmethod
     async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
@@ -4559,11 +4661,12 @@ litellm_config_cache: Final[DualCache] = DualCache(
 class _ConfigRow:
     """Mimics the Prisma litellm_config row shape for cached entries."""
 
-    __slots__ = ("param_name", "param_value")
+    __slots__ = ("param_name", "param_value", "reload_revision")
 
-    def __init__(self, param_name: str, param_value: object) -> None:
+    def __init__(self, param_name: str, param_value: object, reload_revision: int | None = None) -> None:
         self.param_name = param_name
         self.param_value = param_value
+        self.reload_revision = reload_revision
 
 
 CONFIG_PARAMS_TARGET: Final = "config_params"
@@ -4574,14 +4677,23 @@ def _config_cache_key(param_name: str) -> str:
 
 
 def _pack_config_row(row: Any) -> dict[str, object]:
-    return {"param_name": row.param_name, "param_value": row.param_value}
+    return {
+        "param_name": row.param_name,
+        "param_value": row.param_value,
+        "reload_revision": getattr(row, "reload_revision", None),
+    }
 
 
 def _unpack_config_row(cached: object) -> _ConfigRow | None:
     if cached is None or cached == _CONFIG_CACHE_MISS:
         return None
     if isinstance(cached, dict):
-        return _ConfigRow(cached["param_name"], cached["param_value"])
+        revision: Final = cached.get("reload_revision")
+        return _ConfigRow(
+            cached["param_name"],
+            cached["param_value"],
+            revision if isinstance(revision, int) and not isinstance(revision, bool) else None,
+        )
     return None
 
 

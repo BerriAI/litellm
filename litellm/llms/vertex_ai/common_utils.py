@@ -1278,6 +1278,7 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
         )
@@ -1292,6 +1293,23 @@ class VertexAITokenCounter(BaseTokenCounter):
             model_to_use, count_tokens_params_request
         ):
             return None
+
+        without_count_route: Final = (
+            VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
+        )
+        model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
+        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
+            return None
+        if without_count_route:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="vertex_ai_partner_models",
+                error=True,
+                error_message=f"LiteLLM does not support counting tokens for Vertex AI model {model_to_use}.",
+                status_code=400,
+            )
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
@@ -1357,6 +1375,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 count_context_error_response,
                 gemini_count_contents,
                 inference_request_view,
+                malformed_tool_result_text_count_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -1374,7 +1393,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
-            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            blocks_error: Final = unconvertible_messages_error(
+                request_view.messages, messages_format
+            ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
