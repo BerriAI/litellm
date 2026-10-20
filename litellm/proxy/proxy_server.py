@@ -14267,11 +14267,6 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
-def _drops_params(deployment: Mapping[str, object] | None) -> bool:
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
-    return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
-
-
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -14359,13 +14354,6 @@ async def count_request_tokens(
             model_to_use = _model
 
     conversation_empty: Final = not messages and not contents
-    if prompt and not conversation_empty and not _drops_params(deployment):
-        raise ProxyException(
-            message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
-            type="invalid_request_error",
-            param="prompt",
-            code=400,
-        )
     prompt_only: Final = bool(prompt) and conversation_empty
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
