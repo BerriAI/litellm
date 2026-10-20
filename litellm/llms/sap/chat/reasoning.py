@@ -14,7 +14,7 @@ _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 class _SAPThoughtBlock(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    content: str = ""
+    content: str | None = None
     signature: str | None = None
 
 
@@ -26,7 +26,7 @@ class _SAPThoughts(BaseModel):
 
 
 def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
-    return ChatCompletionThinkingBlock(type="thinking", thinking=block.content, signature=block.signature)
+    return ChatCompletionThinkingBlock(type="thinking", thinking=block.content or "", signature=block.signature)
 
 
 def _as_object(value: object) -> Mapping[str, object] | None:
@@ -56,8 +56,12 @@ def _normalize_body(body: object) -> object:
     if parsed is None or fields is None:
         return body
 
-    blocks: Final = tuple(_thinking_block(block) for block in parsed.reasoning_content)
-    reasoning_text: Final = "".join(block.content for block in parsed.reasoning_content)
+    blocks: Final = tuple(
+        _thinking_block(block) for block in parsed.reasoning_content if block.content is not None
+    )
+    reasoning_text: Final = "\n".join(
+        block.content for block in parsed.reasoning_content if block.content is not None
+    )
 
     return {
         **fields,
@@ -84,6 +88,43 @@ def normalize_reasoning_blocks(result: object, body_key: Literal["message", "del
         return result
 
     return {**fields, "choices": [_normalize_choice(choice, body_key) for choice in choices]}
+
+
+def denormalize_reasoning_blocks(
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Inverse of normalize_reasoning_blocks: rebuild list[ReasoningBlock] from thinking_blocks.
+
+    LiteLLM normalizes SAP's reasoning_content list into a str + thinking_blocks before
+    returning a ModelResponse. When that response is replayed as a history message the dict
+    must be converted back to the SAP shape before SAPAssistantMessage validation.
+
+    If thinking_blocks is absent but reasoning_content is a plain str (e.g. from a
+    non-SAP provider), drop the field: we cannot reconstruct SAP ReasoningBlocks without
+    the original signatures.
+    """
+    if message.get("role") != "assistant":
+        return message
+    thinking_blocks: Final = message.get("thinking_blocks")
+    if isinstance(thinking_blocks, list):
+        reasoning_content: Final[list[dict[str, str | None]]] = [  # mutable-ok: wire list passed to validate_dict
+            {
+                "content": str(
+                    block.get("thinking") or ""  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # isinstance guard in comprehension filter; pyright can't narrow
+                ),
+                "signature": block.get(  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                    "signature"
+                ),
+            }
+            for block in thinking_blocks  # pyright: ignore[reportUnknownVariableType]  # isinstance(thinking_blocks, list) guard above; pyright can't narrow into comprehension
+            if isinstance(block, dict)
+        ]
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")} | {
+            "reasoning_content": reasoning_content
+        }
+    if isinstance(message.get("reasoning_content"), str):
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")}
+    return message
 
 
 _STREAM_CHUNK_KEYS: Final = ("final_result", "orchestration_result")

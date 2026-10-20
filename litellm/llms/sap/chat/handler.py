@@ -24,9 +24,9 @@ class GenAIHubOrchestrationError(BaseLLMException):
         self.message = message
 
 
-# -------------------------------
-# Stream parsing helpers
-# -------------------------------
+# ----------------------------------
+# Parsing and transformation helpers
+# ----------------------------------
 
 
 def _now_ts() -> int:
@@ -48,33 +48,35 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
+    def _from_orchestration_result(evt: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc: Final = evt.get("orchestration_result") or {}
+        orc: Final[dict[str, object]] = evt.get("orchestration_result") or {}  # pyright: ignore[reportAssignmentType]  # wire JSON; orchestration_result is always a dict
         if not orc:
             return None
 
         return OpenAIChatCompletionChunk.model_validate(
             {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+                "id": orc.get("id")
+                or evt.get("request_id")  # pyright: ignore[reportUnknownMemberType]  # wire JSON string field
+                or "stream-chunk",
                 "object": orc.get("object") or "chat.completion.chunk",
                 "created": orc.get("created") or evt.get("created") or _now_ts(),
                 "model": orc.get("model") or "unknown",
                 "choices": [
                     {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
+                        "index": choice.get("index", 0),
+                        "delta": choice.get("delta") or {},
+                        "finish_reason": choice.get("finish_reason"),
                     }
-                    for c in (orc.get("choices") or [])
+                    for choice in orc.get("choices") or []  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]  # wire JSON; choices is always list[dict]
                 ],
             }
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -90,10 +92,13 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
-            # ensure it looks like an OpenAI chunk
-            if "object" not in fr:
-                fr["object"] = "chat.completion.chunk"
+            fr_raw: Final = event_obj["final_result"] or {}
+            if not isinstance(fr_raw, dict):
+                return None
+            fr: Final[dict[str, object]] = {  # mutable-ok: wire dict consumed by model_validate
+                **fr_raw,
+                **(({"object": "chat.completion.chunk"}) if "object" not in fr_raw else {}),
+            }
             return OpenAIChatCompletionChunk.model_validate(fr)
 
         # Orchestration incremental delta
@@ -249,7 +254,8 @@ class AsyncSAPStreamIterator:
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
     def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
-        if data.get("config", {}).get("stream", None) is not None:
+        config = data.get("config") or {}  # pyright: ignore[reportUnknownVariableType]  # wire JSON; config is always a dict when present
+        if isinstance(config, dict) and config.get("stream") is not None:
             data["config"]["stream"]["enabled"] = True
         else:
             data["config"]["stream"] = {"enabled": True}

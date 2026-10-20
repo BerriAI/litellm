@@ -43,7 +43,10 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
-from .reasoning import normalize_reasoning_blocks
+from .reasoning import (
+    normalize_reasoning_blocks,
+    denormalize_reasoning_blocks,
+)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -107,8 +110,9 @@ def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
         folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
-        message_role_class = _message_role_mapping(str(folded_message["role"]))
-        validated_message = validate_dict(folded_message, message_role_class)
+        denormalized_message = denormalize_reasoning_blocks(dict(folded_message))
+        message_role_class = _message_role_mapping(str(denormalized_message["role"]))
+        validated_message = validate_dict(denormalized_message, message_role_class)
         template.append(validated_message)
     return template
 
@@ -230,7 +234,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "functions",
             "extra_headers",
             "parallel_tool_calls",
+            "reasoning_effort",
             "response_format",
+            "thinking",
             "timeout",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
@@ -422,7 +428,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response_format: Final = optional_params.get("response_format", {})
         if response_format.get("type") in ("json_object", "json_schema"):
             if model.startswith("anthropic"):
-                response = self._strip_markdown_json(response)
+                return self._strip_markdown_json(response)
 
         return response
 
