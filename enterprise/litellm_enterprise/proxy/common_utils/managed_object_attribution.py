@@ -110,9 +110,7 @@ class ManagedObjectCreatorAttribution:
     A background response also carries its end user, the creating key's project, and the key,
     team, and user budgets and per-model budgets, the way the read that billed it before did,
     and never names a key-scoped creator as its user. A key that sets no budget of its own
-    takes its budget tier's, the same rule auth applies. The project is billed only while the
-    key is still on the team the object was created under, so one charge never splits across
-    two teams.
+    takes its budget tier's, the same rule auth applies.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -130,7 +128,7 @@ class ManagedObjectCreatorAttribution:
             "user_api_key_user_id": _creator_user_id(job.created_by),
             **_shared_metadata(job, rows),
             **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-            "user_api_key_project_id": _project_on_creating_team(rows.key, getattr(job, "team_id", None)),
+            "user_api_key_project_id": getattr(rows.key, "project_id", None),
             **_key_budget_fields(rows.key),
             **_budget_fields(
                 rows.team,
@@ -227,10 +225,6 @@ def _key_alias(
 
 def _organization_id(row: object) -> str | None:
     return cast("str | None", getattr(row, "organization_id", None)) if row is not None else None
-
-
-def _project_on_creating_team(key: object, creating_team_id: str | None) -> object:
-    return getattr(key, "project_id", None) if getattr(key, "team_id", None) == creating_team_id else None
 
 
 def _budget_fields(row: object, spend_key: str, max_budget_key: str, model_max_budget_key: str) -> Mapping[str, object]:
