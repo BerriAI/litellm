@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import threading
@@ -10,8 +11,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable
 
 import yaml
+
+from poc.guarded_model import valid_cost
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS_PATH = ROOT / "runs.jsonl"
@@ -19,7 +23,8 @@ AUX_COSTS_PATH = ROOT / "costs_aux.jsonl"
 RUNS_ROOT = ROOT / "runs_raw"
 GLOBAL_BUDGET_USD = 15.0
 RESERVATION_USD = 1.0
-MIN_FREE_BYTES = 20 * 1024**3
+MIN_FREE_BYTES = 50 * 1024**3
+EMERGENCY_FREE_BYTES = 20 * 1024**3
 MAX_LOG_BYTES = 200 * 1024
 INFRA_EXIT_STATUSES = {
     "APIConnectionError",
@@ -76,7 +81,7 @@ def committed_spend_usd(runs_path: Path = RUNS_PATH, aux_path: Path = AUX_COSTS_
 
 
 def _cost(value: object) -> float:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+    return float(value) if valid_cost(value) else 0.0
 
 
 def _utility_env(env: dict[str, str]) -> dict[str, str]:
@@ -93,9 +98,7 @@ def global_budget_allows(committed_spend: float, in_flight: int, budget: float =
 
 def sum_call_costs(calls: list[dict[str, object]]) -> tuple[float, bool]:
     present_costs = [call.get("cost_usd") for call in calls if call.get("event") == "call"]
-    return sum(_cost(cost) for cost in present_costs), any(
-        not isinstance(cost, (int, float)) or isinstance(cost, bool) for cost in present_costs
-    )
+    return sum(_cost(cost) for cost in present_costs), any(not valid_cost(cost) for cost in present_costs)
 
 
 def sum_call_tokens(calls: list[dict[str, object]]) -> dict[str, int]:
@@ -116,7 +119,13 @@ def classify_error(
     eval_status: str | None,
     trajectory_found: bool,
     exception_text: str = "",
+    cost_incomplete: bool = False,
+    emergency_disk_stop: bool = False,
 ) -> str:
+    if exit_status == "CostAccountingError" or cost_incomplete:
+        return "accounting"
+    if emergency_disk_stop:
+        return "infra"
     if eval_status == "resolved":
         return "none"
     if eval_status == "error":
@@ -132,6 +141,26 @@ def classify_error(
     ):
         return "infra"
     return "solver" if submission or eval_status == "unresolved" or trajectory_found else "infra"
+
+
+def retry_eligible(
+    error_class: str,
+    attempt: int,
+    n_calls: int,
+    cost_usd: float,
+    emergency_disk_stop: bool = False,
+) -> bool:
+    return (
+        attempt == 1
+        and error_class == "infra"
+        and n_calls == 0
+        and cost_usd == 0
+        and not emergency_disk_stop
+    )
+
+
+def emergency_disk_stop_required(free_bytes: int) -> bool:
+    return free_bytes < EMERGENCY_FREE_BYTES
 
 
 def _timestamp() -> str:
@@ -363,12 +392,26 @@ def _attempt(
         "-c",
         str(model_config_path),
     ]
+    emergency_disk_stop = False
     with solve_log.open("wb") as log:
-        try:
-            completed = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=615)
-            rc = completed.returncode
-        except subprocess.TimeoutExpired:
-            rc = 124
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        while process.poll() is None:
+            if emergency_disk_stop_required(shutil.disk_usage("/").free):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                emergency_disk_stop = True
+                break
+            time.sleep(10)
+        rc = process.wait()
     _bounded_log(solve_log)
     solve_latency_s = time.monotonic() - started
     containers_removed = _cleanup_containers(run_id, env)
@@ -392,6 +435,8 @@ def _attempt(
         eval_status,
         trajectory_found,
         _tail_exception_text(info),
+        cost_incomplete,
+        emergency_disk_stop,
     )
     base_commit, image_pins = _dataset_metadata(task_id)
     call_rows = [call for call in calls if call.get("event") == "call"]
@@ -425,12 +470,20 @@ def _attempt(
         "rc": rc,
         "cost_usd": cost_usd,
         "cost_incomplete": cost_incomplete,
+        "emergency_disk_stop": emergency_disk_stop,
         "n_calls": len(call_rows),
         "tokens": tokens,
         "solve_latency_s": solve_latency_s,
         "eval_latency_s": eval_latency_s,
         "call_ids": [call.get("call_id") for call in call_rows if call.get("call_id")],
         "budget_guard_refused": any(call.get("event") == "budget_guard_refused" for call in calls),
+        "retry_eligible": retry_eligible(
+            error_class,
+            attempt,
+            len(call_rows),
+            cost_usd,
+            emergency_disk_stop,
+        ),
         "containers_removed": containers_removed,
         "started_at": started_at,
         "finished_at": _utc_now(),
@@ -446,22 +499,29 @@ def _package_version(name: str) -> str:
 
 
 class DispatchGuard:
-    def __init__(self, stop_path: Path, budget: float = GLOBAL_BUDGET_USD, min_free_bytes: int = MIN_FREE_BYTES):
+    def __init__(
+        self,
+        stop_path: Path,
+        budget: float = GLOBAL_BUDGET_USD,
+        free_bytes: Callable[[], int] = lambda: shutil.disk_usage("/").free,
+        committed_spend: Callable[[], float] = committed_spend_usd,
+    ):
         self._lock = threading.Lock()
         self._in_flight = 0
         self._stopped = False
         self._stop_path = stop_path
         self._budget = budget
-        self._min_free_bytes = min_free_bytes
+        self._free_bytes = free_bytes
+        self._committed_spend = committed_spend
 
     def acquire(self, task_id: str) -> bool:
         with self._lock:
             if self._stopped:
                 return False
-            free_bytes = shutil.disk_usage("/").free
-            if free_bytes < self._min_free_bytes:
-                reason = f"disk_free_below_{self._min_free_bytes}"
-            elif not global_budget_allows(committed_spend_usd(), self._in_flight, self._budget):
+            free_bytes = self._free_bytes()
+            if free_bytes < MIN_FREE_BYTES:
+                reason = "disk_below_reserve_50GiB"
+            elif not global_budget_allows(self._committed_spend(), self._in_flight, self._budget):
                 reason = "global_spend_reservation_exceeds_budget"
             else:
                 self._in_flight += 1
@@ -472,6 +532,16 @@ class DispatchGuard:
                 {"task_id": task_id, "reason": reason, "free_bytes": free_bytes, "ts": _utc_now()},
             )
             return False
+
+    def stop_for_accounting(self, task_id: str) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+            append_jsonl(
+                self._stop_path,
+                {"task_id": task_id, "reason": "cost_accounting_incomplete", "ts": _utc_now()},
+            )
 
     def release(self) -> None:
         with self._lock:
@@ -511,9 +581,11 @@ def _run_task(
                     base_url,
                 )
                 results.append(row)
+                if row["error_class"] == "accounting":
+                    guard.stop_for_accounting(task_id)
             finally:
                 guard.release()
-            if attempt == 1 and row["error_class"] == "infra":
+            if row["retry_eligible"]:
                 attempt += 1
                 continue
             break

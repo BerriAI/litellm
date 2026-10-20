@@ -1,6 +1,8 @@
 import json
+import math
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import litellm
@@ -40,15 +42,39 @@ def budget_allows(spent_usd: float, reservation_usd: float, budget_usd: float) -
     return spent_usd + reservation_usd <= budget_usd
 
 
-def gateway_cost(hidden_params: dict) -> float | None:
-    raw = (hidden_params.get("additional_headers") or {}).get(COST_HEADER)
-    return None if raw is None else float(raw)
+def gateway_cost(hidden_params: Mapping[str, object]) -> float | None:
+    headers = hidden_params.get("additional_headers")
+    raw = headers.get(COST_HEADER) if isinstance(headers, Mapping) else None
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def valid_cost(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value)) and value >= 0
+    except OverflowError:
+        return False
+
+
+def _cost_accounting_error() -> LimitsExceeded:
+    return LimitsExceeded(
+        {"role": "exit", "content": "CostAccountingError", "extra": {
+            "exit_status": "CostAccountingError", "submission": ""
+        }}
+    )
 
 
 class GuardedLitellmModel(LitellmModel):
     def __init__(self, **kwargs):
         super().__init__(config_class=GuardedModelConfig, **kwargs)
         self.spent_usd = 0.0
+        self.accounting_incomplete = False
         self._pending_reservation = 0.0
         self._pending_input_estimate = 0
         self._pending_counted = 0
@@ -56,6 +82,9 @@ class GuardedLitellmModel(LitellmModel):
         self._prev_actual: int | None = None
 
     def query(self, messages: list[dict], **kwargs) -> dict:
+        if self.accounting_incomplete:
+            self._log({"event": "accounting_incomplete_refused", "exit_status": "CostAccountingError"})
+            raise _cost_accounting_error()
         os.environ["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"] = "1"
         prepared = self._prepare_messages_for_api(messages)
         n_in = litellm.token_counter(
@@ -88,20 +117,27 @@ class GuardedLitellmModel(LitellmModel):
         )
 
     def _calculate_cost(self, response) -> dict[str, float]:
-        cost = gateway_cost(response._hidden_params)
-        self.spent_usd += cost or 0.0
+        hidden_params = response._hidden_params
+        headers = hidden_params.get("additional_headers")
+        raw_cost = headers.get(COST_HEADER) if isinstance(headers, Mapping) else None
+        cost = gateway_cost(hidden_params)
+        cost_valid = valid_cost(cost)
+        if not cost_valid:
+            self.accounting_incomplete = True
+        else:
+            self.spent_usd += cost
         usage = response.usage.model_dump() if response.usage else {}
         self._prev_counted = self._pending_counted
         self._prev_actual = usage.get("prompt_tokens")
         self._log({
             "event": "call",
-            "call_id": response._hidden_params.get("litellm_call_id"),
+            "call_id": hidden_params.get("litellm_call_id"),
             "response_id": response.id,
             "returned_model": response.model,
-            "gateway_model_id": (response._hidden_params.get("additional_headers") or {}).get(
-                "llm_provider-x-litellm-model-id"),
-            "cost_usd": cost,
-            "cost_source": "gateway_header" if cost is not None else "missing",
+            "gateway_model_id": (headers or {}).get("llm_provider-x-litellm-model-id")
+            if isinstance(headers, Mapping) else None,
+            "cost_usd": cost if cost_valid else raw_cost,
+            "cost_source": "gateway_header" if cost_valid else "invalid",
             "reservation_usd": self._pending_reservation,
             "est_input_tokens": self._pending_input_estimate,
             "prompt_tokens": usage.get("prompt_tokens"),
@@ -109,12 +145,14 @@ class GuardedLitellmModel(LitellmModel):
             "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
             "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
-            "latency_ms": response._hidden_params.get("_response_ms"),
+            "latency_ms": hidden_params.get("_response_ms"),
             "finish_reason": response.choices[0].finish_reason,
             "spent_usd_after": self.spent_usd,
-            "reservation_covered_actual": cost is not None and cost <= self._pending_reservation,
+            "reservation_covered_actual": cost_valid and cost <= self._pending_reservation,
         })
-        return {"cost": cost if cost is not None else 0.0}
+        if not cost_valid:
+            raise _cost_accounting_error()
+        return {"cost": cost}
 
     def _log(self, row: dict) -> None:
         with Path(self.config.call_log_path).open("a") as f:

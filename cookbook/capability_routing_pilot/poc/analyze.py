@@ -56,6 +56,22 @@ def _preflight_cost(path: Path) -> float:
     return sum(_cost(probe.get("cost")) for probe in probes if isinstance(probe, dict))
 
 
+def _jev_cost_by_task(aux: list[dict[str, object]]) -> dict[str, float]:
+    jev_rows = [
+        row
+        for row in aux
+        if row.get("kind") in {"jev", "jev_classifier"} and isinstance(row.get("task_id"), str)
+    ]
+    return {
+        task_id: sum(_cost(row.get("cost_usd")) for row in jev_rows if row.get("task_id") == task_id)
+        for task_id in {str(row["task_id"]) for row in jev_rows}
+    }
+
+
+def _aux_cost_for_kinds(aux: list[dict[str, object]], kinds: set[str]) -> float:
+    return sum(_cost(row.get("cost_usd")) for row in aux if row.get("kind") in kinds)
+
+
 def _aux_costs(path: Path) -> list[dict[str, object]]:
     cost_path = path / "costs_aux.jsonl"
     return load_jsonl(str(cost_path)) if cost_path.exists() else []
@@ -99,14 +115,21 @@ def _fixed_model_summary(
     cfg: PolicyConfig,
 ) -> dict[str, object]:
     model_outcomes = [_model_outcome(outcomes, task_id, model) for task_id in task_ids]
+    graded_outcomes = [outcome for outcome in model_outcomes if outcome["graded"]]
     solved = sum(outcome["success"] is True for outcome in model_outcomes)
     total_cost = sum(float(outcome["cost_usd"]) for outcome in model_outcomes)
     attempted_tasks = sum(outcome["attempts"] > 0 for outcome in model_outcomes)
-    cell = beta_cell(solved, len(task_ids), cfg.credible_mass, total_cost / attempted_tasks if attempted_tasks else None)
+    n_graded = len(graded_outcomes)
+    n_missing = sum(outcome["attempts"] == 0 for outcome in model_outcomes)
+    n_infra_only = sum(outcome["attempts"] > 0 and not outcome["graded"] for outcome in model_outcomes)
+    cell = beta_cell(solved, n_graded, cfg.credible_mass, total_cost / attempted_tasks if attempted_tasks else None)
     return {
         "solved": solved,
+        "n_graded": n_graded,
+        "n_missing": n_missing,
+        "n_infra_only": n_infra_only,
         "total_tasks": len(task_ids),
-        "raw_rate": solved / len(task_ids) if task_ids else None,
+        "raw_rate": solved / n_graded if n_graded else None,
         "posterior_mean": cell.posterior_mean,
         "ci_low": cell.ci_low,
         "ci_high": cell.ci_high,
@@ -125,6 +148,7 @@ def _case_rows(
     outcomes: dict[tuple[str, str], dict[str, object]],
     capability_map: dict[str, dict[str, object]],
     cfg: PolicyConfig,
+    jev_cost_by_task: dict[str, float],
 ) -> list[dict[str, object]]:
     rows = []
     for task_id in task_ids:
@@ -148,6 +172,13 @@ def _case_rows(
         row["jev_decision"] = decision.model
         row["jev_decision_reason"] = decision.reason
         row["retrospective_oracle"] = _oracle(outcomes, task_id)
+        replay_outcome = _model_outcome(outcomes, task_id, decision.model)
+        jev_cost = jev_cost_by_task.get(task_id, 0.0)
+        row["replay_model"] = decision.model
+        row["replay_success"] = replay_outcome["success"]
+        row["replay_model_cost_usd"] = replay_outcome["cost_usd"]
+        row["jev_classification_cost_usd"] = jev_cost
+        row["replay_total_cost_usd"] = float(replay_outcome["cost_usd"]) + jev_cost
         rows.append(row)
     return rows
 
@@ -209,14 +240,18 @@ def _render_report(
         and labels[task_id]["jev"].get("label") is not None
     ]
     agreement = sum(offline == jev for offline, jev in agreement_rows)
-    routed_successes = sum(_model_outcome(outcomes, row["task_id"], str(row["jev_decision"]))["success"] is True for row in case_rows)
-    routed_cost = sum(float(_model_outcome(outcomes, row["task_id"], str(row["jev_decision"]))["cost_usd"]) for row in case_rows)
-    label_cost = sum(_cost(row.get("cost_usd")) for row in aux if row.get("kind") == "offline_label")
-    classifier_cost = sum(_cost(row.get("cost_usd")) for row in aux if row.get("kind") == "jev_classifier")
+    replay_graded = sum(row["replay_success"] is not None for row in case_rows)
+    replay_successes = sum(row["replay_success"] is True for row in case_rows)
+    replay_model_cost = sum(float(row["replay_model_cost_usd"]) for row in case_rows)
+    replay_jev_cost = sum(float(row["jev_classification_cost_usd"]) for row in case_rows)
+    replay_total_cost = sum(float(row["replay_total_cost_usd"]) for row in case_rows)
+    label_cost = _aux_cost_for_kinds(aux, {"offline_label", "labeler"})
+    classifier_cost = _aux_cost_for_kinds(aux, {"jev", "jev_classifier"})
+    smoke_cost = _aux_cost_for_kinds(aux, {"smoke"})
     other_aux_cost = sum(
         _cost(row.get("cost_usd"))
         for row in aux
-        if row.get("kind") not in {"offline_label", "jev_classifier"}
+        if row.get("kind") not in {"offline_label", "labeler", "jev", "jev_classifier", "smoke"}
     )
     solver_cost = sum(_cost(row.get("cost_usd")) for row in records)
     infra_failures = sum(row.get("error_class") == "infra" for row in records)
@@ -245,14 +280,16 @@ def _render_report(
             )
         cells.extend([str(row["jev_decision"]), str(row["jev_decision_reason"]), str(row["retrospective_oracle"])])
         report.append("| " + " | ".join(value.replace("|", "\\|") for value in cells) + " |")
-    report.extend(["", "## Fixed-model results", "", "| Model | Solved | Raw rate | Beta(1,1) mean | 90% CI | Total cost | Mean cost per attempted task | Cost per success |", "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |"])
+    report.extend(["", "## Fixed-model results", "", "| Model | Solved / n_graded | n_missing | n_infra_only | Raw rate | Beta(1,1) mean | 90% CI | Total cost | Mean cost per attempted task | Cost per success |", "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |"])
     for model in MODEL_ORDER:
         result = fixed[model]
-        ci = f"{result['ci_low']:.3f}–{result['ci_high']:.3f}"
+        ci = f"{result['ci_low']:.3f}-{result['ci_high']:.3f}"
         mean_cost = result["mean_cost_per_attempted_task_usd"]
         success_cost = result["cost_per_success_usd"]
+        raw_rate = result["raw_rate"]
         report.append(
-            f"| {model} | {result['solved']}/{result['total_tasks']} | {result['raw_rate']:.3f} | "
+            f"| {model} | {result['solved']}/{result['n_graded']} | {result['n_missing']} | "
+            f"{result['n_infra_only']} | {f'{raw_rate:.3f}' if raw_rate is not None else 'n/a'} | "
             f"{result['posterior_mean']:.3f} | {ci} | ${result['total_cost_usd']:.6f} | "
             f"{f'${mean_cost:.6f}' if mean_cost is not None else 'n/a'} | "
             f"{f'${success_cost:.6f}' if success_cost is not None else 'n/a'} |"
@@ -260,16 +297,35 @@ def _render_report(
     report.extend(
         [
             "",
-            "## Jev routing policy on this pilot",
+            "## Retrospective router replay (not an observed routed run)",
             "",
-            f"The router selected {routed_successes}/{len(task_ids)} outcomes for an observed cost of ${routed_cost:.6f}. "
-            f"It fell back to the reference model for {sum(row['jev_decision'] == 'opus-5' for row in case_rows)}/{len(task_ids)} tasks. "
+            f"The retrospective replay selected {replay_successes}/{replay_graded} graded outcomes and measured model "
+            f"costs of ${replay_model_cost:.6f}. Recorded Jev classification cost was ${replay_jev_cost:.6f}, "
+            f"for a retrospective total of ${replay_total_cost:.6f}. It fell back to the reference model for "
+            f"{sum(row['jev_decision'] == cfg.reference for row in case_rows)}/{len(task_ids)} tasks. "
             f"For each candidate, T is the sorted intersection of reference and candidate task_success and task_cost keys. "
             f"For each task in T, d is candidate success minus reference success, and the one-sided Hoeffding lower "
             f"bound is mean(d) - sqrt(2*ln(1/alpha)/n), with alpha={cfg.alpha}. A candidate is eligible iff "
             f"n >= {cfg.min_paired_tasks}, the lower bound is >= -{cfg.tolerance}, and its paired mean cost is lower "
             "than the reference paired mean cost. The router picks the eligible candidate with the lowest paired "
             "mean cost, breaking ties by model name, and otherwise falls back to the reference model",
+            "",
+            "| Task | Jev label | Selected model | Selected success | Selected model cost | Jev classification cost | Retrospective total cost |",
+            "| --- | --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in case_rows:
+        jev_label = row["jev_label"] or "classifier failure"
+        replay_success = row["replay_success"]
+        report.append(
+            f"| {row['task_id']} | {jev_label} | {row['replay_model']} | "
+            f"{replay_success if replay_success is not None else 'not graded'} | "
+            f"${float(row['replay_model_cost_usd']):.6f} | "
+            f"${float(row['jev_classification_cost_usd']):.6f} | "
+            f"${float(row['replay_total_cost_usd']):.6f} |"
+        )
+    report.extend(
+        [
             "",
             "Paired comparisons by category:",
             "",
@@ -319,9 +375,9 @@ def _render_report(
             "## Label agreement and resource use",
             "",
             f"Offline label coverage: {offline_count}/{len(task_ids)}. Offline/Jev agreement: {agreement}/{len(agreement_rows)} comparable labels",
-            f"Spend: solver ${solver_cost:.6f}, offline labeler ${label_cost:.6f}, Jev classifier ${classifier_cost:.6f}, "
-            f"preflight ${preflight_cost:.6f}, other auxiliary calls ${other_aux_cost:.6f}, total "
-            f"${solver_cost + label_cost + classifier_cost + preflight_cost + other_aux_cost:.6f}",
+            f"Spend totals: solver ${solver_cost:.6f}, labeler ${label_cost:.6f}, Jev ${classifier_cost:.6f}, "
+            f"smoke ${smoke_cost:.6f}, preflight ${preflight_cost:.6f}, other auxiliary calls ${other_aux_cost:.6f}, "
+            f"total ${solver_cost + label_cost + classifier_cost + smoke_cost + preflight_cost + other_aux_cost:.6f}",
             f"Total recorded runtime: {total_runtime_s:.2f}s. Infrastructure failure attempts: {infra_failures}. "
             f"Solver failure attempts: {solver_failures}",
             f"Capability map categories: {', '.join(sorted(capability_map)) or 'none'}",
@@ -348,9 +404,10 @@ def analyze(data_dir: Path = ROOT) -> dict[str, object]:
     capability_map = build_capability_map(records, categories, models, cfg)
     outcomes = task_outcomes(records)
     fixed = _fixed_model_summaries(task_ids, outcomes, records, cfg)
-    case_rows = _case_rows(task_ids, labels, records, outcomes, capability_map, cfg)
-    loo_rows = _leave_one_out(task_ids, labels, records, categories, cfg)
     aux = _aux_costs(data_dir)
+    jev_cost_by_task = _jev_cost_by_task(aux)
+    case_rows = _case_rows(task_ids, labels, records, outcomes, capability_map, cfg, jev_cost_by_task)
+    loo_rows = _leave_one_out(task_ids, labels, records, categories, cfg)
     preflight_cost = _preflight_cost(data_dir)
     label_runtime = sum(
         float(value.get("latency_s", 0.0))

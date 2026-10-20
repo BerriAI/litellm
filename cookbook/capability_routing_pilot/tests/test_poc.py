@@ -3,6 +3,7 @@ import json
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from minisweagent.exceptions import LimitsExceeded
@@ -15,6 +16,7 @@ from poc.guarded_model import (
     estimate_input_tokens,
     gateway_cost,
     reserve_usd,
+    valid_cost,
 )
 from poc.label import parse_jev_response, parse_label_response
 from poc.policy import (
@@ -27,9 +29,11 @@ from poc.policy import (
     task_outcomes,
 )
 from poc.run_pilot import (
+    DispatchGuard,
     _utility_env,
     classify_error,
     global_budget_allows,
+    retry_eligible,
     sum_call_costs,
     sum_call_tokens,
 )
@@ -352,6 +356,93 @@ def test_gateway_and_run_cost_accounting_handles_missing_costs() -> None:
     }
 
 
+@pytest.mark.parametrize("raw_cost", [None, "nan", "inf", "-0.01"])
+def test_invalid_gateway_cost_fails_closed_and_refuses_later_queries(tmp_path: Path, raw_cost: str | None) -> None:
+    from poc.guarded_model import COST_HEADER
+
+    headers = {} if raw_cost is None else {COST_HEADER: raw_cost}
+    model = GuardedLitellmModel(
+        model_name="litellm_proxy/test-model",
+        model_kwargs={"api_base": "https://gateway.invalid"},
+        run_budget_usd=1.0,
+        worst_input_usd_per_token=0.000002,
+        output_usd_per_token=0.00001,
+        max_output_tokens=64,
+        call_log_path=str(tmp_path / "calls.jsonl"),
+    )
+    response = SimpleNamespace(
+        _hidden_params={
+            "additional_headers": headers,
+            "litellm_call_id": "call-id",
+            "_response_ms": 12,
+        },
+        usage=None,
+        id="response-id",
+        model="test-model",
+        choices=[SimpleNamespace(finish_reason="stop")],
+    )
+    with pytest.raises(LimitsExceeded) as cost_error:
+        model._calculate_cost(response)
+    assert cost_error.value.messages[0]["extra"]["exit_status"] == "CostAccountingError"
+    assert cost_error.value.messages[0]["extra"]["submission"] == ""
+    assert model.accounting_incomplete
+    assert model.spent_usd == 0
+    with pytest.raises(LimitsExceeded) as query_error:
+        model.query([{"role": "user", "content": "This call must be refused"}])
+    assert query_error.value.messages[0]["extra"]["exit_status"] == "CostAccountingError"
+    assert query_error.value.messages[0]["extra"]["submission"] == ""
+    rows = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert rows[0]["cost_source"] == "invalid"
+    assert rows[0]["cost_usd"] == raw_cost
+    assert rows[1]["event"] == "accounting_incomplete_refused"
+
+
+@pytest.mark.parametrize("invalid_cost", [None, float("nan"), float("inf"), -0.01])
+def test_cost_validation_rejects_missing_nonfinite_and_negative_values(invalid_cost: object) -> None:
+    assert not valid_cost(invalid_cost)
+    assert valid_cost(0)
+    assert valid_cost(0.01)
+    assert not valid_cost(10**1000)
+
+
+@pytest.mark.parametrize("invalid_cost", [float("nan"), float("inf"), -0.01])
+def test_run_cost_sum_marks_nonfinite_and_negative_cost_incomplete(invalid_cost: float) -> None:
+    assert sum_call_costs([{"event": "call", "cost_usd": invalid_cost}]) == (0.0, True)
+
+
+def test_retry_eligibility_is_limited_to_setup_only_first_infra_failure() -> None:
+    assert retry_eligible("infra", 1, 0, 0.0)
+    assert not retry_eligible("infra", 1, 1, 0.0)
+    assert not retry_eligible("infra", 1, 0, 0.01)
+    assert not retry_eligible("infra", 2, 0, 0.0)
+    assert not retry_eligible("solver", 1, 0, 0.0)
+    assert not retry_eligible("accounting", 1, 0, 0.0)
+    assert not retry_eligible("infra", 1, 0, 0.0, emergency_disk_stop=True)
+
+
+def test_dispatch_guard_uses_injected_disk_reserve_and_stops_for_accounting(tmp_path: Path) -> None:
+    low_disk = DispatchGuard(
+        tmp_path / "low_disk.jsonl",
+        free_bytes=lambda: 49 * 1024**3,
+        committed_spend=lambda: 0.0,
+    )
+    assert not low_disk.acquire("task-low")
+    low_disk_row = json.loads((tmp_path / "low_disk.jsonl").read_text())
+    assert low_disk_row["reason"] == "disk_below_reserve_50GiB"
+
+    available_disk = DispatchGuard(
+        tmp_path / "available_disk.jsonl",
+        free_bytes=lambda: 51 * 1024**3,
+        committed_spend=lambda: 0.0,
+    )
+    assert available_disk.acquire("task-available")
+    available_disk.release()
+    available_disk.stop_for_accounting("task-accounting")
+    assert not available_disk.acquire("task-after-accounting")
+    stop_row = json.loads((tmp_path / "available_disk.jsonl").read_text())
+    assert stop_row["reason"] == "cost_accounting_incomplete"
+
+
 def test_error_classification_distinguishes_infra_and_solver_failures() -> None:
     assert classify_error("Submitted", 0, "patch", "resolved", True) == "none"
     assert classify_error("Submitted", 0, "patch", "unresolved", True) == "solver"
@@ -361,6 +452,9 @@ def test_error_classification_distinguishes_infra_and_solver_failures() -> None:
     assert classify_error("Submitted", 124, "patch", "unresolved", True) == "solver"
     assert classify_error("Submitted", 1, "patch", "error", True) == "infra"
     assert classify_error("ModuleNotFoundError", 1, "", "skipped_empty_patch", True) == "infra"
+    assert classify_error("CostAccountingError", 1, "", "skipped_empty_patch", True) == "accounting"
+    assert classify_error("Submitted", 1, "", "skipped_empty_patch", True, cost_incomplete=True) == "accounting"
+    assert classify_error("Submitted", 1, "patch", "resolved", True, emergency_disk_stop=True) == "infra"
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -428,6 +522,9 @@ def test_analysis_reports_fixed_model_costs_oracle_and_case_table(tmp_path: Path
     result = analyze(tmp_path)
     haiku = result["fixed_models"]["haiku-4.5"]
     assert haiku["solved"] == 1
+    assert haiku["n_graded"] == 1
+    assert haiku["n_missing"] == 0
+    assert haiku["n_infra_only"] == 1
     assert haiku["total_tasks"] == 2
     assert haiku["total_cost_usd"] == pytest.approx(0.18)
     assert haiku["mean_cost_per_attempted_task_usd"] == pytest.approx(0.09)
@@ -440,7 +537,8 @@ def test_analysis_reports_fixed_model_costs_oracle_and_case_table(tmp_path: Path
     assert "Paired comparisons by category:" in result["report"]
     assert "| repository_debugging | haiku-4.5 | 1 | 0.000 | -2.448 | $0.150000 | $0.500000 |" in result["report"]
     assert "No threshold was tuned" in result["report"]
-    assert "Spend: solver" in result["report"]
+    assert "Spend totals: solver" in result["report"]
+    assert "Retrospective router replay (not an observed routed run)" in result["report"]
     assert "total $1.563600" in result["report"]
     assert "Offline label coverage: 2/2. Offline/Jev agreement: 1/2 comparable labels" in result["report"]
     assert "Total recorded runtime: 21.65s" in result["report"]
@@ -450,6 +548,61 @@ def test_analysis_reports_fixed_model_costs_oracle_and_case_table(tmp_path: Path
         rows = list(csv.DictReader(file))
     assert rows[0]["retrospective_oracle"] == "haiku-4.5"
     assert rows[1]["sonnet-5_success"] == "True"
+
+
+def test_analysis_separates_graded_missing_infra_and_includes_jev_replay_cost(tmp_path: Path) -> None:
+    task_ids = ["task-graded", "task-infra", "task-missing"]
+    _write_json(tmp_path / "tasks.json", {"tasks": [{"instance_id": task_id} for task_id in task_ids]})
+    _write_json(
+        tmp_path / "poc" / "pilot_models.json",
+        {"solvers": {"haiku-4.5": {}, "sonnet-5": {}, "opus-5": {}}},
+    )
+    _write_json(
+        tmp_path / "labels.json",
+        [
+            {
+                "task_id": task_id,
+                "offline": {"label": "repository_debugging", "latency_s": 0.0},
+                "jev": {"label": "repository_debugging", "latency_s": 0.0},
+            }
+            for task_id in task_ids
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "runs.jsonl",
+        [
+            _record("task-graded", "haiku-4.5", success=True, cost_usd=0.1),
+            _record("task-infra", "haiku-4.5", error_class="infra", cost_usd=0.2),
+            _record("task-graded", "opus-5", success=True, cost_usd=0.25),
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "costs_aux.jsonl",
+        [
+            {"kind": "jev", "task_id": "task-graded", "cost_usd": 0.04},
+            {"kind": "jev", "task_id": "task-infra", "cost_usd": 0.05},
+            {"kind": "jev", "task_id": "task-missing", "cost_usd": 0.06},
+        ],
+    )
+
+    result = analyze(tmp_path)
+    haiku = result["fixed_models"]["haiku-4.5"]
+    assert haiku["solved"] == 1
+    assert haiku["n_graded"] == 1
+    assert haiku["n_missing"] == 1
+    assert haiku["n_infra_only"] == 1
+    assert haiku["raw_rate"] == 1.0
+    assert haiku["posterior_mean"] == pytest.approx(2 / 3)
+    assert haiku["mean_cost_per_attempted_task_usd"] == pytest.approx(0.15)
+    replay = result["cases"][0]
+    assert replay["replay_model"] == "opus-5"
+    assert replay["replay_success"] is True
+    assert replay["replay_model_cost_usd"] == pytest.approx(0.25)
+    assert replay["jev_classification_cost_usd"] == pytest.approx(0.04)
+    assert replay["replay_total_cost_usd"] == pytest.approx(0.29)
+    assert "for a retrospective total of $0.400000" in result["report"]
+    assert "n_missing" in result["report"]
+    assert "n_infra_only" in result["report"]
 
 
 def test_input_estimate_covers_tool_overhead_and_tracks_observed_prompt_growth():
