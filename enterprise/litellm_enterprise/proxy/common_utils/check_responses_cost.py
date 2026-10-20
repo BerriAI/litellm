@@ -9,10 +9,10 @@ managed files hook, so both stay free. The spend event carries the id the client
 unified_object_id, so its spend log is found under that id with the _background_cost suffix.
 The spend event reaches the creating key's or team's own logging callbacks the way that creator's
 requests do. Its message content is redacted when the creator's key or team logging turns message
-logging off, else as the proxy is set, the way the batch poll decides it. The creator is read before
-the row is claimed, so a lookup that fails leaves the response for the next read or poll to bill. A
-creator whose logging settings the logger rejects is billed through the proxy's own callbacks only,
-with its message content redacted.
+logging off, else as the proxy is set, the way the batch poll decides it. The row is claimed before
+the creator is read, so reads that lose the race skip the lookups. A creator whose lookup fails, or
+whose logging settings the logger rejects, is still billed, through the proxy's own callbacks only
+and with its message content redacted.
 A read that finds no row, because the create could not store one, stores it under the reading key
 and bills it the same way, so a response the create left untracked is still billed once. A streamed
 background create is free on its own; its stream stores the row under the creating key and bills
