@@ -761,14 +761,17 @@ def test_baggage_mapping_a_deployment_tag_keeps_the_team_tag_guardrail_mode_firs
         assert (plain_inputs, _guardrail_inputs(optional)) == (("response",), ("response",))
 
 
+@pytest.mark.parametrize("metadata", ["run-123", {"tags": "run-123"}], ids=["non_object", "string_tags"])
 @pytest.mark.parametrize(
     ("header_tag", "baggage"),
     [(True, "region=sg"), (True, "entrypoint=a"), (False, "region=sg"), (False, "entrypoint=a")],
     ids=["header_tag_unmapped_baggage", "header_tag_mapped_baggage", "unmapped_baggage", "mapped_baggage"],
 )
-def test_non_object_metadata_keeps_its_status_under_baggage(optional: Rig, header_tag: bool, baggage: str) -> None:
+def test_malformed_metadata_keeps_its_status_under_baggage(
+    optional: Rig, header_tag: bool, baggage: str, metadata: JsonValue
+) -> None:
     headers: Final = {"x-litellm-tags": f"caller-{uuid.uuid4().hex}"} if header_tag else {}
-    fields: Final[Mapping[str, JsonValue]] = {"metadata": "run-123"}
+    fields: Final[Mapping[str, JsonValue]] = {"metadata": metadata}
     with optional.proxy.scenario() as scenario:
         key: Final = scenario.key()
         optional.provider.drain()
