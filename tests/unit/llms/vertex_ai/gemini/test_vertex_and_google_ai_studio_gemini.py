@@ -23,6 +23,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
     normalize_gemini_speech_config,
+    reject_unknown_gemini_tts_voice_keys,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
@@ -142,19 +143,79 @@ def test_gemini_speech_config_accepts_cloud_tts_speaker_entries(speaker: Mapping
     }
 
 
+@pytest.mark.parametrize(
+    ("voice", "expected"),
+    (
+        (
+            {
+                "languageCode": "en-US",
+                "modelName": "gemini-2.5-flash-tts",
+                "multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "Ryan", "speakerId": "Umbriel"}]},
+            },
+            {
+                "languageCode": "en-US",
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [
+                        {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
+                    ]
+                },
+            },
+        ),
+        (
+            {"model_name": "gemini-2.5-flash-tts", "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda"}}},
+            {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}},
+        ),
+        ({"speech_config": {"modelName": "gemini-2.5-flash-tts", "language_code": "fr-FR"}}, {"languageCode": "fr-FR"}),
+    ),
+)
+def test_gemini_speech_config_drops_cloud_tts_model_name(
+    voice: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    assert normalize_gemini_speech_config(voice) == expected
+
+
 def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
     speech_config: Final = {
         "speech_config": {
             "language_code": "fr-FR",
-            "metadata": {1: "discard", "source": ["studio", 2]},
+            "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda", 1: "discard"}},
         },
         "format": "pcm16",
     }
 
     assert normalize_gemini_speech_config(speech_config) == {
         "languageCode": "fr-FR",
-        "metadata": {"source": ["studio", 2]},
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
     }
+
+
+def test_gemini_speech_config_keeps_only_speech_config_fields():
+    speech_config: Final = {
+        "voice": "Kore",
+        "metadata": {"source": "studio"},
+        "speech_config": {"language_code": "fr-FR", "style": "calm"},
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "voice, unknown_keys",
+    [
+        ({"name": "Kore", "style": "calm"}, "style"),
+        ({"speech_config": {"voice": "Kore", "pitch": 2}}, "pitch"),
+        ({"speechConfig": {"voiceConfig": {}}, "tone": "x", "pitch": 2}, "pitch, tone"),
+    ],
+)
+def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, unknown_keys):
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"voice keys {unknown_keys}\\."):
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, True, "vertex_ai")
+
 
 
 def test_top_logprobs():

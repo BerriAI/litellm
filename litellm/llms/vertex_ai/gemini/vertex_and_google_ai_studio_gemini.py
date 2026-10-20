@@ -293,31 +293,72 @@ def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[
     }
 
 
+_GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
+
+_GEMINI_TTS_VOICE_KEYS: Final = frozenset(
+    {
+        "format",
+        "name",
+        "voice",
+        "voiceName",
+        "voice_name",
+        "languageCode",
+        "language_code",
+        "modelName",
+        "model_name",
+        "speechConfig",
+        "speech_config",
+        "voiceConfig",
+        "voice_config",
+        "multiSpeakerVoiceConfig",
+        "multi_speaker_voice_config",
+    }
+)
+
+
+def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
+    return as_str_mapping(value.get("speechConfig", value.get("speech_config")))
+
+
+def reject_unknown_gemini_tts_voice_keys(
+    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str
+) -> None:
+    nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
+    unknown_keys: Final = sorted({key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS})
+    if not unknown_keys or drop_params:
+        return
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support the voice keys {', '.join(unknown_keys)}. Remove them, or set drop_params "
+            "to ignore them."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
 def normalize_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    nested_config: Final = as_str_mapping(value.get("speechConfig", value.get("speech_config")))
+    nested_config: Final = _gemini_speech_config_wrapper(value)
     config: Final = (
         {
-            **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config", "format")},
+            **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config")},
             **nested_config,
         }
         if nested_config is not None
         else value
     )
-    normalized: Final = _with_gemini_speaker_voice_configs(
-        _normalize_gemini_speech_config_item({key: item for key, item in config.items() if key != "format"})
-    )
+    normalized: Final = _with_gemini_speaker_voice_configs(_normalize_gemini_speech_config_item(config))
+    speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
     voice_name: Final = next(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
         None,
     )
-    if "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
-        return {key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice")}
-    if not isinstance(voice_name, str):
-        return {**normalized}
+    if "voiceConfig" in speech_config or "multiSpeakerVoiceConfig" in speech_config or not isinstance(voice_name, str):
+        return speech_config
     return {
-        **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
+        **speech_config,
         "voiceConfig": {
             "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
         },

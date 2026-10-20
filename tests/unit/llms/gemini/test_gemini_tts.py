@@ -170,7 +170,7 @@ class TestGeminiTTSTransformation:
         assert "languageCode" not in result
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
-    def test_map_audio_params_preserves_nested_list_and_values_without_voice(self):
+    def test_map_audio_params_keeps_nested_speaker_list_and_drops_unknown_fields(self):
         config: Final = GoogleAIStudioGeminiConfig()
 
         result: Final = config._map_audio_params(
@@ -195,7 +195,6 @@ class TestGeminiTTSTransformation:
                     {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
                 ]
             },
-            "metadata": ["studio", 2],
         }
 
     def test_gemini_tts_multi_speaker_audio_parameter_mapping(self):

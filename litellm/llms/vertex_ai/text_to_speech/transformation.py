@@ -274,6 +274,19 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
 
     @staticmethod
+    def _reject_malformed_gemini_tts_voice(model: str, drop_params: bool) -> None:
+        if drop_params:
+            return
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} needs voice to be a Gemini voice name such as {_DEFAULT_GEMINI_TTS_VOICE} or a speech "
+                "config object. Send one, or set drop_params to use the default Gemini voice."
+            ),
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    @staticmethod
     def _reject_malformed_gemini_tts_speaker(model: str, drop_params: bool) -> None:
         if drop_params:
             return
@@ -377,31 +390,42 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _map_gemini_tts_voice_to_vertex_format(
         self,
         model: str,
-        voice: str | Mapping[str, object] | None,
+        voice: object,
         drop_params: bool = False,
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
-        if voice is None:
-            return None, {
-                "languageCode": self.DEFAULT_LANGUAGE_CODE,
-                "modelName": model,
-                "name": _DEFAULT_GEMINI_TTS_VOICE,
-            }
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            reject_unknown_gemini_tts_voice_keys,
+        )
 
-        if isinstance(voice, str):
+        default_voice: Final[dict[str, object]] = {
+            "languageCode": self.DEFAULT_LANGUAGE_CODE,
+            "modelName": model,
+            "name": _DEFAULT_GEMINI_TTS_VOICE,
+        }
+        if voice is None:
+            return None, default_voice
+
+        if isinstance(voice, str) and voice:
             return voice, {
                 "languageCode": self.DEFAULT_LANGUAGE_CODE,
                 "modelName": model,
                 "name": self._resolve_gemini_tts_voice_name(model, voice, drop_params),
             }
 
-        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        voice_config: Final = as_str_mapping(voice)
+        if voice_config is None:
+            self._reject_malformed_gemini_tts_voice(model, drop_params)
+            return None, default_voice
+        reject_unknown_gemini_tts_voice_keys(model, voice_config, drop_params, "vertex_ai")
+
+        speech_config: Final = self._get_dict_value(voice_config, "speechConfig", "speech_config") or voice_config
         language_code: Final = (
-            self._get_str_value(voice, "languageCode", "language_code")
+            self._get_str_value(voice_config, "languageCode", "language_code")
             or self._get_str_value(speech_config, "languageCode", "language_code")
             or self.DEFAULT_LANGUAGE_CODE
         )
         model_name: Final = model
-        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, voice, drop_params)
+        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, voice_config, drop_params)
         if speaker_configs:
             return None, {
                 "languageCode": language_code,
@@ -410,7 +434,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                     "speakerVoiceConfigs": speaker_configs,
                 },
             }
-        voice_name: Final = self._extract_gemini_tts_voice_name(voice)
+        voice_name: Final = self._extract_gemini_tts_voice_name(voice_config)
         if voice_name is not None:
             return None, {
                 "languageCode": language_code,
@@ -418,7 +442,6 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 "name": self._resolve_gemini_tts_voice_name(model, voice_name, drop_params),
             }
         return None, {
-            **voice,
             "languageCode": language_code,
             "modelName": model_name,
             "name": _DEFAULT_GEMINI_TTS_VOICE,
@@ -467,15 +490,15 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
 
         mapped_voice, mapped_params = (
-            (self._dispatch_voice_name(voice), optional_params)
-            if "audioEncoding" in optional_params
-            else self.map_openai_params(
+            self.map_openai_params(
                 model=model,
                 voice=voice,
                 optional_params=optional_params,
                 drop_params=drops_unsupported_params(kwargs.get("drop_params")),
                 kwargs=kwargs,
             )
+            if self._is_gemini_tts_model(model)
+            else (self._dispatch_voice_name(voice), optional_params)
         )
 
         # Store credentials in litellm_params for use in transform methods
@@ -541,6 +564,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         """
         mapped_params: Final[dict[str, object]] = {}
         openai_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        drops_params: Final = drop_params or litellm.drop_params is True
 
         ##########################################################
         # Map voice using helper
@@ -548,7 +572,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(
             voice=voice,
             model=model,
-            drop_params=drop_params or litellm.drop_params is True,
+            drop_params=drops_params,
         )
         if voice_dict is not None:
             mapped_params["vertex_voice_dict"] = voice_dict
@@ -576,6 +600,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         instructions: Final = openai_params.get("instructions")
         if isinstance(instructions, str) and self._is_gemini_tts_model(model):
             mapped_params["prompt"] = instructions
+        elif instructions is not None and self._is_gemini_tts_model(model) and not drops_params:
+            raise UnsupportedParamsError(
+                message=f"{model} needs instructions to be a string. Send one, or set drop_params to ignore it.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
 
         # Pass through Vertex AI-specific parameters from kwargs
         if "audioConfig" in kwargs:

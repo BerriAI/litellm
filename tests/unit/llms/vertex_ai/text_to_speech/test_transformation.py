@@ -341,15 +341,17 @@ class TestVertexAITextToSpeechConfig:
         }
 
     @pytest.mark.parametrize(
-        ("voice", "expected_name"),
+        "voice",
         [
-            ({"speechConfig": {"voice": "Kore"}}, "Kore"),
-            ({"speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}}, "Kore"),
-            ({"speechConfig": {"voiceConfig": {}}}, "Kore"),
-            ({"languageCode": "en-US"}, "Kore"),
+            {"speechConfig": {"voice": "Kore"}},
+            {"speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}},
+            {"speechConfig": {"voiceConfig": {}}},
+            {"speech_config": {}},
+            {"multi_speaker_voice_config": {"speaker_voice_configs": []}},
+            {"languageCode": "en-US"},
         ],
     )
-    def test_gemini_tts_nested_voice_mapping(self, voice: dict[str, object], expected_name: str):
+    def test_gemini_tts_nested_voice_mapping_sends_only_cloud_tts_voice_fields(self, voice: dict[str, object]):
         config: Final = VertexAITextToSpeechConfig()
 
         _, optional_params = config.map_openai_params(
@@ -358,7 +360,11 @@ class TestVertexAITextToSpeechConfig:
             voice=voice,
         )
 
-        assert optional_params["vertex_voice_dict"]["name"] == expected_name
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": "Kore",
+        }
 
     @pytest.mark.parametrize(
         "voice",
@@ -1824,4 +1830,97 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_both_speakers_to_cloud_tts
                 {"speakerAlias": "Katie", "speakerId": "Leda"},
             ],
         },
+    }
+
+
+@pytest.mark.parametrize(
+    ("speech_params", "error"),
+    (
+        ({"voice": ["Kore"]}, "needs voice to be a Gemini voice name"),
+        ({"voice": ""}, "needs voice to be a Gemini voice name"),
+        ({"voice": {"name": "Kore", "style": "calm"}}, "does not support the voice keys style"),
+        ({"voice": {"speechConfig": {"voice": "Kore", "pitch": 2}}}, "does not support the voice keys pitch"),
+        ({"voice": "Kore", "instructions": ["Read slowly"]}, "needs instructions to be a string"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_malformed_params_are_bad_requests_unless_dropped(
+    respx_mock: respx.MockRouter,
+    google_token_endpoint: responses.RequestsMock,
+    speech_params: dict[str, object],
+    error: str,
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+    request: Final = {
+        "model": "vertex_ai/gemini-3.1-flash-tts-preview",
+        "input": "Say hello",
+        "response_format": "mp3",
+        "vertex_credentials": _AUTHORIZED_USER,
+        "vertex_location": "global",
+        **speech_params,
+    }
+
+    with pytest.raises(litellm.BadRequestError, match=error):
+        await litellm.aspeech(**request)
+    assert not route.called
+
+    response: Final = await litellm.aspeech(**request, drop_params=True)
+
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert response.content == audio_bytes
+    assert sent["input"] == {"text": "Say hello"}
+    assert sent["voice"] == {"languageCode": "en-US", "modelName": "gemini-3.1-flash-tts-preview", "name": "Kore"}
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_beta_lyria_2_serves_the_openai_params_it_ignores(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$").mock(
+        return_value=httpx.Response(200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai_beta/lyria-002",
+        input="A bright synth track",
+        voice="alloy",
+        response_format="mp3",
+        speed=1.5,
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"lyria-2-audio"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_wav_unknown_voice_keys_are_bad_requests_unless_dropped(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://aiplatform\.googleapis\.com/.*/models/gemini-3.1-flash-tts-preview:generateContent$"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+    request: Final = {
+        "model": "vertex_ai/gemini-3.1-flash-tts-preview",
+        "input": "Say hello",
+        "voice": {"speech_config": {"voice": "Kore", "style": "calm"}, "modelName": "gemini-3.1-flash-tts-preview"},
+        "response_format": "wav",
+        "vertex_credentials": _AUTHORIZED_USER,
+        "vertex_location": "global",
+    }
+
+    with pytest.raises(litellm.BadRequestError, match="does not support the voice keys style"):
+        await litellm.aspeech(**request)
+    assert not route.called
+
+    response: Final = await litellm.aspeech(**request, drop_params=True)
+
+    assert _PCM_AUDIO in response.content
+    assert json.loads(route.calls[0].request.content)["generationConfig"]["speechConfig"] == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
     }
