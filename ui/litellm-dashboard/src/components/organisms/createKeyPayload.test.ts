@@ -167,6 +167,25 @@ describe("key ownership", () => {
   });
 });
 
+describe("tags", () => {
+  it("stores the Tags field inside metadata and leaves it off the top level", () => {
+    const values = {
+      key_alias: "my-key",
+      metadata: '{"team":"core","tags":["from-json"]}',
+      tags: ["production", "pilot"],
+    };
+    const before = structuredClone(values);
+    const payload = payloadOf(build(values));
+
+    expect(values).toStrictEqual(before);
+    expect(payload).not.toHaveProperty("tags");
+    expect(JSON.parse(String(payload.metadata))).toEqual({
+      team: "core",
+      tags: ["production", "pilot"],
+    });
+  });
+});
+
 describe("metadata", () => {
   it("re-serialises the parsed form value", () => {
     expect(payloadOf(build({ key_alias: "my-key", metadata: '{"team":"core"}' }))).toStrictEqual(
