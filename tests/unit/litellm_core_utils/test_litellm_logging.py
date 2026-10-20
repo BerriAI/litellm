@@ -32,6 +32,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
     REDACTED_BY_LITELLM,
     SENTRY_PII_DENYLIST,
@@ -406,6 +407,20 @@ def test_get_masked_api_base(logging_obj):
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
     assert type(masked_api_base) == str
+
+
+@pytest.mark.parametrize("no_upstream_call", [False, True])
+def test_pre_call_stamps_the_provider_handoff_only_when_a_provider_call_is_made(logging_obj, no_upstream_call):
+    """The proxy fires pre_call for a failure it raised itself (auth, rate limit, client disconnect)
+    so callbacks see it; that call never reached a provider, so neither handoff instant may be set."""
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    if no_upstream_call:
+        logging_obj.model_call_details[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+
+    logging_obj.pre_call(input="", api_key="")
+
+    assert ("api_call_start_time" in logging_obj.model_call_details) is not no_upstream_call
+    assert (logging_obj.model_call_details.get("first_api_call_start_time") is not None) is not no_upstream_call
 
 
 def test_pre_call_tolerates_missing_api_base(logging_obj):
