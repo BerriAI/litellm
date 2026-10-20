@@ -16,7 +16,7 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1442,10 +1442,10 @@ class TestResponsesIteratorDeferredLogging:
         logging_obj._on_deferred_stream_complete = MagicMock()
         iterator = self._iterator(logging_obj)
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with patch("litellm.responses.streaming_iterator.spawn_logging_task") as mock_spawn_logging_task:
             iterator._log_completed_response(is_async=True)
 
-        mock_create_task.assert_not_called()
+        mock_spawn_logging_task.assert_not_called()
         args = logging_obj._deferred_stream_complete_args
         assert isinstance(args, tuple) and len(args) == 1
         assert "dispatched" not in recorded
@@ -1458,15 +1458,25 @@ class TestResponsesIteratorDeferredLogging:
         logging_obj._on_deferred_stream_complete = None
         iterator = self._iterator(logging_obj)
 
-        created = []
-        real_create_task = asyncio.create_task
+        from litellm.responses import streaming_iterator
 
-        def tracking_create_task(coro):
-            task = real_create_task(coro)
+        created: Final[list[asyncio.Task[object]]] = []
+        real_spawn_logging_task: Final = streaming_iterator.spawn_logging_task
+
+        def tracking_spawn_logging_task(
+            running_loop: asyncio.AbstractEventLoop,
+            coroutine: Coroutine[object, object, object],
+            *,
+            task_name: str,
+        ) -> asyncio.Task[object]:
+            task: Final = real_spawn_logging_task(running_loop, coroutine, task_name=task_name)
             created.append(task)
             return task
 
-        with patch("asyncio.create_task", side_effect=tracking_create_task):
+        with patch(
+            "litellm.responses.streaming_iterator.spawn_logging_task",
+            side_effect=tracking_spawn_logging_task,
+        ):
             iterator._log_completed_response(is_async=True)
 
         assert len(created) == 1

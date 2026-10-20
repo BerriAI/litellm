@@ -133,12 +133,14 @@ class ManagedObjectCreatorAttribution:
     user's alias, because a resolvable name is more useful on the spend row than a null.
     user_api_key_org_id is resolved too: the spend update writer reads it off this metadata
     to increment organization spend, so leaving it out drops the cost from org accounting.
-    A background response also carries its end user and the key, team, and user budgets, the
-    way the read that billed it before did, and never names a key-scoped creator as its user.
-    Its creator's key and team metadata come along too, so the billed event reaches the key's
-    and team's logging callbacks like that read did. A rotated key's metadata is read from the
-    key it was rotated to, and a deleted key's or team's from its deleted row. A key or team
-    lookup that fails raises instead, so the bill waits for the next read or poll.
+    A background response also carries its end user, the creating key's project and its alias,
+    and the key, team, and user budgets and per-model budgets, the way the read that billed it
+    before did, and never names a key-scoped creator as its user. A key that sets no budget of
+    its own takes its budget tier's, the same rule auth applies. Its creator's key and team
+    metadata come along too, so the billed event reaches the key's and team's logging callbacks
+    like that read did. A rotated key's metadata is read from the key it was rotated to, and a
+    deleted key's or team's from its deleted row. A key or team lookup that fails raises
+    instead, so the bill waits for the next read or poll.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -163,13 +165,29 @@ class ManagedObjectCreatorAttribution:
                 "user_api_key_user_id": _creator_user_id(job.created_by),
                 **_shared_metadata(job, rows),
                 **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-                **_budget_fields(rows.key, "user_api_key_spend", "user_api_key_max_budget"),
-                **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
-                **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
+                "user_api_key_project_id": getattr(rows.key, "project_id", None),
+                "user_api_key_project_alias": getattr(
+                    getattr(rows.key, "litellm_project_table", None), "project_alias", None
+                ),
+                **_key_budget_fields(rows.key),
+                **_budget_fields(
+                    rows.team,
+                    "user_api_key_team_spend",
+                    "user_api_key_team_max_budget",
+                    "user_api_key_team_model_max_budget",
+                ),
+                **_budget_fields(
+                    rows.user,
+                    "user_api_key_user_spend",
+                    "user_api_key_user_max_budget",
+                    "user_api_key_user_model_max_budget",
+                ),
             },
             key_metadata=row_metadata(rows.key) if rows.key is not None else await self._retired_key_metadata(api_key),
             team_id=team_id,
-            team_metadata=row_metadata(rows.team) if rows.team is not None else await self._deleted_team_metadata(team_id),
+            team_metadata=(
+                row_metadata(rows.team) if rows.team is not None else await self._deleted_team_metadata(team_id)
+            ),
         )
 
     async def _retired_key_metadata(self, api_key: str | None) -> Mapping[str, object]:
@@ -231,7 +249,9 @@ class ManagedObjectCreatorAttribution:
     ) -> prisma_models.LiteLLM_VerificationToken | None:
         if not api_key or _is_cli_session_key(api_key, created_by):
             return None
-        return await _token_table(self._prisma_client).find_unique(where={"token": api_key})
+        return await _token_table(self._prisma_client).find_unique(
+            where={"token": api_key}, include={"litellm_budget_table": True, "litellm_project_table": True}
+        )
 
     async def _team_row(self, object_id: str, team_id: str | None) -> prisma_models.LiteLLM_TeamTable | None:
         try:
@@ -274,7 +294,9 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
 
 def row_metadata(row: object) -> Mapping[str, object]:
     metadata: Final = getattr(row, "metadata", None)
-    return cast(Mapping[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
+    if not isinstance(metadata, dict):
+        return {}
+    return cast(Mapping[str, object], metadata)  # cast-ok: prisma Json object column
 
 
 def _names_a_key_row(api_key: object) -> TypeGuard[str]:
@@ -299,7 +321,28 @@ def _organization_id(row: object) -> str | None:
     return cast("str | None", getattr(row, "organization_id", None)) if row is not None else None
 
 
-def _budget_fields(row: object, spend_key: str, max_budget_key: str) -> Mapping[str, object]:
+def _budget_fields(row: object, spend_key: str, max_budget_key: str, model_max_budget_key: str) -> Mapping[str, object]:
     if row is None:
         return {}
-    return {spend_key: getattr(row, "spend", None), max_budget_key: getattr(row, "max_budget", None)}
+    return {
+        spend_key: getattr(row, "spend", None),
+        max_budget_key: getattr(row, "max_budget", None),
+        model_max_budget_key: getattr(row, "model_max_budget", None),
+    }
+
+
+def _key_budget_fields(key: object) -> Mapping[str, object]:
+    if key is None:
+        return {}
+    tier: Final = getattr(key, "litellm_budget_table", None)
+    return {
+        "user_api_key_spend": getattr(key, "spend", None),
+        "user_api_key_max_budget": _own_or_tier_budget(key, tier, "max_budget"),
+        "user_api_key_model_max_budget": _own_or_tier_budget(key, tier, "model_max_budget"),
+    }
+
+
+def _own_or_tier_budget(key: object, tier: object, field: str) -> object:
+    own: Final = getattr(key, field, None)
+    tier_value: Final = getattr(tier, field, None)
+    return own if tier_value is None or own not in (None, {}) else tier_value

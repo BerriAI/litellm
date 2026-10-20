@@ -68,6 +68,19 @@ if TYPE_CHECKING:
 
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _CALLBACK_LIST_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+
+class _RoutedModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str | None = None
+
+
+class _RoutedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_info: _RoutedModelInfo = _RoutedModelInfo()
+
+
+_ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
 _CALLBACK_LIST_FIELDS: Final = frozenset({"success_callback", "failure_callback", "litellm_disabled_callbacks"})
 _REJECTED_CREATOR_LOGGING: Final[Mapping[str, object]] = MappingProxyType({"turn_off_message_logging": True})
@@ -387,9 +400,22 @@ class CheckResponsesCost:
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
+                    **self._requested_model_group(target, job.team_id),
                 }
             ),
             creator_logging=creator_logging_fields(creator, self._proxy_config),
+        )
+
+    def _requested_model_group(self, target: _PollTarget, team_id: str | None) -> Mapping[str, object]:
+        requested: Final = target.model_metadata.get("model_group")
+        if target.deployment is None or not isinstance(requested, str):
+            return MappingProxyType({})
+        routed: Final = _ROUTED_DEPLOYMENTS.validate_python(
+            self.llm_router.get_model_list(model_name=requested, team_id=team_id) or ()
+        )
+        serving_id: Final = target.deployment.model_info.id
+        return MappingProxyType(
+            {"model_group": requested} if any(row.model_info.id == serving_id for row in routed) else {}
         )
 
     async def _bill_once(
