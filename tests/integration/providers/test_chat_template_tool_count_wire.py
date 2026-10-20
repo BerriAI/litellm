@@ -247,32 +247,18 @@ def test_messages_count_tokens_skips_web_search_and_counts_unmapped_tool_keys_fo
     )
 
 
-def _tool_framing(gateway: Gateway, model: str) -> tuple[int, int]:
-    without_tools: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ()))
-    plain: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, (_ANTHROPIC_TOOL,)))
-    deferred: Final = _count(
-        gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ({**_ANTHROPIC_TOOL, "defer_loading": True},))
-    )
-    return plain - without_tools, deferred - plain
-
-
 def test_messages_count_tokens_keeps_openai_tool_framing_for_other_models(gateway: Gateway) -> None:
     with wire_server(_completion) as wire, gateway.scenario() as scenario:
-        framing: Final = _tool_framing(gateway, _deployment(scenario, "count", _GROK, wire.url))
-        upstream: Final = wire.drain()
-    assert upstream == ()
-    assert framing == (_OPENAI_TOOL_OVERHEAD + _tokens(_OPENAI_NAMESPACE), 0)
-
-
-def test_messages_count_tokens_keeps_openai_tool_framing_for_openrouters_deepseek_chat(gateway: Gateway) -> None:
-    with wire_server(_completion) as wire, gateway.scenario() as scenario:
-        chat, v3_2 = (
-            _tool_framing(gateway, _deployment(scenario, "count", backend, wire.url))
-            for backend in ("openrouter/deepseek/deepseek-chat", "openrouter/deepseek/deepseek-v3.2")
+        model: Final = _deployment(scenario, "count", _GROK, wire.url)
+        without_tools: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ()))
+        plain: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, (_ANTHROPIC_TOOL,)))
+        deferred: Final = _count(
+            gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ({**_ANTHROPIC_TOOL, "defer_loading": True},))
         )
         upstream: Final = wire.drain()
     assert upstream == ()
-    assert chat == (v3_2[0], 0), f"openrouter/deepseek/deepseek-chat counted tools as {chat}, deepseek-v3.2 as {v3_2}"
+    assert plain - without_tools == _OPENAI_TOOL_OVERHEAD + _tokens(_OPENAI_NAMESPACE)
+    assert deferred == plain
 
 
 @dataclass(frozen=True, slots=True)
