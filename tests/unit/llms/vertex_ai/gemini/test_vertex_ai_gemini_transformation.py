@@ -59,25 +59,17 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_with_snake_case, part_with_camel_case)
 
     # Test camelCase to snake_case matching
-    parts_with_camel_case = [
-        {"functionCall": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}
-    ]
+    parts_with_camel_case = [{"functionCall": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}]
 
-    part_with_snake_case = {
-        "function_call": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}
-    }
+    part_with_snake_case = {"function_call": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}
 
     # Should find match between functionCall and function_call
     assert check_if_part_exists_in_parts(parts_with_camel_case, part_with_snake_case)
 
     # Test no match when values differ
-    part_with_different_values = {
-        "function_call": {"name": "different_function", "args": {"x": 5}}
-    }
+    part_with_different_values = {"function_call": {"name": "different_function", "args": {"x": 5}}}
 
-    assert not check_if_part_exists_in_parts(
-        parts_with_snake_case, part_with_different_values
-    )
+    assert not check_if_part_exists_in_parts(parts_with_snake_case, part_with_different_values)
 
     # Test multiple keys with mixed casing
     parts_mixed = [
@@ -533,9 +525,9 @@ def test_thought_signature_parallel_function_calls():
     assert "provider_specific_fields" in tools[0]
     assert tools[0]["provider_specific_fields"]["thought_signature"] == test_signature
     # Second tool call should not have thought signature
-    assert "provider_specific_fields" not in tools[
-        1
-    ] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
+    assert "provider_specific_fields" not in tools[1] or "thought_signature" not in tools[1].get(
+        "provider_specific_fields", {}
+    )
 
 
 def test_thought_signature_preservation_in_conversion():
@@ -710,9 +702,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview (should add dummy signature)
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_from_older_model, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_from_older_model, model="gemini-3-pro-preview")
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
@@ -720,9 +710,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
-        "utf-8"
-    )
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -751,9 +739,7 @@ def test_dummy_signature_not_added_for_gemini_2_5():
     }
 
     # Convert to Gemini format for gemini-2.5-flash (should NOT add dummy signature)
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message, model="gemini-2.5-flash"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message, model="gemini-2.5-flash")
 
     # Verify no dummy signature is added for non-gemini-3 models
     assert len(gemini_parts) == 1
@@ -790,9 +776,7 @@ def test_dummy_signature_not_added_when_signature_exists():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_with_signature, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_with_signature, model="gemini-3-pro-preview")
 
     # Verify real signature is preserved, not replaced with dummy
     assert len(gemini_parts) == 1
@@ -821,9 +805,7 @@ def test_dummy_signature_with_function_call_mode():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_function_call, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_function_call, model="gemini-3-pro-preview")
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
@@ -831,9 +813,7 @@ def test_dummy_signature_with_function_call_mode():
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
-        "utf-8"
-    )
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -845,11 +825,7 @@ def _parallel_tool_calls(*signatures):
             "function": {
                 "name": f"tool_{idx}",
                 "arguments": '{"location": "Paris"}',
-                **(
-                    {"provider_specific_fields": {"thought_signature": signature}}
-                    if signature is not None
-                    else {}
-                ),
+                **({"provider_specific_fields": {"thought_signature": signature}} if signature is not None else {}),
             },
             "index": idx,
         }
@@ -879,9 +855,7 @@ def _parallel_tool_calls_signed_via_id(*signatures):
 
 
 REAL_THOUGHT_SIGNATURE = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n"
-PLACEHOLDER_SIGNATURE = base64.b64encode(b"skip_thought_signature_validator").decode(
-    "utf-8"
-)
+PLACEHOLDER_SIGNATURE = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
 
 
 def test_dummy_signature_only_on_first_parallel_tool_call():
@@ -978,9 +952,7 @@ def test_signature_embedded_in_tool_call_id_only_on_first_parallel_call():
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": _parallel_tool_calls_signed_via_id(
-                REAL_THOUGHT_SIGNATURE, None, None
-            ),
+            "tool_calls": _parallel_tool_calls_signed_via_id(REAL_THOUGHT_SIGNATURE, None, None),
         },
         model="gemini-3-pro-preview",
     )
@@ -998,9 +970,7 @@ def test_tool_level_provider_specific_fields_signature_leaves_siblings_empty():
     )
 
     tool_calls = _parallel_tool_calls(None, None)
-    tool_calls[0]["provider_specific_fields"] = {
-        "thought_signature": REAL_THOUGHT_SIGNATURE
-    }
+    tool_calls[0]["provider_specific_fields"] = {"thought_signature": REAL_THOUGHT_SIGNATURE}
 
     gemini_parts = convert_to_gemini_tool_call_invoke(
         {"role": "assistant", "content": None, "tool_calls": tool_calls},
@@ -1597,7 +1567,9 @@ class TestVideoMetadataAllGeminiModels:
 def test_convert_tool_response_with_base64_image():
     """Test tool response with base64 data URI image."""
     # Create a small test image (1x1 red pixel PNG)
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create tool message with image
@@ -1624,9 +1596,7 @@ def test_convert_tool_response_with_base64_image():
     }
 
     # Convert tool response with nested multimodal functionResponse.parts.
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
@@ -1652,7 +1622,9 @@ def test_convert_tool_response_with_base64_image():
 
 def test_gemini_history_nests_multimodal_tool_response_parts():
     """Full history conversion should not emit sibling inline_data tool result parts."""
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     messages = [
         {"role": "user", "content": "Get me an image"},
         {
@@ -1704,9 +1676,7 @@ def test_convert_tool_response_text_only():
     tool_message = {
         "role": "tool",
         "tool_call_id": "call_test789",
-        "content": [
-            {"type": "text", "text": '{"status": "completed", "result": "success"}'}
-        ],
+        "content": [{"type": "text", "text": '{"status": "completed", "result": "success"}'}],
     }
 
     last_message_with_tool_calls = {
@@ -1718,9 +1688,7 @@ def test_convert_tool_response_text_only():
         ]
     }
 
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Should be a single part (no list) when no image
     assert not isinstance(result, list), "Should return single part when no image"
@@ -1771,17 +1739,15 @@ def test_file_data_field_order():
     # Verify field order by checking dictionary keys
     # In Python 3.7+, dict maintains insertion order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index(
-        "file_uri"
-    ), "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), (
+        "mime_type must come before file_uri in the file_data dict"
+    )
 
     # Also verify by serializing to JSON string
     json_str = json.dumps(file_data)
     mime_type_pos = json_str.find('"mime_type"')
     file_uri_pos = json_str.find('"file_uri"')
-    assert (
-        mime_type_pos < file_uri_pos
-    ), "mime_type must appear before file_uri in JSON serialization"
+    assert mime_type_pos < file_uri_pos, "mime_type must appear before file_uri in JSON serialization"
 
 
 def test_file_data_field_order_gcs_urls():
@@ -1805,9 +1771,9 @@ def test_file_data_field_order_gcs_urls():
 
     # Verify field order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index(
-        "file_uri"
-    ), "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), (
+        "mime_type must come before file_uri in the file_data dict"
+    )
 
 
 def test_gemini_files_api_uri_without_format():
@@ -1891,9 +1857,7 @@ def test_extract_file_data_with_path_object():
         assert extracted["filename"].endswith(".mp3")
 
         # Verify MIME type was correctly detected
-        assert (
-            extracted["content_type"] == "audio/mpeg"
-        ), f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
+        assert extracted["content_type"] == "audio/mpeg", f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
 
         # Verify content was read
         assert extracted["content"] == b"fake mp3 content"
@@ -1971,9 +1935,9 @@ def test_extract_file_data_fallback_to_octet_stream():
 
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".xyz123")
-        assert (
-            extracted["content_type"] == "application/octet-stream"
-        ), f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        assert extracted["content_type"] == "application/octet-stream", (
+            f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        )
     finally:
         os.unlink(str(tmp_path))
 
@@ -2008,9 +1972,7 @@ def test_convert_tool_response_with_pdf_file():
     }
 
     # Convert tool response with nested multimodal functionResponse.parts.
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
@@ -2058,17 +2020,13 @@ def test_convert_tool_response_with_input_file_type():
     }
 
     # Convert tool response
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
     function_response = result[0]["function_response"]
-    assert (
-        function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
-    )
+    assert function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
 
 
 def test_convert_tool_response_with_nested_file_object():
@@ -2095,9 +2053,7 @@ def test_convert_tool_response_with_nested_file_object():
     }
 
     # Convert tool response
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -2119,7 +2075,9 @@ def test_assistant_message_with_images_field():
     The images should be converted to inline_data parts in the Gemini format.
     """
     # Create a small test image (1x1 red pixel PNG)
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create messages with assistant message containing images field
@@ -2150,16 +2108,11 @@ def test_assistant_message_with_images_field():
     # Verify user message
     assert contents[0]["role"] == "user"
     assert len(contents[0]["parts"]) == 1
-    assert (
-        contents[0]["parts"][0]["text"]
-        == "Generate an image of a banana wearing a costume that says LiteLLM"
-    )
+    assert contents[0]["parts"][0]["text"] == "Generate an image of a banana wearing a costume that says LiteLLM"
 
     # Verify assistant message
     assert contents[1]["role"] == "model"
-    assert (
-        len(contents[1]["parts"]) == 2
-    ), f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
+    assert len(contents[1]["parts"]) == 2, f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
 
     # Find text part and inline_data part
     text_part = None
@@ -2186,8 +2139,12 @@ def test_assistant_message_with_images_field():
 def test_assistant_message_with_multiple_images():
     """Test that assistant messages with multiple images are properly converted."""
     # Create two test images
-    test_image1_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    test_image2_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    test_image1_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    test_image2_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    )
     image1_data_uri = f"data:image/png;base64,{test_image1_base64}"
     image2_data_uri = f"data:image/jpeg;base64,{test_image2_base64}"
 
@@ -2234,7 +2191,9 @@ def test_assistant_message_with_multiple_images():
 def test_assistant_message_with_images_using_message_object():
     """Test that Message objects with images field are properly converted."""
     # Create a small test image
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create messages using Message object (as returned by LiteLLM)
@@ -2279,7 +2238,9 @@ def test_assistant_message_with_images_in_conversation_history():
     2. Assistant generates image (with images field)
     3. User asks follow-up question about the image
     """
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     messages = [
@@ -2464,14 +2425,8 @@ def test_gemini_thought_signature_preservation_real_response():
 
     parts = real_candidate["content"]["parts"]
 
-    content, reasoning_content = (
-        VertexGeminiConfig().get_assistant_content_message(parts=parts)
-    )
-    thought_signatures = (
-        VertexGeminiConfig()._extract_thought_signatures_from_parts(
-            parts=parts
-        )
-    )
+    content, reasoning_content = VertexGeminiConfig().get_assistant_content_message(parts=parts)
+    thought_signatures = VertexGeminiConfig()._extract_thought_signatures_from_parts(parts=parts)
     functions, tools, _ = VertexGeminiConfig._transform_parts(
         parts=parts,
         cumulative_tool_call_idx=0,
@@ -2498,9 +2453,7 @@ def test_gemini_thought_signature_preservation_real_response():
     parts_out = converted_real[0]["parts"]
     assert len(parts_out) == 2
     assert "text" in parts_out[0]
-    assert (
-        parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
-    )
+    assert parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
     assert "function_call" in parts_out[1]
     assert "thoughtSignature" not in parts_out[1]
 
@@ -2677,9 +2630,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
 
     config = VertexGeminiConfig()
     content, _ = config.get_assistant_content_message(parts=response_parts)
-    thought_signatures = config._extract_thought_signatures_from_parts(
-        parts=response_parts
-    )
+    thought_signatures = config._extract_thought_signatures_from_parts(parts=response_parts)
     _, tools, _ = VertexGeminiConfig._transform_parts(
         parts=response_parts, cumulative_tool_call_idx=0, is_function_call=False
     )
@@ -2737,7 +2688,9 @@ WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes(
 def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
     image_url: Final = "https://tool-result-images.test/gemini-tool-response.png"
-    respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
+    respx.get(image_url).mock(
+        return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"})
+    )
     tool_message: Final = {
         "role": "tool",
         "tool_call_id": "call_test456",
@@ -2767,7 +2720,9 @@ def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -
     assert inline_data == {"data": base64.b64encode(WHITE_PNG).decode(), "mime_type": "image/png"}
 
 
-CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
+CLAUDE_THINKING_SIGNATURE: Final = (
+    "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
+)
 
 
 def _parts_of(contents: Sequence[ContentType]) -> list[PartType]:

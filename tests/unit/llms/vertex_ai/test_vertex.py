@@ -36,7 +36,6 @@ def test_completion_pydantic_obj_2():
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-
     class CalendarEvent(BaseModel):
         name: str
         date: str
@@ -45,9 +44,7 @@ def test_completion_pydantic_obj_2():
     class EventsList(BaseModel):
         events: list[CalendarEvent]
 
-    messages = [
-        {"role": "user", "content": "List important events from the 20th century."}
-    ]
+    messages = [{"role": "user", "content": "List important events from the 20th century."}]
     expected_request_body = {
         "contents": [
             {
@@ -195,9 +192,7 @@ def test_vertex_function_translation(tool, expect_parameters):
     if expect_parameters:
         assert "parameters" in optional_params["tools"][0]["function_declarations"][0]
     else:
-        assert (
-            "parameters" not in optional_params["tools"][0]["function_declarations"][0]
-        )
+        assert "parameters" not in optional_params["tools"][0]["function_declarations"][0]
 
 
 def test_vertex_tool_type_field_removal():
@@ -249,10 +244,7 @@ def test_vertex_tool_type_field_removal():
     assert len(optional_params_function["tools"]) == 1
     assert "function_declarations" in optional_params_function["tools"][0]
     assert len(optional_params_function["tools"][0]["function_declarations"]) == 1
-    assert (
-        optional_params_function["tools"][0]["function_declarations"][0]["name"]
-        == "test_function"
-    )
+    assert optional_params_function["tools"][0]["function_declarations"][0]["name"] == "test_function"
 
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params_function["tools"][0]
@@ -1187,9 +1179,7 @@ def test_logprobs():
     with patch.object(client, "post", return_value=mock_response):
         resp = litellm.completion(
             model="gemini/gemini-1.5-flash-002",
-            messages=[
-                {"role": "user", "content": "What's the weather like in San Francisco?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in San Francisco?"}],
             logprobs=True,
             api_key="test-api-key",
             client=client,
@@ -1205,15 +1195,11 @@ def test_process_gemini_media():
 
     # Test GCS URI
     gcs_result = _process_gemini_media("gs://bucket/image.png")
-    assert gcs_result["file_data"] == FileDataType(
-        mime_type="image/png", file_uri="gs://bucket/image.png"
-    )
+    assert gcs_result["file_data"] == FileDataType(mime_type="image/png", file_uri="gs://bucket/image.png")
 
     # Test gs url with format specified
     gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
-    assert gcs_result["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="gs://bucket/image"
-    )
+    assert gcs_result["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="gs://bucket/image")
 
     # Test gs url without extension using mime_type from image_url object
     image_message = [
@@ -1242,16 +1228,12 @@ def test_process_gemini_media():
     # Test HTTPS JPG URL
     https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
-    )
+    assert https_result["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="https://example.com/image.jpg")
 
     # Test HTTPS PNG URL
     https_result = _process_gemini_media("https://example.com/image.png")
     print("https_result PNG", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="image/png", file_uri="https://example.com/image.png"
-    )
+    assert https_result["file_data"] == FileDataType(mime_type="image/png", file_uri="https://example.com/image.png")
 
     # Test HTTPS VIDEO URL
     https_result = _process_gemini_media("https://cloud-samples-data/video/animals.mp4")
@@ -1281,27 +1263,17 @@ def test_get_image_mime_type_from_url():
     from litellm.litellm_core_utils.prompt_templates.common_utils import get_image_mime_type_from_url
 
     # Test JPEG images
-    assert (
-        get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
-    )
-    assert (
-        get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
-    )
-    assert (
-        get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
-    )
+    assert get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
+    assert get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
+    assert get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
 
     # Test PNG images
     assert get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
     assert get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
 
     # Test WebP images
-    assert (
-        get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
-    )
-    assert (
-        get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
-    )
+    assert get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
+    assert get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
 
     # Test audio formats
     assert get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
@@ -1371,7 +1343,6 @@ def encoded_images():
     ]
     return [encode_image_to_base64(path) for path in image_paths]
 
-
     # assert result["file_data"]["file_uri"] == http_url
 
 
@@ -1382,9 +1353,7 @@ def encoded_images():
         ("Guinea", 1),  # Guinea closer to guinea image
     ],
 )
-def test_aaavertex_embeddings_distances(
-    vertex_client, encoded_images, input_string, expected_closer_index
-):
+def test_aaavertex_embeddings_distances(vertex_client, encoded_images, input_string, expected_closer_index):
     """
     Test cosine distances between image and text embeddings using Vertex AI multimodalembedding@001
     """
@@ -1411,9 +1380,7 @@ def test_aaavertex_embeddings_distances(
         ),
     ):
         for idx, encoded_image in enumerate(encoded_images):
-            mock_response.json.return_value = {
-                "predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]
-            }
+            mock_response.json.return_value = {"predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]}
             mock_response.status_code = 200
             response = litellm.embedding(
                 model="vertex_ai/multimodalembedding@001",
@@ -1424,13 +1391,9 @@ def test_aaavertex_embeddings_distances(
             image_embeddings.append(response.data[0].embedding)
 
     # Mock text embedding based on input string
-    mock_text_embedding = (
-        [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
-    )
+    mock_text_embedding = [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
     text_mock_response = MagicMock()
-    text_mock_response.json.return_value = {
-        "predictions": [{"imageEmbedding": mock_text_embedding}]
-    }
+    text_mock_response.json.return_value = {"predictions": [{"imageEmbedding": mock_text_embedding}]}
     text_mock_response.status_code = 200
     with (
         patch.object(vertex_client, "post", return_value=text_mock_response),
@@ -1468,8 +1431,8 @@ def test_vertex_parallel_tool_calls_true():
 
 def test_vertex_parallel_tool_calls_false_multiple_tools_dropped():
     """
-    parallel_tool_calls=False with multiple tools is dropped for Gemini
-  (unsupported upstream). Request should succeed without the param.
+      parallel_tool_calls=False with multiple tools is dropped for Gemini
+    (unsupported upstream). Request should succeed without the param.
     """
     tools = [
         {"type": "function", "function": {"name": "get_weather"}},
@@ -1568,9 +1531,7 @@ def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
     return credential_key
 
 
-def test_litellm_completion_vertex_exception(
-    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
-) -> None:
+def test_litellm_completion_vertex_exception(respx_mock: respx.MockRouter, _cached_vertex_credentials: str) -> None:
     url: Final = (
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
@@ -1603,9 +1564,7 @@ def test_litellm_completion_vertex_exception(
     assert route.call_count == 1
 
 
-def test_router_completion_vertex_exception(
-    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
-) -> None:
+def test_router_completion_vertex_exception(respx_mock: respx.MockRouter, _cached_vertex_credentials: str) -> None:
     url: Final = (
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
@@ -1691,9 +1650,7 @@ async def test_completion_fine_tuned_model(
 
     assert route.call_count == 1
     assert json.loads(route.calls[0].request.content) == {
-        "contents": [
-            {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
-        ]
+        "contents": [{"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}]
     }
     assert response.choices[0].message.content.startswith("A canvas vast")
     assert response.choices[0].finish_reason == "stop"
@@ -1717,9 +1674,7 @@ def test_gemini_finetuned_endpoint(
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/endpoints/4965075652664360960:generateContent"
     )
-    route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
-    )
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
 
     litellm.completion(
         model="vertex_ai/4965075652664360960",
@@ -1733,9 +1688,7 @@ def test_gemini_finetuned_endpoint(
     )
 
     assert route.call_count == 1
-    assert str(route.calls[0].request.url).endswith(
-        "endpoints/4965075652664360960:generateContent"
-    )
+    assert str(route.calls[0].request.url).endswith("endpoints/4965075652664360960:generateContent")
 
 
 def test_gemini_nullable_object_tool_schema_httpx(
@@ -1745,9 +1698,7 @@ def test_gemini_nullable_object_tool_schema_httpx(
         "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/"
         "publishers/google/models/gemini-3.5-flash:generateContent"
     )
-    route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
-    )
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
 
     litellm.completion(
         model="vertex_ai/gemini-3.5-flash",
@@ -1799,9 +1750,7 @@ def test_gemini_nullable_object_tool_schema_httpx(
 
     assert route.call_count == 1
     request_body: Final = json.loads(route.calls[0].request.content)
-    parameters_schema: Final = request_body["tools"][0]["function_declarations"][0][
-        "parameters"
-    ]
+    parameters_schema: Final = request_body["tools"][0]["function_declarations"][0]["parameters"]
     context_schema: Final = parameters_schema["properties"]["customer_context"]
     nullable_object_schema: Final = context_schema["anyOf"][0]
     assert nullable_object_schema["nullable"] is True
@@ -1878,9 +1827,7 @@ def test_gemini_pro_grounding(
     assert response._hidden_params["vertex_ai_grounding_metadata"] == [
         {
             "webSearchQueries": ["latest world cup winner"],
-            "groundingChunks": [
-                {"web": {"uri": "https://example.com", "title": "Example"}}
-            ],
+            "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}],
         }
     ]
 
@@ -2003,16 +1950,12 @@ def test_prompt_factory() -> None:
     ]
 
 
-def test_signed_s3_url_with_format(
-    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
-) -> None:
+def test_signed_s3_url_with_format(respx_mock: respx.MockRouter, _cached_vertex_credentials: str) -> None:
     url: Final = (
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent"
     )
-    route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
-    )
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
 
     litellm.completion(
         model="vertex_ai/gemini-2.0-flash-001",
@@ -2098,9 +2041,7 @@ async def test_vertex_ai_deepseek(
     }
 
 
-def test_vertex_ai_response_id(
-    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
-) -> None:
+def test_vertex_ai_response_id(respx_mock: respx.MockRouter, _cached_vertex_credentials: str) -> None:
     url: Final = (
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
@@ -2348,10 +2289,7 @@ async def test_partner_models_httpx_ai21(
     assert len(response.choices) == 1
     assert response.choices[0].message.content == "Checking the weather."
     assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
-    assert (
-        response.choices[0].message.tool_calls[0].function.arguments
-        == '{"location":"San Francisco"}'
-    )
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"location":"San Francisco"}'
     assert (
         response.usage.prompt_tokens,
         response.usage.completion_tokens,
@@ -2368,9 +2306,9 @@ async def test_gemini_context_caching_anthropic_format(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    cache_list_route: Final = respx_mock.get(
-        url__regex=r".*cachedContents.*"
-    ).mock(return_value=httpx.Response(200, json={"cachedContents": []}))
+    cache_list_route: Final = respx_mock.get(url__regex=r".*cachedContents.*").mock(
+        return_value=httpx.Response(200, json={"cachedContents": []})
+    )
     cache_route: Final = respx_mock.post(url__regex=r".*cachedContents.*").mock(
         return_value=httpx.Response(
             200,
@@ -2382,9 +2320,9 @@ async def test_gemini_context_caching_anthropic_format(
             },
         )
     )
-    generation_route: Final = respx_mock.post(
-        url__regex=r".*generateContent.*"
-    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    generation_route: Final = respx_mock.post(url__regex=r".*generateContent.*").mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response())
+    )
     messages: Final = [
         {
             "role": "system",
@@ -2438,12 +2376,8 @@ async def test_gemini_context_caching_anthropic_format(
     ]
     cache_request: Final = json.loads(cache_route.calls[0].request.content)
     assert cache_request["model"] == "models/gemini-2.5-flash-lite-001"
-    assert cache_request["contents"] == [
-        {"role": "user", "parts": [{"text": "Summarize the agreement"}]}
-    ]
-    assert cache_request["system_instruction"] == {
-        "parts": [{"text": "Legal agreement " * 4000}]
-    }
+    assert cache_request["contents"] == [{"role": "user", "parts": [{"text": "Summarize the agreement"}]}]
+    assert cache_request["system_instruction"] == {"parts": [{"text": "Legal agreement " * 4000}]}
     assert json.loads(generation_route.calls[0].request.content) == {
         "contents": [
             {"role": "model", "parts": [{"text": "The agreement lasts one year."}]},
@@ -2483,9 +2417,7 @@ async def test_anthropic_message_via_anthropic_messages(
             (_cached_vertex_credentials, "test-project"),
             (Credentials(token="test-vertex-token"), "test-project"),
         )
-    route: Final = respx_mock.post(
-        url__regex=r".*claude-3-5-sonnet@20240620.*"
-    ).mock(
+    route: Final = respx_mock.post(url__regex=r".*claude-3-5-sonnet@20240620.*").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -2539,9 +2471,9 @@ async def test_anthropic_message_via_anthropic_messages(
 def test_gemini_fine_tuned_model_request_consistency(
     respx_mock: respx.MockRouter, _cached_vertex_credentials: str
 ) -> None:
-    route: Final = respx_mock.post(
-        url__regex=r".*publishers/google/models/.*:generateContent"
-    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    route: Final = respx_mock.post(url__regex=r".*publishers/google/models/.*:generateContent").mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response())
+    )
     messages: Final = [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is the weather?"},
@@ -2580,9 +2512,7 @@ def test_gemini_fine_tuned_model_request_consistency(
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/"
         "publishers/google/models/ft-uuid:generateContent"
     )
-    assert first_request["system_instruction"] == {
-        "parts": [{"text": "You are a helpful assistant."}]
-    }
+    assert first_request["system_instruction"] == {"parts": [{"text": "You are a helpful assistant."}]}
     assert first_request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
     assert first_request == second_request
 
@@ -2684,9 +2614,7 @@ def test_gemini_pro_json_schema_args_sent_httpx(
         response = call()
         assert response.model == model.split("/")[1]
         if not invalid_response:
-            assert json.loads(response.choices[0].message.content) == {
-                "recipes": [{"recipe_name": "Sugar Cookies"}]
-            }
+            assert json.loads(response.choices[0].message.content) == {"recipes": [{"recipe_name": "Sugar Cookies"}]}
 
     assert route.call_count == 1
     request_body: Final = json.loads(route.calls[0].request.content)
@@ -2741,9 +2669,7 @@ def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
         response = call()
         assert response.model == model.split("/")[1]
         if not invalid_response:
-            assert json.loads(response.choices[0].message.content) == {
-                "recipes": [{"recipe_name": "Sugar Cookies"}]
-            }
+            assert json.loads(response.choices[0].message.content) == {"recipes": [{"recipe_name": "Sugar Cookies"}]}
 
     assert route.call_count == 1
     request_body: Final = json.loads(route.calls[0].request.content)
@@ -2781,9 +2707,9 @@ async def test_gemini_pro_json_schema_httpx_content_policy_error(
             "usageMetadata": {"promptTokenCount": 1, "totalTokenCount": 1},
         }
     )
-    route: Final = respx_mock.post(
-        url__regex=r".*gemini-2.5-flash-lite:generateContent"
-    ).mock(return_value=httpx.Response(200, json=response_body))
+    route: Final = respx_mock.post(url__regex=r".*gemini-2.5-flash-lite:generateContent").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
 
     response: Final = await litellm.acompletion(
         model="vertex_ai_beta/gemini-2.5-flash-lite",
@@ -2813,11 +2739,7 @@ def test_litellm_api_base(
             json=(
                 _vertex_gemini_response()
                 if route_type == "completion"
-                else {
-                    "predictions": [
-                        {"embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 1}}}
-                    ]
-                }
+                else {"predictions": [{"embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 1}}}]}
             ),
         )
     )
@@ -2848,12 +2770,8 @@ def test_litellm_api_base(
     )
 
 
-def test_vertex_anthropic_completion(
-    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
-) -> None:
-    route: Final = respx_mock.post(
-        url__regex=r".*claude-sonnet-4-6@default.*"
-    ).mock(
+def test_vertex_anthropic_completion(respx_mock: respx.MockRouter, _cached_vertex_credentials: str) -> None:
+    route: Final = respx_mock.post(url__regex=r".*claude-sonnet-4-6@default.*").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -2889,9 +2807,7 @@ def test_vertex_anthropic_completion(
 
     assert route.call_count == 1
     assert response.model == "claude-sonnet-4-6@default"
-    assert response._hidden_params["response_cost"] == pytest.approx(
-        2 * 0.001 + 3 * 0.002
-    )
+    assert response._hidden_params["response_cost"] == pytest.approx(2 * 0.001 + 3 * 0.002)
     assert response.choices[0].message.reasoning_content == "I will greet the user."
     assert response.choices[0].message.thinking_blocks == [
         {
@@ -2936,12 +2852,8 @@ def test_vertex_gemini_streaming_returns_text_and_finish_reason(
     )
     chunks: Final = tuple(stream)
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
-        "Vertex streams without a live API."
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == ("Vertex streams without a live API.")
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason is not None) == (
+        "stop",
     )
-    assert tuple(
-        chunk.choices[0].finish_reason
-        for chunk in chunks
-        if chunk.choices[0].finish_reason is not None
-    ) == ("stop",)
     assert route.call_count == 1

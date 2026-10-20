@@ -488,7 +488,6 @@ def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge
     assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
 
 
-
 @pytest.mark.parametrize(
     ("field", "expected"),
     [
@@ -533,6 +532,7 @@ def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, e
     schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
 
     assert schema["properties"]["value"] == expected
+
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
