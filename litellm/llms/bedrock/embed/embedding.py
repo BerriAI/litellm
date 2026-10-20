@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
@@ -44,6 +45,8 @@ from .amazon_titan_multimodal_transformation import (
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
 from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig, drop_params_enabled
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -140,7 +143,7 @@ class BedrockEmbedding(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return response.json()
+        return _JSON_OBJECT.validate_python(response.json())
 
     async def _make_async_call(
         self,
@@ -174,7 +177,7 @@ class BedrockEmbedding(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return response.json()
+        return _JSON_OBJECT.validate_python(response.json())
 
     def _transform_response(
         self,
@@ -663,7 +666,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         # Parse response
         if response.status_code == 200:
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         else:
             raise Exception(f"Failed to get async invoke status: {response.status_code} - {response.text}")
 

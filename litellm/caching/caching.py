@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -44,6 +44,7 @@ from .s3_cache import S3Cache
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
+_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
 
 
 @contextmanager
@@ -211,7 +212,7 @@ class Cache:
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
                 if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                    redis_startup_nodes = json.loads(_env_cluster_nodes)
+                    redis_startup_nodes = _REDIS_STARTUP_NODES_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided

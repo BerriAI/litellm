@@ -1,6 +1,9 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -15,6 +18,34 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MAIImageUsageDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[NotRequired[int | float | None]]
+    image_tokens: ReadOnly[NotRequired[int | float | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MAIImageUsage(TypedDict, total=False):
+    input_tokens_details: ReadOnly[NotRequired[object]]
+    num_input_text_tokens: ReadOnly[NotRequired[int | float | None]]
+    num_input_image_tokens: ReadOnly[NotRequired[int | float | None]]
+    input_tokens: ReadOnly[NotRequired[int | float | None]]
+    output_tokens: ReadOnly[NotRequired[int | float | None]]
+    num_output_tokens: ReadOnly[NotRequired[int | float | None]]
+    output_image_tokens: ReadOnly[NotRequired[int | float | None]]
+    total_tokens: ReadOnly[NotRequired[int | float | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MAIImageResponse(TypedDict, total=False):
+    usage: ReadOnly[NotRequired[object]]
+
+
+_MAI_IMAGE_USAGE_DETAILS_ADAPTER: Final[TypeAdapter[_MAIImageUsageDetails]] = TypeAdapter(_MAIImageUsageDetails)
+_MAI_IMAGE_USAGE_ADAPTER: Final[TypeAdapter[_MAIImageUsage]] = TypeAdapter(_MAIImageUsage)
+_MAI_IMAGE_RESPONSE_ADAPTER: Final[TypeAdapter[_MAIImageResponse]] = TypeAdapter(_MAIImageResponse)
 
 
 class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
@@ -77,7 +108,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         return "maiimage" in model_normalized
 
     @staticmethod
-    def normalize_mai_image_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
+    def normalize_mai_image_usage(usage: object) -> Mapping[str, object]:
         """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
         if usage is None:
             return {
@@ -87,10 +118,13 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 "total_tokens": 0,
             }
 
-        normalized_usage: Final = dict(usage)
-        input_tokens_details = normalized_usage.get("input_tokens_details")
-        if not isinstance(input_tokens_details, dict):
-            input_tokens_details = {}
+        normalized_usage: Final[_MAIImageUsage] = _MAI_IMAGE_USAGE_ADAPTER.validate_python(usage)
+        input_tokens_details_value: Final = normalized_usage.get("input_tokens_details")
+        input_tokens_details: Final[_MAIImageUsageDetails] = (
+            _MAI_IMAGE_USAGE_DETAILS_ADAPTER.validate_python(input_tokens_details_value)
+            if isinstance(input_tokens_details_value, dict)
+            else {}
+        )
 
         text_tokens = normalized_usage.get("num_input_text_tokens")
         if text_tokens is None:
@@ -120,18 +154,16 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         if total_tokens is None:
             total_tokens = input_tokens + output_tokens
 
-        normalized_usage.update(
-            {
-                "input_tokens": input_tokens,
-                "input_tokens_details": {
-                    "image_tokens": image_tokens,
-                    "text_tokens": text_tokens,
-                },
-                "output_tokens": output_tokens,
-                "total_tokens": total_tokens,
-            }
-        )
-        return normalized_usage
+        return {
+            **normalized_usage,
+            "input_tokens": input_tokens,
+            "input_tokens_details": {
+                "image_tokens": image_tokens,
+                "text_tokens": text_tokens,
+            },
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return ["n", "size"]
@@ -251,12 +283,18 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
-            response: Final = raw_response.json()
+            response_json: Final = _MAI_IMAGE_RESPONSE_ADAPTER.validate_python(raw_response.json())
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
-        if "usage" in response:
-            response["usage"] = self.normalize_mai_image_usage(response.get("usage"))
+        response: Final = (
+            {
+                **response_json,
+                "usage": self.normalize_mai_image_usage(response_json["usage"]),
+            }
+            if "usage" in response_json
+            else dict(response_json)
+        )
 
         logging_obj.post_call(
             input=request_data.get("prompt", ""),

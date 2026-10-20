@@ -452,7 +452,7 @@ class KeyManagementEventHooks:
         except ImportError:
             return None
 
-        prisma_client: Final = getattr(proxy_server_module, "prisma_client", None)
+        prisma_client: Final = proxy_server_module.prisma_client
         user_api_key_cache: Final = getattr(proxy_server_module, "user_api_key_cache", None)
 
         if prisma_client is None or user_api_key_cache is None:

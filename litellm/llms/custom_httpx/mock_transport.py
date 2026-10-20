@@ -12,6 +12,8 @@ import uuid
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # ---------------------------------------------------------------------------
 # Pre-built response templates
@@ -56,6 +58,14 @@ _JSON_HEADERS: Final = {
 }
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MockChatRequest(TypedDict):
+    model: ReadOnly[NotRequired[str]]
+
+
+_MOCK_CHAT_REQUEST: Final = TypeAdapter(_MockChatRequest)
+
+
 class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """
     httpx transport that returns canned OpenAI ChatCompletion responses.
@@ -70,7 +80,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
             body: Final = json.loads(request.content)
         except (json.JSONDecodeError, ValueError):
             return ("mock-model", False)
-        model: Final = body.get("model", "mock-model")
+        model: Final = _MOCK_CHAT_REQUEST.validate_python(body).get("model", "mock-model")
         return (model, False)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:

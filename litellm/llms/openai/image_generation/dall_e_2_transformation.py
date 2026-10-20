@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -8,6 +9,8 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
@@ -57,7 +60,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        response: Final = raw_response.json()
+        response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         stringified_response: Final = response
         ## LOGGING

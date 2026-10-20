@@ -161,6 +161,7 @@ else:
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+_COMPLETION_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
@@ -3115,7 +3116,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _COMPLETION_RESPONSE_ADAPTER.validate_python(raw_response.json(), strict=True)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(

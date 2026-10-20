@@ -20,7 +20,7 @@ from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -293,14 +293,29 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
     )
 
 
-class _AnthropicSSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SSETextDelta(TypedDict, total=False):
+    type: ReadOnly[object]
     text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
 
 
-class _AnthropicSSEEvent(TypedDict, total=False):
-    delta: ReadOnly[_AnthropicSSEDelta]
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SSETextDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSETextDelta]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SSEStopDelta(TypedDict, total=False):
+    stop_reason: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SSEStopDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSEStopDelta]
+
+
+_SSE_TEXT_DELTA_EVENT: Final = TypeAdapter(_SSETextDeltaEvent)
+_SSE_STOP_DELTA_EVENT: Final = TypeAdapter(_SSEStopDeltaEvent)
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -1629,14 +1644,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not line.startswith("data:"):
             return line
         try:
-            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
-                line[len("data:") :].strip()
-            )
+            data: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
         except json.JSONDecodeError:
             return line
-        if not isinstance(data, dict):
+        event: Final = as_str_mapping(data)
+        if event is None:
             return line
-        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
+        rewritten: Final = _rewritten_event(_as_str_mapping(event), rewrite_event)
         return line if rewritten is data else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
@@ -1737,8 +1751,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data: _AnthropicSSEEvent = json.loads(data_line)
-                        delta: _AnthropicSSEDelta = data.get("delta", {})
+                        data: _SSETextDeltaEvent = _SSE_TEXT_DELTA_EVENT.validate_python(json.loads(data_line))
+                        delta: _SSETextDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
@@ -1800,9 +1814,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data: _AnthropicSSEEvent = json.loads(data_line)
-                                delta: _AnthropicSSEDelta = data.get("delta", {})
-                                stop_reason: str | None = delta.get("stop_reason")
+                                data: _SSEStopDeltaEvent = _SSE_STOP_DELTA_EVENT.validate_python(json.loads(data_line))
+                                delta: _SSEStopDelta = data.get("delta", {})
+                                stop_reason: object = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:

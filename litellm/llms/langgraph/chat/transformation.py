@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -22,6 +23,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -436,7 +439,7 @@ class LangGraphConfig(BaseConfig):
         Transform the LangGraph response to LiteLLM ModelResponse format.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             verbose_logger.debug("LangGraph response: %s", response_json)
 
             content: Final = self._extract_content_from_response(response_json)

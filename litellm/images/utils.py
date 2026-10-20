@@ -17,7 +17,7 @@ class ImageEditRequestUtils:
         image_edit_optional_params: ImageEditOptionalRequestParams,
         drop_params: bool | None = None,
         additional_drop_params: list[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get optional parameters for the image edit API.
 

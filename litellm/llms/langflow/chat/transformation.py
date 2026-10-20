@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -12,6 +13,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -236,12 +239,13 @@ class LangFlowConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            response_json: Final = raw_response.json()
+            raw_json: Final = raw_response.json()
         except Exception as e:
             raise LangFlowError(
                 message=f"LangFlow returned a non-JSON response: {e}",
                 status_code=raw_response.status_code,
             )
+        response_json: Final = _JSON_OBJECT.validate_python(raw_json)
 
         verbose_logger.debug("LangFlow response: %s", response_json)
 

@@ -22,7 +22,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -121,6 +121,15 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AdminTeamAndKeyRows(TypedDict):
+    keys: ReadOnly[Sequence[Mapping[str, object]] | None]
+    teams: ReadOnly[Sequence[Mapping[str, object]] | None]
+
+
+_ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(list[_AdminTeamAndKeyRows])
 
 
 def _user_table(
@@ -1169,8 +1178,8 @@ async def user_info_v2(
 
 async def _fetch_admin_teams_and_keys_rows(
     prisma_client: "PrismaClient", sql_query: str
-) -> Sequence[Mapping[str, Sequence[Mapping[str, object]] | None]]:
-    return await prisma_client.db.query_raw(sql_query)
+) -> Sequence[_AdminTeamAndKeyRows]:
+    return _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER.validate_python(await prisma_client.db.query_raw(sql_query))
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):

@@ -1,12 +1,28 @@
 """CLI commands for the at-rest credential encryption migration."""
 
-from typing import Final
+from typing import Final, TypedDict
 
 import click
 import rich
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly
 
 from ...http_client import HTTPClient
 from .auth import cli_context_obj
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MigrationReport(TypedDict, total=False):
+    residual_legacy: ReadOnly[int | float | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MigrationResponse(TypedDict, total=False):
+    report: ReadOnly[_MigrationReport]
+
+
+_JSON_OBJECT: Final = TypeAdapter(object)
+_MIGRATION_RESPONSE: Final = TypeAdapter(_MigrationResponse)
 
 
 @click.group()
@@ -40,23 +56,35 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
         lite encryption migrate --check   # attestation scan, no writes
         lite encryption migrate           # perform the migration
     """
-    client: Final = HTTPClient(cli_context_obj(ctx)["base_url"], ctx.obj["api_key"])
+    context: Final = cli_context_obj(ctx)
+    base_url: Final = context["base_url"]
+    if "api_key" not in context:
+        raise KeyError("api_key")
+    client: Final = HTTPClient(base_url, context["api_key"])
 
-    if check_only:
-        response = client.request("GET", "/credentials/migrate-encryption/check")
-    else:
-        response = client.request(
+    response: Final[object] = _JSON_OBJECT.validate_python(
+        client.request("GET", "/credentials/migrate-encryption/check")
+        if check_only
+        else client.request(
             "POST",
             "/credentials/migrate-encryption",
             json={},
             params={"dry_run": "true"} if dry_run else None,
         )
+    )
 
     rich.print_json(data=response)
 
-    report: Final = response.get("report", {}) if isinstance(response, dict) else {}
-    residual: Final = report.get("residual_legacy")
+    residual: Final = _residual_legacy(response)
     if residual is not None and residual > 0:
         rich.print(f"[yellow]Residual legacy values remaining: {residual}[/yellow]")
     elif residual == 0:
         rich.print("[green]No legacy values remaining (residual_legacy == 0).[/green]")
+
+
+def _residual_legacy(response: object) -> int | float | None:
+    if not isinstance(response, dict):
+        return None
+    payload: Final = _MIGRATION_RESPONSE.validate_python(response)
+    report: Final = payload.get("report", {})
+    return report.get("residual_legacy")

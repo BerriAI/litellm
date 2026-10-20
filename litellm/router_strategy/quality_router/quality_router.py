@@ -47,13 +47,13 @@ class QualityRouter(CustomLogger):
         model_name: str,
         litellm_router_instance: "Router",
         default_model: str | None = None,
-        quality_router_config: dict[str, Any] | None = None,
+        quality_router_config: Mapping[str, object] | None = None,
     ):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
         if quality_router_config:
-            self.config = QualityRouterConfig(**quality_router_config)
+            self.config = QualityRouterConfig.model_validate(quality_router_config)
         else:
             self.config = QualityRouterConfig()
 
