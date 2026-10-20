@@ -405,12 +405,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return True
 
     @staticmethod
-    def _supports_sampling_params(model: str) -> bool:
+    def supports_sampling_params(model: str) -> bool:
         """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
 
         Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
         and later accept the fields but ignore them, and a later generation will 400 on them.
-        A model the map says nothing about keeps forwarding them."""
+        A model the map says nothing about keeps forwarding them. ``temperature`` and ``top_p``
+        leave ``get_supported_openai_params`` when the flag is off, so the shared unsupported-param
+        check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
+        ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
+        request body is built."""
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         bare: Final = model.split("/")[-1]
         for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
@@ -419,8 +423,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return True
 
     @staticmethod
-    def _reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
-        """Drop ``param`` under ``drop_params``, else raise the client-side 400 that names the escape hatch."""
+    def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
+        """Return under ``drop_params`` so the caller drops ``param``, else raise the client-side 400
+        that names the escape hatch."""
         if litellm.drop_params or drop_params:
             return
         raise UnsupportedParamsError(
@@ -433,7 +438,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        sampling_params: Final = ("temperature", "top_p", "top_k") if self._supports_sampling_params(model) else ()
+        sampling_params: Final = ("temperature", "top_p", "top_k") if self.supports_sampling_params(model) else ()
         supported_params: Final = [
             *sampling_params,
             "max_tokens",
@@ -1293,12 +1298,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        supports_sampling_params: Final = self._supports_sampling_params(model)
+        supports_sampling_params: Final = self.supports_sampling_params(model)
         gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
-                self._reject_unsupported_sampling_param(model=model, param=param, drop_params=drop_params)
-            elif param == "temperature":
+                continue
+            if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     if value is not None and value < 1.0:
                         verbose_logger.info(
