@@ -43,7 +43,6 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.api_base_without_login(api_base)
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -52,7 +51,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 llm_provider=custom_llm_provider,
                 message=str(e),
             )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        return get_copilot_api_base(api_base, lambda: dynamic_api_key), dynamic_api_key, custom_llm_provider
 
     def get_openai_compatible_provider_info(
         self,

@@ -56,6 +56,13 @@ class Authenticator:
         )
         self._ensure_token_dir()
 
+    def stored_access_token(self) -> str | None:
+        try:
+            with open(self.access_token_file, "r") as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
     def get_access_token(self) -> str:
         """
         Login to Copilot with retry 3 times.
@@ -66,13 +73,10 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to obtain an access token after retries.
         """
-        try:
-            with open(self.access_token_file, "r") as f:
-                access_token = f.read().strip()
-                if access_token:
-                    return access_token
-        except OSError:
-            verbose_logger.warning("No existing access token found or error reading file")
+        stored: Final = self.stored_access_token()
+        if stored is not None:
+            return stored
+        verbose_logger.warning("No existing access token found or error reading file")
 
         if not can_block_current_thread():
             raise GetAccessTokenError(

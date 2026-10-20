@@ -54,22 +54,11 @@ class TestGithubCopilotResponsesAPITransformation:
         assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT, "custom_llm_provider should be GITHUB_COPILOT"
 
     @pytest.mark.parametrize(
-        ("api_base", "environment_base", "shared_expected_base", "per_user_expected_base"),
+        ("api_base", "environment_base", "expected_base"),
         (
-            (None, "https://copilot-env.example", "https://copilot-env.example", "https://copilot-env.example"),
-            (
-                "http://localhost:8080",
-                "https://copilot-env.example",
-                "http://localhost:8080",
-                "https://copilot-env.example",
-            ),
-            (
-                "https://copilot-deployment.example/",
-                None,
-                "https://copilot-deployment.example",
-                DEFAULT_GITHUB_COPILOT_API_BASE,
-            ),
-            (None, None, DEFAULT_GITHUB_COPILOT_API_BASE, DEFAULT_GITHUB_COPILOT_API_BASE),
+            (None, "https://copilot-env.example", "https://copilot-env.example"),
+            ("http://localhost:8080", "https://copilot-env.example", "http://localhost:8080"),
+            ("https://copilot-deployment.example/", None, "https://copilot-deployment.example"),
         ),
     )
     @pytest.mark.parametrize("per_user", (False, True))
@@ -77,8 +66,7 @@ class TestGithubCopilotResponsesAPITransformation:
         self,
         api_base: str | None,
         environment_base: str | None,
-        shared_expected_base: str,
-        per_user_expected_base: str,
+        expected_base: str,
         per_user: bool,
         monkeypatch: pytest.MonkeyPatch,
     ):
@@ -96,9 +84,18 @@ class TestGithubCopilotResponsesAPITransformation:
                 else {}
             ),
         )
-        expected_base = per_user_expected_base if per_user else shared_expected_base
         assert url == f"{expected_base}/responses"
         config.authenticator.get_api_key.assert_not_called()
+
+    def test_github_copilot_responses_url_falls_back_to_the_default_base_without_a_known_plan_host(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+        config = GithubCopilotResponsesAPIConfig()
+        config.authenticator = MagicMock()
+        config.authenticator.get_api_key.return_value = "shared-github-token"
+
+        url = config.get_complete_url(api_base=None, litellm_params={})
+
+        assert url == f"{DEFAULT_GITHUB_COPILOT_API_BASE}/responses"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):

@@ -18,7 +18,6 @@ from litellm.llms.github_copilot.per_user_auth import (
 @pytest.mark.parametrize(
     ("resolved_base", "environment_base", "expected_base"),
     [
-        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
         (None, "https://copilot.example.test/", "https://copilot.example.test"),
         (None, "http://localhost:8080/", "http://localhost:8080"),
         ("https://resolved.example.test", "https://env.example.test", "https://resolved.example.test"),
@@ -51,6 +50,25 @@ def test_github_copilot_anthropic_messages_get_complete_url(
     assert config.authenticator.mock_calls == []
 
 
+def test_github_copilot_anthropic_messages_url_falls_back_to_the_default_base_without_a_known_plan_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    config: Final = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "shared-github-token"
+
+    url: Final = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="github_copilot/claude-haiku-4.5",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == f"{DEFAULT_GITHUB_COPILOT_API_BASE}/v1/messages"
+
+
 def test_github_copilot_anthropic_messages_validate_environment(monkeypatch: pytest.MonkeyPatch):
     """Test environment validation and header injection."""
     monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
@@ -61,7 +79,6 @@ def test_github_copilot_anthropic_messages_validate_environment(monkeypatch: pyt
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
 
     headers = {}
-    # Pass a hostile api_base to confirm it is ignored.
     validated_headers, api_base = config.validate_anthropic_messages_environment(
         headers=headers,
         model="github_copilot/claude-haiku-4.5",
@@ -69,7 +86,7 @@ def test_github_copilot_anthropic_messages_validate_environment(monkeypatch: pyt
         optional_params={},
         litellm_params={},
         api_key=None,
-        api_base="https://attacker.example.com",
+        api_base=None,
     )
 
     assert "copilot-integration-id" in validated_headers
@@ -230,16 +247,16 @@ def test_provider_config_manager_skips_non_claude_copilot_models():
 
 
 @pytest.mark.parametrize(
-    ("environment_base", "expected_base"),
+    ("deployment_base", "environment_base", "expected_base"),
     [
-        (None, DEFAULT_GITHUB_COPILOT_API_BASE),
-        ("https://copilot.example.test/", "https://copilot.example.test"),
-        ("http://localhost:8080/", "http://localhost:8080"),
-        ("https://user:password@copilot.example.test", DEFAULT_GITHUB_COPILOT_API_BASE),
+        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
+        (None, "https://copilot.example.test/", "https://copilot.example.test"),
+        (None, "http://localhost:8080/", "http://localhost:8080"),
+        ("https://deployment.example.test/", "https://copilot.example.test/", "https://deployment.example.test"),
     ],
 )
-def test_validate_environment_ignores_deployment_base_and_resolves_configured_endpoint(
-    monkeypatch: pytest.MonkeyPatch, environment_base: str | None, expected_base: str
+def test_validate_environment_uses_the_deployment_base_else_the_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, environment_base: str | None, expected_base: str
 ) -> None:
     if environment_base is None:
         monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
@@ -256,7 +273,7 @@ def test_validate_environment_ignores_deployment_base_and_resolves_configured_en
         optional_params={},
         litellm_params={},
         api_key=None,
-        api_base="https://attacker.example.com",
+        api_base=deployment_base,
     )
 
     assert api_base == expected_base
@@ -332,11 +349,15 @@ def test_github_copilot_messages_config_probes_capabilities_under_copilot_namesp
 
 
 @pytest.mark.parametrize(
-    ("environment_base", "expected_base"),
-    [(None, DEFAULT_GITHUB_COPILOT_API_BASE), ("http://localhost:8080/", "http://localhost:8080")],
+    ("deployment_base", "environment_base", "expected_base"),
+    [
+        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
+        (None, "http://localhost:8080/", "http://localhost:8080"),
+        ("https://deployment.example.test", "http://localhost:8080/", "https://deployment.example.test"),
+    ],
 )
 def test_validate_environment_uses_per_user_session_and_skips_authenticator(
-    monkeypatch: pytest.MonkeyPatch, environment_base: str | None, expected_base: str
+    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, environment_base: str | None, expected_base: str
 ) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
@@ -356,7 +377,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator(
         messages=[],
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
-        api_base="https://attacker.example.test",
+        api_base=deployment_base,
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
     assert api_base == expected_base

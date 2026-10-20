@@ -61,18 +61,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> tuple[dict, str | None]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
-
-        The caller-supplied ``api_base`` is intentionally ignored. Routing this
-        request anywhere other than the authenticated Copilot endpoint would
-        leak the Copilot bearer token to a caller-controlled URL.
         """
-        # Always use the configured Copilot endpoint, never the caller-supplied
-        # api_base. rstrip so a base with a trailing slash does not yield a
-        # double-slash URL once "/v1/messages" is appended downstream.
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        dynamic_api_base: Final = get_copilot_api_base().rstrip("/")
         try:
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
@@ -83,6 +75,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
                 llm_provider="github_copilot",
                 message=str(e),
             )
+        dynamic_api_base: Final = get_copilot_api_base(api_base, lambda: dynamic_api_key).rstrip("/")
 
         # Merge Copilot headers with provided headers
         copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
@@ -119,13 +112,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.
-
-        ``api_base`` here is the value already resolved by
-        ``validate_anthropic_messages_environment`` (the authenticated Copilot
-        host), not the raw caller-supplied base — that one is discarded there to
-        avoid leaking the Copilot bearer token to a caller-controlled URL. We
-        reuse it to avoid a second authenticator read, falling back to a fresh
-        resolution only if it was not provided.
         """
-        resolved: Final = (api_base or get_copilot_api_base()).rstrip("/")
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        resolved: Final = get_copilot_api_base(
+            api_base,
+            lambda: user_session.token if user_session is not None else self.authenticator.get_api_key(),
+        ).rstrip("/")
         return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"

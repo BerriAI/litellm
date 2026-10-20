@@ -2,15 +2,24 @@
 Constants for Copilot integration
 """
 
+import hashlib
+import ipaddress
 import os
-from collections.abc import MutableMapping
-from typing import Final
+from collections.abc import Callable, Mapping, MutableMapping
+from typing import (
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # casts pin the untyped litellm clients and cache to the local Protocols
+)
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 COPILOT_VERSION: Final = "0.26.7"
@@ -18,6 +27,11 @@ EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
+_GITHUB_API_HOST: Final = "api.github.com"
+_COPILOT_USER_URL: Final = f"https://{_GITHUB_API_HOST}/copilot_internal/user"
+_PLAN_API_BASE_TTL_SECONDS: Final = 3600
+_PLAN_API_BASE_RETRY_SECONDS: Final = 60
+_PLAN_API_BASE_TIMEOUT_SECONDS: Final = 10.0
 DEFAULT_COPILOT_INTEGRATION_ID: Final = "vscode-chat"
 DEFAULT_COPILOT_EDITOR_VERSION: Final = "vscode/1.115.0"
 DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION: Final = EDITOR_PLUGIN_VERSION
@@ -39,6 +53,43 @@ _COPILOT_REQUEST_HEADER_CONFIG = _COPILOT_AUTH_HEADER_CONFIG + (
         "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
         "electron-fetch",
     ),
+)
+
+
+class _PlanApiBaseCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: object, ttl: float | None = None) -> object: ...
+
+    def flush_cache(self) -> None: ...
+
+
+class _SyncGetClient(Protocol):
+    def get(
+        self, url: str, headers: Mapping[str, str] | None = None, timeout: float | None = None
+    ) -> httpx.Response: ...
+
+
+class _AsyncGetClient(Protocol):
+    async def get(
+        self, url: str, headers: Mapping[str, str] | None = None, timeout: float | None = None
+    ) -> httpx.Response: ...
+
+
+@with_config(ConfigDict(extra="allow"))
+class _CopilotUserEndpoints(TypedDict):
+    api: ReadOnly[NotRequired[object]]
+
+
+@with_config(ConfigDict(extra="allow"))
+class _CopilotUserPayload(TypedDict):
+    endpoints: ReadOnly[NotRequired[_CopilotUserEndpoints]]
+
+
+_COPILOT_USER: Final = TypeAdapter(_CopilotUserPayload)
+_PLAN_API_BASES: Final = cast(  # cast-ok: pins the untyped module cache to _PlanApiBaseCache
+    _PlanApiBaseCache,
+    InMemoryCache(max_size_in_memory=1000, default_ttl=_PLAN_API_BASE_TTL_SECONDS),
 )
 
 
@@ -71,6 +122,10 @@ class GetAccessTokenError(GithubCopilotError):
 
 
 class GetAPIKeyError(GithubCopilotError):
+    pass
+
+
+class InvalidAPIBaseError(GithubCopilotError):
     pass
 
 
@@ -108,11 +163,32 @@ def get_copilot_default_headers(
     }
 
 
+def _hostname(url: str) -> str | None:
+    try:
+        return urlsplit(url).hostname
+    except ValueError:
+        return None
+
+
+def _is_loopback(hostname: str) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_valid_api_base(api_base: str) -> bool:
-    parsed_api_base: Final = urlsplit(api_base)
+    try:
+        parsed_api_base: Final = urlsplit(api_base)
+    except ValueError:
+        return False
+    scheme: Final = parsed_api_base.scheme.lower()
+    hostname: Final = parsed_api_base.hostname
     return (
-        parsed_api_base.scheme.lower() in ("http", "https")
-        and parsed_api_base.hostname is not None
+        hostname is not None
+        and (scheme == "https" or (scheme == "http" and _is_loopback(hostname)))
         and parsed_api_base.username is None
         and parsed_api_base.password is None
         and not parsed_api_base.query
@@ -120,21 +196,129 @@ def _is_valid_api_base(api_base: str) -> bool:
     )
 
 
-def get_copilot_api_base(api_base: str | None = None) -> str:
-    candidates: Final = (
-        ("deployment api_base", api_base),
-        ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE")),
-    )
-    for source, candidate in candidates:
-        if not candidate:
-            continue
-        if _is_valid_api_base(candidate):
-            return candidate
+def _warn_if_token_exchange_url_is_set() -> None:
+    api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL")
+    if api_key_url and _hostname(api_key_url) != _GITHUB_API_HOST:
         verbose_logger.warning(
-            "Ignoring %s because it must be an HTTP(S) URL without credentials, query, or fragment",
-            source,
+            "GITHUB_COPILOT_API_KEY_URL is no longer used, so GitHub Copilot requests go to %s. "
+            "Set GITHUB_COPILOT_API_BASE to your Copilot API host, such as https://copilot-api.<subdomain>.ghe.com",
+            DEFAULT_GITHUB_COPILOT_API_BASE,
         )
-    return DEFAULT_GITHUB_COPILOT_API_BASE
+
+
+def _configured_copilot_api_base_source(api_base: str | None) -> tuple[str, str | None]:
+    return ("api_base", api_base) if api_base else ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE"))
+
+
+def _configured_copilot_api_base(api_base: str | None) -> str | None:
+    source, configured_api_base = _configured_copilot_api_base_source(api_base)
+    if not configured_api_base:
+        _warn_if_token_exchange_url_is_set()
+        return None
+    if not _is_valid_api_base(configured_api_base):
+        raise InvalidAPIBaseError(
+            status_code=500,
+            message=(
+                f"GitHub Copilot {source} must be an HTTPS URL, or HTTP on a loopback host, "
+                "without credentials, query, or fragment"
+            ),
+        )
+    return configured_api_base
+
+
+def _trusted_plan_api_base(endpoints_api: object) -> str | None:
+    if not isinstance(endpoints_api, str) or not _is_valid_api_base(endpoints_api):
+        return None
+    try:
+        parsed: Final = urlsplit(endpoints_api)
+        port: Final = parsed.port
+    except ValueError:
+        return None
+    hostname: Final = (parsed.hostname or "").lower()
+    is_copilot_host: Final = parsed.scheme.lower() == "https" and hostname.endswith(".githubcopilot.com")
+    return endpoints_api.rstrip("/") if is_copilot_host and port in (None, 443) else None
+
+
+def _plan_api_base_from(response: httpx.Response) -> tuple[str, int]:
+    if not response.is_success:
+        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
+    try:
+        endpoints: Final = _COPILOT_USER.validate_python(response.json()).get("endpoints")
+    except ValueError:
+        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_TTL_SECONDS
+    endpoints_api: Final = endpoints.get("api") if endpoints is not None else None
+    return _trusted_plan_api_base(endpoints_api) or DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_TTL_SECONDS
+
+
+def _plan_api_base_key(github_token: str) -> str:
+    return hashlib.sha256(github_token.encode()).hexdigest()
+
+
+def _cached_plan_api_base(key: str) -> str | None:
+    cached: Final = _PLAN_API_BASES.get_cache(key)
+    return cached if isinstance(cached, str) else None
+
+
+def _remember_plan_api_base(key: str, resolved: tuple[str, int]) -> None:
+    api_base, ttl = resolved
+    _PLAN_API_BASES.set_cache(key, api_base, ttl=ttl)
+
+
+def _plan_api_base_is_needed(github_token: str, api_base: str | None) -> bool:
+    _, configured_api_base = _configured_copilot_api_base_source(api_base)
+    return not configured_api_base and _cached_plan_api_base(_plan_api_base_key(github_token)) is None
+
+
+def _lookup_plan_api_base(github_token: str) -> tuple[str, int]:
+    import litellm
+
+    client: Final = cast(_SyncGetClient, litellm.module_level_client)  # cast-ok: pins the untyped client
+    try:
+        response: Final = client.get(
+            _COPILOT_USER_URL, headers=get_copilot_auth_headers(github_token), timeout=_PLAN_API_BASE_TIMEOUT_SECONDS
+        )
+    except httpx.HTTPError:
+        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
+    return _plan_api_base_from(response)
+
+
+async def _alookup_plan_api_base(github_token: str) -> tuple[str, int]:
+    from litellm.llms.custom_httpx import http_handler
+
+    client: Final = cast(  # cast-ok: pins the untyped client factory to the local Protocol
+        Callable[[str], _AsyncGetClient], http_handler.get_async_httpx_client
+    )("github_copilot")
+    try:
+        response: Final = await client.get(
+            _COPILOT_USER_URL, headers=get_copilot_auth_headers(github_token), timeout=_PLAN_API_BASE_TIMEOUT_SECONDS
+        )
+    except httpx.HTTPError:
+        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
+    return _plan_api_base_from(response)
+
+
+def prefetch_copilot_plan_api_base(github_token: str, api_base: str | None = None) -> None:
+    if _plan_api_base_is_needed(github_token, api_base):
+        _remember_plan_api_base(_plan_api_base_key(github_token), _lookup_plan_api_base(github_token))
+
+
+async def aprefetch_copilot_plan_api_base(github_token: str, api_base: str | None = None) -> None:
+    if _plan_api_base_is_needed(github_token, api_base):
+        _remember_plan_api_base(_plan_api_base_key(github_token), await _alookup_plan_api_base(github_token))
+
+
+def get_copilot_api_base(api_base: str | None = None, github_token: Callable[[], str | None] | None = None) -> str:
+    configured_api_base: Final = _configured_copilot_api_base(api_base)
+    if configured_api_base is not None:
+        return configured_api_base
+    token: Final = github_token() if github_token is not None else None
+    plan_api_base: Final = _cached_plan_api_base(_plan_api_base_key(token)) if token else None
+    return plan_api_base or DEFAULT_GITHUB_COPILOT_API_BASE
+
+
+async def aget_copilot_api_base(github_token: str, api_base: str | None = None) -> str:
+    await aprefetch_copilot_plan_api_base(github_token, api_base)
+    return get_copilot_api_base(api_base, lambda: github_token)
 
 
 def pin_session_authorization(

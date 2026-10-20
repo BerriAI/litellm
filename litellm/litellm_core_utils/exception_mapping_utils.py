@@ -2469,6 +2469,15 @@ def exception_type(
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
+    if isinstance(original_exception, Exception) and getattr(original_exception, "status_code", None) == 401:
+        from litellm.llms.github_copilot.per_user_auth import github_copilot_caller_rejection
+
+        github_copilot_rejection: Final = github_copilot_caller_rejection(
+            original_exception,
+            cast(object, extra_kwargs),  # cast-ok: extra_kwargs arrives as an untyped request dict
+        )
+        if github_copilot_rejection is not None:
+            raise github_copilot_rejection from original_exception
     if isinstance(original_exception, ImportError) and (
         original_exception.name in ("boto3", "botocore") or custom_llm_provider in ("bedrock", "bedrock_mantle")
     ):

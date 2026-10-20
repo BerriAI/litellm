@@ -56,6 +56,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/custom_httpx/http_handler.py",
         "litellm/llms/databricks/agent/transformation.py",
         "litellm/llms/gigachat/authenticator.py",
+        "litellm/llms/github_copilot/common_utils.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",

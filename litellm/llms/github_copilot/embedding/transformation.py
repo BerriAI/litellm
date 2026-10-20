@@ -120,8 +120,11 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        operator_api_base: Final = get_copilot_api_base(api_base if user_session is None else None)
-        return f"{operator_api_base.rstrip('/')}/embeddings"
+        resolved: Final = get_copilot_api_base(
+            api_base,
+            lambda: user_session.token if user_session is not None else self.authenticator.get_api_key(),
+        )
+        return f"{resolved.rstrip('/')}/embeddings"
 
     def transform_embedding_request(
         self,

@@ -52,12 +52,12 @@ class TestDeclaredAuthenticatingProvider:
         assert api_base == expected
 
     def test_copilot_reports_configured_environment_base(self, isolated_token_dirs, resolution_lookups, monkeypatch):
-        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "http://configured.example.com/v1")
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://configured.example.com/v1")
 
         api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
 
         assert resolution_lookups == []
-        assert api_base == "http://configured.example.com/v1"
+        assert api_base == "https://configured.example.com/v1"
 
     def test_explicit_api_base_still_wins(self, isolated_token_dirs, resolution_lookups):
         api_base = litellm.get_api_base(

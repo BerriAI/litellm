@@ -63,13 +63,10 @@ def test_github_copilot_embedding_config_validate_environment():
 @pytest.mark.parametrize(
     ("deployment_base", "environment_base", "expected_base"),
     [
-        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
         (None, "https://copilot.example.test/", "https://copilot.example.test"),
         (None, "http://localhost:8080/", "http://localhost:8080"),
         ("https://deployment.example.test/", "https://env.example.test", "https://deployment.example.test"),
         ("http://localhost:9090/", "https://env.example.test", "http://localhost:9090"),
-        ("not-a-url", "https://env.example.test", "https://env.example.test"),
-        (None, "not-a-url", DEFAULT_GITHUB_COPILOT_API_BASE),
     ],
 )
 def test_github_copilot_embedding_config_get_complete_url(
@@ -95,6 +92,25 @@ def test_github_copilot_embedding_config_get_complete_url(
 
     assert url == f"{expected_base}/embeddings"
     assert config.authenticator.mock_calls == []
+
+
+def test_github_copilot_embedding_url_falls_back_to_the_default_base_without_a_known_plan_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    config: Final = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "shared-github-token"
+
+    url: Final = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="github_copilot/text-embedding-3-small",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == f"{DEFAULT_GITHUB_COPILOT_API_BASE}/embeddings"
 
 
 def test_github_copilot_embedding_config_transform_request():
@@ -301,11 +317,11 @@ def test_per_user_session_token_wins_over_caller_authorization(authorization_hea
 
 
 @pytest.mark.parametrize(
-    ("request_base", "expected_base"),
-    [(None, "http://localhost:8080"), ("https://attacker.example.test/", "http://localhost:8080")],
+    ("deployment_base", "expected_base"),
+    [(None, "http://localhost:8080"), ("https://deployment.example.test/", "https://deployment.example.test")],
 )
-def test_get_complete_url_ignores_request_base_with_per_user_session(
-    monkeypatch: pytest.MonkeyPatch, request_base: str | None, expected_base: str
+def test_get_complete_url_uses_the_deployment_base_with_per_user_session(
+    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, expected_base: str
 ) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
@@ -314,7 +330,7 @@ def test_get_complete_url_ignores_request_base_with_per_user_session(
     config.authenticator = MagicMock()
     session: Final = GithubCopilotUserSession(token="user-oauth-token")
     url: Final = config.get_complete_url(
-        api_base=request_base,
+        api_base=deployment_base,
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},

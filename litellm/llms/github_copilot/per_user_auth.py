@@ -35,8 +35,15 @@ from .authenticator import (
     DEFAULT_GITHUB_ACCESS_TOKEN_URL,
     DEFAULT_GITHUB_CLIENT_ID,
     DEFAULT_GITHUB_DEVICE_CODE_URL,
+    Authenticator,
 )
-from .common_utils import get_copilot_api_base, get_copilot_auth_headers, get_copilot_default_headers
+from .common_utils import (
+    aget_copilot_api_base,
+    aprefetch_copilot_plan_api_base,
+    get_copilot_auth_headers,
+    get_copilot_default_headers,
+    prefetch_copilot_plan_api_base,
+)
 
 GITHUB_COPILOT_USER_SESSION_KWARG_KEY: Final = "github_copilot_user_session"
 _LLM_PROVIDER: Final = "github_copilot"
@@ -294,7 +301,7 @@ async def acheck_copilot_seat(github_token: str, credential_name: str) -> None:
     client: Final = _new_async_github_client()
     try:
         response: Final = await client.get(
-            f"{get_copilot_api_base().rstrip('/')}/models",
+            f"{(await aget_copilot_api_base(github_token)).rstrip('/')}/models",
             headers=get_copilot_default_headers(github_token),
         )
     except Exception as e:
@@ -413,6 +420,17 @@ def require_github_copilot_user_session(litellm_params: object) -> GithubCopilot
     return None
 
 
+def github_copilot_caller_rejection(
+    original_exception: object, request_kwargs: object
+) -> CallerCredentialAuthenticationError | None:
+    if (
+        getattr(original_exception, "status_code", None) != 401
+        or github_copilot_user_session_from(request_kwargs) is None
+    ):
+        return None
+    return _reject_connection(github_copilot_per_user_credential_name(request_kwargs) or "")
+
+
 def is_github_copilot_per_user_request(kwargs: Mapping[str, object]) -> bool:
     """True when this call carries a resolved per-user Copilot session, meaning it
     must bypass the shared response cache (cache keys ignore caller identity).
@@ -490,3 +508,36 @@ def attach_github_copilot_user_session(
     session: Final = GithubCopilotUserSession(token=github_token)
     kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = session  # rebind-ok: kwargs is the request mutation channel
     _strip_caller_authorization(kwargs)
+
+
+def _plan_api_base_request(kwargs: Mapping[str, object], model: object) -> tuple[str, str | None] | None:
+    api_base_obj: Final = kwargs.get("api_base")
+    api_base: Final = api_base_obj if isinstance(api_base_obj, str) else None
+    session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
+    if isinstance(session, GithubCopilotUserSession):
+        return session.token, api_base
+    targets_github_copilot: Final = kwargs.get("custom_llm_provider") == _LLM_PROVIDER or (
+        isinstance(model, str) and model.startswith(f"{_LLM_PROVIDER}/")
+    )
+    shared_token: Final = Authenticator().stored_access_token() if targets_github_copilot else None
+    return (shared_token, api_base) if shared_token is not None else None
+
+
+def prepare_github_copilot_request(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    model: object,
+) -> None:
+    attach_github_copilot_user_session(kwargs)
+    plan_request: Final = _plan_api_base_request(kwargs, model)
+    if plan_request is not None:
+        prefetch_copilot_plan_api_base(*plan_request)
+
+
+async def aprepare_github_copilot_request(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    model: object,
+) -> None:
+    attach_github_copilot_user_session(kwargs)
+    plan_request: Final = _plan_api_base_request(kwargs, model)
+    if plan_request is not None:
+        await aprefetch_copilot_plan_api_base(*plan_request)

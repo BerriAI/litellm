@@ -16,6 +16,7 @@ from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
+    InvalidAPIBaseError,
     get_copilot_api_base,
     get_copilot_default_headers,
 )
@@ -61,54 +62,57 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
 
-    @pytest.mark.parametrize("scheme", ["http", "https"])
-    def test_get_api_base_prefers_environment(self, scheme):
-        with patch.dict(
-            os.environ,
-            {"GITHUB_COPILOT_API_BASE": f"{scheme}://configured.example.com"},
-            clear=True,
-        ):
-            assert get_copilot_api_base() == f"{scheme}://configured.example.com"
+    @pytest.mark.parametrize(
+        "api_base",
+        (
+            "https://configured.example.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+        ),
+    )
+    def test_get_api_base_prefers_environment(self, api_base):
+        with patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True):
+            assert get_copilot_api_base() == api_base
 
     @pytest.mark.parametrize(
         "api_base",
         (
+            "http://configured.example.com",
+            "http://10.0.0.1:8080",
             "ftp://api.githubcopilot.com",
             "https://user:password@api.githubcopilot.com",
             "https://api.githubcopilot.com?tenant=example",
             "https://api.githubcopilot.com#fragment",
             "api.githubcopilot.com",
             "https:///missing-host",
+            "https://[invalid",
         ),
     )
-    def test_get_api_base_rejects_invalid_configuration(self, api_base, caplog):
+    def test_get_api_base_rejects_invalid_configuration(self, api_base):
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
-            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot GITHUB_COPILOT_API_BASE must be an HTTPS URL"),
         ):
-            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
-
-        assert (
-            "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTP(S) URL without credentials, query, or fragment"
-            in caplog.text
-        )
+            get_copilot_api_base()
 
     def test_get_api_base_uses_default_when_unconfigured(self):
         with patch.dict(os.environ, {}, clear=True):
             assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
 
-    @pytest.mark.parametrize("scheme", ["http", "https"])
-    def test_get_api_base_prefers_deployment_endpoint(self, scheme):
+    @pytest.mark.parametrize("api_base", ("https://deployment.example.com", "http://localhost:9000"))
+    def test_get_api_base_prefers_deployment_endpoint(self, api_base):
         with patch.dict(
             os.environ,
             {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
             clear=True,
         ):
-            assert get_copilot_api_base(f"{scheme}://deployment.example.com") == f"{scheme}://deployment.example.com"
+            assert get_copilot_api_base(api_base) == api_base
 
     @pytest.mark.parametrize(
         "api_base",
         [
+            "http://deployment.example.com",
             "ftp://deployment.example.com",
             "https://user:pw@deployment.example.com",
             "https://deployment.example.com?q=1",
@@ -117,21 +121,16 @@ class TestGitHubCopilotAuthenticator:
             "deployment.example.com",
         ],
     )
-    def test_get_api_base_falls_back_from_invalid_deployment_endpoint(self, api_base, caplog):
+    def test_get_api_base_rejects_invalid_deployment_endpoint_instead_of_falling_back(self, api_base):
         with (
             patch.dict(
                 os.environ,
                 {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
                 clear=True,
             ),
-            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot api_base must be an HTTPS URL"),
         ):
-            assert get_copilot_api_base(api_base) == "https://configured.example.com"
-
-        assert (
-            "Ignoring deployment api_base because it must be an HTTP(S) URL without credentials, query, or fragment"
-            in caplog.text
-        )
+            get_copilot_api_base(api_base)
 
     @pytest.mark.parametrize("deployment_base", [None, ""])
     @pytest.mark.parametrize("environment_base", [None, ""])
@@ -139,6 +138,34 @@ class TestGitHubCopilotAuthenticator:
         environment = {} if environment_base is None else {"GITHUB_COPILOT_API_BASE": environment_base}
         with patch.dict(os.environ, environment, clear=True), caplog.at_level(logging.WARNING, logger="LiteLLM"):
             assert get_copilot_api_base(deployment_base) == DEFAULT_GITHUB_COPILOT_API_BASE
+        assert caplog.text == ""
+
+    def test_get_api_base_warns_when_only_an_enterprise_token_exchange_url_is_set(self, caplog):
+        with (
+            patch.dict(
+                os.environ,
+                {"GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token"},
+                clear=True,
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
+        assert "GITHUB_COPILOT_API_KEY_URL is no longer used" in caplog.text
+        assert "Set GITHUB_COPILOT_API_BASE" in caplog.text
+
+    @pytest.mark.parametrize(
+        "environment",
+        (
+            {"GITHUB_COPILOT_API_KEY_URL": "https://api.github.com/copilot_internal/v2/token"},
+            {
+                "GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token",
+                "GITHUB_COPILOT_API_BASE": "https://copilot-api.octo.ghe.com",
+            },
+        ),
+    )
+    def test_get_api_base_does_not_warn_when_the_token_exchange_url_needs_no_action(self, environment, caplog):
+        with patch.dict(os.environ, environment, clear=True), caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            get_copilot_api_base()
         assert caplog.text == ""
 
     def test_get_github_headers(self, authenticator):

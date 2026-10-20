@@ -11,7 +11,7 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.types.utils import server_owned_wif_litellm_params
@@ -80,6 +80,14 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 
 
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
+
+
+def caller_endpoint_keys_to_drop(deployment_litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+    model: Final = deployment_litellm_params.get("model")
+    is_github_copilot: Final = deployment_litellm_params.get("custom_llm_provider") == "github_copilot" or (
+        isinstance(model, str) and model.startswith("github_copilot/")
+    )
+    return ("api_base", "base_url") if is_github_copilot else ()
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

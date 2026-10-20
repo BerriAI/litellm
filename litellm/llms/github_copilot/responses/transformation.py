@@ -265,8 +265,11 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        operator_api_base: Final = get_copilot_api_base(api_base if user_session is None else None)
-        return f"{operator_api_base.rstrip('/')}/responses"
+        resolved: Final = get_copilot_api_base(
+            api_base,
+            lambda: user_session.token if user_session is not None else self.authenticator.get_api_key(),
+        )
+        return f"{resolved.rstrip('/')}/responses"
 
     def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """

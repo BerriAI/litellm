@@ -196,6 +196,7 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
+    caller_endpoint_keys_to_drop,
     get_dynamic_litellm_params,
     is_clientside_credential,
 )
@@ -4585,8 +4586,13 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
-        for key in self._forwarded_alias_marker_keys_the_deployment_sets(
-            deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        for key in (
+            *self._forwarded_alias_marker_keys_the_deployment_sets(
+                deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+            ),
+            *caller_endpoint_keys_to_drop(
+                cast("Mapping[str, object]", deployment["litellm_params"])  # cast-ok: untyped deployment dict
+            ),
         ):
             kwargs.pop(key, None)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=self.default_litellm_params)
