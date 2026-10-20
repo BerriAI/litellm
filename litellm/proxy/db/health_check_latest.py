@@ -10,8 +10,9 @@ worker on every call. ``SELECT DISTINCT ON`` keeps the transfer at one row per
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, field_validator
@@ -113,3 +114,13 @@ async def fetch_latest_health_checks_for_models(
     except Exception as query_err:  # noqa: BLE001  # a paged model list must not fail on its health decoration
         verbose_proxy_logger.error("Error getting latest health checks for models: %s", query_err)
         return ()
+
+
+def latest_by_model_name(rows: Iterable[LatestHealthCheckRow]) -> Mapping[str, LatestHealthCheckRow]:
+    """The newest row per model name.
+
+    The queries above return one row per (model_id, model_name), so a model group with several
+    deployments comes back as several rows, plus one without a model_id if it was ever checked by
+    name. They arrive in model_id order with NULL last, which says nothing about which check is newest.
+    """
+    return MappingProxyType({row.model_name: row for row in sorted(rows, key=lambda row: row.checked_at)})
