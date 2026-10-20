@@ -6411,21 +6411,17 @@ _NUM_RETRIES_ADAPTER: Final = TypeAdapter(float)
 _RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy)
 
 
-def _build_retry_predicate(
-    retry_policy_exception_type: type[BaseException] | None,
-    retry_policy: RetryPolicy | None,
-) -> Callable[[BaseException], bool]:
-    """Check if an exception is transient or explicitly enabled via RetryPolicy."""
+def _build_retry_predicate(retry_policy: RetryPolicy | None) -> Callable[[BaseException], bool]:
+    """A RetryPolicy count decides for the errors it covers, and other errors retry only when transient."""
 
     def _predicate(e: BaseException) -> bool:
-        if retry_policy_exception_type is not None and isinstance(e, retry_policy_exception_type):
-            return True
-        if (
-            retry_policy is not None
-            and isinstance(e, Exception)
-            and (get_num_retries_from_retry_policy(exception=e, retry_policy=retry_policy) or 0) > 0
-        ):
-            return True
+        policy_retries: Final[int | None] = (
+            get_num_retries_from_retry_policy(exception=e, retry_policy=retry_policy)
+            if retry_policy is not None and isinstance(e, Exception)
+            else None
+        )
+        if policy_retries is not None:
+            return policy_retries > 0
         status_code: Final[object] = getattr(e, "status_code", None)
         if isinstance(status_code, int):
             return should_retry(status_code)
@@ -6440,12 +6436,6 @@ class _RetryPlan:
     retry_policy: RetryPolicy | None
     initial_exception: BaseException | None
 
-    @property
-    def retry_policy_exception_type(self) -> type[BaseException] | None:
-        if self.retry_policy is None or self.initial_exception is None:
-            return None
-        return type(self.initial_exception)
-
 
 def _retry_plan_after_first_error(
     first_error: Exception, num_retries: int, retry_policy: RetryPolicy
@@ -6458,9 +6448,9 @@ def _retry_plan_after_first_error(
         if policy_retries <= 0:
             return None
         return _RetryPlan(num_retries=policy_retries, retry_policy=retry_policy, initial_exception=first_error)
-    if num_retries <= 1 or not _build_retry_predicate(None, None)(first_error):
+    if num_retries <= 1 or not _build_retry_predicate(None)(first_error):
         return None
-    return _RetryPlan(num_retries=num_retries - 1, retry_policy=None, initial_exception=first_error)
+    return _RetryPlan(num_retries=num_retries - 1, retry_policy=retry_policy, initial_exception=first_error)
 
 
 def _run_completion_retries(
@@ -6487,7 +6477,7 @@ def _run_completion_retries(
     retryer: Final = tenacity.Retrying(
         wait=_build_retry_wait_fn(plan.num_retries, retry_strategy),
         stop=tenacity.stop_after_attempt(plan.num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy_exception_type, plan.retry_policy)),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
     )
     return retryer(original_function, *args, **kwargs)
@@ -6517,7 +6507,7 @@ async def _run_acompletion_retries(
     retryer: Final = tenacity.AsyncRetrying(
         wait=_build_retry_wait_fn(plan.num_retries, retry_strategy),
         stop=tenacity.stop_after_attempt(plan.num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy_exception_type, plan.retry_policy)),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
     )
     return await retryer(original_function, *args, **kwargs)

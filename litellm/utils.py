@@ -1553,20 +1553,22 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     retry_policy: Final[object] = kwargs.pop("retry_policy", None)
     if not retry_policy:
         return num_retries, kwargs
-    get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
-        litellm_utils.get_num_retries_from_retry_policy
-    )
-    retry_policy_num_retries: Final[int | None] = get_num_retries_from_retry_policy(
-        exception=exception,
-        retry_policy=retry_policy,
-    )
+    kwargs["retry_policy"] = retry_policy
+    retry_policy_num_retries: Final[int | None] = _get_retry_policy_num_retries(kwargs, exception)
     if retry_policy_num_retries is None:
         return num_retries, kwargs
-    kwargs["retry_policy"] = retry_policy
     return retry_policy_num_retries, kwargs
 
 
-def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
+def _get_retry_policy_num_retries(kwargs: Mapping[str, object], exception: Exception) -> int | None:
+    get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
+        litellm_utils.get_num_retries_from_retry_policy
+    )
+    retry_policy: Final[object] = kwargs.get("retry_policy")
+    return get_num_retries_from_retry_policy(exception=exception, retry_policy=retry_policy) if retry_policy else None
+
+
+def _get_wrapper_timeout(kwargs: Mapping[str, object]) -> object:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     if kwargs.get("stream") is not True:
@@ -1576,6 +1578,13 @@ def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
         return logging_obj.applied_timeout
     stream_timeout: Final = kwargs.get("stream_timeout")
     return kwargs.get("timeout") if stream_timeout is None else stream_timeout
+
+
+def _add_retry_context(error: Exception, kwargs: Mapping[str, object]) -> None:
+    deployment_num_retries: Final = kwargs.get("num_retries")
+    if deployment_num_retries is not None:
+        setattr(error, "num_retries", deployment_num_retries)
+    setattr(error, "timeout", _get_wrapper_timeout(kwargs=kwargs))
 
 
 def check_coroutine(value) -> bool:
@@ -2066,7 +2075,9 @@ def client(original_function):
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     status_code: Final[object] = getattr(e, "status_code", None)
                     if (
-                        "retry_policy" in kwargs or not isinstance(status_code, int) or should_retry(status_code)
+                        _get_retry_policy_num_retries(kwargs, e) is not None
+                        or not isinstance(status_code, int)
+                        or should_retry(status_code)
                     ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, _initial_exception=e, **kwargs)
@@ -2076,11 +2087,10 @@ def client(original_function):
                     and model in context_window_fallback_dict
                     and not is_completion_litellm_router_call
                 ):
+                    fallback_model: Final = context_window_fallback_dict[model]
                     if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]
-                    else:
-                        kwargs["model"] = context_window_fallback_dict[model]
-                    return original_function(*args, **kwargs)
+                        return original_function(fallback_model, *args[1:], **kwargs)
+                    return original_function(*args, **{**kwargs, "model": fallback_model})
             elif call_type == CallTypes.responses.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
@@ -2139,6 +2149,7 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
+        request_kwargs: Final = {**kwargs}
 
         try:
             if logging_obj is None:
@@ -2353,6 +2364,41 @@ def client(original_function):
 
             return result
         except Exception as e:
+            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+            is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
+            retries_apply: Final = (
+                call_type == CallTypes.acompletion.value
+                and bool(num_retries)
+                and not is_acompletion_litellm_router_call
+                and not isinstance(e, ImportError)
+            )  # router has its own logic for retrying
+            if retries_apply:
+                litellm.num_retries = None  # set retries to None to prevent infinite loops
+            status_code: Final[object] = getattr(e, "status_code", None)
+            acompletion_retried: Final = (
+                retries_apply
+                and (
+                    _get_retry_policy_num_retries(kwargs, e) is not None
+                    or not isinstance(status_code, int)
+                    or should_retry(status_code)
+                )
+                and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError))
+            )
+            if acompletion_retried:
+                kwargs["num_retries"] = num_retries
+                try:
+                    return await litellm.acompletion_with_retries(
+                        *args,
+                        original_function=litellm.acompletion,
+                        _initial_exception=e,
+                        **{**request_kwargs, "num_retries": num_retries},
+                    )
+                except openai.APIError as retry_err:
+                    _add_retry_context(retry_err, kwargs)
+                    raise
+                except Exception as retry_unavailable:
+                    verbose_logger.debug("acompletion retries did not run: %s", retry_unavailable)
+
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
@@ -2370,44 +2416,20 @@ def client(original_function):
                 except Exception as e:
                     raise e
 
-            retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
-            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if retry_call_type == CallTypes.acompletion.value:
+            if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
-
-                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
-
-                retries_apply: Final = (
-                    bool(num_retries) and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
-                )  # router has its own logic for retrying
-                if retries_apply:
-                    litellm.num_retries = None  # set retries to None to prevent infinite loops
-                status_code: Final[object] = getattr(e, "status_code", None)
                 if (
-                    retries_apply
-                    and ("retry_policy" in kwargs or not isinstance(status_code, int) or should_retry(status_code))
-                    and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError))
-                ):
-                    kwargs["num_retries"] = num_retries
-                    try:
-                        return await litellm.acompletion_with_retries(*args, _initial_exception=e, **kwargs)
-                    except openai.APIError as retry_err:
-                        e = retry_err
-                    except Exception as retry_unavailable:
-                        verbose_logger.debug("acompletion retries did not run: %s", retry_unavailable)
-                elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                    not acompletion_retried
+                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                     and not is_acompletion_litellm_router_call
                 ):
+                    fallback_model: Final = context_window_fallback_dict[model]
                     if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]
-                    else:
-                        kwargs["model"] = context_window_fallback_dict[model]
-                    result = await original_function(*args, **kwargs)
-                    return result
-            elif retry_call_type == CallTypes.aresponses.value:
+                        return await original_function(fallback_model, *args[1:], **kwargs)
+                    return await original_function(*args, **{**kwargs, "model": fallback_model})
+            elif call_type == CallTypes.aresponses.value:
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
@@ -2427,13 +2449,8 @@ def client(original_function):
                     else:
                         return result
 
-            deployment_num_retries: Final = kwargs.get("num_retries")
-            if deployment_num_retries is not None:
-                setattr(e, "num_retries", deployment_num_retries)
-
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
-            setattr(e, "timeout", timeout)
-            raise e
+            _add_retry_context(e, kwargs)
+            raise
 
         finally:
             # Restore trace_id/session_id contextvars to their pre-call value once
