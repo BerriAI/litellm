@@ -4,25 +4,26 @@ calls, the workers' memory) into the case's metrics, and the case's limits into 
 from __future__ import annotations
 
 import hashlib
+import json
 import statistics
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import chain
-from typing import Final
+from typing import Final, Literal
 
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
 
 from setup.datastore import (
-    active_sessions,
-    slowest_statement,
     DbCounters,
     RedisCommand,
     RedisCounters,
     StatementCalls,
+    active_sessions,
     calls_in,
+    slowest_statement,
     statement_deltas,
 )
 from setup.mocks.reply_common import Provider
@@ -184,33 +185,42 @@ class Observation:
         """Requests the plan expected to succeed that came back with any other status (0 is a client timeout)."""
         return sum(1 for record in self.records if not record.blocked and record.status != 200)
 
-    def gateway_added_seconds(self) -> list[float]:
-        """Seconds the gateway added to each first-attempt request: total time minus the mock's own delay for a
-        non-streamed request, time to the first token minus the mock's delay to its first byte for a stream."""
-        non_stream: Final = [record.total_s - delay for record, delay in self._clean(stream=False)]
-        stream: Final = [
-            record.first_token_s - delay
-            for record, delay in self._clean(stream=True)
-            if record.first_token_s is not None
-        ]
-        return non_stream + stream
+    def latency_pairs(self, metric: LatencyMetric) -> list[tuple[WireRecord, float]]:
+        """Each first-attempt request with its value of one latency metric. `gateway_added_seconds` is the
+        seconds the gateway added (total time minus the mock's own delay for a non-streamed request, time to the
+        first token minus the mock's delay for a stream), `time_to_first_token_seconds` is the client's wait for
+        the first token with the mock delay included, and the two `litellm_*` metrics are the gateway's own
+        `x-litellm-overhead-duration-ms` and `x-litellm-response-duration-ms` headers in seconds."""
+        if metric == "gateway_added_seconds":
+            non_stream: Final = [(record, record.total_s - delay) for record, delay in self._clean(stream=False)]
+            stream: Final = [
+                (record, record.first_token_s - delay)
+                for record, delay in self._clean(stream=True)
+                if record.first_token_s is not None
+            ]
+            return non_stream + stream
+        if metric == "time_to_first_token_seconds":
+            return [(r, r.first_token_s) for r, _ in self._clean(stream=True) if r.first_token_s is not None]
+        if metric == "litellm_overhead_seconds":
+            return [
+                (r, r.litellm_overhead_ms / 1000) for r in self._first_attempts() if r.litellm_overhead_ms is not None
+            ]
+        return [(r, r.litellm_response_ms / 1000) for r in self._first_attempts() if r.litellm_response_ms is not None]
 
     def _first_attempts(self) -> list[WireRecord]:
         return [record for record, _ in self._clean(stream=False)] + [record for record, _ in self._clean(stream=True)]
 
+    def gateway_added_seconds(self) -> list[float]:
+        return [value for _, value in self.latency_pairs("gateway_added_seconds")]
+
     def litellm_overhead_seconds(self) -> list[float]:
-        """`x-litellm-overhead-duration-ms` per first-attempt request, the gateway's own account of what it added
-        (receive time to response end, minus the provider call), in seconds to sit next to `gateway_added_seconds`."""
-        return [r.litellm_overhead_ms / 1000 for r in self._first_attempts() if r.litellm_overhead_ms is not None]
+        return [value for _, value in self.latency_pairs("litellm_overhead_seconds")]
 
     def litellm_response_seconds(self) -> list[float]:
-        """`x-litellm-response-duration-ms` per first-attempt request, the gateway's own end-to-end time."""
-        return [r.litellm_response_ms / 1000 for r in self._first_attempts() if r.litellm_response_ms is not None]
+        return [value for _, value in self.latency_pairs("litellm_response_seconds")]
 
     def time_to_first_token_seconds(self) -> list[float]:
-        """Seconds from the client sending each first-attempt streamed request to its first token, mock delay
-        included, comparable across versions because the mocks generate the same replies after the same wait."""
-        return [record.first_token_s for record, _ in self._clean(stream=True) if record.first_token_s is not None]
+        return [value for _, value in self.latency_pairs("time_to_first_token_seconds")]
 
     def bodies_off_reply(self) -> int:
         """Served requests whose text is not the reply the mock generated for them (plus the post-call rewrite
@@ -233,6 +243,131 @@ class Observation:
 def _text_sha1(text: str, *, intervened: bool) -> str:
     original: Final = text.removesuffix(" [post]") if intervened else text
     return hashlib.sha1(original.encode()).hexdigest()
+
+
+LatencyMetric = Literal[
+    "gateway_added_seconds", "time_to_first_token_seconds", "litellm_overhead_seconds", "litellm_response_seconds"
+]
+TOP_CONTRIBUTORS: Final = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Contributor:
+    """One slice of a metric: a statement, a Redis command, an endpoint, a worker or a status, with its own
+    value in the metric's unit and, where the metric is a total, its share of that total."""
+
+    label: str
+    value: float
+    share: float | None = None
+
+
+def _top(items: Iterable[Contributor]) -> tuple[Contributor, ...]:
+    return tuple(sorted(items, key=lambda item: item.value, reverse=True)[:TOP_CONTRIBUTORS])
+
+
+def _endpoint_label(record: WireRecord) -> str:
+    return f"{record.endpoint}{' stream' if record.stream else ''}"
+
+
+def _latency_breakdown(metric: LatencyMetric, rank: int, observation: Observation) -> tuple[Contributor, ...]:
+    pairs: Final = observation.latency_pairs(metric)
+    by_endpoint: dict[str, list[float]] = defaultdict(list)
+    for record, value in pairs:
+        by_endpoint[_endpoint_label(record)].append(value)
+    return _top(
+        Contributor(label, percentile(values, rank) or 0.0, len(values) / len(pairs))
+        for label, values in by_endpoint.items()
+    )
+
+
+def _statements_for(
+    metric: Metric, statements: tuple[StatementCalls, ...], exempt_tables: frozenset[str]
+) -> tuple[StatementCalls, ...]:
+    if metric in ("postgres_calls_per_request", "postgres_max_statement_per_request"):
+        return tuple(item for item in statements if item.bucket == "awaited")
+    if metric == "postgres_background_calls_per_request":
+        return tuple(item for item in statements if item.bucket == "background")
+    if metric == "postgres_max_background_statement_per_request":
+        return tuple(item for item in statements if item.bucket == "background" and item.table not in exempt_tables)
+    return tuple(item for item in statements if item.calls > 0)
+
+
+def _statement_breakdown(
+    metric: Metric, observation: Observation, exempt_tables: frozenset[str]
+) -> tuple[Contributor, ...]:
+    chosen: Final = _statements_for(metric, observation.statements or (), exempt_tables)
+    requests: Final = max(1, len(observation.records))
+    total_calls: Final = sum(item.calls for item in chosen)
+    total_ms: Final = sum(item.total_exec_ms for item in chosen)
+    if metric == "postgres_slowest_statement_seconds":
+        return _top(
+            Contributor(
+                item.summary, item.mean_exec_seconds or 0.0, item.total_exec_ms / total_ms if total_ms else None
+            )
+            for item in chosen
+        )
+    if metric == "postgres_active_sessions":
+        return _top(
+            Contributor(
+                item.summary, item.total_exec_ms / 1000 / observation.wall_seconds, item.total_exec_ms / total_ms
+            )
+            for item in chosen
+            if total_ms
+        )
+    return _top(
+        Contributor(item.summary, item.calls / requests, item.calls / total_calls) for item in chosen if total_calls
+    )
+
+
+def _redis_breakdown(metric: Metric, observation: Observation) -> tuple[Contributor, ...]:
+    bucket: Final = "awaited" if metric == "redis_calls_per_request" else "background"
+    chosen: Final = tuple(item for item in observation.redis_commands or () if item.bucket == bucket)
+    requests: Final = max(1, len(observation.records))
+    total: Final = sum(item.count for item in chosen)
+    return _top(
+        Contributor(f"{item.command} {item.key}".strip(), item.count / requests, item.count / total)
+        for item in chosen
+        if total
+    )
+
+
+def _memory_breakdown(observation: Observation) -> tuple[Contributor, ...]:
+    before: Final = {reading.worker: reading.ram_usage_mb for reading in observation.rss_before.readings}
+    return _top(
+        Contributor(f"{reading.replica} pid {reading.worker_pid}", reading.ram_usage_mb - before[reading.worker])
+        for reading in observation.rss_after.readings
+        if reading.worker in before
+    )
+
+
+def _status_breakdown(observation: Observation) -> tuple[Contributor, ...]:
+    unexpected: Final = [r for r in observation.records if not r.blocked and r.status != 200]
+    counts: Final = Counter(f"{_endpoint_label(record)} status {record.status}" for record in unexpected)
+    return _top(Contributor(label, float(count), count / len(unexpected)) for label, count in counts.items())
+
+
+def breakdown(
+    metric: Metric, percentile_rank: int | None, observation: Observation, exempt_tables: frozenset[str] = frozenset()
+) -> tuple[Contributor, ...]:
+    """The top contributors to one metric, so a spike on the chart names its statement, command, endpoint or
+    worker. Gauges with no slices (`cpu_seconds_per_request`, `prometheus_redis_latency_mean_seconds`,
+    `postgres_peak_connections`) have none."""
+    if metric in (
+        "gateway_added_seconds",
+        "time_to_first_token_seconds",
+        "litellm_overhead_seconds",
+        "litellm_response_seconds",
+    ):
+        return _latency_breakdown(metric, 50 if percentile_rank is None else percentile_rank, observation)
+    if metric.startswith("postgres_") and metric != "postgres_peak_connections":
+        return _statement_breakdown(metric, observation, exempt_tables)
+    if metric in {"redis_calls_per_request", "redis_background_calls_per_request"}:
+        return _redis_breakdown(metric, observation)
+    if metric == "memory_growth_megabytes":
+        return _memory_breakdown(observation)
+    if metric == "unexpected_status_count":
+        return _status_breakdown(observation)
+    return ()
 
 
 def observe(
@@ -290,6 +425,7 @@ class Row:
     observed: float | None
     limit: float | None
     detail: str = ""
+    breakdown: tuple[Contributor, ...] = ()
 
     @property
     def label(self) -> str:
@@ -351,6 +487,7 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
                 observed=observe(metric, rank, observation, case.background_cap_exempt_tables),
                 limit=limit.max if limit else None,
                 detail=_detail(metric, observation, case.background_cap_exempt_tables),
+                breakdown=breakdown(metric, rank, observation, case.background_cap_exempt_tables),
             )
         )
     exceeded: Final = [
@@ -376,13 +513,20 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
     return ""
 
 
-def _row_properties(row: Row) -> tuple[tuple[str, float], ...]:
+def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
     observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
     limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
-    return observed + limit
+    contributors: Final = (
+        ((f"{row.property_name}_breakdown", json.dumps([asdict(item) for item in row.breakdown])),)
+        if row.breakdown
+        else ()
+    )
+    return observed + limit + contributors
 
 
-def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float], ...]:
+def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float | str], ...]:
+    """One numeric property per observed metric and per limit, plus a `_breakdown` JSON list of the top
+    contributors for every metric that has slices, all under the `perf_` prefix the dashboard ingests."""
     return tuple(chain.from_iterable(map(_row_properties, rows)))
 
 
