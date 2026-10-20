@@ -61,7 +61,11 @@ def test_gemini_cloud_tts_maps_openai_voice_names_in_all_voice_forms(
         "languageCode": config.DEFAULT_LANGUAGE_CODE,
         "modelName": model,
         **(
-            {"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "reader", "speakerId": mapped_voice}]}}
+            {
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [{"speakerAlias": "reader", "speakerId": mapped_voice}]
+                }
+            }
             if multi_speaker
             else {"name": mapped_voice}
         ),
@@ -318,9 +322,10 @@ class TestVertexAITextToSpeechConfig:
     def test_gemini_tts_ignores_non_list_speaker_entries(self):
         config: Final = VertexAITextToSpeechConfig()
 
-        assert config._extract_gemini_tts_speaker_configs(
-            {"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": "invalid"}}
-        ) == []
+        assert (
+            config._extract_gemini_tts_speaker_configs({"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": "invalid"}})
+            == []
+        )
 
     @pytest.mark.parametrize(
         ("voice", "expected_name"),
@@ -595,17 +600,17 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
     }
     audio_bytes: Final = audio_by_encoding[encoding]
     logger: Final = MagicMock()
-    logger.model_call_details = {
-        "additional_args": {
-            "complete_input_dict": {
-                "dict_body": {
-                    "input": {"text": input_text},
-                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
-                }
-            }
-        }
-    }
-    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    sent_request: Final = httpx.Request(
+        "POST",
+        _SYNTHESIZE_URL,
+        json={
+            "input": {"text": input_text},
+            "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+        },
+    )
+    raw_response: Final = httpx.Response(
+        200, json={"audioContent": base64.b64encode(audio_bytes).decode()}, request=sent_request
+    )
 
     result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
     usage: Final = result.usage
@@ -649,18 +654,18 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
 @pytest.mark.parametrize("encoding", ["ALAW", "MULAW"])
 @pytest.mark.parametrize("audio", [b"\x12" * 24000, b"RIFF" + b"\x12" * 23996])
 def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavailable(encoding: str, audio: bytes):
-    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio).decode()})
     logger: Final = MagicMock()
-    logger.model_call_details = {
-        "additional_args": {
-            "complete_input_dict": {
-                "dict_body": {
-                    "input": {"text": "Hello"},
-                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
-                }
-            }
-        }
-    }
+    sent_request: Final = httpx.Request(
+        "POST",
+        _SYNTHESIZE_URL,
+        json={
+            "input": {"text": "Hello"},
+            "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+        },
+    )
+    raw_response: Final = httpx.Response(
+        200, json={"audioContent": base64.b64encode(audio).decode()}, request=sent_request
+    )
 
     with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
         result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(
@@ -676,18 +681,18 @@ def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavai
 
 
 def test_gemini_cloud_tts_returns_audio_unbilled_when_duration_is_unmeasurable():
-    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(b"invalid").decode()})
     logger: Final = MagicMock()
-    logger.model_call_details = {
-        "additional_args": {
-            "complete_input_dict": {
-                "dict_body": {
-                    "input": {"text": "Hello"},
-                    "audioConfig": {"audioEncoding": "MP3", "sampleRateHertz": 24000},
-                }
-            }
-        }
-    }
+    sent_request: Final = httpx.Request(
+        "POST",
+        _SYNTHESIZE_URL,
+        json={
+            "input": {"text": "Hello"},
+            "audioConfig": {"audioEncoding": "MP3", "sampleRateHertz": 24000},
+        },
+    )
+    raw_response: Final = httpx.Response(
+        200, json={"audioContent": base64.b64encode(b"invalid").decode()}, request=sent_request
+    )
 
     with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
         result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(
@@ -1462,7 +1467,12 @@ _GENERATE_CONTENT_RESPONSE: Final = {
             "content": {
                 "role": "model",
                 "parts": [
-                    {"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": base64.b64encode(_PCM_AUDIO).decode()}}
+                    {
+                        "inlineData": {
+                            "mimeType": "audio/L16;codec=pcm;rate=24000",
+                            "data": base64.b64encode(_PCM_AUDIO).decode(),
+                        }
+                    }
                 ],
             },
             "finishReason": "STOP",
@@ -1577,10 +1587,13 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_instructions_as_the_style_
 @pytest.mark.parametrize(
     ("vertex_location", "synthesize_url"),
     (
-        ("us-central1", "https://us-central1-texttospeech.googleapis.com/v1/text:synthesize"),
-        ("europe-west4", "https://europe-west4-texttospeech.googleapis.com/v1/text:synthesize"),
-        ("northamerica-northeast1", "https://northamerica-northeast1-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-central1", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-east5", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-north1", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("northamerica-northeast1", "https://northamerica-northeast1-texttospeech.googleapis.com/v1/text:synthesize"),
         ("global", _SYNTHESIZE_URL),
     ),
 )
@@ -1607,6 +1620,78 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_keeps_the_deployment_region(
 
     assert route.call_count == 1
     assert response.content == audio_bytes
+
+
+@pytest.mark.parametrize("vertex_location", ["asia-northeast1", "europe-west2", "australia-southeast1"])
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_region_cloud_tts_does_not_serve(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, vertex_location: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=f"no Gemini TTS location for vertex_location {vertex_location}"):
+        await litellm.aspeech(
+            model="vertex_ai/gemini-3.1-flash-tts-preview",
+            input="Say hello",
+            voice="Kore",
+            response_format="mp3",
+            vertex_credentials=_AUTHORIZED_USER,
+            vertex_location=vertex_location,
+        )
+
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_router_gemini_tts_mp3_unknown_voice_is_a_bad_request_that_keeps_the_deployment_serving(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    respx_mock.post(_SYNTHESIZE_URL).mock(
+        side_effect=lambda request: (
+            httpx.Response(
+                404, json={"error": {"code": 404, "message": "Voice Koree not found.", "status": "NOT_FOUND"}}
+            )
+            if json.loads(request.content)["voice"]["name"] == "Koree"
+            else httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-tts",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.1-flash-tts-preview",
+                    "vertex_credentials": _AUTHORIZED_USER,
+                    "vertex_location": "global",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Voice Koree not found"):
+        await router.aspeech(model="gemini-tts", input="Say hello", voice="Koree", response_format="mp3")
+    response: Final = await router.aspeech(model="gemini-tts", input="Say hello", voice="Kore", response_format="mp3")
+
+    assert response.content == audio_bytes
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_chirp_unknown_voice_stays_not_found(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(
+            404, json={"error": {"code": 404, "message": "Voice en-US-Nope not found.", "status": "NOT_FOUND"}}
+        )
+    )
+
+    with pytest.raises(litellm.NotFoundError, match="Voice en-US-Nope not found"):
+        await litellm.aspeech(
+            model="vertex_ai/chirp",
+            input="Say hello",
+            voice={"languageCode": "en-US", "name": "en-US-Nope"},
+            vertex_credentials=_AUTHORIZED_USER,
+        )
 
 
 @pytest.mark.asyncio
@@ -1676,12 +1761,12 @@ async def test_aspeech_vertex_ai_gemini_tts_unsupported_format_is_rejected_befor
 def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, mock_ensure_token, mock_post):
     mock_ensure_token.return_value = ("mock-token", "test-project")
     mock_get_token.return_value = ("mock-token", "mock-url")
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
-    mock_response.json.return_value = {"audioContent": base64.b64encode(audio_bytes).decode()}
-    mock_post.return_value = mock_response
+    mock_post.side_effect = lambda **kwargs: httpx.Response(
+        200,
+        json={"audioContent": base64.b64encode(audio_bytes).decode()},
+        request=httpx.Request("POST", kwargs["url"], json=kwargs["json"]),
+    )
 
     result: Final = litellm.speech(
         model="vertex_ai/gemini-3.1-flash-tts-preview",

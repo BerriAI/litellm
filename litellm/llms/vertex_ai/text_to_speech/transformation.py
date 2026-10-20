@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -54,6 +55,24 @@ _LyriaVoice: TypeAlias = str | dict | None
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
+_GEMINI_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
+    {
+        **dict.fromkeys(
+            ("us", "us-central1", "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west4"), "us"
+        ),
+        **dict.fromkeys(
+            ("eu", "europe-central2", "europe-north1", "europe-southwest1", "europe-west1", "europe-west4"), "eu"
+        ),
+        "northamerica-northeast1": "northamerica-northeast1",
+    }
+)
+
+
+class _GeminiCloudTtsRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input: VertexTextToSpeechInput
+    audioConfig: VertexTextToSpeechAudioConfig
 
 
 def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate: int) -> float | None:
@@ -415,7 +434,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             model=model,
             input=input,
             voice=mapped_voice,
-            text_to_speech_provider_config=self,
+            text_to_speech_provider_config=(
+                VertexAIGeminiCloudTextToSpeechConfig() if self._is_gemini_tts_model(model) else self
+            ),
             text_to_speech_optional_params=mapped_params,
             custom_llm_provider="vertex_ai",
             litellm_params=litellm_params_dict,
@@ -560,7 +581,18 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_location: Final = litellm_params.get("vertex_location")
         if not isinstance(vertex_location, str) or vertex_location == "global":
             return self.TTS_API_URL
-        return f"https://{vertex_location}-texttospeech.googleapis.com/v1/text:synthesize"
+        cloud_tts_location: Final = _GEMINI_CLOUD_TTS_LOCATIONS.get(vertex_location)
+        if cloud_tts_location is None:
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} serves mp3, opus, alaw and mulaw through Cloud Text-to-Speech, which has no Gemini TTS "
+                    f"location for vertex_location {vertex_location}. Use a deployment in global, us, eu, "
+                    "northamerica-northeast1, or a US or EU Vertex AI region."
+                ),
+                model=model,
+                llm_provider="vertex_ai",
+            )
+        return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _validate_vertex_input(
         self,
@@ -741,15 +773,17 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if self._is_gemini_tts_model(model):
             from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
 
-            request_body: Final = logging_obj.model_call_details["additional_args"]["complete_input_dict"]["dict_body"]
-            input_data: Final = request_body["input"]
-            audio_config: Final = request_body["audioConfig"]
+            request: Final = _GeminiCloudTtsRequest.model_validate_json(raw_response.request.content)
+            input_data: Final = request.input
+            audio_config: Final = request.audioConfig
             container_duration: Final = calculate_request_duration(binary_data)
             sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
             duration: Final = (
                 container_duration
                 if container_duration is not None
-                else _fallback_gemini_tts_audio_duration(binary_data, audio_config["audioEncoding"], sample_rate)
+                else _fallback_gemini_tts_audio_duration(
+                    binary_data, audio_config.get("audioEncoding", ""), sample_rate
+                )
             )
             if duration is None:
                 verbose_logger.warning(
@@ -768,6 +802,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=audio_tokens),
             )
         return binary_response
+
+
+class VertexAIGeminiCloudTextToSpeechConfig(VertexAITextToSpeechConfig):
+    def get_error_class(self, error_message: str, status_code: int, headers: dict[str, str]) -> BaseLLMException:
+        return super().get_error_class(
+            error_message=error_message, status_code=400 if status_code == 404 else status_code, headers=headers
+        )
 
 
 class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
