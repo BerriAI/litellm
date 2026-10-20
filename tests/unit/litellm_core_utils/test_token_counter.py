@@ -2360,6 +2360,27 @@ def test_pdf_inline_image_bytes_do_not_push_content_over_the_limit(inline_image_
     count_calls.assert_called_once_with(page_text)
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [b"(BI) Tj\n", b"/BI 1 Tf\n", b"/BIfoo 1 Tf\n"],
+    ids=["literal-string", "inline-image-name", "longer-name"],
+)
+def test_pdf_inline_image_operator_is_not_found_inside_strings_or_names(prefix: bytes):
+    string_operand: Final = b"(sample text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    page: Final = _fake_pdf_page(content_bytes=prefix + text_operator * repetitions)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _price_pdf_pages((page,), count_function)
+
+    page.extract_text.assert_not_called()
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions
+
+
 def test_pdf_comments_are_not_counted_as_string_operands():
     comment: Final = b"% (lots of text)\n"
     repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(comment) + 1

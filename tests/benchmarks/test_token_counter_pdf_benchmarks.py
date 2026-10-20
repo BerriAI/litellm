@@ -41,6 +41,13 @@ def test_pdf_invocation_scan_ignores_unterminated_comments():  # test-quality-ok
 
 
 @pytest.mark.benchmark
+def test_pdf_inline_image_scan_repeated_bi_without_id():  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"BI " * 1_000_000)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
 @pytest.mark.parametrize(
     "comments",
     [

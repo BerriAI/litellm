@@ -353,7 +353,11 @@ PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
 PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?"
 PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*")
 PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s\S])")
-PDF_INLINE_IMAGE: Final = re.compile(rb"\bBI\b[\s\S]*?(?:\bID\s[\s\S]*?(?:\sEI\b|\Z)|\Z)")
+PDF_INLINE_IMAGE: Final = re.compile(
+    PDF_LITERAL_STRING_OPERAND
+    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=\s)"
+    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?:\sEI(?![^\s\[/<(%])|\Z)|\Z))"
+)
 PDF_XOBJECT_INVOCATION: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
 )
@@ -924,6 +928,10 @@ def _pdf_invocation_name(invocation: re.Match[bytes]) -> str | None:
     return _pdf_decode_name(name) if name is not None else None
 
 
+def _pdf_inline_image_replacement(match: re.Match[bytes]) -> bytes:
+    return b" " if match.group("inline_image") is not None else match.group(0)
+
+
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
     form_metrics_memo: Final[dict[int, _PdfStreamMetrics]] = {}  # mutable-ok: page-local cache avoids repeated walks
 
@@ -968,7 +976,7 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
         cached: Final = form_metrics_memo.get(identity)
         if cached is not None:
             return cached
-        content: Final = PDF_INLINE_IMAGE.sub(b" ", resolved.get_data())
+        content: Final = PDF_INLINE_IMAGE.sub(_pdf_inline_image_replacement, resolved.get_data())
         form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
         resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
         metrics: Final = stream_metrics(content, resources, ancestors | {identity})
@@ -1047,7 +1055,10 @@ def _pdf_bounded_operand_sample(samples: Iterable[bytes]) -> bytes:
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
     """Oversized pages use bounded decoded string samples scaled to the full decoded operand text."""
     contents: Final = page.get_contents()
-    content: Final = PDF_INLINE_IMAGE.sub(b" ", contents.get_data() if contents is not None else b"")
+    content: Final = PDF_INLINE_IMAGE.sub(
+        _pdf_inline_image_replacement,
+        contents.get_data() if contents is not None else b"",
+    )
     content_bytes, operand_bytes, form_samples = _pdf_page_content_metrics(page, content)
     if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
         sample: Final = _pdf_bounded_operand_sample(
