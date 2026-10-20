@@ -68,7 +68,6 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
-    # Appended after every existing filter so a scope without a team binds exactly as before.
     team_index: Final = api_keys_index + int(bool(scope.api_keys))
     conditions: Final = (
         f"date >= ${start_index}",
@@ -110,8 +109,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     return " AND ".join(conditions), params
 
 
-# The proxy stamps a User-Agent tag on every request, so in a team's tag breakdown these would
-# outnumber its real tags. Same rule as common_daily_activity._is_user_agent_tag.
+# Same rule as common_daily_activity._is_user_agent_tag
 _NOT_USER_AGENT_TAG: Final = (
     "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
 )

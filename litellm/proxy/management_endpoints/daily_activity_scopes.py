@@ -40,7 +40,6 @@ class ResolvedScope:
 
 
 Entity = Literal["user", "team", "tag", "organization", "customer", "agent"]
-# How the Team view buckets its breakdown: by team (default), or by tag for one team's spend.
 TeamGroupBy: TypeAlias = Literal["team", "tag"]
 EntityScopeResolution = ResolvedScope | ScopeDenied
 EntityScopeQuery = Callable[..., EntityQuery]
@@ -127,8 +126,9 @@ async def _resolve_team(
 ) -> EntityScopeResolution:
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
+    requested: Final = _named_team_ids(query) if query.group_by == "tag" else query.entity_ids
     team_scope: Final = await resolve_team_daily_activity_scope(
-        team_ids=",".join(query.entity_ids) if query.entity_ids is not None else None,
+        team_ids=",".join(requested) if requested is not None else None,
         exclude_team_ids=",".join(query.exclude_entity_ids) if query.exclude_entity_ids else None,
         api_key=query.api_key,
         user_api_key_dict=user_api_key_dict,
@@ -146,9 +146,6 @@ async def _resolve_team(
     )
     if query.group_by == "team":
         return team
-    # group_by=tag: the same permitted team and key filter, read from the tag table and bucketed
-    # by tag. group_by_tag_error already held the request to exactly one named team, and the
-    # resolver returns a named team list as given (or 404s it), so this is that one team.
     permitted: Final = tuple(team_scope.team_ids or ())
     if len(permitted) != 1:
         raise ValueError(f"group_by=tag resolved to {len(permitted)} teams, expected exactly one")
@@ -296,13 +293,15 @@ def _team_query(
     )
 
 
+def _named_team_ids(query: EntityQuery) -> tuple[str, ...]:
+    return tuple(team_id for team_id in query.entity_ids or () if team_id)
+
+
 def group_by_tag_error(query: EntityQuery) -> str | None:
-    """Why a group_by=tag request is malformed, else None. A team's tag breakdown is one team's
-    spend, so it needs exactly one team named in team_ids, whoever is asking: checked before any
-    permission lookup, since that lookup fills in every team a non-admin belongs to."""
+    """Checked before any permission lookup, which fills in every team a non-admin belongs to."""
     if query.group_by != "tag":
         return None
-    named: Final = tuple(team_id for team_id in query.entity_ids or () if team_id)
+    named: Final = _named_team_ids(query)
     if len(named) == 1:
         return None
     return f"group_by=tag needs exactly one team in team_ids, got {len(named)}"
