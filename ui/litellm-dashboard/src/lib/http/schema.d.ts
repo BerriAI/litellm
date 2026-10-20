@@ -30073,10 +30073,25 @@ export interface components {
              */
             maximum_spend_logs_cleanup_run_budget?: string | null;
             /**
+             * Maximum Spend Logs Cleanup Target Size
+             * @description Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. Unset means the run stops as soon as the tables are back under maximum_spend_logs_size.
+             */
+            maximum_spend_logs_cleanup_target_size?: string | null;
+            /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Maximum Spend Logs Size
+             * @description Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex (heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the cleanup job deletes the oldest spend logs first until they are under maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is deleted when either rule says so. Unset means no size rule.
+             */
+            maximum_spend_logs_size?: string | null;
+            /**
+             * Maximum Spend Logs Size Check Interval
+             * @description How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup.
+             */
+            maximum_spend_logs_size_check_interval?: string | null;
             /**
              * Mcp Advertised Versions
              * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.
@@ -30199,6 +30214,11 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Request Tag Mappings
+             * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
+             */
+            request_tag_mappings?: components["schemas"]["RequestTagMapping"][] | null;
             /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
@@ -42656,6 +42676,36 @@ export interface components {
             status_code: number;
         };
         /**
+         * RequestTagMapping
+         * @description An exact baggage value mapping, or a prefix for any value of a key.
+         */
+        RequestTagMapping: {
+            /**
+             * Header
+             * @default baggage
+             * @constant
+             */
+            header: "baggage";
+            /** Key */
+            key: string;
+            /**
+             * Require Budgeted Tag
+             * @default false
+             */
+            require_budgeted_tag: boolean;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /** Tag */
+            tag?: string | null;
+            /** Tag Prefix */
+            tag_prefix?: string | null;
+            /** Value */
+            value?: string | null;
+        };
+        /**
          * RequestType
          * @description Fixed v0 taxonomy. User-extensible types come in v1.
          * @enum {string}
@@ -50072,6 +50122,8 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /** Max Embedding Batch Size */
+            max_embedding_batch_size?: number | null;
             /**
              * Member Auto Router
              * @default false

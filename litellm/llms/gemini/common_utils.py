@@ -3,6 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -498,6 +499,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
@@ -522,7 +524,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         )
         if isinstance(request_view, VertexGeminiCountContextError):
             return count_context_error_response(request_view, request_model, model_to_use)
-        count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+        count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools, model=model_to_use)
         if isinstance(count_context, VertexGeminiCountContextError):
             return count_context_error_response(count_context, request_model, model_to_use)
         blocks_error: Final = unconvertible_messages_error(

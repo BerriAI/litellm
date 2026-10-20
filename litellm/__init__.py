@@ -551,6 +551,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, ma
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+apply_search_free_tier: bool = False
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
 ] = {}  # Provider-specific or global cost margins. Examples:
@@ -2385,6 +2386,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "ClaudeCodeOptions",
         "CodexOptions",
         "OpenCodeOptions",
+        "PiOptions",
         "DeepAgentsOptions",
         "ToolLoopOptions",
     }
