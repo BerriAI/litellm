@@ -4040,6 +4040,94 @@ class TestHasAttributeErrorInChain:
         assert _has_attribute_error_in_chain(exc_a) is False
 
 
+_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+_HISTORY_BEFORE_COMPACTION: Final = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+_TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's name?"}
+
+
+class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
+    async def _failed_prompt_tokens(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        request_input: list[dict[str, str]],
+    ) -> int:
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={})
+        cursor_caller: Final = ProxyUserAPIKeyAuth(request_route="/cursor/chat/completions")
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        raw_body: Final = {"model": "gpt-4o", "input": request_input}
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            AsyncMock(return_value={**raw_body, "litellm_metadata": {}, "proxy_server_request": {"body": raw_body}}),
+        )
+
+        async def pass_through_pre_call_hook(
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
+        ) -> dict[str, object]:
+            return data
+
+        pre_call_logging: Final = MagicMock(spec=ProxyLogging)
+        pre_call_logging.pre_call_hook = AsyncMock(side_effect=pass_through_pre_call_hook)
+        _, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=cursor_caller,
+            proxy_logging_obj=pre_call_logging,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type=route_type,
+        )
+        logging_obj.model_call_details.update(
+            first_api_call_start_time=datetime.datetime.now(),
+            messages=request_input,
+            call_type=logged_call_type,
+        )
+        failure_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        failure_logging.alert_types = []
+        with (
+            patch.object(failure_logging, "update_request_status", new=AsyncMock()),
+            pytest.raises(ProxyException),
+        ):
+            await processing_obj.handle_llm_api_exception(
+                e=Exception("boom"),
+                user_api_key_dict=cursor_caller,
+                proxy_logging_obj=failure_logging,
+            )
+        return processing_obj.data["combined_usage_object"].prompt_tokens
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_type, logged_call_type, trims_at_the_compaction",
+        [("aresponses", "aresponses", True), ("acompletion", "responses", False)],
+    )
+    async def test_a_failed_call_counts_from_the_newest_compaction_only_when_dispatched_as_responses(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        trims_at_the_compaction: bool,
+    ) -> None:
+        async def prompt_tokens(request_input: list[dict[str, str]]) -> int:
+            return await self._failed_prompt_tokens(monkeypatch, route_type, logged_call_type, request_input)
+
+        resent: Final = await prompt_tokens([*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+        dispatched_after_trim: Final = await prompt_tokens([_COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+
+        assert (resent == dispatched_after_trim) is trims_at_the_compaction
+        assert resent >= dispatched_after_trim
+
+
 @pytest.mark.asyncio
 class TestHandleLLMApiExceptionDictDetail:
     """
@@ -10590,6 +10678,7 @@ class TestDetachedStreamFailureHook:
                 "user_api_key_dict": user_api_key_dict,
                 "original_exception": failure,
                 "request_data": processing_obj.data,
+                "dispatched_call_type": "anthropic_messages",
             }
         ]
 

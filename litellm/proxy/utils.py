@@ -1022,7 +1022,7 @@ def _failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
-    client_route: str | None = None,
+    dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1065,7 +1065,7 @@ def _failure_usage_to_lift(
         model=str(model_call_details.get("model") or ""),
         request_input=(
             messages_since_newest_compaction(dispatched_input)
-            if _call_type_for_route(client_route) in _RESPONSES_CALL_TYPES
+            if dispatched_call_type in _RESPONSES_CALL_TYPES
             else dispatched_input
         ),
         system_input=system_input,
@@ -1263,7 +1263,7 @@ def _provider_billed_the_failure(exception: Exception) -> bool:
 
 
 def _failure_fields_to_lift(
-    request_data: Mapping[str, object], provider_billed: bool = False, client_route: str | None = None
+    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -1283,7 +1283,7 @@ def _failure_fields_to_lift(
         provider_billed=provider_billed,
         deployment_id=_logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None,
         base_model=get_base_model_from_metadata(model_call_details=_model_call_details),
-        client_route=client_route,
+        dispatched_call_type=dispatched_call_type,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3439,6 +3439,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         traceback_str: str | None = None,
+        dispatched_call_type: str | None = None,
     ) -> HTTPException | None:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -3511,7 +3512,7 @@ class ProxyLogging:
             await offload_token_count(_failure_fields_to_lift)(
                 request_data,
                 provider_billed=_provider_billed_the_failure(original_exception),
-                client_route=user_api_key_dict.request_route,
+                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
             )
         )
 

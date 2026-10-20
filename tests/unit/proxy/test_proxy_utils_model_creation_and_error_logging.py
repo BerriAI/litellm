@@ -736,7 +736,9 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     post-dispatch failures keep zero spend.
     """
 
-    async def _run(self, request_data, original_exception: Exception | None = None, request_route=None):
+    async def _run(
+        self, request_data, original_exception: Exception | None = None, request_route=None, dispatched_call_type=None
+    ):
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy._types import UserAPIKeyAuth
@@ -748,6 +750,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                 request_data=request_data,
                 original_exception=original_exception or Exception("boom"),
                 user_api_key_dict=UserAPIKeyAuth(request_route=request_route),
+                dispatched_call_type=dispatched_call_type,
             )
 
     def _timeout(self, model: str, cause: Exception) -> Exception:
@@ -765,7 +768,13 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         return logging_obj
 
     @pytest.mark.asyncio
-    async def test_a_failed_responses_request_counts_its_input_from_the_newest_compaction_item(self):
+    @pytest.mark.parametrize(
+        "request_route, dispatched_call_type",
+        [("/v1/responses", None), ("/cursor/chat/completions", "aresponses")],
+    )
+    async def test_a_failed_responses_request_counts_its_input_from_the_newest_compaction_item(
+        self, request_route, dispatched_call_type
+    ):
         from datetime import datetime
 
         async def prompt_tokens(request_input):
@@ -780,7 +789,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                 ),
                 "metadata": {},
             }
-            await self._run(request_data, request_route="/v1/responses")
+            await self._run(request_data, request_route=request_route, dispatched_call_type=dispatched_call_type)
             return request_data["combined_usage_object"].prompt_tokens
 
         resent = await prompt_tokens(
@@ -2289,32 +2298,32 @@ COMPACTION_ITEM = {
 TURN_AFTER_COMPACTION = {"role": "user", "content": "what is the cat's name?"}
 
 
-def _failed_call_prompt_tokens(call_type, client_route, request_input):
+def _failed_call_prompt_tokens(call_type, dispatched_call_type, request_input):
     from litellm.proxy.utils import _failure_usage_to_lift
 
     lifted = _failure_usage_to_lift(
         model_call_details={"call_type": call_type, "model": FAILURE_USAGE_MODEL, "messages": request_input},
         request_body={},
         dispatched=True,
-        client_route=client_route,
+        dispatched_call_type=dispatched_call_type,
     )
     assert lifted is not None
     return lifted[0].prompt_tokens
 
 
 @pytest.mark.parametrize(
-    "call_type, client_route",
+    "call_type, dispatched_call_type",
     [
-        ("acompletion", "/v1/chat/completions"),
-        ("aanthropic_messages", "/v1/messages"),
-        ("responses", "/v1/chat/completions"),
+        ("acompletion", "acompletion"),
+        ("aanthropic_messages", "anthropic_messages"),
+        ("responses", "acompletion"),
     ],
 )
 def test_a_failed_call_off_the_responses_route_counts_the_history_before_a_compaction_typed_message(
-    call_type, client_route
+    call_type, dispatched_call_type
 ):
     def prompt_tokens(request_input):
-        return _failed_call_prompt_tokens(call_type, client_route, request_input)
+        return _failed_call_prompt_tokens(call_type, dispatched_call_type, request_input)
 
     sent = prompt_tokens([COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
