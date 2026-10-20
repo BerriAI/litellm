@@ -2123,7 +2123,7 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     [
-        ("gemini-3.8-flash", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
         ("gemini-2.5-flash", {"type": "integer"}),
     ],
 )
@@ -2162,7 +2162,7 @@ def test_gemini_tool_mapping_sends_integer_enums_to_gemini_3_and_keeps_caller_to
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     [
-        ("gemini-flash-latest", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-flash-latest", {"type": "integer", "enum": ["1", "2", "5"]}),
         ("gemini-1.5-pro", {"type": "integer"}),
     ],
 )
@@ -2234,7 +2234,7 @@ def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_t
     ]
     assert sent_levels == [
         (
-            {"type": "integer", "format": "enum", "enum": [str(10**9 + n) for n in range(count)]}
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(count)]}
             if integer_enums_sent
             else {"type": "integer"}
         )
@@ -2272,7 +2272,7 @@ def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> Non
     [
         (
             _TEN_DIGIT_VALUES_IN_BUDGET,
-            {"type": "integer", "format": "enum", "enum": [str(10**9 + n) for n in range(_TEN_DIGIT_VALUES_IN_BUDGET)]},
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(_TEN_DIGIT_VALUES_IN_BUDGET)]},
         ),
         (_TEN_DIGIT_VALUES_IN_BUDGET + 1, {"type": "integer"}),
     ],

@@ -1410,7 +1410,7 @@ def test_fix_enum_types():
     Gemini accepts, and removes enums on other non-string types.
 
     Gemini rejects non-string enum values, causing API failures. Integer enums are
-    accepted as type INTEGER with format "enum" and string values.
+    sent as type INTEGER with string values.
     """
     from litellm.llms.vertex_ai.common_utils import _fix_enum_types
 
@@ -1469,7 +1469,6 @@ def test_fix_enum_types():
             },
             "maxLength": {
                 "enum": ["100", "200", "500"],
-                "format": "enum",
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1486,7 +1485,6 @@ def test_fix_enum_types():
                     },
                     "innerNonStringEnum": {
                         "enum": ["1", "2", "3"],
-                        "format": "enum",
                         "type": "integer",
                     },
                 },
@@ -1497,7 +1495,7 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer", "format": "enum", "enum": ["1", "2", "3"]},
+                    {"type": "integer", "enum": ["1", "2", "3"]},
                 ]
             },
         },
@@ -1528,7 +1526,6 @@ def test_fix_enum_types():
 
     # 2. Integer enums are converted, other non-string enums are removed
     assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
-    assert input_schema["properties"]["maxLength"]["format"] == "enum"
     assert "enum" not in input_schema["properties"]["enabled"]
     assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == ["1", "2", "3"]
 
@@ -1542,8 +1539,8 @@ def test_fix_enum_types():
 
 
 
-def test_build_vertex_schema_sends_integer_enum_as_format_enum():
-    """An integer enum tool parameter reaches Gemini as INTEGER with format "enum" and string values."""
+def test_build_vertex_schema_sends_integer_enum_as_string_values():
+    """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
 
     parameters = {
@@ -1557,7 +1554,7 @@ def test_build_vertex_schema_sends_integer_enum_as_format_enum():
 
     result = _build_vertex_schema(parameters, send_integer_enums=True)
 
-    assert result["properties"]["level"]["format"] == "enum"
+    assert "format" not in result["properties"]["level"]
     assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
     assert result["properties"]["level"]["type"].lower() == "integer"
     assert "enum" not in result["properties"]["flag"]
@@ -1569,12 +1566,12 @@ def test_build_vertex_schema_sends_integer_enum_as_format_enum():
         (
             [1, 2, 5],
             True,
-            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True, "format": "enum"}]},
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
         ),
         (
             [1, 2, 5, None],
             True,
-            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True, "format": "enum"}]},
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
         ),
         ([1, 2, 5], False, {"anyOf": [{"type": "integer", "nullable": True}]}),
         ([1, "a"], True, {"anyOf": [{"type": "integer", "nullable": True}]}),
@@ -1619,7 +1616,7 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
 
     assert sent[0]["enum"] == ["1", "2", "5"]
     assert sent[1]["enum"] == ["1", "2", "5"]
-    assert sent[1]["format"] == "enum"
+    assert sent[0] == sent[1]
 
 
 class _Priority(int, Enum):
@@ -1654,7 +1651,7 @@ def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
     _fix_enum_types(schema, send_integer_enums=send_integer_enums)
 
     assert schema.get("enum") == expected_enum
-    assert ("format" in schema) == (expected_enum is not None)
+    assert "format" not in schema
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (

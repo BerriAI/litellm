@@ -709,8 +709,7 @@ def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, 
 def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
     match node:
         case {"enum": list() as values}:
-            is_integer_enum: Final = node.get("format") == "enum" and str(node.get("type")).lower() == "integer"
-            return (is_integer_enum, sum(len(str(value)) for value in values))
+            return (str(node.get("type")).lower() == "integer", sum(len(str(value)) for value in values))
         case _:
             return None
 
@@ -747,8 +746,8 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
     """Make `enum` fields acceptable to Gemini / Vertex.
 
     Gemini / Vertex APIs only accept string enum values. With `send_integer_enums`,
-    an integer enum of int64 values is sent the way Gemini documents it: type INTEGER,
-    `format: "enum"` and the values as strings; the model still returns an integer.
+    an integer enum of values a double holds exactly is sent as type INTEGER with the
+    values as strings; the model still returns an integer.
     On any other non-string typed property (or when `anyOf` types do not include a
     string type), the enum is removed to avoid provider validation errors.
     """
@@ -782,8 +781,7 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 else None
             )
             if integer_enum is not None:
-                schema["format"] = "enum"  # rebind-ok: this function edits the schema in place by design
-                schema["enum"] = list(integer_enum)  # rebind-ok: same in-place edit
+                schema["enum"] = list(integer_enum)  # rebind-ok: this function edits the schema in place by design
             else:
                 schema.pop("enum", None)
 
@@ -816,7 +814,7 @@ def build_vertex_schema(
         parameters: dict - the json schema to build from
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
-        send_integer_enums: bool - whether to send integer enums in Gemini's `format: "enum"` form instead of removing them
+        send_integer_enums: bool - whether to send integer enums with string values instead of removing them
     Returns:
         parameters: dict - the input parameters, modified in place
     """

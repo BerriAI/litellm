@@ -694,7 +694,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
-            send_integer_enums: Whether to send integer enums in Gemini's `format: "enum"` form
+            send_integer_enums: Whether to send integer enums with string values
 
         Returns:
             List of mapped tools in Vertex AI format

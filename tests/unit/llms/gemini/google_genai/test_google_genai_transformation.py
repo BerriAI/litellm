@@ -245,7 +245,7 @@ async def test_generate_content_stream_parses_function_call(
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     [
-        ("gemini-flash-latest", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-flash-latest", {"type": "integer", "enum": ["1", "2", "5"]}),
         ("gemini-1.5-pro", {"type": "integer"}),
     ],
 )
@@ -276,7 +276,7 @@ def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
     GoogleGenAIConfig._normalize_response_schema(config_dict, "gemini-flash-latest")
 
     assert config_dict["responseSchema"]["properties"]["level"] == (
-        {"type": "integer", "format": "enum", "enum": [str(value) for value in values]}
+        {"type": "integer", "enum": [str(value) for value in values]}
         if integer_enum_sent
         else {"type": "integer"}
     )
