@@ -17765,6 +17765,13 @@ def test_retry_policy_ceiling_is_the_largest_budget_any_error_class_is_granted()
     assert _retry_policy_ceiling(RetryPolicy()) == 0
 
 
+@pytest.mark.parametrize("error_class_field", tuple(RetryPolicy.model_fields))
+def test_retry_policy_ceiling_counts_every_error_class(error_class_field: str):
+    from litellm.router import _retry_policy_ceiling
+
+    assert _retry_policy_ceiling(RetryPolicy.model_validate({error_class_field: 5})) == 5
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_last_attempt_under_a_retry_policy_forwards_lifecycle_frames_live():
     """A retry policy bounds the hold the way a plain budget does: once the attempts reach the most retries the

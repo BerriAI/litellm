@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
@@ -73,6 +73,9 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+_RESPONSE_OUTPUT_ITEMS_ADAPTER: Final[TypeAdapter[Sequence[object] | None]] = TypeAdapter(
+    Sequence[object] | None, config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 def _provider_mapped_params(
@@ -1035,9 +1038,10 @@ class ResponsesAPIRequestUtils:
             return []
 
         if isinstance(response, dict):
-            output = response.get("output", [])
+            output_raw = response.get("output", [])
         else:
-            output = getattr(response, "output", []) or []
+            output_raw = getattr(response, "output", []) or []
+        output: Final[Sequence[object] | None] = _RESPONSE_OUTPUT_ITEMS_ADAPTER.validate_python(output_raw, strict=True)
 
         collected: Final[set[str]] = set()
         if output:
@@ -1062,9 +1066,10 @@ class ResponsesAPIRequestUtils:
 
         # Get the output list
         if isinstance(responses_api_response, dict):
-            output = responses_api_response.get("output", [])
+            output_raw = responses_api_response.get("output", [])
         else:
-            output = getattr(responses_api_response, "output", [])
+            output_raw = getattr(responses_api_response, "output", [])
+        output: Final[Sequence[object] | None] = _RESPONSE_OUTPUT_ITEMS_ADAPTER.validate_python(output_raw, strict=True)
 
         if not output:
             return responses_api_response

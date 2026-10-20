@@ -7960,13 +7960,16 @@ async def async_mock_completion_streaming_obj(
 
 
 ########## Reading Config File ############################
+_CONFIG_ARGS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
 def read_config_args(config_path) -> dict:
     try:
         import os
 
         os.getcwd()
         with open(config_path, "r") as config_file:
-            config: Final = json.load(config_file)
+            config: Final = _CONFIG_ARGS.validate_python(json.load(config_file))
 
         # read keys/ values from config file and return them
         return config
@@ -8928,11 +8931,16 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
     return stop
 
 
+_BUNDLED_MODEL_COST_MAP: Final = TypeAdapter(
+    dict[str, dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+
+
 @lru_cache(maxsize=1)
-def get_bundled_model_cost_map() -> dict[str, Any]:
+def get_bundled_model_cost_map() -> dict[str, dict[str, object]]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
+        return _BUNDLED_MODEL_COST_MAP.validate_python(json.loads(model_cost_path.read_text()))
     except Exception:
         return {}
 

@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -117,7 +117,7 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS
 def merge_bedrock_aws_request_params(
     litellm_params: Mapping[str, object],
     optional_params: Mapping[str, object],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Merge deployment and request parameters without allowing auth escalation.
 
     Deployment configuration is authoritative for AWS authentication. When a
@@ -790,13 +790,14 @@ def init_bedrock_client(
         endpoint_url = f"https://bedrock-runtime.{resolved_region_name}.{get_aws_dns_suffix(resolved_region_name)}"
 
     import boto3
+    from botocore.config import Config
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+        config = Config(connect_timeout=timeout, read_timeout=timeout)
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(connect_timeout=timeout.connect, read_timeout=timeout.read)
+        config = Config(connect_timeout=timeout.connect, read_timeout=timeout.read)
     else:
-        config = boto3.session.Config()
+        config = Config()
 
     ### CHECK STS ###
     if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
@@ -2002,11 +2003,18 @@ def get_bedrock_response_stream_shape():
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
+_BEDROCK_MAPPING_ADAPTER: Final = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_BEDROCK_HTTP_STATUS_ADAPTER: Final = TypeAdapter(int, config=ConfigDict(strict=True, hide_input_in_errors=True))
+_BEDROCK_STREAM_BYTES_ADAPTER: Final = TypeAdapter(bytes, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def _modeled_error_status(member: Shape) -> int | None:
-    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
-    return None if status is None else int(status)
+    metadata: Final = _BEDROCK_MAPPING_ADAPTER.validate_python(member.metadata or {})
+    error_metadata: Final = _BEDROCK_MAPPING_ADAPTER.validate_python(metadata.get("error", {}))
+    status: Final = error_metadata.get("httpStatusCode")
+    return None if status is None else _BEDROCK_HTTP_STATUS_ADAPTER.validate_python(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:
@@ -2112,7 +2120,7 @@ class BedrockEventStreamDecoderBase:
 
         self.parser = EventStreamJSONParser()
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _parse_message_from_event(self, event: EventStreamMessage) -> str | None:
         response_stream_shape: Final = get_bedrock_response_stream_shape()
         if response_stream_shape is None:
             raise BedrockError(
@@ -2122,22 +2130,25 @@ class BedrockEventStreamDecoderBase:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict: Final = event.to_response_dict()
+        response_dict: Final = bedrock_event_stream_response(event)
         parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
-        if "chunk" in parsed_response:
-            chunk = parsed_response.get("chunk")
+        parsed_response_mapping: Final = _BEDROCK_MAPPING_ADAPTER.validate_python(parsed_response)
+        if "chunk" in parsed_response_mapping:
+            chunk: Final = parsed_response_mapping.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()
+            chunk_mapping: Final = _BEDROCK_MAPPING_ADAPTER.validate_python(chunk)
+            chunk_bytes: Final = _BEDROCK_STREAM_BYTES_ADAPTER.validate_python(chunk_mapping.get("bytes"))
+            return chunk_bytes.decode()
         else:
-            chunk = response_dict.get("body")
-            if not chunk:
+            chunk_body: Final = response_dict.get("body")
+            if not chunk_body:
                 return None
 
-            return chunk.decode()
+            return chunk_body.decode()
 
 
 _JSON_VALUE: Final = TypeAdapter(object)
