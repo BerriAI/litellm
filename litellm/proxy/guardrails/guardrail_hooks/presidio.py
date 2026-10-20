@@ -1197,7 +1197,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             # Operates on defensive copies so the client-facing request and response are not modified in-place
-            kwargs_copy: Final[dict] = safe_deep_copy(kwargs)  # mutable-ok: defensive clone of request kwargs
+            kwargs_copy: Final[dict[str, object]] = safe_deep_copy(kwargs)  # mutable-ok: defensive clone
             result_copy: Final[object] = safe_deep_copy(result)
 
             messages: Final[list | None] = kwargs_copy.get("messages", None)
@@ -1256,8 +1256,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs_copy["messages"] = messages
             if "input" in kwargs_copy and (
-                kwargs.get("input") is kwargs.get("messages")
-                or kwargs_copy.get("input") == kwargs.get("messages")
+                kwargs.get("input") is kwargs.get("messages") or kwargs_copy.get("input") == kwargs.get("messages")
             ):
                 kwargs_copy["input"] = messages
 
