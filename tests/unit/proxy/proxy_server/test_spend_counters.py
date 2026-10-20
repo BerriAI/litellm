@@ -1373,7 +1373,7 @@ class _FakeRedisMeetingAtTheWarmCheck(FakeAsyncRedis):
 
 
 @pytest.mark.asyncio
-async def test_overlapping_cold_end_user_seeds_write_the_end_user_row_once(monkeypatch):
+async def test_overlapping_cold_end_user_seeds_read_and_write_the_end_user_row_once(monkeypatch: pytest.MonkeyPatch):
     counter_key: Final = "spend:end_user:customer-1"
     callers: Final = 3
     redis: Final = _FakeRedisMeetingAtTheWarmCheck(FakeServer(), callers)
@@ -1399,6 +1399,7 @@ async def test_overlapping_cold_end_user_seeds_write_the_end_user_row_once(monke
     await asyncio.wait_for(asyncio.gather(*(_request() for _ in range(callers))), timeout=5)
 
     assert float(await redis.get(counter_key)) == 7.5
+    prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

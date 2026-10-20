@@ -218,14 +218,17 @@ class SpendCounterReseed:
         when the DB read succeeds, or None when the DB is unavailable.
         """
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
+        waited_for_seed: Final = lock.locked()
         async with lock:
             batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
             if batched is not None and batched[0] is not None:
                 return batched[0]
             # Re-check after acquiring the lock. Skip in-memory on a clean
-            # Redis miss - in-memory is per-pod-stale.
+            # Redis miss - in-memory is per-pod-stale. The request's batched
+            # read can predate the lock, so a caller that waited on it re-reads
+            # Redis for the value the holder seeded.
             redis_clean_miss = batched is not None
-            if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
+            if spend_counter_cache.redis_cache is not None and (waited_for_seed or not redis_clean_miss):
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
