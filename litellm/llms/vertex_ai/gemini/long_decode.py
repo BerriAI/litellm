@@ -91,6 +91,8 @@ def continuation_cap_of(request_body: RequestBody) -> int | None:
 
 
 def _asks_for_text_only(generation_config: GenerationConfig) -> bool:
+    if "response_modalities" in generation_config:
+        return False
     if "responseModalities" not in generation_config:
         return True
     return all(modality == "TEXT" for modality in generation_config["responseModalities"])
@@ -101,7 +103,9 @@ def with_default_output_budget(
 ) -> RequestBody:
     generation_config: Final = request_body.get("generationConfig", GenerationConfig())
     budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
-    if budget is None or budget <= 0 or not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
+    if budget is None or budget <= 0 or "generation_config" in request_body:
+        return request_body
+    if not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
         return request_body
     if not _asks_for_text_only(generation_config):
         return request_body

@@ -1424,6 +1424,58 @@ async def test_env_budget_applies_only_to_a_request_asking_for_text_output(
     assert _output_limits(sent[0]) == expected_limits
 
 
+def _ai_studio_model_in_mode(mode: str) -> str:
+    return next(
+        name
+        for name, row in litellm.model_cost.items()
+        if name.startswith("gemini/") and row.get("mode") == mode and row.get("max_output_tokens")
+    )
+
+
+@pytest.mark.parametrize("mode", ["audio_speech", "image_generation"])
+@pytest.mark.asyncio
+async def test_env_budget_skips_a_model_the_cost_map_does_not_list_as_a_chat_model(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=_ai_studio_model_in_mode(mode),
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {}
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"generation_config": {"temperature": 0.1}},
+        {"generation_config": {"max_output_tokens": 30}},
+        {"generationConfig": {"response_modalities": ["AUDIO"]}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_leaves_a_snake_case_generation_config_from_extra_body_alone(
+    monkeypatch: pytest.MonkeyPatch, extra_body: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        extra_body=dict(extra_body),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {}
+
+
 @pytest.mark.parametrize("model", ["gemini/gemini-2.5-flash", "vertex_ai/gemini-2.5-flash", ARGON])
 @pytest.mark.asyncio
 async def test_env_budget_above_a_models_output_limit_sends_that_limit_instead(
