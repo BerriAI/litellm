@@ -154,9 +154,15 @@ class ResponseMetadata:
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
-            "provider_response_model": _provider_response_model(self.result),
+            "provider_response_model": self._get_hidden_param("provider_response_model")
+            or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
+
+    def _get_hidden_param(self, key: str) -> object | None:
+        if isinstance(self._hidden_params, dict):
+            return self._hidden_params.get(key)
+        return getattr(self._hidden_params, key, None)
 
     def _update_hidden_params(self, new_params: Mapping[str, object]) -> None:
         """
