@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class TrendAISettings(BaseModel):
+class TrendAISettings(BaseModel, frozen=True):
     app_name: str | None = None
     fallback_on_error: Literal["block", "allow"] = "block"
     timeout: float = 5.0
@@ -16,18 +16,18 @@ class TrendAISettings(BaseModel):
     response_content_chunk_size_bytes: int = 49_500
 
 
-class TrendAIChatMessage(BaseModel):
+class TrendAIChatMessage(BaseModel, frozen=True):
     role: Literal["assistant"] = "assistant"
     content: str
 
 
-class TrendAIChatChoice(BaseModel):
+class TrendAIChatChoice(BaseModel, frozen=True):
     index: int = 0
     message: TrendAIChatMessage
     finish_reason: Literal["stop"] = "stop"
 
 
-class TrendAIChatCompletionPayload(BaseModel):
+class TrendAIChatCompletionPayload(BaseModel, frozen=True):
     """The OpenAI chat-completion shape Trend AI Guard scans model output as."""
 
     id: str = "chatcmpl-stream"
@@ -41,44 +41,44 @@ class TrendAIChatCompletionPayload(BaseModel):
         return cls(model=model, choices=(TrendAIChatChoice(message=TrendAIChatMessage(content=content)),))
 
 
-class TrendAIRedactedMessage(BaseModel):
+class TrendAIRedactedMessage(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     content: str | None = None
 
 
-class TrendAIRedactedChoice(BaseModel):
+class TrendAIRedactedChoice(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     message: TrendAIRedactedMessage | None = None
 
 
-class TrendAIRedactedResponse(BaseModel):
+class TrendAIRedactedResponse(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     choices: tuple[TrendAIRedactedChoice, ...] = ()
 
 
-class TrendAIRedactedPrompt(BaseModel):
+class TrendAIRedactedPrompt(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     prompt: str | None = None
 
 
-class TrendAISensitiveRule(BaseModel):
+class TrendAISensitiveRule(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     id: str = ""
 
 
-class TrendAISensitiveInformation(BaseModel):
+class TrendAISensitiveInformation(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     has_policy_violation: bool = Field(default=False, alias="hasPolicyViolation")
     rules: tuple[TrendAISensitiveRule, ...] = ()
 
 
-class TrendAIResponse(BaseModel):
+class TrendAIResponse(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
     action: str
