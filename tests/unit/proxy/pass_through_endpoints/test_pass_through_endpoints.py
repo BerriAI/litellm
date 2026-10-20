@@ -530,6 +530,49 @@ def test_is_langfuse_route():
     assert handler.is_langfuse_route("") is False
 
 
+def test_is_langfuse_route_matches_langfuse_provider_on_target_url():
+    """
+    The /langfuse/* proxy route forwards to LANGFUSE_HOST/api/public/..., so the
+    target URL never contains `/langfuse/`; the route is identified by its provider.
+    """
+    handler = PassThroughEndpointLogging()
+
+    assert handler.is_langfuse_route("https://cloud.langfuse.com/api/public/scores", "langfuse") is True
+    assert handler.is_langfuse_route("https://langfuse.internal/api/public/otel/v1/traces", "langfuse") is True
+    assert handler.is_langfuse_route("https://cloud.langfuse.com/api/public/scores") is False
+    assert handler.is_langfuse_route("https://api.openai.com/v1/chat/completions", "openai") is False
+
+
+@pytest.mark.asyncio
+async def test_pass_through_async_success_handler_skips_langfuse_provider():
+    log_dispatch = AsyncMock()
+    handler = PassThroughEndpointLogging(log_dispatch=log_dispatch)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    target_url = "https://cloud.langfuse.com/api/public/scores"
+
+    result = await handler.pass_through_async_success_handler(
+        httpx_response=httpx.Response(200, request=httpx.Request("POST", target_url)),
+        response_body={"id": "score-1"},
+        logging_obj=logging_obj,
+        url_route=target_url,
+        result="",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={},
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(
+            url=target_url,
+            request_body={},
+            request_method="POST",
+        ),
+        custom_llm_provider="langfuse",
+    )
+
+    assert result is None
+    log_dispatch.assert_not_called()
+
+
 def test_is_vertex_route_ignores_plain_predict_path_segment():
     """
     Regression for LIT-4527: a custom (non-Vertex) passthrough URL whose path
