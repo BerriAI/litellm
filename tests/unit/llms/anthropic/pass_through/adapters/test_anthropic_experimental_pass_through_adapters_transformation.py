@@ -5419,3 +5419,149 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+def test_translate_anthropic_to_openai_midturn_tool_addition():
+    """
+    Test that mid-conversation tool_addition blocks (such as Claude Code's mid-conversation-tool-changes)
+    are hoisted into the request's tools and stripped from the translated messages.
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather in Dallas?"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "A new tool is available."},
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {
+                            "name": "get_weather",
+                            "description": "Get the weather for a city",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        },
+                    },
+                },
+            ],
+        },
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    req = {"model": "openai/some-open-model", "messages": messages}
+    translated_req, _ = adapter.translate_anthropic_to_openai(req)
+
+    # Verify tool was added to tools
+    assert "tools" in translated_req
+    assert len(translated_req["tools"]) == 1
+    tool = translated_req["tools"][0]
+    assert tool["type"] == "function"
+    assert tool["function"]["name"] == "get_weather"
+    assert tool["function"]["description"] == "Get the weather for a city"
+    assert tool["function"]["parameters"]["properties"]["city"]["type"] == "string"
+
+    # Verify tool_addition was stripped and text preserved
+    assert len(translated_req["messages"]) == 2
+    assert "get_weather" not in json.dumps(translated_req["messages"])
+
+
+def test_translate_anthropic_to_openai_midturn_tool_addition_carrier_only():
+    """
+    Test that when a system message contains only tool_addition, the tool is added
+    and the carrier message is dropped so no empty operator note is sent.
+    """
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {
+                            "name": "calc",
+                            "description": "Calculator",
+                            "input_schema": {"type": "object"},
+                        },
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "Calculate 2+2"},
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    req = {"model": "openai/some-open-model", "messages": messages}
+    translated_req, _ = adapter.translate_anthropic_to_openai(req)
+
+    assert "tools" in translated_req
+    assert len(translated_req["tools"]) == 1
+    assert translated_req["tools"][0]["function"]["name"] == "calc"
+
+    # Carrier message should be dropped entirely
+    assert len(translated_req["messages"]) == 2
+    assert translated_req["messages"][0]["content"] == "Hello"
+    assert translated_req["messages"][1]["content"] == "Calculate 2+2"
+
+
+def test_translate_anthropic_to_openai_midturn_tool_removal():
+    """
+    Test that mid-conversation tool_removal drops the tool from the request.
+    """
+    messages = [
+        {"role": "user", "content": "Start"},
+        {"role": "system", "content": [{"type": "tool_removal", "tool_name": "calc"}]},
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    req = {
+        "model": "openai/some-open-model",
+        "messages": messages,
+        "tools": [
+            {"name": "calc", "input_schema": {}},
+            {"name": "search", "input_schema": {}},
+        ],
+    }
+    translated_req, _ = adapter.translate_anthropic_to_openai(req)
+
+    assert "tools" in translated_req
+    tool_names = [t["function"]["name"] for t in translated_req["tools"]]
+    assert tool_names == ["search"]
+
+
+def test_translate_anthropic_to_openai_midturn_tool_addition_deduplication():
+    """
+    Test that adding a tool that is already in top-level tools skips duplicate definition.
+    """
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "name": "calc",
+                        "description": "Calculator",
+                        "input_schema": {"type": "object"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    req = {
+        "model": "openai/some-open-model",
+        "messages": messages,
+        "tools": [{"name": "calc", "input_schema": {}}],
+    }
+    translated_req, _ = adapter.translate_anthropic_to_openai(req)
+
+    assert len(translated_req["tools"]) == 1
+    assert translated_req["tools"][0]["function"]["name"] == "calc"
