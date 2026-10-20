@@ -680,7 +680,7 @@ async def _acompletion(
 async def check_usage_ai_chat_model_access(
     user_api_key_dict: "UserAPIKeyAuth", model: str | None, router_settings: Mapping[str, object] | None
 ) -> None:
-    from litellm.proxy._types import ProxyException
+    from litellm.proxy._types import LitellmUserRoles, ProxyException
     from litellm.proxy.auth.auth_checks import (
         _personal_key_owner,  # pyright: ignore[reportPrivateUsage]  # the same owner lookup the resolved-model check uses
         can_key_call_resolved_model,
@@ -703,7 +703,7 @@ async def check_usage_ai_chat_model_access(
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
-        if user_api_key_dict.team_id is None:
+        if user_api_key_dict.team_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             await can_user_call_model(
                 model=resolved_model,
                 llm_router=llm_router,

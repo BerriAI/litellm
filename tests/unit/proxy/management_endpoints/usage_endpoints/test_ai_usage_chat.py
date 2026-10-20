@@ -1647,11 +1647,15 @@ class TestUsageAiChatTeamModelRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("key_models", "user_models", "denied"),
-        [(["prod-model"], None, False), ([], ["prod-alias"], True)],
+        ("user_role", "key_models", "user_models", "denied"),
+        [
+            (LitellmUserRoles.PROXY_ADMIN, ["prod-model"], None, False),
+            (LitellmUserRoles.INTERNAL_USER, [], ["prod-alias"], True),
+            (LitellmUserRoles.PROXY_ADMIN, [], ["prod-alias"], False),
+        ],
     )
-    async def test_group_alias_is_authorized_by_its_target_for_the_key_and_the_user(
-        self, key_models: list[str], user_models: list[str] | None, denied: bool
+    async def test_group_alias_target_is_authorized_and_a_proxy_admin_skips_its_user_models_like_chat(
+        self, user_role: LitellmUserRoles, key_models: list[str], user_models: list[str] | None, denied: bool
     ):
         from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
         from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -1663,7 +1667,7 @@ class TestUsageAiChatTeamModelRouting:
             )
         personal_key: Final = UserAPIKeyAuth(
             user_id="u1",
-            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_role=user_role,
             api_key="sk-test",
             models=key_models,
             router_settings={"model_group_alias": {"prod-alias": "prod-model"}},
