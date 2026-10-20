@@ -2207,8 +2207,8 @@
         "interactions": false
       }
     },
-    "superbot": {
-      "display_name": "superbot (`superbot`)",
+    "superbot-gg": {
+      "display_name": "superbot (`superbot-gg`)",
       "url": "https://docs.litellm.ai/docs/providers/superbot",
       "endpoints": {
         "chat_completions": true,

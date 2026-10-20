@@ -250,7 +250,7 @@
       "/v1/messages"
     ]
   },
-  "superbot": {
+  "superbot-gg": {
     "base_url": "https://api.superbot.gg/v1",
     "api_key_env": "SUPERBOT_API_KEY",
     "api_base_env": "SUPERBOT_API_BASE"

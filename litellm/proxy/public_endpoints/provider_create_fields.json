@@ -3318,7 +3318,7 @@
   {
     "provider": "Superbot",
     "provider_display_name": "superbot",
-    "litellm_provider": "superbot",
+    "litellm_provider": "superbot-gg",
     "credential_fields": [
       {
         "key": "api_base",
@@ -3341,7 +3341,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "superbot/superbot"
+    "default_model_placeholder": "superbot-gg/superbot"
   },
   {
     "provider": "Sambanova",
