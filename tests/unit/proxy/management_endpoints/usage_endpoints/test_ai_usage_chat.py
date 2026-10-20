@@ -12,6 +12,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     TOOL_HANDLERS,
     TOOLS_ADMIN,
@@ -1259,6 +1260,43 @@ class TestUsageAiChatModelAccess:
 
         assert exc_info.value.code == "403"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("model", "denied"), [(None, True), ("shared-model", False)])
+    async def test_default_model_gets_the_user_model_check_a_picked_model_gets(self, model: str | None, denied: bool):
+        from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            check_usage_ai_chat_model_access,
+        )
+
+        user_cache: Final = UserApiKeyCache()
+        await user_cache.async_set_cache(
+            key="u1", value=LiteLLM_UserTable(user_id="u1", models=["shared-model"]), model_type=LiteLLM_UserTable
+        )
+        router: Final = self._router()
+        with (
+            patch(  # test-quality-ok: check reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: check reads the proxy_server.llm_model_list module global; no injection seam
+                "litellm.proxy.proxy_server.llm_model_list", None
+            ),
+            patch(  # test-quality-ok: check reads the proxy_server.prisma_client module global; no injection seam
+                "litellm.proxy.proxy_server.prisma_client", None
+            ),
+            patch(  # test-quality-ok: check reads the proxy_server.user_api_key_cache module global; no injection seam
+                "litellm.proxy.proxy_server.user_api_key_cache", user_cache
+            ),
+        ):
+            personal_key: Final = UserAPIKeyAuth(models=[], user_id="u1", api_key="sk-test")
+            if denied:
+                with pytest.raises(ProxyException) as exc_info:
+                    await check_usage_ai_chat_model_access(user_api_key_dict=personal_key, model=model)
+                assert exc_info.value.code == "403"
+                assert "No model was picked" in exc_info.value.message
+            else:
+                assert await check_usage_ai_chat_model_access(user_api_key_dict=personal_key, model=model) is None
+
 
 class TestUsageAiChatTeamModelRouting:
     @staticmethod
@@ -1301,22 +1339,105 @@ class TestUsageAiChatTeamModelRouting:
         assert result.choices[0].message.content == "from the team deployment"
 
     @pytest.mark.asyncio
-    async def test_team_key_ask_ai_spend_is_not_attributed_to_the_team(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN])
+    async def test_team_key_reaches_its_own_team_deployment_when_teams_share_a_public_name(
+        self, user_role: LitellmUserRoles
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": f"model_name_{team_id}_internal",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-dummy",
+                        "mock_response": f"from the {team_id} deployment",
+                    },
+                    "model_info": {"team_id": team_id, "team_public_model_name": "shared-team-model"},
+                }
+                for team_id in ("team-a", "team-b")
+            ]
+        )
+
+        with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+            "litellm.proxy.proxy_server.llm_router", router
+        ):
+            result: Final = await _acompletion(
+                model="shared-team-model",
+                messages=[{"role": "user", "content": "hi"}],
+                user_api_key_dict=UserAPIKeyAuth(user_role=user_role, team_id="team-b", api_key="sk-test"),
+            )
+
+        assert result.choices[0].message.content == "from the team-b deployment"
+
+    @pytest.mark.asyncio
+    async def test_key_and_team_tags_pick_the_tagged_deployment(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tagged-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-dummy",
+                        "mock_response": f"from the {tag} deployment",
+                        "tags": [tag],
+                    },
+                }
+                for tag in ("team-tag", "default")
+            ],
+            enable_tag_filtering=True,
+        )
+
+        with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+            "litellm.proxy.proxy_server.llm_router", router
+        ):
+            result: Final = await _acompletion(
+                model="tagged-model",
+                messages=[{"role": "user", "content": "hi"}],
+                user_api_key_dict=UserAPIKeyAuth(
+                    team_id="team-a", team_metadata={"tags": ["team-tag"]}, metadata={}, api_key="sk-test"
+                ),
+            )
+
+        assert result.choices[0].message.content == "from the team-tag deployment"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("team_id", "billed_team_id"), [("team-a", "team-a"), ("litellm-dashboard", None)])
+    async def test_ask_ai_spend_is_billed_to_the_calling_key_user_and_team(
+        self, monkeypatch: pytest.MonkeyPatch, team_id: str, billed_team_id: str | None
+    ):
         import asyncio
 
         import litellm
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
         )
 
-        logged: Final[asyncio.Queue[object]] = asyncio.Queue()
+        logged: Final[asyncio.Queue[tuple[object, object, object]]] = asyncio.Queue()
 
         class SpendCapture(CustomLogger):
             async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-                await logged.put(kwargs["standard_logging_object"]["metadata"]["user_api_key_team_id"])
+                metadata = kwargs["standard_logging_object"]["metadata"]
+                await logged.put(
+                    (metadata["user_api_key_hash"], metadata["user_api_key_user_id"], metadata["user_api_key_team_id"])
+                )
 
+        caller: Final = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, team_id=team_id, user_id="u1", api_key="sk-test"
+        )
         monkeypatch.setattr(litellm, "callbacks", [SpendCapture()])
         with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
             "litellm.proxy.proxy_server.llm_router", self._team_router()
@@ -1324,12 +1445,10 @@ class TestUsageAiChatTeamModelRouting:
             await _acompletion(
                 model="my-team-model",
                 messages=[{"role": "user", "content": "hi"}],
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN, team_id="team-a", api_key="sk-test"
-                ),
+                user_api_key_dict=caller,
             )
 
-        assert await asyncio.wait_for(logged.get(), timeout=10) is None
+        assert await asyncio.wait_for(logged.get(), timeout=10) == (caller.api_key, "u1", billed_team_id)
 
     @pytest.mark.asyncio
     async def test_team_public_model_name_without_team_id_uses_litellm(self):

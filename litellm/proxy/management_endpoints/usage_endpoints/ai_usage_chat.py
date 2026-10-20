@@ -6,9 +6,12 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, cast, overload
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -470,7 +473,11 @@ def _resolve_model(model: str | None) -> str:
 _RouterRoute: TypeAlias = Literal["model_group", "deployment"]
 
 
-def _router_route(router: "Router", model: str, caller_is_proxy_admin: bool) -> _RouterRoute | None:
+def _router_route(
+    router: "Router", model: str, team_id: str | None, caller_is_proxy_admin: bool
+) -> _RouterRoute | None:
+    if team_id is not None and router.map_team_model(model, team_id) is not None:
+        return "model_group"
     if router.is_recognized_model(model) or (caller_is_proxy_admin and model in router.team_public_model_names):
         return "model_group"
     if router.router_general_settings.pass_through_all_models:
@@ -478,6 +485,49 @@ def _router_route(router: "Router", model: str, caller_is_proxy_admin: bool) -> 
     if router.default_deployment is not None or router.pattern_router.route(model) is not None:  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
         return "model_group"
     return "deployment" if model in router.deployment_names else None
+
+
+def _billed_caller(user_api_key_dict: "UserAPIKeyAuth") -> "UserAPIKeyAuth":
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    if user_api_key_dict.team_id != UI_SESSION_TOKEN_TEAM_ID:
+        return user_api_key_dict
+    return user_api_key_dict.model_copy(update={"team_id": None})
+
+
+class _TaggedMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tags: tuple[object, ...] | None = None
+
+
+class _CallerTagSources(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    metadata: _TaggedMetadata | None = None
+    team_metadata: _TaggedMetadata | None = None
+    project_metadata: _TaggedMetadata | None = None
+
+
+def _caller_routing_tags(user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    sources: Final = _CallerTagSources.model_validate(user_api_key_dict, from_attributes=True)
+    tags: Final = chain.from_iterable(
+        source.tags or () for source in (sources.metadata, sources.team_metadata, sources.project_metadata) if source
+    )
+    return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
+
+
+def _caller_metadata(caller: "UserAPIKeyAuth") -> Mapping[str, object]:
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    billing_metadata: Final = cast(  # cast-ok: the shared helper returns the request dict untyped
+        "Mapping[str, object]",
+        LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(  # pyright: ignore[reportUnknownMemberType]  # the shared billing helper takes and returns a bare dict
+            data={"metadata": {}}, user_api_key_dict=caller, _metadata_variable_name="metadata"
+        )["metadata"],
+    )
+    caller_tags: Final = _caller_routing_tags(caller)
+    return MappingProxyType({**billing_metadata, **({"tags": list(caller_tags)} if caller_tags else {})})
 
 
 async def _acompletion(
@@ -488,10 +538,7 @@ async def _acompletion(
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
-    from litellm.proxy.litellm_pre_call_utils import (
-        resolve_team_model_alias,
-        sanitized_user_api_key_auth,
-    )
+    from litellm.proxy.litellm_pre_call_utils import resolve_team_model_alias
     from litellm.proxy.proxy_server import llm_router
     from litellm.router_utils.common_utils import is_proxy_admin_request
     from litellm.types.llms.openai import AllMessageValues
@@ -508,11 +555,17 @@ async def _acompletion(
     resolved_model: Final = (
         model_aliases.get(team_aliased_model, team_aliased_model) if model_aliases is not None else team_aliased_model
     )
-    router_metadata: Final = (
-        {"user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict)} if user_api_key_dict is not None else {}
+    caller: Final = _billed_caller(user_api_key_dict) if user_api_key_dict is not None else None
+    caller_metadata: Final[Mapping[str, object]] = (
+        _caller_metadata(caller) if caller is not None else MappingProxyType({})
     )
     route: Final = (
-        _router_route(llm_router, resolved_model, is_proxy_admin_request({"metadata": router_metadata}))
+        _router_route(
+            llm_router,
+            resolved_model,
+            caller.team_id if caller is not None else None,
+            is_proxy_admin_request({"metadata": caller_metadata}),
+        )
         if llm_router is not None
         else None
     )
@@ -526,7 +579,7 @@ async def _acompletion(
                 temperature=USAGE_AI_TEMPERATURE,
                 drop_params=True,
                 allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
-                metadata=router_metadata,
+                metadata=dict(caller_metadata),
                 specific_deployment=route == "deployment",
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
@@ -536,7 +589,7 @@ async def _acompletion(
             temperature=USAGE_AI_TEMPERATURE,
             drop_params=True,
             allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
-            metadata=router_metadata,
+            metadata=dict(caller_metadata),
             specific_deployment=route == "deployment",
         )
     return await litellm.acompletion(
@@ -547,15 +600,24 @@ async def _acompletion(
         temperature=USAGE_AI_TEMPERATURE,
         drop_params=True,
         allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
+        metadata=dict(caller_metadata),
     )
 
 
 async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> None:
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+    from litellm.proxy.auth.auth_checks import (
+        _personal_key_owner,  # pyright: ignore[reportPrivateUsage]  # the same owner lookup the resolved-model check uses
+        can_key_call_resolved_model,
+        can_user_call_model,
+        key_model_aliases_for_auth_check,
+    )
     from litellm.proxy.proxy_server import (
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy_server.llm_model_list is an untyped module global
         llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     resolved_model: Final = _resolve_model(model)
@@ -566,14 +628,23 @@ async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", 
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
+        if user_api_key_dict.team_id is None:
+            await can_user_call_model(
+                model=resolved_model,
+                llm_router=llm_router,
+                user_object=await _personal_key_owner(
+                    valid_token=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+                key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+            )
     except ProxyException as denial:
         if (model or "").strip():
             raise
         raise ProxyException(
-            message=(
-                f"Ask AI uses {resolved_model} when no model is picked, and this key cannot call it. "
-                f"Pick a model this key can call. {denial.message}"
-            ),
+            message=f"No model was picked, so Ask AI used its default. {denial.message} Pick a model you can call.",
             type=denial.type,
             param="model",
             code=denial.code,
