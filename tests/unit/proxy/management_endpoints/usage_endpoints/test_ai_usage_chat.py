@@ -1148,6 +1148,7 @@ class TestUsageAiChatModelAccess:
                 await check_usage_ai_chat_model_access(
                     user_api_key_dict=UserAPIKeyAuth(models=["shared-model"], api_key="sk-test"),
                     model="team-a-secret",
+                    router_settings=None,
                 )
 
         assert exc_info.value.code == "403"
@@ -1174,6 +1175,7 @@ class TestUsageAiChatModelAccess:
             result: Final = await check_usage_ai_chat_model_access(
                 user_api_key_dict=UserAPIKeyAuth(models=["shared-model"], api_key="sk-test"),
                 model="shared-model",
+                router_settings=None,
             )
             assert result is None
 
@@ -1199,6 +1201,7 @@ class TestUsageAiChatModelAccess:
             result: Final = await check_usage_ai_chat_model_access(
                 user_api_key_dict=UserAPIKeyAuth(models=[], api_key="sk-test"),
                 model="team-a-secret",
+                router_settings=None,
             )
             assert result is None
 
@@ -1230,6 +1233,7 @@ class TestUsageAiChatModelAccess:
                         api_key="sk-test",
                     ),
                     model="team-a-secret",
+                    router_settings=None,
                 )
 
         assert exc_info.value.code == "403"
@@ -1257,6 +1261,7 @@ class TestUsageAiChatModelAccess:
                 await check_usage_ai_chat_model_access(
                     user_api_key_dict=UserAPIKeyAuth(models=["shared-model"], api_key="sk-test"),
                     model=None,
+                    router_settings=None,
                 )
 
         assert exc_info.value.code == "403"
@@ -1292,11 +1297,18 @@ class TestUsageAiChatModelAccess:
             personal_key: Final = UserAPIKeyAuth(models=[], user_id="u1", api_key="sk-test")
             if denied:
                 with pytest.raises(ProxyException) as exc_info:
-                    await check_usage_ai_chat_model_access(user_api_key_dict=personal_key, model=model)
+                    await check_usage_ai_chat_model_access(
+                        user_api_key_dict=personal_key, model=model, router_settings=None
+                    )
                 assert exc_info.value.code == "403"
                 assert "No model was picked" in exc_info.value.message
             else:
-                assert await check_usage_ai_chat_model_access(user_api_key_dict=personal_key, model=model) is None
+                assert (
+                    await check_usage_ai_chat_model_access(
+                        user_api_key_dict=personal_key, model=model, router_settings=None
+                    )
+                    is None
+                )
 
 
 class TestUsageAiChatTeamModelRouting:
@@ -1580,6 +1592,39 @@ class TestUsageAiChatTeamModelRouting:
         assert exc_info.value.code == "403"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_models", "user_models", "denied"),
+        [(["prod-model"], None, False), ([], ["prod-alias"], True)],
+    )
+    async def test_group_alias_is_authorized_by_its_target_for_the_key_and_the_user(
+        self, key_models: list[str], user_models: list[str] | None, denied: bool
+    ):
+        from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+        user_cache: Final = UserApiKeyCache()
+        if user_models is not None:
+            await user_cache.async_set_cache(
+                key="u1", value=LiteLLM_UserTable(user_id="u1", models=user_models), model_type=LiteLLM_UserTable
+            )
+        personal_key: Final = UserAPIKeyAuth(
+            user_id="u1",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+            models=key_models,
+            router_settings={"model_group_alias": {"prod-alias": "prod-model"}},
+        )
+        with patch(  # test-quality-ok: the check reads the proxy_server.user_api_key_cache module global; no injection seam
+            "litellm.proxy.proxy_server.user_api_key_cache", user_cache
+        ):
+            if denied:
+                with pytest.raises(ProxyException) as exc_info:
+                    await self._endpoint_body(personal_key)
+                assert exc_info.value.code == "403"
+            else:
+                assert b'"content": "from the aliased deployment"' in await self._endpoint_body(personal_key)
+
+    @pytest.mark.asyncio
     async def test_router_calls_receive_sanitized_caller_auth_for_access_group_filtering(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
@@ -1674,8 +1719,10 @@ class TestUsageAiChatTeamModelRouting:
                 "litellm.proxy.proxy_server.prisma_client", None
             ),
         ):
-            await check_usage_ai_chat_model_access(user_api_key_dict=team_key, model=None)
-            routed_model: Final = await resolve_usage_ai_chat_model(user_api_key_dict=team_key, model=None)
+            await check_usage_ai_chat_model_access(user_api_key_dict=team_key, model=None, router_settings=None)
+            routed_model: Final = await resolve_usage_ai_chat_model(
+                user_api_key_dict=team_key, model=None, router_settings=None
+            )
             events: Final = [
                 json.loads(raw.removeprefix("data: "))
                 async for raw in stream_usage_ai_chat(

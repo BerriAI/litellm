@@ -534,26 +534,42 @@ def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object
     )
 
 
-async def resolve_usage_ai_chat_model(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> str:
+async def usage_ai_chat_router_settings(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object] | None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if llm_router is None:
+        return None
+    return await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=user_api_key_dict, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+
+
+def _requested_model(model: str | None, router_settings: Mapping[str, object] | None) -> str:
+    from litellm.router_utils.common_utils import resolve_model_group_alias
+
+    picked_or_default: Final = _resolve_model(model)
+    if router_settings is None:
+        return picked_or_default
+    return resolve_model_group_alias(router_settings.get("model_group_alias"), picked_or_default) or picked_or_default
+
+
+async def resolve_usage_ai_chat_model(
+    user_api_key_dict: "UserAPIKeyAuth", model: str | None, router_settings: Mapping[str, object] | None
+) -> str:
     from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
     from litellm.proxy.common_request_processing import (
         _resolve_per_request_model_group_alias,  # pyright: ignore[reportPrivateUsage]  # the key and team alias rule /chat/completions applies
     )
     from litellm.proxy.litellm_pre_call_utils import resolve_team_model_alias
-    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+    from litellm.proxy.proxy_server import llm_router
 
-    team_aliased_model: Final = resolve_team_model_alias(_resolve_model(model), user_api_key_dict)
+    team_aliased_model: Final = resolve_team_model_alias(_requested_model(model, router_settings), user_api_key_dict)
     global_aliased_model: Final = litellm.model_alias_map.get(team_aliased_model, team_aliased_model)
     key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict)
     key_aliased_model: Final = (
         key_aliases.get(global_aliased_model, global_aliased_model) if key_aliases is not None else global_aliased_model
     )
-    if llm_router is None:
-        return key_aliased_model
-    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict=user_api_key_dict, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-    )
-    if router_settings is None:
+    if llm_router is None or router_settings is None:
         return key_aliased_model
     group_alias_target: Final = await _resolve_per_request_model_group_alias(
         requested_model=key_aliased_model,
@@ -626,7 +642,9 @@ async def _acompletion(
     )
 
 
-async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> None:
+async def check_usage_ai_chat_model_access(
+    user_api_key_dict: "UserAPIKeyAuth", model: str | None, router_settings: Mapping[str, object] | None
+) -> None:
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import (
         _personal_key_owner,  # pyright: ignore[reportPrivateUsage]  # the same owner lookup the resolved-model check uses
@@ -642,7 +660,7 @@ async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", 
         user_api_key_cache,
     )
 
-    resolved_model: Final = _resolve_model(model)
+    resolved_model: Final = _requested_model(model, router_settings)
     try:
         await can_key_call_resolved_model(
             model=resolved_model,

@@ -54,6 +54,7 @@ async def usage_ai_chat(
         check_usage_ai_chat_model_access,
         resolve_usage_ai_chat_model,
         stream_usage_ai_chat,
+        usage_ai_chat_router_settings,
     )
 
     is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
@@ -63,8 +64,13 @@ async def usage_ai_chat(
         user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
     messages: Final = [{"role": m.role, "content": m.content} for m in data.messages]
 
-    await check_usage_ai_chat_model_access(user_api_key_dict=user_api_key_dict, model=data.model)
-    routed_model: Final = await resolve_usage_ai_chat_model(user_api_key_dict=user_api_key_dict, model=data.model)
+    router_settings: Final = await usage_ai_chat_router_settings(user_api_key_dict)
+    await check_usage_ai_chat_model_access(
+        user_api_key_dict=user_api_key_dict, model=data.model, router_settings=router_settings
+    )
+    routed_model: Final = await resolve_usage_ai_chat_model(
+        user_api_key_dict=user_api_key_dict, model=data.model, router_settings=router_settings
+    )
 
     return StreamingResponse(
         wrap_sse_stream_with_keepalive_pings(
