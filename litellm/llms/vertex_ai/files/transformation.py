@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import IO, Any, Final, TypedDict
 from urllib.parse import quote, unquote
@@ -30,6 +31,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
@@ -1103,6 +1105,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _map_openai_to_vertex_params(
         self,
         openai_request_body: dict[str, Any],
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         wrapper to call VertexGeminiConfig.map_openai_params
@@ -1117,7 +1120,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             model=_model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=False,
+            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
         )
         return vertex_params
 
@@ -1152,11 +1155,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             content_type=content_type,
         ):
+            deployment_drop_params: Final[object] = litellm_params.get("drop_params")
             return {
                 "streaming_media_upload": StreamingMediaUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
-                        self._map_openai_to_vertex_params,
+                        partial(self._map_openai_to_vertex_params, deployment_drop_params=deployment_drop_params),
                     ),
                     content_type="application/json",
                 )

@@ -27,7 +27,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -324,8 +324,11 @@ def reject_unknown_gemini_tts_voice_keys(
     model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
 ) -> None:
     nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
-    unknown_keys: Final = sorted({key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS})
-    if not unknown_keys or drop_params:
+    ignored_wrapper: Final = ("speech_config",) if "speechConfig" in voice and "speech_config" in voice else ()
+    unknown_keys: Final = sorted(
+        {*(key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS), *ignored_wrapper}
+    )
+    if not unknown_keys or drops_unsupported_params(drop_params):
         return
     raise UnsupportedParamsError(
         message=(

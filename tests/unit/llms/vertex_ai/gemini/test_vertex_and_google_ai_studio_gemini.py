@@ -208,6 +208,7 @@ def test_gemini_speech_config_keeps_only_speech_config_fields():
         ({"name": "Kore", "style": "calm"}, "style"),
         ({"speech_config": {"voice": "Kore", "pitch": 2}}, "pitch"),
         ({"speechConfig": {"voiceConfig": {}}, "tone": "x", "pitch": 2}, "pitch, tone"),
+        ({"speechConfig": {"voiceName": "Kore"}, "speech_config": {"style": "calm"}}, "speech_config"),
     ],
 )
 def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, unknown_keys):
@@ -244,6 +245,18 @@ def test_chat_audio_speech_config_unknown_keys_are_rejected_unless_dropped():
     )
     assert voice_only["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
 
+
+def test_chat_audio_speech_config_unknown_keys_follow_global_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
 
 
 def test_top_logprobs():
