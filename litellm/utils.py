@@ -28,6 +28,7 @@ import textwrap
 import threading
 import time
 import traceback
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -228,12 +229,15 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
+    API_KEY_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
+    AdminApiKeySecretReference,
     CallTypes,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialApiKeySecretReference,
     CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
@@ -261,6 +265,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
 )
 
@@ -458,7 +463,13 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import (
+    LOCAL_OIDC_SECRET_PREFIXES,
+    UnresolvableSecretReference,
+    get_secret,
+    oidc_reference_kind,
+    resolve_local_oidc_reference,
+)
 
 from ._logging import is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -722,16 +733,13 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
     return applied_guardrails
 
 
-def load_credentials_from_list(kwargs: dict):
-    """
-    Updates kwargs with the credentials if credential_name in kwarg
-    """
+def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     # Access CredentialAccessor via module to trigger lazy loading if needed
     credential_accessor: Final[type[CredentialAccessor]] = litellm_utils.CredentialAccessor
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if not credential_name:
-        return
+    if not isinstance(credential_name, str) or not credential_name:
+        return MappingProxyType({})
     credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
         verbose_logger.warning(
@@ -739,10 +747,93 @@ def load_credentials_from_list(kwargs: dict):
             credential_name,
             len(litellm.credential_list),
         )
-        return
-    for key, value in credential.credential_values.items():
-        if key not in kwargs:
-            kwargs[key] = value
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in credential_api_key_secret_reference(credential.credential_values).items()
+            if key not in kwargs
+        }
+    )
+
+
+def resolve_api_key_secret_reference(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
+
+
+def _secret_behind_api_key_reference(
+    reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str:
+    if not reference.may_reach(upstream):
+        raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
+    if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+        raise _secret_reference_error(
+            f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
+            "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
+            llm_provider=llm_provider,
+            model=model,
+        )
+    match resolve_local_oidc_reference(reference):
+        case UnresolvableSecretReference(kind=kind, reason=reason):
+            raise _secret_reference_error(
+                f"api_key {kind} secret reference could not be resolved: {reason}",
+                llm_provider=llm_provider,
+                model=model,
+            )
+        case str() as secret:
+            return secret
+
+
+def _secret_reference_error(message: str, llm_provider: object, model: object) -> AuthenticationError:
+    return AuthenticationError(message=message, llm_provider=llm_provider, model=model)
+
+
+def _unreachable_upstream_message(reference: AdminApiKeySecretReference) -> str:
+    if isinstance(reference, CredentialApiKeySecretReference):
+        return (
+            "The api_key secret reference comes from a stored credential, so LiteLLM sends it only to "
+            "that credential's own api_base. Set this api_base on the credential, or give this model its own "
+            "credential."
+        )
+    return (
+        "The api_key secret reference goes only to the host its deployment configures, and this call "
+        "points at another one. Send your own api_key with that host."
+    )
+
+
+def with_named_credential(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {**kwargs, **_named_credential_values(kwargs)}
+
+
+def load_credentials_from_list(kwargs: dict[str, object]) -> None:
+    """
+    Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
+    reference for the secret it points to, read now so a rotated token is used on the next call
+    """
+    kwargs.update(_credential_updates(kwargs))
+
+
+def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    credential_values: Final = _named_credential_values(kwargs)
+    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return credential_values
+    secret: Final = _secret_behind_api_key_reference(
+        api_key,
+        model=kwargs.get("model"),
+        llm_provider=kwargs.get("custom_llm_provider"),
+        upstream=MappingProxyType(
+            {
+                "model": kwargs.get("model"),
+                **{key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
+            }
+        ),
+    )
+    return MappingProxyType({**credential_values, "api_key": secret})
 
 
 def get_dynamic_callbacks(
@@ -2515,7 +2606,15 @@ def uses_anthropic_tokenizer(model: str) -> bool:
     return model in litellm.anthropic_models and "claude-3" not in model
 
 
-HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "llama2", "llama3"]
+HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek", "llama2", "llama3"]
+
+_DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
+    r"deepseek[-_.](?:chat[-_.])?v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)(?::free)?$", re.IGNORECASE
+)
+
+_BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(
+    {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
+)
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -2524,6 +2623,8 @@ def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
         return "cohere"
     if uses_anthropic_tokenizer(model):
         return "anthropic"
+    if _DEEPSEEK_TOKENIZER_MODEL.search(model):
+        return "deepseek"
     if "llama-2" in model.lower() or "replicate" in model.lower():
         return "llama2"
     if "llama-3" in model.lower():
@@ -2535,10 +2636,9 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
-    return {
-        "type": "huggingface_tokenizer",
-        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
-    }
+    with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
+        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2549,6 +2649,12 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
             return tokenizer_dispatch.anthropic()
+        case "deepseek":
+            return tokenizer_dispatch.from_str(
+                resources.files("litellm.litellm_core_utils.tokenizers")
+                .joinpath("deepseek_tokenizer.json")
+                .read_text(encoding="utf-8")
+            )
         case "llama2":
             return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
@@ -3580,6 +3686,15 @@ def _registration_base(
     return _RegistrationWrite(key=key, entry=dict(fallback.entry))
 
 
+def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
+    return (
+        frozenset({"explicit_cache_read_input_token_cost"})
+        if value.get("cache_read_input_token_cost") is not None
+        and value.get("explicit_cache_read_input_token_cost") is None
+        else frozenset()
+    )
+
+
 def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
@@ -3594,7 +3709,10 @@ def _registration_write(
         for name, field_value in base.entry.items()
         if name != "litellm_provider" or field_value is not None
     }
-    return _RegistrationWrite(key=base.key, entry=update_dictionary(existing_model, value))
+    return _RegistrationWrite(
+        key=base.key,
+        entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
+    )
 
 
 def _registration_attempt(
@@ -4718,6 +4836,12 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
     return optional_params
 
 
+def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
+    from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+    return deployment_reasoning_effort_levels(model_info) or ()
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -5246,11 +5370,21 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openai":
-        optional_params = litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            litellm.OpenAIGPT5Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            )
+            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+            else litellm.OpenAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
@@ -5274,6 +5408,7 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             )
         else:
             verbose_logger.debug(
@@ -5295,11 +5430,21 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            )
+            if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -6497,6 +6642,7 @@ def get_model_info_helper(
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -8166,6 +8312,23 @@ def _infer_valid_provider_from_env_vars(
     return valid_providers
 
 
+def _provider_listing_params(
+    custom_llm_provider: str, litellm_params: LiteLLM_Params | None
+) -> Mapping[str, object] | None:
+    if litellm_params is None:
+        return None
+    params: Final = litellm_params.model_dump(exclude_none=True)
+    api_key: Final = litellm_params.api_key
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return params
+    return {
+        **params,
+        "api_key": _secret_behind_api_key_reference(
+            api_key, model=litellm_params.model, llm_provider=custom_llm_provider, upstream=params
+        ),
+    }
+
+
 def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
@@ -8177,7 +8340,7 @@ def _get_valid_models_from_provider_api(
         if cached_result is not None:
             return cached_result
         models: Final = provider_config.discover_models(
-            litellm_params=litellm_params.model_dump(exclude_none=True) if litellm_params is not None else None
+            litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)

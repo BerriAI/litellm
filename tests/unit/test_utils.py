@@ -59,6 +59,7 @@ from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_K
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
+    CredentialItem,
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
@@ -865,6 +866,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_token_cost",
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
+        "explicit_cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
         "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
@@ -963,6 +965,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -7005,6 +7008,555 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+_MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
+_MISTRAL_REPLY: Final = {
+    "id": "chatcmpl-oidc",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "devstral-latest",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _allowed_token_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> Path:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text(content)
+    return token
+
+
+def _mistral_credential(api_key: str) -> CredentialItem:
+    return CredentialItem(credential_name="mistral-sa", credential_values={"api_key": api_key}, credential_info={})
+
+
+_PING: Final = [{"role": "user", "content": "ping"}]
+
+
+def _ping_mistral_through(credential_name: str) -> None:
+    litellm.completion(model="mistral/devstral-latest", messages=_PING, litellm_credential_name=credential_name)
+
+
+def test_named_credential_oidc_file_api_key_sends_the_token_read_on_each_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "token-before-rotation")
+    reference: Final = f"oidc/file/{token}"
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        _ping_mistral_through("mistral-sa")
+        token.write_text("token-after-rotation")
+        _ping_mistral_through("mistral-sa")
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer token-before-rotation", "Bearer token-after-rotation"]
+    assert litellm.credential_list[0].credential_values["api_key"] == reference
+
+
+@pytest.mark.asyncio
+async def test_deployment_oidc_env_api_key_resolves_per_call_and_the_router_keeps_the_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-two")
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer env-token-one", "Bearer env-token-two"]
+    assert router.get_model_list(model_name="devstral")[0]["litellm_params"]["api_key"] == "oidc/env/MISTRAL_SA_TOKEN"
+
+
+def test_explicit_api_key_wins_over_a_named_credential_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(f"oidc/file/{tmp_path / 'absent'}")])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_key="sk-explicit",
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == "Bearer sk-explicit"
+
+
+@pytest.mark.parametrize(
+    ("make_reference", "reason"),
+    [
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'absent'}", "No such file or directory"),
+        (lambda tmp_path: f"oidc/file/{tmp_path.parent}/outside", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file//run/secrets/lit-absent-token", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file/relative/token", "must be absolute"),
+        (lambda tmp_path: "oidc/env/LIT_UNSET_SA_TOKEN", "environment variable is not set"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'empty'}", "empty value"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'binary'}", "not UTF-8 text"),
+    ],
+)
+def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_target_or_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    make_reference: Callable[[Path], str],
+    reason: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+    (tmp_path / "empty").write_text("")
+    (tmp_path / "binary").write_bytes(b"\xffFILE-CONTENT")
+    (tmp_path.parent / "outside").write_text("FILE-CONTENT")
+    reference: Final = make_reference(tmp_path)
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert reason in excinfo.value.message
+    assert reference.split("/", 2)[2] not in excinfo.value.message
+    assert reference in caplog.text
+    assert "FILE-CONTENT" not in excinfo.value.message
+    assert "0xff" not in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("reference", "kind"),
+    [
+        ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
+        ("oidc/google/https://api.mistral.ai", "oidc/google"),
+        ("oidc/github/mistral", "oidc/github"),
+        ("oidc/env_MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+        ("oidc/LIT-UNKNOWN-KIND/MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+    ],
+)
+def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str, kind: str
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "must-not-be-sent")
+    monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert f"{kind} secret reference" in excinfo.value.message
+    assert reference.removeprefix(kind).lstrip("/") not in excinfo.value.message
+    assert "MISTRAL_SA_TOKEN_PATH" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {
+                    "model": "mistral/devstral-latest",
+                    "api_key": "oidc/google/https://api.mistral.ai",
+                    "order": 1,
+                },
+            },
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "sk-healthy", "order": 2},
+            },
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            response: Final = await router.acompletion(model="devstral", messages=_PING)
+            sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+    finally:
+        router.discard()
+
+    assert response.choices[0].message.content == "pong"
+    assert sent == ["Bearer sk-healthy"]
+
+
+def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "server-secret")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == f"Bearer {reference}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [({}, "Bearer env-token"), ({"team_id": "team-1"}, "Bearer oidc/env/MISTRAL_SA_TOKEN")],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            await router.acompletion(
+                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+            )
+            sent: Final = upstream.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert sent == expected
+
+
+_DEPLOYMENT_HOST_REFERENCE_REFUSAL: Final = "goes only to the host its deployment configures"
+_BEDROCK_RUNTIME: Final = "https://bedrock-runtime.us-east-1.amazonaws.com"
+_BEDROCK_CLAUDE: Final = "us.anthropic.claude-sonnet-5-5"
+_BEDROCK_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+def _bedrock_router(api_key: str, endpoint: str | None) -> litellm.Router:
+    params: Final = {"model": f"bedrock/converse/{_BEDROCK_CLAUDE}", "aws_region_name": "us-east-1", "api_key": api_key}
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {**params, "aws_bedrock_runtime_endpoint": endpoint} if endpoint else params,
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_endpoint", "call_endpoint"),
+    [(None, "https://caller.example"), (_BEDROCK_RUNTIME, f"{_BEDROCK_RUNTIME}:8443")],
+    ids=["deployment without an endpoint", "endpoint on another port"],
+)
+async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_the_call_picks_another_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deployment_endpoint: str | None, call_endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    router: Final = _bedrock_router("oidc/file//run/secrets/lit-missing-token", deployment_endpoint)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL) as excinfo:
+                await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
+    finally:
+        router.discard()
+
+    assert upstream.calls.call_count == 0
+    assert "/run/secrets" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_configures_when_the_call_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _bedrock_router(f"oidc/file/{token}", _BEDROCK_RUNTIME)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            await router.acompletion(
+                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+            )
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (("bedrock-runtime.us-east-1.amazonaws.com", "Bearer file-token"),)
+
+
+_HUGGINGFACE_EMBEDDING: Final = [[0.1, 0.2]]
+
+
+def _authorizations(calls: respx.models.CallList) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (call.request.url.host, call.request.headers["Authorization"])
+        for call in calls
+        if "Authorization" in call.request.headers
+    )
+
+
+def _huggingface_router(model: str, api_key: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {"model": model, "api_key": api_key}}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_is_refused_when_a_wildcard_call_names_its_own_url_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _huggingface_router("huggingface/*", f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+                await router.aembedding(
+                    model="huggingface/https://caller.example/embed", input=["hello"], input_type="feature-extraction"
+                )
+    finally:
+        router.discard()
+
+    assert _authorizations(upstream.calls) == ()
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_url_its_deployment_names_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    model: Final = "huggingface/https://endpoint.example/embed"
+    router: Final = _huggingface_router(model, f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            await router.aembedding(model=model, input=["hello"], input_type="feature-extraction")
+            sent: Final = _authorizations(upstream.calls)
+    finally:
+        router.discard()
+
+    assert sent == (("endpoint.example", "Bearer file-token"),)
+
+
+_CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://caller.example/v1"),
+        (None, "https://caller.example/v1"),
+        ("https://api.mistral.ai/v1", "http://api.mistral.ai/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
+        ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
+        ("https://mistral-gateway.example/v1", None),
+    ],
+    ids=[
+        "another host",
+        "credential without api_base",
+        "another scheme",
+        "userinfo trick",
+        "another port",
+        "unparseable",
+        "call clears the api_base",
+    ],
+)
+def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str | None
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+            litellm.completion(
+                model="mistral/devstral-latest",
+                messages=_PING,
+                litellm_credential_name="mistral-sa",
+                api_base=call_api_base,
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:443/v1"),
+        ("https://api.mistral.ai:443/v1", "https://API.mistral.ai./v1"),
+    ],
+    ids=["explicit default port on the call", "explicit default port on the credential"],
+)
+def test_a_named_credentials_oidc_api_key_reaches_an_api_base_on_the_same_origin(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str, call_api_base: str
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_base=call_api_base,
+        )
+        sent: Final = tuple(authorization for _, authorization in _authorizations(upstream.calls))
+
+    assert sent == ("Bearer env-token",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_api_base", "refused"),
+    [(None, False), ("https://API.mistral.ai/v1/", False), ("https://team-admin-host.example/v1", True)],
+    ids=["row without api_base", "row on the credential's host", "row on another host"],
+)
+async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials_host(
+    monkeypatch: pytest.MonkeyPatch, row_api_base: str | None, refused: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistral-sa",
+                credential_values={"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": "https://api.mistral.ai"},
+                credential_info={},
+            )
+        ],
+    )
+    row_params: Final = {"model": "mistral/devstral-latest", "litellm_credential_name": "mistral-sa"}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {**row_params, "api_base": row_api_base} if row_api_base else row_params,
+                "model_info": {"team_id": "team-1"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_MISTRAL_REPLY)
+            if refused:
+                with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+                    await router.acompletion(
+                        model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+                    )
+            else:
+                await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (() if refused else (("api.mistral.ai", "Bearer env-token"),))
+
+
+@pytest.mark.parametrize(
+    ("listing_params", "expected"),
+    [
+        (
+            lambda reference: LiteLLM_Params(
+                **litellm.Router(
+                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                ).get_model_list(model_name="openai/*")[0]["litellm_params"]
+            ),
+            lambda reference: "Bearer listing-token",
+        ),
+        (
+            lambda reference: LiteLLM_Params(model="openai/*", api_key=reference),
+            lambda reference: f"Bearer {reference}",
+        ),
+    ],
+    ids=["proxy-level deployment", "caller-built params"],
+)
+def test_provider_model_listing_sends_the_token_only_behind_a_deployment_oidc_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing_params: Callable[[str], LiteLLM_Params],
+    expected: Callable[[str], str],
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://api.openai.com/v1/models").respond(
+            200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
+        )
+        listed: Final = get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="openai", litellm_params=listing_params(reference)
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == expected(reference)
+    assert any(model.endswith("gpt-listed") for model in listed)
+
+
 _MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
 _ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
 
@@ -7224,6 +7776,51 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["litellm_provider"] == "azure"
         assert info["input_cost_per_token"] == 1e-07
         assert info["output_cost_per_token"] == 4e-07
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    "registered_prices, billed_cache_read_rate",
+    [
+        pytest.param({"input_cost_per_token": 2e-06}, 2.5e-07, id="inherits-builtin-explicit-rate"),
+        pytest.param({"cache_read_input_token_cost": 1e-07}, 1e-07, id="own-cache-read-price-wins"),
+        pytest.param(
+            {"cache_read_input_token_cost": 1e-07, "explicit_cache_read_input_token_cost": 5e-08},
+            5e-08,
+            id="own-explicit-price-wins",
+        ),
+    ],
+)
+def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
+) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "dashscope/qwen-register-explicit-cache-test"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[key] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        litellm.register_model({key: registered_prices}, persist_across_reloads=False)
+        explicit_hit: Final = ModelResponse(
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            )
+        )
+
+        assert litellm.completion_cost(completion_response=explicit_hit, model=key) == pytest.approx(
+            1000 * billed_cache_read_rate
+        )
     finally:
         _invalidate_model_cost_lowercase_map()
 
