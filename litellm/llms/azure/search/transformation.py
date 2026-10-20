@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Final, Literal
 import httpx
 from pydantic import ConfigDict, ValidationError
 
+from litellm.llms.azure.common_utils import cached_azure_ad_token_refresh_provider
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -263,9 +264,7 @@ def _search_tool(optional_params: Mapping[str, object]) -> _BingGroundingTool | 
 
 
 def _default_entra_token_minter() -> str:
-    from litellm.secret_managers.get_azure_ad_token_provider import get_azure_ad_token_provider
-
-    return get_azure_ad_token_provider(azure_scope=ENTRA_SCOPE)()
+    return cached_azure_ad_token_refresh_provider(ENTRA_SCOPE)()
 
 
 class BingGroundingSearchConfig(BaseSearchConfig):

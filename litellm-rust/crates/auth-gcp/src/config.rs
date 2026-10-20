@@ -1,5 +1,9 @@
 use std::{collections::BTreeMap, path::Path};
 
+use base64::{
+    Engine, alphabet,
+    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
+};
 use litellm_auth_types::{Error, ErrorDetail, InputSource, SecretValue, Sourced};
 use serde_json::{Map, Value};
 
@@ -80,9 +84,10 @@ pub fn get_vertex_ai_project_from_credentials(
         CredentialSource::Inline(configured) => configured.expose().to_string(),
         CredentialSource::Trusted(configured) => {
             let configured = configured.expose();
-            match std::fs::read_to_string(configured) {
-                Ok(contents) if Path::new(configured).is_file() => contents,
-                _ => configured.to_string(),
+            if names_a_credentials_file(configured) {
+                std::fs::read_to_string(configured).ok()?
+            } else {
+                configured.to_string()
             }
         }
         CredentialSource::ApplicationCredentials(path) => std::fs::read_to_string(path).ok()?,
@@ -103,6 +108,32 @@ pub fn get_vertex_ai_location(
         .location()
         .map(str::to_string)
         .or_else(|| VertexParams::LOCATION.resolve(&|_| None, env_lookup))
+}
+
+const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
+
+fn is_inline_json(configured: &str) -> bool {
+    configured
+        .trim_start_matches(INLINE_JSON_LEADING_NOISE)
+        .starts_with('{')
+}
+
+pub(crate) fn names_a_credentials_file(configured: &str) -> bool {
+    !is_inline_json(configured) || Path::new(configured).is_file()
+}
+
+const BASE64_ANY_PADDING: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+
+pub(crate) fn is_base64_encoded_json(configured: &str) -> bool {
+    let compact: String = configured.split_whitespace().collect();
+    let quoted = compact.trim_matches(['"', '\'']);
+    let encoded = quoted.strip_prefix("base64:").unwrap_or(quoted);
+    BASE64_ANY_PADDING
+        .decode(encoded.replace('-', "+").replace('_', "/"))
+        .is_ok_and(|decoded| serde_json::from_slice::<Map<String, Value>>(&decoded).is_ok())
 }
 
 #[derive(Clone, Debug)]
