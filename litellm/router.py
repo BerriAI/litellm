@@ -5166,10 +5166,12 @@ class Router:
         deployment: Final = self._pinned_deployment(model)
         if deployment is not None:
             return (deployment.litellm_params.model_dump(exclude_none=True),)
-        return tuple(
-            candidate["litellm_params"]
-            for candidate in self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
+        candidates: Final = (
+            self._get_deployment_by_litellm_model(model=model)
+            if kwargs.get("specific_deployment") is True
+            else self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
         )
+        return tuple(candidate["litellm_params"] for candidate in candidates)
 
     def _prompt_management_acompletion(
         self,
@@ -14079,7 +14081,7 @@ class Router:
 
     _get_model_from_alias = get_model_from_alias
 
-    def _get_deployment_by_litellm_model(self, model: str) -> list:
+    def _get_deployment_by_litellm_model(self, model: str) -> list[DeploymentTypedDict]:
         """
         Get the deployment by litellm model.
         """

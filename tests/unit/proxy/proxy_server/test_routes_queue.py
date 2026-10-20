@@ -6,6 +6,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -96,7 +97,7 @@ def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router
 def _queue_router(
     monkeypatch: pytest.MonkeyPatch, default_priority: int | None, mock_response: str = "queued"
 ) -> Router:
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -129,11 +130,11 @@ def test_queue_chat_completions_reports_the_priority_the_router_queued_at(
     priority_fields: dict[str, object],
     expected_priority: int,
 ) -> None:
-    router = _queue_router(monkeypatch, default_priority)
-    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
+    router: Final = _queue_router(monkeypatch, default_priority)
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
     with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
         with auth_as():
-            response = client.post("/queue/chat/completions", json=payload)
+            response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 200, response.text
     assert [call.kwargs["request"].priority for call in add_request.await_args_list] == [expected_priority]
     assert response.headers.get("x-litellm-priority") == str(expected_priority)
@@ -156,13 +157,13 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
     priority_fields: dict[str, object],
     message: str,
 ) -> None:
-    router = _queue_router(monkeypatch, default_priority)
-    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
+    router: Final = _queue_router(monkeypatch, default_priority)
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
     with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
         with auth_as():
-            response = client.post("/queue/chat/completions", json=payload)
+            response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 400, response.text
-    error = response.json()["error"]
+    error: Final = response.json()["error"]
     assert (error["type"], error["param"]) == ("invalid_request_error", "priority")
     assert message in error["message"]
     assert add_request.await_count == 0
@@ -172,9 +173,9 @@ def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
     client, auth_as, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _queue_router(monkeypatch, default_priority=3)
-    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": "1", "stream": True}
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": "1", "stream": True}
     with auth_as():
-        response = client.post("/queue/chat/completions", json=payload)
+        response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 200, response.text
     assert response.headers.get("x-litellm-priority") == "1"
 
@@ -183,11 +184,11 @@ def test_a_provider_bad_request_on_the_queue_route_keeps_its_own_message(
     client, auth_as, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _queue_router(monkeypatch, default_priority=3, mock_response="litellm.ContextWindowExceededError")
-    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
     with auth_as():
-        response = client.post("/queue/chat/completions", json=payload)
+        response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 400, response.text
-    error = response.json()["error"]
+    error: Final = response.json()["error"]
     assert error["type"] == "invalid_request_error"
     assert "context window" in error["message"].lower()
     assert "Authentication Error" not in error["message"]

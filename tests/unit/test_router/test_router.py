@@ -25704,7 +25704,7 @@ async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_depl
 
 
 @pytest.mark.parametrize(
-    ("deployment", "requested_model", "request_metadata"),
+    ("deployment", "requested_model", "routing_fields"),
     [
         (
             {
@@ -25713,7 +25713,7 @@ async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_depl
                 "model_info": {"id": "team-a-chat", "team_id": "team-a", "team_public_model_name": "team-chat"},
             },
             "team-chat",
-            {"user_api_key_team_id": "team-a"},
+            {"metadata": {"user_api_key_team_id": "team-a"}},
         ),
         (
             {
@@ -25724,13 +25724,21 @@ async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_depl
             "qa-chat-deployment",
             {},
         ),
+        (
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire", "drop_params": True},
+            },
+            "openai/gpt-5.4-nano",
+            {"specific_deployment": True},
+        ),
     ],
-    ids=["team-route", "deployment-id"],
+    ids=["team-route", "deployment-id", "provider-model-name"],
 )
-async def test_deployment_drop_params_drop_a_non_integer_priority_for_team_routes_and_deployment_ids(
+async def test_deployment_drop_params_drop_a_non_integer_priority_on_every_deployment_route(
     deployment: dict[str, object],
     requested_model: str,
-    request_metadata: dict[str, str],
+    routing_fields: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -25741,7 +25749,7 @@ async def test_deployment_drop_params_drop_a_non_integer_priority_for_team_route
             messages=_PRIORITY_MESSAGES,
             mock_response="pong",
             priority="high",
-            metadata=request_metadata,
+            **routing_fields,
         )
     assert add_request.await_args.kwargs["request"].priority == 3
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
