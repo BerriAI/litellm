@@ -6,6 +6,9 @@
 --
 -- Upgrade note: an old-version writer still targets this index in its ON CONFLICT clause and
 -- fails every flush once it is gone. Drain and stop old instances before running migrations.
+-- An old instance booting against the migrated database also logs "prisma schema out of sync"
+-- with SQL that drops team_id and both new indexes. Do not run it: it deletes team attribution
+-- and its CREATE UNIQUE INDEX fails once two teams share a key.
 --
 -- Disclaimer:
 -- - DROP INDEX CONCURRENTLY cannot run inside a transaction. This migration must stay a

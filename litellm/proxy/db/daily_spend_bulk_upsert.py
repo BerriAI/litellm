@@ -32,8 +32,6 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
-    # Rows also keyed by the team that sent the request, so one entity id shared by several
-    # teams is kept as one row per team.
     team_scoped: bool = False
 
 
