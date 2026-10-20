@@ -33,3 +33,7 @@ class MistralRequestRouting(TypedDict, total=False):
 
 class MistralCacheKeyParams(TypedDict, total=False):
     prompt_cache_key: ReadOnly[object]
+
+
+class MistralReasoningEffortParams(TypedDict, total=False):
+    reasoning_effort: ReadOnly[object]

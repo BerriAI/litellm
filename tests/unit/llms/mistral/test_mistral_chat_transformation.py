@@ -115,6 +115,36 @@ class TestMistralReasoningSupport:
         )
         assert optional_params["reasoning_effort"] == sent
 
+    @pytest.mark.parametrize(
+        ("requested", "drop_params", "sent"),
+        [
+            ({"effort": "medium"}, False, {"reasoning_effort": "high"}),
+            ({"effort": "high", "summary": "auto"}, True, {"reasoning_effort": "high"}),
+            ({"summary": "auto"}, True, {}),
+        ],
+    )
+    def test_reasoning_effort_object_is_sent_as_its_level(self, local_model_cost_map, requested, drop_params, sent):
+        import litellm
+
+        optional_params = litellm.get_optional_params(
+            model="mistral-small-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort=requested,
+            drop_params=drop_params,
+        )
+        assert {key: optional_params[key] for key in ("reasoning_effort",) if key in optional_params} == sent
+
+    @pytest.mark.parametrize("requested", [{"effort": "high", "summary": "auto"}, {"summary": "auto"}])
+    def test_reasoning_effort_object_mistral_cannot_take_is_rejected(self, local_model_cost_map, requested):
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError, match=r"\['reasoning_effort'\]"):
+            litellm.get_optional_params(
+                model="devstral-latest",
+                custom_llm_provider="mistral",
+                reasoning_effort=requested,
+            )
+
     def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
         self, local_model_cost_map, monkeypatch
     ):
@@ -1291,7 +1321,9 @@ async def test_prompt_cache_key_is_dropped_from_an_async_codestral_call_to_anoth
         prompt_cache_key="session-1",
         drop_params=True,
         max_retries=0,
-        client=AsyncOpenAI(api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()),
+        client=AsyncOpenAI(
+            api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()
+        ),
     )
 
     assert "prompt_cache_key" not in json.loads(azure_route.calls.last.request.content)
@@ -1318,6 +1350,30 @@ async def test_prompt_cache_key_rejection_for_an_async_codestral_call_names_code
             client=AsyncOpenAI(
                 api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()
             ),
+        )
+
+    assert not azure_route.called
+
+
+def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_params_error(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match=r"^litellm.UnsupportedParamsError: codestral does not support"
+    ):
+        litellm.completion(
+            model="codestral/codestral-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+            api_key="azure-key",
+            prompt_cache_key="session-1",
+            max_retries=0,
         )
 
     assert not azure_route.called

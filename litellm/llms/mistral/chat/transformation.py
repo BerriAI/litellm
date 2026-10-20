@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -34,6 +35,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (
     MistralCacheKeyParams,
+    MistralReasoningEffortParams,
     MistralRequestRouting,
     MistralThinkingBlock,
     MistralToolCallMessage,
@@ -66,6 +68,14 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
+_MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
+
+
+def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
+    requested: Final = as_str_mapping(reasoning_effort)
+    if requested is None:
+        return reasoning_effort, None
+    return requested.get("effort"), requested.get("summary")
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -217,14 +227,44 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" not in model.lower():
-                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value, self.custom_llm_provider)
+            if (
+                param == "reasoning_effort"
+                and "magistral" not in model.lower()
+                and (
+                    reasoning_level := self._reasoning_level_to_send(
+                        model, _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params), drop_params
+                    )
+                )
+                is not None
+            ):
+                optional_params["reasoning_effort"] = reasoning_level
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param in ("parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
+
+    def _reasoning_level_to_send(
+        self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
+    ) -> str | None:
+        level, summary = _reasoning_level_and_summary(requested.get("reasoning_effort"))
+        sendable: Final = (
+            _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
+        )
+        if sendable is not None and summary is None:
+            return sendable
+        if drop_params or litellm.drop_params is True:
+            return sendable
+        raise UnsupportedParamsError(
+            message=(
+                f"{self.custom_llm_provider} does not support parameters: ['reasoning_effort'], for model={model}, "
+                "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
+                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
+        )
 
     def accepts_prompt_cache_key_at(self, api_base: str | None) -> bool:
         resolved_api_base, _ = self._get_openai_compatible_provider_info(api_base, None)
