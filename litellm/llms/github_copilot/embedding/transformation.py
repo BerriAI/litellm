@@ -20,6 +20,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -204,7 +205,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
         from litellm.llms.openai.openai import OpenAIConfig
 
         return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

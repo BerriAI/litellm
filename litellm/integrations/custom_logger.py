@@ -22,6 +22,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StandardAuditLogPayload,
+    StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -35,12 +36,12 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
         MCPPreCallResponseObject,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.router import PreRoutingHookResponse
 
     Span = _Span
@@ -195,6 +196,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
 
+    async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
+        """Called once per part of a finished batch's lines, when this logger is listed in batch_line_item_callbacks."""
+
     #### PROMPT MANAGEMENT HOOKS ####
 
     async def async_get_chat_completion_prompt(
@@ -252,7 +256,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
@@ -908,7 +912,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         This is useful for logging payloads that contain sensitive information.
         """
         import litellm
-        from litellm import Choices, Message, ModelResponse
         from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
         from litellm.litellm_core_utils.redact_messages import (
             redacted_litellm_params,
@@ -939,31 +942,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
         }
 
-        # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
-        if turn_off_message_logging and not self.redacts_messages_itself():
-            redacted_str: Final = "redacted-by-litellm"
-
-            if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:
-                standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
-
-            if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
-                response: Final = standard_logging_object_copy["response"]
-                if isinstance(response, dict) and "output" in response:
-                    redaction_payload: Final[dict[str, object]] = {}  # mutable-ok: populate the typed wrapper once
-                    redaction_payload["response"] = response
-                    standard_logging_object_copy["response"] = redacted_standard_logging_payload(redaction_payload)[
-                        "response"
-                    ]
-                else:
-                    # Standard ModelResponse format
-                    model_response: Final = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
-                    model_response_dict: Final = model_response.model_dump()
-                    standard_logging_object_copy["response"] = model_response_dict
-
         return {
             **model_call_details,
             **redacted_params,
-            "standard_logging_object": standard_logging_object_copy,
+            "standard_logging_object": (
+                redacted_standard_logging_payload(standard_logging_object_copy)
+                if turn_off_message_logging and not self.redacts_messages_itself()
+                else standard_logging_object_copy
+            ),
         }
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(

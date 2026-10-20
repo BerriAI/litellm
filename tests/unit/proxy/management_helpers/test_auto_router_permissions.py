@@ -146,8 +146,8 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"provider": "laya", "model": "english", "api_key": "sk-member"}, "api_key"),
         ({"provider": "bespoke", "model": "nimble-latest", "api_base": "https://collector.invalid"}, "api_base"),
         ({"provider": "bespoke", "model": "nimble-latest", "api_key": "sk-member"}, "api_key"),
-        ({"provider": "databricks", "model": "my-openjev", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
-        ({"provider": "databricks", "model": "my-openjev", "api_key": "dapi-member"}, "api_key"),
+        ({"provider": "databricks", "model": "ai_decide", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
+        ({"provider": "databricks", "model": "ai_decide", "api_key": "dapi-member"}, "api_key"),
     ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
@@ -168,7 +168,13 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
 
 @pytest.mark.parametrize(
     ("provider", "model"),
-    [("typesafe", "jev-preview"), ("laya", "english"), ("bespoke", "nimble-latest"), ("databricks", "my-openjev")],
+    [
+        ("typesafe", "jev-preview"),
+        ("laya", "english"),
+        ("bespoke", "nimble-latest"),
+        ("databricks", "ai_decide"),
+        ("databricks", "my-openjev"),
+    ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
 def test_members_can_still_tune_the_jev_classifier(provider: str, model: str, legacy: bool) -> None:
@@ -264,7 +270,7 @@ async def test_member_authorization_and_persistence_resolve_the_same_classifier(
         _strategy_router_write_violation,
         update_db_model,
     )
-    from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+    from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "member-router-test-salt")
     stored_config: Final = {
@@ -427,3 +433,26 @@ async def test_jev_evaluation_obeys_each_containing_scope(
         return
     await operation
     assert not catalog.get_model_list(f"{provider}/{model}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", ["key", "team", None])
+async def test_deployed_decision_classifier_requires_key_and_team_access(catalog: Router, restricted: str | None) -> None:
+    permitted: Final = ["allowed", "other"]
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config({
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "other"},
+        }),
+        default_model=None,
+        user_api_key_dict=_actor(models=["allowed"] if restricted == "key" else permitted),
+        team=_team(models=["allowed"] if restricted == "team" else permitted),
+        prisma_client=_Client(),
+        llm_router=catalog,
+    )
+    if restricted is not None:
+        with pytest.raises(ProxyException, match="other"):
+            await operation
+        return
+    await operation

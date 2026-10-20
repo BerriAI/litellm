@@ -176,6 +176,44 @@ class TestClaudePlatformActionsCovered:
         )
 
 
+class TestClaudePlatformOutboundIdentityCovered:
+    """Claude Platform on AWS calls ``sts:GetWebIdentityToken`` with the
+    caller's session before serving inference, and tags the token it
+    requests (``sts:TagGetWebIdentityToken``). Without either in the ceiling,
+    every claude_platform request via OIDC auth denies with "no session
+    policy allows the sts:<action> action" even when the role's identity
+    policy grants it."""
+
+    @pytest.mark.parametrize("action", ["sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"])
+    def test_outbound_identity_action_present(self, action: str):
+        assert action in _granted_actions(_captured_policy()), (
+            f"{action} missing from session policy, so bedrock/claude_platform/* requests will 403 on OIDC auth"
+        )
+
+    @pytest.mark.parametrize("action", ["sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"])
+    def test_outbound_identity_action_is_granted_only_via_claude_platform(self, action: str):
+        granting: Final = tuple(stmt for stmt in _captured_policy()["Statement"] if action in stmt["Action"])
+        assert granting, f"{action} missing from session policy"
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}
+            and stmt["Condition"]["Bool"] == {"aws:SecureTransport": "true"}
+            for stmt in granting
+        ), f"{action} must only be usable over TLS when Claude Platform on AWS calls STS for the session"
+
+    def test_outbound_identity_statement_is_scoped(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "ClaudePlatformOutboundIdentityLiteLLM")
+        assert stmt["Effect"] == "Allow"
+        assert tuple(stmt["Action"]) == ("sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"), (
+            "the outbound identity statement must grant only the two outbound identity actions"
+        )
+
+    def test_no_sts_wildcard(self):
+        assert "sts:*" not in _granted_actions(_captured_policy()), (
+            "session policy must not grant sts:*, only the two outbound identity actions are needed"
+        )
+
+
 class TestBedrockMantleActionsCovered:
     """LIT-3859: bedrock_mantle inference authorizes against the
     ``bedrock-mantle`` action namespace, so the session-policy ceiling
@@ -304,6 +342,15 @@ class TestPolicyTransportConditions:
         assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
             "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
             "to keep parity with the bedrock statement"
+        )
+
+    def test_only_the_outbound_identity_statement_requires_a_claude_platform_caller(self):
+        directly_called: Final = tuple(
+            stmt for stmt in _captured_policy()["Statement"] if stmt["Sid"] != "ClaudePlatformOutboundIdentityLiteLLM"
+        )
+        assert directly_called
+        assert all("StringEquals" not in stmt["Condition"] for stmt in directly_called), (
+            "statements LiteLLM calls directly must not require aws:CalledViaLast, or OIDC auth 403s on those routes"
         )
 
 
