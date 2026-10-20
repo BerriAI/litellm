@@ -4607,3 +4607,98 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
             drop_params=False,
             mock_response="hi",
         )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("profile,custom_price", ((None, False), ("us.openai.gpt-6-sol", False), (None, True)))
+@pytest.mark.asyncio
+async def test_converse_fallback_prices_the_current_attempt(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, asynchronous: bool, profile: str | None, custom_price: bool
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.rust_bridge import configuration
+    CONVERSE_ANSWER: Final = json.dumps(
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            "metrics": {"latencyMs": 1},
+        }
+    ).encode()
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    failed_profile: Final = "us.amazon.nova-micro-v1:0"
+    model: Final = "openai.gpt-6-sol"
+    logging_obj: Final = LiteLLMLogging(
+        model="amazon.nova-micro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="acompletion" if asynchronous else "completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="bedrock-fallback-pricing",
+        function_id="bedrock-fallback-pricing",
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if failed_profile in request.url.path:
+            return httpx.Response(400, json={"message": "Input is too long for requested model."})
+        assert request.url.path == f"/model/{profile or model}/converse"
+        return httpx.Response(200, content=CONVERSE_ANSWER)
+
+    client: Final = (
+        AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        if asynchronous
+        else HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    )
+    kwargs: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "test-bearer",
+        "aws_region_name": "us-east-1",
+        "client": client,
+        "litellm_logging_obj": logging_obj,
+        "num_retries": 0,
+        "stream": stream,
+        "fake_stream": stream,
+    }
+    if asynchronous:
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.acompletion(model="bedrock/converse/amazon.nova-micro-v1:0", model_id=failed_profile, **kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(model="bedrock/converse/amazon.nova-micro-v1:0", model_id=failed_profile, **kwargs)
+
+    overrides: Final = {
+        **({"model_id": profile} if profile is not None else {}),
+        **({"input_cost_per_token": 0.001, "output_cost_per_token": 0.002} if custom_price else {}),
+    }
+    response: Final = (
+        await litellm.acompletion(model=f"bedrock/converse/{model}", **kwargs, **overrides)
+        if asynchronous
+        else litellm.completion(model=f"bedrock/converse/{model}", **kwargs, **overrides)
+    )
+    result: Final = (
+        litellm.stream_chunk_builder(
+            [chunk async for chunk in response] if asynchronous else list(response), logging_obj=response.logging_obj
+        )
+        if stream
+        else response
+    )
+    assert result is not None
+    prices: Final = litellm.get_model_info(profile or model, custom_llm_provider="bedrock")
+    expected: Final = (
+        0.001 + 0.002
+        if custom_price
+        else prices["input_cost_per_token"] + prices["output_cost_per_token"]
+    )
+    active_logging: Final = response.logging_obj if stream else logging_obj
+    assert active_logging._response_cost_calculator(result) == pytest.approx(expected)
+    active_logging.update_environment_variables(litellm_params={}, optional_params={})
+    if asynchronous:
+        await client.close()
+    else:
+        client.close()
+    configuration.reset_rust_configuration()
