@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from urllib.parse import urlsplit
 from typing import Final
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page, Response, expect, sync_playwright
@@ -189,7 +189,9 @@ def _login(page: Page, dashboard: Dashboard) -> None:
 
 
 def _is_data_fetch(response: Response) -> bool:
-    return response.request.resource_type in ("fetch", "xhr") and "/_next/" not in response.url
+    """API calls only. The Admin UI's own assets and Next.js prefetches live under /ui/ and /_next/."""
+    path: Final = urlsplit(response.url).path
+    return response.request.resource_type in ("fetch", "xhr") and not path.startswith(("/ui/", "/_next/"))
 
 
 def _worst(responses: list[Response]) -> Response | None:
