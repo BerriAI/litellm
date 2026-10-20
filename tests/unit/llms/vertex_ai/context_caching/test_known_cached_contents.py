@@ -84,7 +84,9 @@ def _sync_call(
     )
 
 
-async def _async_call(endpoints: ContextCachingEndpoints, client: AsyncHTTPHandler):
+async def _async_call(
+    endpoints: ContextCachingEndpoints, client: AsyncHTTPHandler, timeout: float | httpx.Timeout = 30.0
+):
     return await endpoints.async_check_and_create_cache(
         messages=_messages(),
         optional_params={},
@@ -92,7 +94,7 @@ async def _async_call(endpoints: ContextCachingEndpoints, client: AsyncHTTPHandl
         api_base=None,
         model="gemini-3.1-pro",
         client=client,
-        timeout=30.0,
+        timeout=timeout,
         logging_obj=MagicMock(model_call_details={}),
         custom_llm_provider="vertex_ai",
         vertex_project="p",
@@ -303,6 +305,29 @@ async def test_waiters_resolve_on_their_own_when_the_first_request_fails(endpoin
     assert results[1][2] == "cachedContents/2"
 
 
+@pytest.mark.parametrize("waiter_timeout", [0.05, httpx.Timeout(30.0, read=0.05)])
+@pytest.mark.asyncio
+async def test_waiter_stops_waiting_for_the_first_request_at_its_own_timeout(
+    endpoints: ContextCachingEndpoints, waiter_timeout: float | httpx.Timeout
+):
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+
+    async def slow_list(**_):
+        await asyncio.sleep(0.5)
+        return _response({})
+
+    client.get = AsyncMock(side_effect=slow_list)
+    client.post = AsyncMock(return_value=_response(_created("cachedContents/1", _expire_time(60))))
+
+    results: Final = await asyncio.gather(
+        _async_call(endpoints, client), _async_call(endpoints, client, waiter_timeout), return_exceptions=True
+    )
+
+    assert results[0][2] == "cachedContents/1"
+    assert isinstance(results[1], VertexAIError)
+    assert results[1].status_code == 408
+
+
 def test_parse_expire_time_accepts_nanosecond_precision():
     assert parse_expire_time("2026-10-14T18:06:21.123456789Z") == pytest.approx(
         datetime(2026, 10, 14, 18, 6, 21, 123456, tzinfo=timezone.utc).timestamp()
@@ -417,13 +442,22 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Invalid value at 'generation_config.temperature'",
+        "Tool config, tools and system instruction should not be set in therequest when using cached content.",
+        "CachedContent can not be used with GenerateContent request setting system_instruction, tools or tool_config.",
+    ],
+)
 @pytest.mark.asyncio
-async def test_error_that_does_not_name_the_cache_keeps_the_remembered_cache(
+async def test_error_that_is_not_about_a_missing_cache_keeps_the_remembered_cache(
     respx_mock: respx.MockRouter,
     fake_provider_credentials: None,
     monkeypatch: pytest.MonkeyPatch,
     sync_mode: bool,
     stream: bool,
+    message: str,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
@@ -435,7 +469,7 @@ async def test_error_that_does_not_name_the_cache_keeps_the_remembered_cache(
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
         side_effect=[
             _generated(stream),
-            _rejected(400, "Invalid value at 'generation_config.temperature'"),
+            _rejected(400, message),
             _generated(stream),
         ]
     )

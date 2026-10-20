@@ -11,12 +11,17 @@ KNOWN_CACHE_EXPIRY_MARGIN_SECONDS: Final = 10.0
 MAX_KNOWN_CACHED_CONTENTS: Final = 10_000
 _CACHE_REJECTED_STATUS_CODES: Final = frozenset({400, 403, 404})
 _NAMES_CACHED_CONTENT: Final = re.compile(r"cached?\s*content", re.IGNORECASE)
+_FORBIDS_FIELDS_BESIDE_A_CACHE: Final = re.compile(r"system[_\s]instruction", re.IGNORECASE)
 
 _RFC3339_FRACTION: Final = re.compile(r"\.(\d{1,6})\d*")
 
 
 def names_rejected_cache(status_code: int, message: str) -> bool:
-    return status_code in _CACHE_REJECTED_STATUS_CODES and _NAMES_CACHED_CONTENT.search(message) is not None
+    return (
+        status_code in _CACHE_REJECTED_STATUS_CODES
+        and _NAMES_CACHED_CONTENT.search(message) is not None
+        and _FORBIDS_FIELDS_BESIDE_A_CACHE.search(message) is None
+    )
 
 
 def parse_expire_time(expire_time: object) -> float | None:
@@ -103,13 +108,18 @@ class KnownCachedContents:
             self._entries = {key: entry for key, entry in self._entries.items() if entry[0] != cached_content}
 
     async def single_flight(
-        self, scope: tuple[str, str], cache_key: str, resolve: Callable[[], Awaitable[str | None]]
+        self,
+        scope: tuple[str, str],
+        cache_key: str,
+        resolve: Callable[[], Awaitable[str | None]],
+        wait_seconds: float | None,
     ) -> str | None:
         """Run ``resolve`` once per (scope, cache_key) at a time within this event loop.
 
         Concurrent requests for the same prefix wait for the first one's lookup-or-create
         instead of each listing (and creating a duplicate cache). If that first attempt
-        fails, each waiter resolves on its own.
+        fails, each waiter resolves on its own. A waiter waits at most ``wait_seconds`` and
+        then raises ``asyncio.TimeoutError`` without cancelling the first request.
         """
         loop: Final = asyncio.get_running_loop()
         own: Final[asyncio.Future[str | None]] = loop.create_future()
@@ -117,7 +127,7 @@ class KnownCachedContents:
             inflight: Final = self._inflight.setdefault(loop, {})
             leader: Final = inflight.setdefault((scope, cache_key), own)
         if leader is not own:
-            name: Final = await asyncio.shield(leader)
+            name: Final = await asyncio.wait_for(asyncio.shield(leader), wait_seconds)
             if name:
                 return name
             return await resolve()

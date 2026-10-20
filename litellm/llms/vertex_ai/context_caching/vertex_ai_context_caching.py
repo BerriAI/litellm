@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from typing import Final, Literal
 
@@ -68,6 +69,14 @@ class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
     tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
+
+
+def _wait_seconds(timeout: float | httpx.Timeout | None) -> float | None:
+    match timeout:
+        case httpx.Timeout():
+            return timeout.read
+        case _:
+            return timeout
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -643,7 +652,12 @@ class ContextCachingEndpoints(VertexBase):
             )
             return raw_response_cached.get("name")
 
-        cache_name: Final = await self._known_caches.single_flight(scope, generated_cache_key, lookup_or_create)
+        try:
+            cache_name: Final = await self._known_caches.single_flight(
+                scope, generated_cache_key, lookup_or_create, _wait_seconds(timeout)
+            )
+        except asyncio.TimeoutError:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.")
         return non_cached_messages, optional_params, cache_name
 
     def get_cache(self):
