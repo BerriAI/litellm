@@ -242,7 +242,6 @@ from litellm.router_utils.cooldown_handlers import (
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_model
 from litellm.router_utils.embedding_batch_size_check import (
     async_log_rejection_before_provider_call,
     clear_rejected_before_provider_call,
@@ -11689,16 +11688,16 @@ class Router:
             for deployment in deployments
         )
         params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
+        # base_model resolution mirrors get_router_model_info: unset or blank means the
+        # deployment's own model name is the cost-map key.
         cost_map_keys: Final = tuple(
             dict.fromkeys(  # deduplicates while preserving config order
                 key
                 for key in (
-                    deployment_pricing_model(
-                        model_info.get("base_model") or litellm_params.get("base_model"), litellm_params.get("model")
-                    )
+                    model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
                     for model_info, litellm_params in zip(model_infos, params)
                 )
-                if key is not None
+                if isinstance(key, str) and key
             )
         )
         return DeploymentModelListingInfo(

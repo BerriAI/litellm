@@ -9,10 +9,5 @@ def deployment_pricing_models(base_model: object, model: object) -> tuple[str, .
     return tuple(dict.fromkeys(_named_models(base_model, model)))
 
 
-def deployment_pricing_model(base_model: object, model: object) -> str | None:
-    """The single cost-map key a deployment is listed under, the first of ``deployment_pricing_models``."""
-    return next(iter(deployment_pricing_models(base_model, model)), None)
-
-
 def _named_models(*candidates: object) -> Iterator[str]:
     return (candidate for candidate in candidates if isinstance(candidate, str) and candidate)
