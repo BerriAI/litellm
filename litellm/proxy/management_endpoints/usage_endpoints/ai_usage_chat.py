@@ -481,7 +481,8 @@ def _router_route(router: "Router", model: str, caller_is_proxy_admin: bool) -> 
         return None
     if router.default_deployment is not None or router.pattern_router.route(model) is not None:  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
         return "model_group"
-    return "deployment" if model in router.deployment_names else None
+    serves_model: Final = any(deployment["litellm_params"]["model"] == model for deployment in router.model_list)  # pyright: ignore[reportUnknownVariableType]  # Router.model_list is an untyped list
+    return "deployment" if serves_model else None
 
 
 class _TaggedMetadata(BaseModel):

@@ -929,7 +929,7 @@ class TestUsageAiChatProviderRequest:
     def _tool_names(sent: dict[str, object]) -> list[object]:
         return [tool.get("name") or tool["function"]["name"] for tool in sent["tools"]]
 
-    async def _ask(self, model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _ask(self, model: str, monkeypatch: pytest.MonkeyPatch, router: "Router | None" = None) -> None:
         import litellm
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
@@ -939,7 +939,7 @@ class TestUsageAiChatProviderRequest:
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
-            "litellm.proxy.proxy_server.llm_router", self._router()
+            "litellm.proxy.proxy_server.llm_router", router or self._router()
         ):
             await _acompletion(
                 model=model,
@@ -992,6 +992,18 @@ class TestUsageAiChatProviderRequest:
         await self._ask("openai/gpt-5.6", monkeypatch)
 
         assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-gpt5-deployment"
+
+    @pytest.mark.asyncio
+    async def test_deleted_deployment_name_is_called_with_the_environment_key(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_openai(respx_mock)
+        router: Final = self._router()
+        router.delete_deployment(id=router.get_model_ids(model_name="gpt-5-prod")[0])
+
+        await self._ask("openai/gpt-5.6", monkeypatch, router)
+
+        assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
 
 
 class TestUsageAiChatKeepalive:
