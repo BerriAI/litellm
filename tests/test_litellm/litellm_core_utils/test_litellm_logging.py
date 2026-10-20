@@ -22,6 +22,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
+    get_standard_logging_object_payload,
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -7485,3 +7486,86 @@ async def test_background_interaction_completion_logs_while_in_progress_handler_
     await completion
 
     assert counting_logger.logged_results == [completed, in_progress], counting_logger.logged_results
+
+
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token"),
+    [(1e-06, 2e-06), (0.0, 0.0)],
+    ids=["custom_price", "explicit_zero_price"],
+)
+def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_billed_from(
+    input_cost_per_token: float, output_cost_per_token: float
+):
+    """A deployment with its own price keeps the catalog model as model_map_key but is logged at its own rates."""
+    deployment_id: Final = "lit9660-priced-deployment"
+    deployment_model_info: Final = {
+        "id": deployment_id,
+        "input_cost_per_token": input_cost_per_token,
+        "output_cost_per_token": output_cost_per_token,
+    }
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = LitellmLogging(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9660",
+            function_id="fn",
+        )
+        litellm_params: Final = {
+            "metadata": {
+                "model_group": "lit9660-group",
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": deployment_model_info,
+            }
+        }
+        logging_obj.update_environment_variables(
+            model="gpt-5.4-nano", user="", optional_params={}, litellm_params=litellm_params, custom_llm_provider="openai"
+        )
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+        )
+
+        response_cost: Final = logging_obj._response_cost_calculator(result=response)
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "custom_llm_provider": "openai",
+                "litellm_params": litellm_params,
+                "response_cost": response_cost,
+            },
+            init_response_obj=response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
+        assert payload is not None
+        assert payload["model_map_information"] == {
+            "model_map_key": "openai/gpt-5.4-nano",
+            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
+        }
+        model_map_value: Final = payload["model_map_information"]["model_map_value"]
+        assert model_map_value is not None
+        assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (
+            input_cost_per_token,
+            output_cost_per_token,
+        )
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
