@@ -28,7 +28,6 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
