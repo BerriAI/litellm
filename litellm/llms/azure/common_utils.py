@@ -228,7 +228,7 @@ def _single_flight_async_azure_ad_token_provider(
         if isinstance(token, str):
             return token
         # A coroutine can be awaited only once, so callers that joined another caller's attempt start their own
-        own: Final = token if led else provider()
+        own: Final = token if led else await asyncio.to_thread(provider)
         return own if isinstance(own, str) else await own
 
     return async_provider

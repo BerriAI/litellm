@@ -2397,12 +2397,13 @@ async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
-async def test_a_concurrent_burst_on_an_async_azure_ad_token_provider_gets_a_token_for_every_request(
+async def test_a_concurrent_burst_on_an_async_azure_ad_token_provider_gets_a_token_for_every_request_off_the_loop(
     monkeypatch: pytest.MonkeyPatch, api_version: str
 ) -> None:
     import asyncio
     import itertools
 
+    event_loop_thread: Final = threading.current_thread()
     second_call_started: Final = threading.Event()
     call_numbers: Final = itertools.count()
 
@@ -2411,7 +2412,8 @@ async def test_a_concurrent_burst_on_an_async_azure_ad_token_provider_gets_a_tok
             second_call_started.wait(timeout=0.5)
         else:
             second_call_started.set()
-        return asyncio.sleep(0, result="async-token")
+        blocked_the_loop: Final = threading.current_thread() is event_loop_thread
+        return asyncio.sleep(0, result="blocked-the-loop" if blocked_the_loop else "async-token")
 
     monkeypatch.setattr(
         litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
