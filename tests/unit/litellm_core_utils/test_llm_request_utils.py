@@ -4,6 +4,7 @@ import pytest
 from litellm.litellm_core_utils.llm_request_utils import (
     ensure_extra_body_is_safe,
     flatten_form_field_values,
+    is_proxy_request,
     serialize_multipart_form_fields,
 )
 
@@ -133,3 +134,15 @@ def test_ensure_extra_body_is_safe_returns_non_dict_unchanged():
     result = ensure_extra_body_is_safe(cast(dict[str, object], extra_body))
 
     assert result is extra_body
+
+
+def test_is_proxy_request_only_when_the_server_stamp_is_present():
+    assert is_proxy_request({"proxy_server_request": {"url": "http://proxy/v1/chat/completions"}})
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [None, {}, {"proxy_server_request": None}, {"proxy_server_request": {}}, {"metadata": {"user_api_key": "sk-x"}}],
+)
+def test_is_proxy_request_is_false_for_a_direct_sdk_call(litellm_params):
+    assert is_proxy_request(litellm_params) is False

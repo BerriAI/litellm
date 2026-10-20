@@ -173,6 +173,16 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     return [model for model, _ in model_costs[:n]]
 
 
+def is_proxy_request(litellm_params: Mapping[str, object] | None) -> bool:
+    """
+    True when the call entered through the LiteLLM proxy.
+
+    Keyed only on the server-set ``proxy_server_request`` stamp: the proxy strips that
+    field from client bodies, so a caller cannot fake it, and a plain SDK call never has it.
+    """
+    return litellm_params is not None and bool(litellm_params.get("proxy_server_request"))
+
+
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
     """
     Get the `proxy_server_request` headers from the litellm_params.\

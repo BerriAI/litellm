@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.llm_request_utils import is_proxy_request
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
@@ -268,15 +269,32 @@ def _trusted_s3_model_credentials(litellm_params: Mapping[str, object]) -> _Trus
     return _TrustedS3ModelCredentials.model_validate(snapshot)
 
 
+def _sdk_caller_bucket_name(litellm_params: Mapping[str, object], key: str) -> str | None:
+    """
+    The bucket a direct SDK caller passed as a kwarg.
+
+    A proxy request never gets this fallback: the bucket is what managed file ids are
+    validated against, so on the proxy it must come from deployment config or the
+    environment and never from anything a client could have sent.
+    """
+    if is_proxy_request(litellm_params):
+        return None
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
 def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
     """
-    Resolve the server-configured S3 bucket for Bedrock file operations.
+    Resolve the configured S3 bucket for Bedrock file operations.
 
-    Only trusts the immutable server-side credential snapshot or the
-    environment; never a request-supplied param, since the bucket is what
-    `validate_managed_cloud_file_id` checks file ids against.
+    Trusts the immutable server-side credential snapshot, then the environment,
+    and for a direct SDK call also the caller's own ``s3_bucket_name`` kwarg.
     """
-    bucket_name: Final = _trusted_s3_model_credentials(litellm_params).s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name: Final = (
+        _trusted_s3_model_credentials(litellm_params).s3_bucket_name
+        or os.getenv("AWS_S3_BUCKET_NAME")
+        or _sdk_caller_bucket_name(litellm_params, "s3_bucket_name")
+    )
     if not bucket_name:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return bucket_name
@@ -288,12 +306,19 @@ def get_configured_s3_bucket_names(litellm_params: Mapping[str, object]) -> tupl
 
     Bedrock batch outputs land in ``s3_output_bucket_name`` when it differs from
     the input bucket, so retrieval validates against both. Same trust rules as
-    ``get_configured_s3_bucket_name``: only the immutable credential snapshot or
-    the environment, never a request param.
+    ``get_configured_s3_bucket_name``.
     """
     trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    input_bucket: Final = trusted.s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
-    output_bucket: Final = trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+    input_bucket: Final = (
+        trusted.s3_bucket_name
+        or os.getenv("AWS_S3_BUCKET_NAME")
+        or _sdk_caller_bucket_name(litellm_params, "s3_bucket_name")
+    )
+    output_bucket: Final = (
+        trusted.s3_output_bucket_name
+        or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+        or _sdk_caller_bucket_name(litellm_params, "s3_output_bucket_name")
+    )
     buckets: Final = tuple(dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket))
     if not buckets:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)

@@ -73,9 +73,7 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = get_base_model_from_litellm_call_metadata(
-            {"model_info": {"base_model": "gpt-4"}}
-        )
+        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
         assert result == "gpt-4"
 
     @pytest.mark.parametrize(
@@ -160,6 +158,12 @@ class TestGetLitellmParamsKwargsExtraction:
         result_without_s3_kwargs = get_litellm_params()
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
+
+    def test_s3_bucket_kwargs_are_extracted_when_provided(self):
+        result = get_litellm_params(s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket")
+        assert result["s3_bucket_name"] == "in-bucket"
+        assert result["s3_output_bucket_name"] == "out-bucket"
+        assert "s3_bucket_name" not in get_litellm_params()
 
     def test_a_caller_supplied_control_options_key_is_not_carried(self) -> None:
         assert CONTROL_OPTIONS_KEY not in get_litellm_params(**{CONTROL_OPTIONS_KEY: {"stream_chunk_size": 64}})
@@ -276,9 +280,7 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(
-            metadata={"model_info": {"base_model": "from-metadata"}}
-        )
+        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):
@@ -412,9 +414,7 @@ class TestMetadataFallsBackToLitellmMetadata:
     "value, expected",
     [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
 )
-def test_drop_params_strings_reach_litellm_params_as_flags(
-    value: str | bool | None, expected: bool | None
-) -> None:
+def test_drop_params_strings_reach_litellm_params_as_flags(value: str | bool | None, expected: bool | None) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected
 
 

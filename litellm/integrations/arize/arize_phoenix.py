@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
+from litellm.litellm_core_utils.llm_request_utils import is_proxy_request
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
 
 if TYPE_CHECKING:
@@ -231,7 +232,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         detection to route their telemetry into arbitrary Arize/Phoenix projects.
         """
         litellm_params: Final = kwargs.get("litellm_params")
-        return isinstance(litellm_params, dict) and bool(litellm_params.get("proxy_server_request"))
+        return isinstance(litellm_params, dict) and is_proxy_request(litellm_params)
 
     @staticmethod
     def _project_from_metadata_dict(metadata: dict, metadata_key: str, *, proxy_mode: bool) -> str | None:

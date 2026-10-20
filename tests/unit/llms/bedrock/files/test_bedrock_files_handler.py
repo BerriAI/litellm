@@ -100,9 +100,7 @@ class TestBedrockFilesHandler:
             )
 
     def test_should_extract_unified_managed_s3_uri(self):
-        file_id = _encode_unified_file_id(
-            "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
-        )
+        file_id = _encode_unified_file_id("s3://safe-bucket/litellm-batch-outputs/job/output.jsonl")
 
         assert (
             self.handler._extract_s3_uri_from_file_id(file_id)
@@ -125,12 +123,7 @@ class TestBedrockFilesHandler:
 
     def test_should_not_trust_request_s3_bucket_name_for_expected_bucket(self):
         with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "safe-bucket"}):
-            assert (
-                self.handler._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
-                == "safe-bucket"
-            )
+            assert self.handler._get_configured_s3_bucket_name({"s3_bucket_name": "attacker-bucket"}) == "safe-bucket"
 
     def test_should_trust_proxy_config_s3_bucket_name_for_expected_bucket(self):
         trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
@@ -150,19 +143,36 @@ class TestBedrockFilesHandler:
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="S3 bucket_name is required"):
                 self.handler._get_configured_s3_bucket_name(
-                    {
-                        "_litellm_internal_model_credentials": {
-                            "s3_bucket_name": "attacker-bucket"
-                        }
-                    }
+                    {"_litellm_internal_model_credentials": {"s3_bucket_name": "attacker-bucket"}}
                 )
 
-    def test_should_require_server_s3_bucket_name(self):
+    def test_should_require_server_s3_bucket_name_for_a_proxy_request(self):
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="S3 bucket_name is required"):
                 self.handler._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
+                    {
+                        "s3_bucket_name": "attacker-bucket",
+                        "proxy_server_request": {"url": "http://proxy/v1/files/x/content"},
+                    }
                 )
+
+    def test_should_trust_a_direct_sdk_callers_s3_bucket_name(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.handler._get_configured_s3_bucket_name({"s3_bucket_name": "sdk-bucket"}) == "sdk-bucket"
+
+    def test_should_prefer_the_trusted_snapshot_over_a_direct_sdk_callers_s3_bucket_name(self):
+        trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
+
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                self.handler._get_configured_s3_bucket_name(
+                    {
+                        "s3_bucket_name": "sdk-bucket",
+                        "_litellm_internal_model_credentials": trusted_credentials,
+                    }
+                )
+                == "safe-bucket"
+            )
 
 
 def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
@@ -184,6 +194,42 @@ def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
     litellm_params = mock_retrieve_file_content.call_args.kwargs["litellm_params"]
     assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
     assert "s3_bucket_name" not in litellm_params
+
+
+def test_sdk_file_content_reaches_the_bucket_passed_as_a_kwarg():
+    from litellm.llms.bedrock.files.transformation import get_configured_s3_bucket_name
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch.object(files_main.base_llm_http_handler, "retrieve_file_content", return_value=MagicMock()) as mock,
+    ):
+        files_main.file_content(
+            file_id="s3://sdk-bucket/litellm-bedrock-files/file.jsonl",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="sdk-bucket",
+        )
+
+    litellm_params = mock.call_args.kwargs["litellm_params"]
+    assert get_configured_s3_bucket_name(litellm_params) == "sdk-bucket"
+
+
+def test_proxy_file_content_never_reads_the_bucket_from_request_params():
+    from litellm.llms.bedrock.files.transformation import get_configured_s3_bucket_name
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch.object(files_main.base_llm_http_handler, "retrieve_file_content", return_value=MagicMock()) as mock,
+    ):
+        files_main.file_content(
+            file_id="s3://attacker-bucket/litellm-bedrock-files/file.jsonl",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="attacker-bucket",
+            proxy_server_request={"url": "http://proxy/v1/files/x/content"},
+        )
+
+    litellm_params = mock.call_args.kwargs["litellm_params"]
+    with pytest.raises(ValueError, match="S3 bucket_name is required"):
+        get_configured_s3_bucket_name(litellm_params)
 
 
 def test_should_forward_trusted_model_credentials_to_retrieve_provider_config():
