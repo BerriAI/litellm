@@ -5,7 +5,8 @@ POST /scim/v2/Groups, PUT and PATCH /scim/v2/Groups/{id} used to run /team/membe
 transaction now resolves every member, writes the roster and the membership rows and tags the users, so a
 push of 500 members runs as many statements as a push of 5. DELETE /scim/v2/Groups/{id} used to detach the
 members one at a time and leave their membership rows and keys behind; it now detaches them in one locked pass,
-so deleting 500 members costs as many statements as deleting 5 and leaves no membership rows or member keys.
+so deleting 500 members who each hold a key costs as many statements as deleting 5 and leaves no membership rows
+or member keys.
 """
 
 import os
@@ -15,6 +16,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Final, LiteralString
@@ -67,6 +69,7 @@ SWAP_GROUP: Final = 200
 SWAP_ROUNDS: Final = 10
 OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 2 * UNFIXED_PUSH_SECONDS)
 CHAOS_GROUP: Final = 100
+KEY_WRITERS: Final = 16
 ROLLBACK_SECONDS: Final = 90
 TEAM_ROW_SQL: Final = 'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s'
 LOCK_USER_ROW_SQL: Final = 'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s FOR UPDATE'
@@ -158,14 +161,15 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         assert_landed(candidate, small_team, [*small_a, *small_b])
         assert_landed(candidate, large_team, [*small_a, *large])
 
-        small_key: Final = team_key(candidate, small_team, small_a[0])
-        large_key: Final = team_key(candidate, large_team, small_a[0])
+        with ThreadPoolExecutor(max_workers=KEY_WRITERS) as pool:
+            small_keys: Final = tuple(pool.map(partial(team_key, candidate, small_team), (*small_a, *small_b)))
+            large_keys: Final = tuple(pool.map(partial(team_key, candidate, large_team), (*small_a, *large)))
         deleted_small: Final = _measured(relay, lambda: delete_group(candidate, small_team))
         deleted_large: Final = _measured(relay, lambda: delete_group(candidate, large_team))
         assert deleted_small.response.status_code == 204, deleted_small.response.text
         assert deleted_large.response.status_code == 204, deleted_large.response.text
-        assert_gone(candidate, small_team, [*small_a, *small_b], small_key)
-        assert_gone(candidate, large_team, [*small_a, *large], large_key)
+        assert_gone(candidate, small_team, [*small_a, *small_b], small_keys[0])
+        assert_gone(candidate, large_team, [*small_a, *large], large_keys[-1])
 
         pushes: Final = (
             ("POST", created_small, created_large),

@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, assert_never
@@ -3087,9 +3087,10 @@ def _group_delete_mocks(
     *,
     teammates: Sequence[tuple[str, Sequence[str]]] = (),
 ) -> tuple[MagicMock, MagicMock, AsyncMock]:
-    """Prisma and its transaction, whose one user is admin only through the configured
-    admin group and whose group lookup answers ``team``, plus the patched team delete,
-    which reports member-1 and every teammate on the roster it read under the lock."""
+    """Prisma and its transaction, whose users are left in no team once the delete detached
+    them and whose group lookup answers ``team``, plus the patched team delete, which hands
+    its transaction and the roster it read under the lock, member-1 and every teammate, to
+    the caller's write."""
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
@@ -3097,21 +3098,26 @@ def _group_delete_mocks(
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
-    prisma, tx = _scim_admin_prisma(mocker, user_teams=[_ADMIN_GROUP], teammates=teammates)
+    prisma, tx = _scim_admin_prisma(mocker, user_teams=[], teammates=teammates)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=prisma),
     )
+    roster: Final = ("member-1", *(user_id for user_id, _ in teammates))
+
+    async def delete_rows(
+        *, before_commit: Callable[[object, tuple[str, ...]], Awaitable[None]] | None = None, **_: object
+    ) -> DeletedTeams:
+        if before_commit is not None:
+            await before_commit(tx, roster)
+        return DeletedTeams(team_ids=(_ADMIN_GROUP,))
+
     delete_team_mock: Final = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.delete_validated_team_rows",
-        AsyncMock(return_value=_deleted_admin_group(*(user_id for user_id, _ in teammates))),
+        AsyncMock(side_effect=delete_rows),
     )
     return prisma, tx, delete_team_mock
-
-
-def _deleted_admin_group(*locked_teammates: str) -> DeletedTeams:
-    return DeletedTeams(team_ids=(_ADMIN_GROUP,), roster_user_ids=("member-1", *locked_teammates))
 
 
 def _admin_group_team() -> LiteLLM_TeamTable:
@@ -3123,85 +3129,43 @@ async def test_delete_group_demotes_a_member_who_was_admin_only_through_the_dele
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
     """DELETE /Groups answers 204 and writes the non-admin role for a member who was
-    admin only through the deleted group, before the team delete and again after it."""
+    admin only through the deleted group, once, inside the team delete."""
     _, tx, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
 
     response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert response.status_code == 204
-    assert tx.execute_raw.await_args_list == [_DEMOTED, _DEMOTED]
+    assert tx.execute_raw.await_args_list == [_DEMOTED]
 
 
 @pytest.mark.asyncio
-async def test_delete_group_demotes_again_after_the_team_delete_so_a_concurrent_group_write_cannot_regrant(
-    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
-):
-    """A PUT on the same group that lands between the demotion and the team delete
-    recomputes the retained members' roles and grants PROXY_ADMIN back; the second
-    recompute after the delete leaves them demoted whatever happened in between."""
-    _, tx, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-
-    async def regrant_like_a_concurrent_put(**_: object) -> DeletedTeams:
-        await tx.execute_raw(ANY, LitellmUserRoles.PROXY_ADMIN, ["member-1"])
-        return _deleted_admin_group()
-
-    delete_team_mock.side_effect = regrant_like_a_concurrent_put
-
-    response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
-
-    assert response.status_code == 204
-    assert tx.execute_raw.await_args_list[-1] == _DEMOTED
-
-
-@pytest.mark.asyncio
-async def test_delete_group_demotes_a_member_a_concurrent_group_write_added_after_the_roster_was_read(
+async def test_delete_group_demotes_every_member_on_the_roster_the_team_delete_read_under_the_lock(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
     """A member a concurrent PUT added to the admin group after this delete read the
-    roster is absent from the first recompute, so the second one runs over the roster the
-    team delete read under the lock, which includes that late member."""
+    group is on the roster the team delete read under the lock, so the one role write
+    covers that late member too."""
     _, tx, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team(), teammates=(("member-2", ()),))
 
     response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert response.status_code == 204
     assert tx.execute_raw.await_args_list == [
-        _DEMOTED,
         call(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1", "member-2"]),
     ]
 
 
 @pytest.mark.asyncio
-async def test_delete_group_demotes_members_before_the_team_delete_so_a_failed_delete_retries(
-    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
-):
-    """A team delete that fails leaves the members already demoted and the group still
-    there, so the IdP's retry finds it instead of a 404 and nobody keeps PROXY_ADMIN
-    through a group that is on its way out."""
-    _, tx, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-    delete_team_mock.side_effect = HTTPException(status_code=500, detail={"error": "database unavailable"})
-
-    with pytest.raises(ProxyException) as raised:
-        await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
-
-    assert raised.value.code == "500"
-    assert tx.execute_raw.await_args_list == [_DEMOTED]
-
-
-@pytest.mark.asyncio
-async def test_delete_group_keeps_the_team_when_the_role_writes_fail(
-    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
-):
-    """When the role writes fail the team is not deleted, so the retry runs the whole
-    delete again instead of answering 404 with the roles never recomputed."""
-    _, tx, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
+async def test_delete_group_fails_when_the_role_writes_fail(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch):
+    """The role writes run on the team delete's transaction, so when they fail the
+    request fails with them and the identity provider's retry finds the group."""
+    _, tx, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
     tx.execute_raw.side_effect = RuntimeError("database unavailable")
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert raised.value.code == "500"
-    delete_team_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3212,7 +3176,8 @@ async def test_delete_group_answers_404_when_a_concurrent_delete_removed_the_tea
     leaves the team delete nothing to delete or report, so this request answers 404, the
     same as a group that never existed."""
     _, _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-    delete_team_mock.return_value = DeletedTeams(team_ids=(), roster_user_ids=())
+    delete_team_mock.side_effect = None
+    delete_team_mock.return_value = DeletedTeams(team_ids=())
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)

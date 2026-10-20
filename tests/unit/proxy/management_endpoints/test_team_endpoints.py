@@ -9495,15 +9495,16 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
 
 
 @pytest.mark.asyncio
-async def test_delete_validated_teams_records_and_reports_the_roster_the_lock_read(
+async def test_delete_validated_team_rows_records_the_roster_the_lock_read_and_writes_its_users_before_commit(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
 ):
     """
     A roster write that lands between the caller's read of the team and the locked delete adds
     a member the caller never saw, and a user row can reference the team without a roster entry.
-    The deleted-team record and the reported roster come from the row read under the lock, so
-    they name the late member and not the stray user, while both lose their cached user object.
+    The deleted-team record and the caller's write, which runs on the delete's transaction before
+    it commits, both take the roster read under the lock, so they name the late member and not the
+    stray user, while both lose their cached user object.
     """
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -9557,7 +9558,12 @@ async def test_delete_validated_teams_records_and_reports_the_roster_the_lock_re
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
 
-    deleted = await delete_validated_teams(
+    async def write_before_commit(_tx: object, _user_ids: tuple[str, ...]) -> None:
+        mock_prisma_client.tx.return_value.__aexit__.assert_not_awaited()
+
+    before_commit = AsyncMock(side_effect=write_before_commit)
+
+    deleted = await delete_validated_team_rows(
         teams=(read_by_caller,),
         prisma_client=mock_prisma_client,
         user_api_key_dict=UserAPIKeyAuth(
@@ -9566,9 +9572,11 @@ async def test_delete_validated_teams_records_and_reports_the_roster_the_lock_re
             user_role=LitellmUserRoles.PROXY_ADMIN.value,
         ),
         litellm_changed_by="admin-user",
+        before_commit=before_commit,
     )
 
-    assert deleted == DeletedTeams(team_ids=("team-doomed",), roster_user_ids=("member-1", "late-member"))
+    assert deleted == DeletedTeams(team_ids=("team-doomed",))
+    before_commit.assert_awaited_once_with(tx, ("member-1", "late-member"))
     (written,) = mock_prisma_client.db.litellm_deletedteamtable.create_many.await_args_list
     (record,) = written.kwargs["data"]
     assert [member["user_id"] for member in json.loads(record["members_with_roles"])] == ["member-1", "late-member"]

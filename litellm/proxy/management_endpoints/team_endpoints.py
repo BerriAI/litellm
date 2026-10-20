@@ -14,7 +14,7 @@ import copy
 import json
 import math
 import traceback
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -470,7 +470,6 @@ _DetachedMembers: Final = TypeAdapter(tuple[_DetachedMember, ...])
 @dataclass(frozen=True, slots=True)
 class DeletedTeams:
     team_ids: tuple[str, ...]
-    roster_user_ids: tuple[str, ...]
 
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
@@ -4689,16 +4688,15 @@ async def delete_validated_team_rows(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
+    before_commit: Callable[["Prisma", tuple[str, ...]], Awaitable[None]] | None = None,
 ) -> DeletedTeams:
     """
-    Under every team's advisory lock, read the teams still there and delete the keys their
-    rostered members hold on them, their deleted-team records and rows, and their membership
-    rows and user references; then the cache evictions and audit rows. Keys of users off the
-    roster and the teams' models stay, the way a SCIM member removal leaves them.
-    ``team_ids`` names the teams this call deleted, so one a concurrent delete removed first is
-    left out and recorded only once. ``roster_user_ids`` names the members on the rosters the
-    lock read, which includes a member a concurrent roster write added after the caller read
-    the team.
+    Under every team's advisory lock, delete the teams still there with the keys their rostered
+    members hold on them, their membership rows and user references, and write their deleted-team
+    records; then evict caches and write audit rows. Keys of users off the roster and the teams'
+    models stay. ``team_ids`` names only the teams this call deleted. ``before_commit`` runs on the
+    delete's transaction with the members of the rosters read under the lock, so its writes commit
+    or roll back with the delete.
     """
     from litellm.proxy.proxy_server import (
         proxy_logging_obj,
@@ -4715,7 +4713,8 @@ async def delete_validated_team_rows(
     # the lock before this transaction starts, in which case this sweep reaches what it wrote,
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
-    async with prisma_client.tx(timeout=timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
+    tx_budget: Final = timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
+    async with prisma_client.tx(max_wait=tx_budget, timeout=tx_budget) as tx:
         for team_id in sorted(team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         team_tx: Final = _team_delete_tx(tx)
@@ -4731,6 +4730,8 @@ async def delete_validated_team_rows(
             locked=locked, tx=team_tx, user_api_key_dict=user_api_key_dict, litellm_changed_by=litellm_changed_by
         )
         detached_per_team: Final = await _sweep_deleted_team_references_tx(team_ids=team_ids, tx=team_tx)
+        if before_commit is not None:
+            await before_commit(tx, _locked_roster_user_ids(locked))
 
     rostered_per_team: Final = await _resolve_deleted_team_member_user_ids(teams=locked, prisma_client=prisma_client)
     member_ids_per_team: Final = _members_per_deleted_team(rostered_per_team, detached_per_team)
@@ -4770,10 +4771,11 @@ async def delete_validated_team_rows(
         _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
-    return DeletedTeams(
-        team_ids=tuple(team.team_id for team in locked),
-        roster_user_ids=tuple(dict.fromkeys(chain.from_iterable(_roster_user_ids(team) for team in locked))),
-    )
+    return DeletedTeams(team_ids=tuple(team.team_id for team in locked))
+
+
+def _locked_roster_user_ids(locked: Sequence[LiteLLM_TeamTable]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(chain.from_iterable(_roster_user_ids(team) for team in locked)))
 
 
 def _members_per_deleted_team(
@@ -4895,20 +4897,11 @@ async def _sweep_deleted_team_references_tx(
     team_ids: Sequence[str], tx: _TeamDeleteTx
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """
-    Strip the deleted team ids from every user row and team-membership row that still references
-    them, on the transaction that holds every id's advisory lock and deletes the team rows, so it
-    commits or rolls back with them.
-
-    A user row that outlived its roster entry (the drift #36839 closed the route for) is reached
-    here where the roster never names it. One statement filters the array in place rather than
-    read-filter-write, so a team a concurrent `/team/member_add` appended in between is kept, and
-    the user rows are locked first in the order `USER_ROWS_LOCK_SQL` takes them, so the sweep never
-    waits on a SCIM group push in a cycle.
-
-    Returns the users it stripped each team from: read under the lock, that is everyone who
-    referenced the team when it went away, a member a concurrent roster write added after the
-    caller read the team included. Only this sweep runs, none before the lock: one there would
-    strip such a member first and leave nothing here to report.
+    Strip the deleted team ids from every user and team-membership row still referencing them, on
+    the transaction holding the teams' advisory locks. User rows are locked first in
+    ``USER_ROWS_LOCK_SQL`` order so the sweep never deadlocks with a SCIM group push, and one
+    statement filters each array in place so a team a concurrent ``/team/member_add`` appended is
+    kept. Returns, per team, the users read under the lock as referencing it.
     """
     locked: Final = _DetachedMembers.validate_python(await tx.query_raw(_LOCK_DELETED_TEAM_MEMBERS_SQL, list(team_ids)))
     _ = await tx.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))

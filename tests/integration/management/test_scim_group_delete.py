@@ -1,9 +1,10 @@
 """DELETE /scim/v2/Groups/{id} deletes the group's team the way /team/delete does.
 
 The members' group entries, their membership rows and the keys the members hold on the team go in one locked
-pass whatever the roster size, the configured admin group's members are demoted, and a member a concurrent group
-write added while the delete waited on the team lock, or while it was demoting the roster it had read, is demoted
-with the rest. The group is 404 after, on every worker and on the peer proxy, and an unrelated key keeps serving.
+pass whatever the roster size, and the configured admin group's members are demoted in that same pass, so they stay
+admins until the group is gone. A member a concurrent group write added while the delete waited on the team lock is
+demoted with the rest, and a group write that arrives once the delete holds the lock finds the group gone. The group
+is 404 after, on every worker and on the peer proxy, and an unrelated key keeps serving.
 A service-account key and a model on the team stay, so re-creating the group with the same id brings them back.
 """
 
@@ -199,6 +200,7 @@ def test_a_member_added_while_the_admin_group_delete_waits_on_the_team_lock_is_d
             eventually(lambda: waiters_on_lock_held_by(holder), lambda waiting: waiting == 1, seconds=30)
             delete: Final = pool.submit(delete_group, candidate, team)
             eventually(lambda: waiters_on_lock_held_by(holder), lambda waiting: waiting == 2, seconds=30)
+            assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
         replaced: Final = put.result()
         deleted: Final = delete.result()
 
@@ -210,7 +212,7 @@ def test_a_member_added_while_the_admin_group_delete_waits_on_the_team_lock_is_d
 
 
 @pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
-def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_is_demoted_too(
+def test_a_member_added_while_the_admin_group_delete_holds_the_team_lock_is_refused_and_never_made_admin(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     admin_alias: Final = f"integration-admins-{uuid.uuid4().hex}"
@@ -225,7 +227,7 @@ def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_
             client_timeout=60,
         ) as owned,
         owned.gateway.scenario() as scenario,
-        ThreadPoolExecutor(max_workers=1) as pool,
+        ThreadPoolExecutor(max_workers=2) as pool,
     ):
         candidate: Final = owned.gateway
         users: Final = seed_users(scenario, 5)
@@ -237,15 +239,15 @@ def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_
         with held_user_row(users[0]) as holder:
             delete: Final = pool.submit(delete_group, candidate, team)
             eventually(lambda: waiters_on_rows_locked_by(holder), lambda waiting: waiting == 1, seconds=30)
-            added: Final = add_to_group(candidate, team, (late,))
-            assert added.status_code == 200, added.text
-            assert late in member_ids(body(added))
-            assert user_role(candidate, late) == PROXY_ADMIN
+            added: Final = pool.submit(add_to_group, candidate, team, (late,))
+            assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
         deleted: Final = delete.result()
 
         assert deleted.status_code == 204, deleted.text
-        assert_gone(candidate, team, (*users, late), key)
-        assert _roles_of(candidate, (*users, late)) == frozenset({DEMOTED_ROLE})
+        assert added.result().status_code == 404, added.result().text
+        assert_gone(candidate, team, users, key)
+        assert _roles_of(candidate, users) == frozenset({DEMOTED_ROLE})
+        assert user_role(candidate, late) != PROXY_ADMIN
 
 
 def test_a_group_delete_revokes_member_keys_and_a_re_created_group_gets_its_service_account_key_and_model_back(
