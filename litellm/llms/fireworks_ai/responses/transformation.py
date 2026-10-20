@@ -4,9 +4,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote
 
 import httpx
-from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
-from litellm.llms.base_llm.base_utils import hoisted_instruction_indices
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -15,13 +13,13 @@ from litellm.llms.fireworks_ai.common_utils import (
     with_fireworks_session_affinity,
     without_caller_user,
 )
+from litellm.llms.openai.responses.instruction_items import developer_items_as_system, instruction_items_folded
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import accepts_mid_conversation_system
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -43,65 +41,6 @@ def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str,
             FIREWORKS_FORWARD_USER_ID_PARAM: litellm_params.fireworks_forward_user_id,
             "litellm_metadata": extras.get("litellm_metadata"),
         }
-    )
-
-
-def _role(item: ResponseInputItemParam) -> str | None:
-    match item:
-        case {"role": str(role)}:
-            return role
-        case _:
-            return None
-
-
-def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
-        return item
-    return EasyInputMessageParam(role="system", content=item["content"], type="message")
-
-
-def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if isinstance(input, str):
-        return input
-    return [_developer_item_as_system(item) for item in input]
-
-
-def _text_part(part: ResponseInputContentParam) -> str | None:
-    match part:
-        case {"type": "input_text", "text": str(text)}:
-            return text
-        case _:
-            return None
-
-
-def _text_only_content(item: ResponseInputItemParam) -> str | None:
-    match item:
-        case {"role": "system" | "developer", "content": str(text)}:
-            return text
-        case {"role": "system" | "developer", "content": [*parts]}:
-            texts: Final = tuple(map(_text_part, parts))
-            return None if any(text is None for text in texts) else "\n\n".join(text for text in texts if text)
-        case _:
-            return None
-
-
-def _with_instruction_items_folded(
-    input: str | ResponseInputParam, instructions: str | None
-) -> tuple[str | None, str | ResponseInputParam]:
-    if isinstance(input, str):
-        return instructions, input
-    items: Final = tuple(input)
-    folded: Final = MappingProxyType(
-        {
-            index: text
-            for index in hoisted_instruction_indices(tuple(map(_role, items)))
-            if (text := _text_only_content(items[index])) is not None
-        }
-    )
-    joined: Final = "\n\n".join(chunk for chunk in (instructions, *folded.values()) if chunk)
-    return (
-        instructions if not folded else joined or None,
-        [_developer_item_as_system(item) for index, item in enumerate(items) if index not in folded],
     )
 
 
@@ -134,30 +73,22 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: overrides the base class signature
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: overrides the base class signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: overrides the base class signature
-    ) -> dict:  # mutable-ok: overrides the base class signature
-        instructions_param: Final[object] = response_api_optional_request_params.get("instructions")
+        headers: dict[str, str],  # mutable-ok: overrides the base class signature
+    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
         validated_input: Final = self._validate_input_param(input)
-        instructions, folded_input = (
-            _with_instruction_items_folded(validated_input, instructions_param)
-            if isinstance(instructions_param, str | None)
-            and not accepts_mid_conversation_system(model, self.custom_llm_provider.value)
-            else (instructions_param, _developer_items_as_system(validated_input))
+        folded: Final = instruction_items_folded(
+            model, self.custom_llm_provider.value, validated_input, response_api_optional_request_params
         )
-        instruction_entries: Final = () if instructions is None else (("instructions", instructions),)
-        folded_params: Final = {
-            key: value
-            for key, value in (
-                *((key, value) for key, value in response_api_optional_request_params.items() if key != "instructions"),
-                *instruction_entries,
-            )
-        }
+        placed_input, placed_params = folded or (
+            developer_items_as_system(validated_input),
+            response_api_optional_request_params,
+        )
         request: Final = super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=folded_input,
-            response_api_optional_request_params=folded_params,
+            input=placed_input,
+            response_api_optional_request_params=dict(placed_params),
             litellm_params=litellm_params,
             headers=headers,
         )

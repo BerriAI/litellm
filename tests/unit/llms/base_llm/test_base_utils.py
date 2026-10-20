@@ -1,10 +1,10 @@
 from litellm.llms.base_llm.base_utils import (
     hoist_developer_messages_into_leading_system_message,
-    merge_consecutive_system_messages,
+    merge_system_message_runs,
 )
 
 
-class TestMergeConsecutiveSystemMessages:
+class TestMergeSystemMessageRuns:
     def test_later_developer_message_stays_in_place_while_the_leading_run_folds(self):
         messages = [
             {"role": "system", "content": "You are Codex"},
@@ -13,7 +13,7 @@ class TestMergeConsecutiveSystemMessages:
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
         ]
-        assert list(merge_consecutive_system_messages(messages)) == [
+        assert list(merge_system_message_runs(messages)) == [
             {"role": "system", "content": "You are Codex\n\nSandbox: read-only."},
             {"role": "user", "content": "Hi there"},
             {"role": "system", "content": "Answer with exactly one word."},
@@ -26,7 +26,7 @@ class TestMergeConsecutiveSystemMessages:
             {"role": "developer", "content": {"text": "not a content list"}},
             {"role": "user", "content": "Hi there"},
         ]
-        assert list(merge_consecutive_system_messages(messages)) == [
+        assert list(merge_system_message_runs(messages)) == [
             {"role": "system", "content": "You are Codex"},
             {"role": "system", "content": {"text": "not a content list"}},
             {"role": "user", "content": "Hi there"},

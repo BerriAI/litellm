@@ -39,7 +39,7 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     hoist_developer_messages_into_leading_system_message,
     map_developer_role_to_system_role,
-    merge_consecutive_system_messages,
+    merge_system_message_runs,
     moves_a_later_developer_message,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -107,7 +107,7 @@ def translate_developer_role_for_openai_compatible_endpoint(
         return map_developer_role_to_system_role(messages=messages)
     if moves_a_later_developer_message(messages) and not accepts_mid_conversation_system(model, custom_llm_provider):
         return hoist_developer_messages_into_leading_system_message(messages=messages)
-    return merge_consecutive_system_messages(messages)
+    return merge_system_message_runs(messages)
 
 
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])

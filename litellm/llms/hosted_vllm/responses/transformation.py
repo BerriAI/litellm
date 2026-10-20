@@ -8,8 +8,10 @@ the chat completions → responses conversion pipeline.
 
 from typing import Final
 
+from litellm.llms.openai.responses.instruction_items import instruction_items_folded
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -67,6 +69,29 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{api_base}/responses"
 
         return f"{api_base}/v1/responses"
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: overrides the base class signature
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: overrides the base class signature
+    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
+        folded: Final = instruction_items_folded(
+            model,
+            self.custom_llm_provider.value,
+            self._validate_input_param(input),
+            response_api_optional_request_params,
+        )
+        placed_input, placed_params = folded or (input, response_api_optional_request_params)
+        return super().transform_responses_api_request(
+            model=model,
+            input=placed_input,
+            response_api_optional_request_params=dict(placed_params),
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""

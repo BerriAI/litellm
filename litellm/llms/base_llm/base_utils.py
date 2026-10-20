@@ -507,11 +507,11 @@ _SystemPart: TypeAlias = tuple[SystemMessageContent, ChatCompletionCachedContent
 
 def _with_message_cache_control(
     blocks: Sequence[object], cache_control: ChatCompletionCachedContent | None
-) -> list[object]:  # mutable-ok: content block lists are the wire format callers isinstance-check
+) -> tuple[object, ...]:
     last: Final = as_str_mapping(blocks[-1]) if blocks else None
     if last is None or cache_control is None or "cache_control" in last:
-        return [*blocks]
-    return [*blocks[:-1], {**last, "cache_control": cache_control}]
+        return tuple(blocks)
+    return (*blocks[:-1], {**last, "cache_control": cache_control})
 
 
 def _as_system_message(message: AllMessageValues) -> AllMessageValues:
@@ -523,25 +523,25 @@ def _as_system_message(message: AllMessageValues) -> AllMessageValues:
 
 def _text_blocks(
     content: SystemMessageContent, cache_control: ChatCompletionCachedContent | None
-) -> list[object]:  # mutable-ok: content block lists are the wire format callers isinstance-check
+) -> tuple[object, ...]:
     if not isinstance(content, str):
         return _with_message_cache_control(content, cache_control)
     if not content:
-        return []
+        return ()
     if cache_control:
         cached_block: Final[ChatCompletionTextObject] = {
             "type": "text",
             "text": content,
             "cache_control": cache_control,
         }
-        return [cached_block]
+        return (cached_block,)
     text_block: Final[ChatCompletionTextObject] = {"type": "text", "text": content}
-    return [text_block]
+    return (text_block,)
 
 
-def _lone_text_block_text(blocks: list[object]) -> str | None:
+def _lone_text_block_text(blocks: Sequence[object]) -> str | None:
     match blocks:
-        case [{"type": "text", "text": str() as text}] if blocks == [{"type": "text", "text": text}]:
+        case [{"type": "text", "text": str() as text} as block] if block == {"type": "text", "text": text}:
             return text
         case _:
             return None
@@ -637,7 +637,7 @@ def moves_a_later_developer_message(messages: Sequence[AllMessageValues]) -> boo
     return _hoisted_message_order(messages) != tuple(range(len(messages)))
 
 
-def merge_consecutive_system_messages(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+def merge_system_message_runs(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
     """
     Translate `developer` role to `system` role in place and fold each run of
     consecutive system messages into one, for chat templates that render a single
@@ -659,4 +659,4 @@ def hoist_developer_messages_into_leading_system_message(
     one message in a single pass.
     """
     order: Final = _hoisted_message_order(messages)
-    return merge_consecutive_system_messages(tuple(messages[index] for index in order))
+    return merge_system_message_runs(tuple(messages[index] for index in order))
