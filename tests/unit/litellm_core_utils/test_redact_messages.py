@@ -1083,27 +1083,30 @@ class TestPerformRedaction:
 
 
 class TestRedactStreamingResponsesForCustomLogger:
-    def _model_call_details(self):
+    def _model_call_details(self, key: str = "async_complete_streaming_response"):
         response_obj = litellm.ModelResponse(
             choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
         return {
             "stream": True,
-            "async_complete_streaming_response": response_obj,
+            key: response_obj,
         }, response_obj
 
-    def test_opted_out_logger_gets_redacted_copy(self):
-        model_call_details, response_obj = self._model_call_details()
+    @pytest.mark.parametrize(
+        "key", ["async_complete_streaming_response", "complete_streaming_response", "complete_response"]
+    )
+    def test_opted_out_logger_gets_redacted_copy(self, key: str):
+        model_call_details, response_obj = self._model_call_details(key)
         opted_out_logger = CustomLogger(message_logging=False)
 
         redacted_details = redacted_model_call_details_for_custom_logger(
             model_call_details=model_call_details, custom_logger=opted_out_logger
         )
 
-        redacted_response = redacted_details["async_complete_streaming_response"]
+        redacted_response = redacted_details[key]
         assert redacted_response.choices[0].message.content == "redacted-by-litellm"
         assert response_obj.choices[0].message.content == "secret content"
-        assert model_call_details["async_complete_streaming_response"] is response_obj
+        assert model_call_details[key] is response_obj
 
     def test_compliant_logger_gets_shared_response(self):
         model_call_details, response_obj = self._model_call_details()
@@ -1660,7 +1663,7 @@ class SyncTestCustomLogger(TestCustomLogger):
 
 
 @pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
-def test_one_callback_opting_out_on_a_sync_call_redacts_instructions_only_for_itself(
+def test_one_callback_opting_out_on_a_sync_call_gets_a_redacted_copy_only_for_itself(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     opted_out: Final = SyncTestCustomLogger(message_logging=False)
@@ -1670,7 +1673,7 @@ def test_one_callback_opting_out_on_a_sync_call_redacts_instructions_only_for_it
 
     litellm.responses(
         model="openai/gpt-5-mini",
-        input="hi",
+        input="private question",
         instructions=SECRET,
         api_key="fake-key",
         client=HTTPHandler(
@@ -1686,6 +1689,16 @@ def test_one_callback_opting_out_on_a_sync_call_redacts_instructions_only_for_it
         time.sleep(0.1)
     assert _logged_instructions(sibling) == (SECRET,) * 6
     assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
+    assert _logged_question_and_answer(sibling) == (True, True)
+    assert _logged_question_and_answer(opted_out) == (False, False)
+
+
+def _logged_question_and_answer(logger: TestCustomLogger) -> tuple[bool, bool]:
+    kwargs: Final = logger.logged_kwargs
+    assert kwargs is not None
+    assert isinstance(logger.response_obj, ResponsesAPIResponse)
+    request_text: Final = json.dumps([kwargs.get(key) for key in ("messages", "input", "prompt")], default=str)
+    return "private question" in request_text, "private answer" in logger.response_obj.model_dump_json()
 
 
 def _logged_instructions(logger: TestCustomLogger) -> tuple[object, ...]:

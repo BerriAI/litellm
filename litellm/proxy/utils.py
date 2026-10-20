@@ -62,6 +62,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
+    REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
@@ -1055,7 +1056,14 @@ def _failure_usage_to_lift(
         if isinstance(optional_params, dict)
         else None
     )
-    system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
+    system_input: Final = next(
+        (
+            system
+            for system in (dispatched_system, request_body.get("system"), request_body.get("instructions"))
+            if system and system != REDACTED_BY_LITELLM
+        ),
+        None,
+    )
     estimated_usage: Final = _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),

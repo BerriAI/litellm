@@ -56,13 +56,16 @@ def redact_message_input_output_from_custom_logger(
 
 def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
     """
-    Returns a copy of model_call_details with the request instructions and streaming responses redacted
-    when the custom logger has opted out of message logging. The shared model_call_details is left
+    Returns a copy of model_call_details with the request messages, instructions and streaming responses
+    redacted when the custom logger has opted out of message logging. The shared model_call_details is left
     untouched so other callbacks and the spend log still receive the unredacted values.
     """
     if not _opted_out_of_message_logging(custom_logger):
         return model_call_details
-    return {**model_call_details, **_redacted_entries_for_opted_out_logger(model_call_details)}
+    return {
+        **{key: value for key, value in model_call_details.items() if key != SERVED_OUTPUT_TEXTS_KEY},
+        **_redacted_entries_for_opted_out_logger(model_call_details),
+    }
 
 
 def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
@@ -70,6 +73,9 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
     litellm_params: Final = _as_mapping(model_call_details.get("litellm_params"))
     standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
     return {
+        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        "prompt": "",
+        "input": "",
         **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
         **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params is not None else {}),
         **({"litellm_params": redacted_litellm_params(litellm_params)} if litellm_params is not None else {}),
@@ -80,28 +86,29 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
         ),
         **{
             streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
-            for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+            for streaming_key in (
+                "complete_streaming_response",
+                "async_complete_streaming_response",
+                "complete_response",
+            )
             if model_call_details.get(streaming_key) is not None
         },
     }
 
 
 def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger: CustomLogger) -> object:
-    if not _opted_out_of_message_logging(custom_logger):
+    if not _opted_out_of_message_logging(custom_logger) or not _is_redactable_response(response_obj):
         return response_obj
-    if isinstance(response_obj, litellm.ResponsesAPIResponse):
-        return (
-            response_obj
-            if response_obj.instructions is None
-            else response_obj.model_copy(update={"instructions": REDACTED_BY_LITELLM})
-        )
-    response_mapping: Final = _as_mapping(response_obj)
-    if response_mapping is not None and "output" in response_mapping:
-        return _with_redacted_instructions(response_mapping)
-    return response_obj
+    return perform_redaction({}, response_obj)
 
 
-def _redacted_streaming_response_copy(streaming_response):
+def _is_redactable_response(response_obj: object) -> bool:
+    return isinstance(
+        response_obj, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse)
+    ) or (isinstance(response_obj, dict) and ("choices" in response_obj or "output" in response_obj))
+
+
+def _redacted_streaming_response_copy(streaming_response: object) -> object:
     redacted_response: Final = (
         streaming_response
         if isinstance(streaming_response, litellm.ResponsesAPIResponse)
@@ -487,10 +494,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             # For async objects, return a simple redacted response without deepcopy
             return {"text": REDACTED_BY_LITELLM}
 
-        if not (
-            isinstance(result, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse))
-            or (isinstance(result, dict) and ("choices" in result or "output" in result))
-        ):
+        if not _is_redactable_response(result):
             return {"text": REDACTED_BY_LITELLM}
 
         _result: Final = copy.deepcopy(result)
