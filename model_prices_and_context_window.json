@@ -42300,6 +42300,134 @@
         ],
         "supports_audio_output": true
     },
+    "mistral/voxtral-mini-transcribe-3": {
+        "input_cost_per_second": 5.83333e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-transcribe-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-transcribe-3-0": {
+        "input_cost_per_second": 5.83333e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-transcribe-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-small-transcribe-3": {
+        "input_cost_per_second": 6.66667e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-small-transcribe-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-small-transcribe-3-0": {
+        "input_cost_per_second": 6.66667e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-small-transcribe-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-transcribe-realtime-3": {
+        "input_cost_per_second": 0.000133333,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-transcribe-realtime-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-transcribe-realtime-3-0": {
+        "input_cost_per_second": 0.000133333,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-transcribe-realtime-3-0",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-tts-3": {
+        "input_cost_per_character": 1.3e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_speech",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-tts-3-0",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
+    },
+    "mistral/voxtral-mini-tts-3-0": {
+        "input_cost_per_character": 1.3e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_speech",
+        "source": "https://docs.mistral.ai/models/voxtral-mini-tts-3-0",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
+    },
     "mistral/voxtral-small-2507": {
         "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
