@@ -1626,6 +1626,37 @@ async def test_env_budget_never_goes_above_the_cost_map_limit_when_a_deployment_
     assert all(isinstance(limit, int) and limit <= model_limit for limit in sent_limits)
 
 
+@pytest.mark.asyncio
+async def test_env_budget_caps_each_deployment_at_its_own_model_info_limit_and_never_at_a_siblings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    budget: Final = _cost_map_max_output_tokens(model) // 2
+    low_limit: Final = budget // 4
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "low",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": low_limit},
+            },
+            {"model_name": "plain", "litellm_params": {"model": model, "api_key": "fake-gemini-key"}},
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = (httpx.Response(200, json=HOP_2), httpx.Response(200, json=HOP_2))
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model_name in ("plain", "low"):
+        await router.acompletion(model=model_name, messages=list(MESSAGES), client=client)
+
+    assert [_output_limits(request) for request in sent] == [
+        {"max_output_tokens": budget},
+        {"max_output_tokens": low_limit},
+    ]
+
+
 @pytest.mark.parametrize(
     "generation_config",
     [None, {"responseModalities": None}, {"responseModalities": {"TEXT": 1}}],

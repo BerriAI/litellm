@@ -18,7 +18,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -1307,7 +1307,7 @@ def sync_transform_request_body(
         ),
         model,
         custom_llm_provider,
-        bool(litellm_params.get("model_info")),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
+        litellm_params.get("model_info"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
     )
 
 
@@ -1326,29 +1326,47 @@ def _answers_text(cost_map_key: str) -> bool:
     return "text" in row.get("supported_output_modalities", ("text",))
 
 
-def _overrides_max_output_tokens(cost_map_row: object) -> bool:
-    return isinstance(cost_map_row, AliasedCostEntry) and "max_output_tokens" in cost_map_row.registered_fields
+class _OutputLimit(TypedDict):
+    max_output_tokens: NotRequired[ReadOnly[int | None]]
+
+
+_OUTPUT_LIMIT: Final = TypeAdapter(_OutputLimit)
+
+
+def _output_limit(fields: object) -> int | None:
+    try:
+        return _OUTPUT_LIMIT.validate_python(fields).get("max_output_tokens")
+    except ValidationError:
+        return None
+
+
+def _deployment_output_limit(cost_map_key: str, deployment_model_info: object) -> int | None:
+    limits: Final = (
+        _output_limit(GetModelCostMap.loaded_model_cost_map().get(cost_map_key)),
+        _output_limit(deployment_model_info),
+    )
+    return min((limit for limit in limits if limit is not None), default=None)
 
 
 def _text_chat_model_max_output_tokens(
-    model: str, custom_llm_provider: str, from_router_deployment: bool
+    model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> int | None:
     info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
         return None
     if not _answers_text(info["key"]):
         return None
-    if from_router_deployment and _overrides_max_output_tokens(litellm.model_cost.get(info["key"])):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-        return None
+    if deployment_model_info:
+        return _deployment_output_limit(info["key"], deployment_model_info)
     return info.get("max_output_tokens")
 
 
 def _with_default_output_budget(
-    request_body: RequestBody, model: str, custom_llm_provider: str, from_router_deployment: bool
+    request_body: RequestBody, model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> RequestBody:
     return with_default_output_budget(
         request_body,
-        partial(_text_chat_model_max_output_tokens, model, custom_llm_provider, from_router_deployment),
+        partial(_text_chat_model_max_output_tokens, model, custom_llm_provider, deployment_model_info),
     )
 
 
@@ -1440,7 +1458,7 @@ async def async_transform_request_body(
         request_body,
         model,
         custom_llm_provider,
-        bool(litellm_params.get("model_info")),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
+        litellm_params.get("model_info"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
     )
 
 
