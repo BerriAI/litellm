@@ -9594,6 +9594,44 @@ def test_update_kwargs_with_deployment_no_tags():
     assert "tags" not in kwargs["metadata"]
 
 
+def _copilot_deployment_object(token_dir, monkeypatch, **litellm_params):
+    (token_dir / "access-token").write_text("shared-copilot-token")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/gpt-4.1",
+                    "api_base": "https://deployment.example.com/v1",
+                    **litellm_params,
+                },
+            }
+        ]
+    )
+    return router, router.get_deployment_by_model_group_name(model_group_name="copilot")
+
+
+def test_update_kwargs_with_deployment_drops_caller_api_base_for_a_copilot_deployment_object_with_drop_params(
+    tmp_path, monkeypatch
+):
+    router, deployment = _copilot_deployment_object(tmp_path, monkeypatch, drop_params=True)
+    kwargs: dict = {"metadata": {}, "api_base": "https://caller.example.com"}
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert "api_base" not in kwargs
+
+
+def test_update_kwargs_with_deployment_refuses_caller_api_base_for_a_copilot_deployment_object(tmp_path, monkeypatch):
+    router, deployment = _copilot_deployment_object(tmp_path, monkeypatch)
+
+    with pytest.raises(litellm.BadRequestError, match="do not accept api_base from the caller"):
+        router._update_kwargs_with_deployment(
+            deployment=deployment, kwargs={"metadata": {}, "api_base": "https://caller.example.com"}
+        )
+
+
 @pytest.mark.asyncio
 async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
     router = Router(

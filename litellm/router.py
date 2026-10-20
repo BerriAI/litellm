@@ -197,6 +197,7 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
+    DeploymentParamLookup,
     get_dynamic_litellm_params,
     github_copilot_caller_endpoint_keys,
     is_clientside_credential,
@@ -4587,12 +4588,12 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
-        deployment_litellm_params: Final = cast(  # cast-ok: deployment litellm_params is a str-keyed dict
-            "Mapping[str, object]", deployment["litellm_params"]
+        deployment_litellm_params: Final = cast(  # cast-ok: a dict or LiteLLM_Params, both answer get
+            "DeploymentParamLookup", deployment["litellm_params"]
         )
         caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: router call kwargs are a str-keyed dict
         caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_litellm_params, caller_kwargs)
-        call_drop_params: Final = {**deployment_litellm_params, **caller_kwargs}.get("drop_params")
+        call_drop_params: Final = caller_kwargs.get("drop_params", deployment_litellm_params.get("drop_params"))
         if caller_endpoint_keys and not drops_unsupported_params(call_drop_params):
             raise litellm.BadRequestError(
                 message=(
