@@ -1940,7 +1940,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
-        would_reject_token: Final = _logging_only_scan_would_reject.set(False)
+        _logging_only_scan_would_reject.set(False)
 
         try:
             texts: Final = inputs.get("texts", [])
@@ -1985,7 +1985,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             raise e
         finally:
             would_reject: Final = _logging_only_scan_would_reject.get() or any(map(self._asks_to_block, detections))
-            _logging_only_scan_would_reject.reset(would_reject_token)
+            _logging_only_scan_would_reject.set(False)
             # Log guardrail information
             self._log_guardrail_information(
                 request_data=request_data,

@@ -179,8 +179,7 @@ class TestVertexAIFilesHandler:
             with pytest.raises(
                 ValueError,
                 match=re.escape(
-                    "Failed to download file from GCS: "
-                    "gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"
+                    "Failed to download file from GCS: gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"
                 ),
             ):
                 await self.handler.afile_content(

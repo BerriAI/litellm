@@ -70,7 +70,11 @@ def test_ingest_runs_end_to_end_through_the_base_pipeline(monkeypatch):
 
     result = asyncio.run(_ingestion_for_bucket("rag-bucket").ingest(file_data=("doc.txt", b"doc", "text/plain")))
 
-    assert (result["status"], result["vector_store_id"], result["file_id"]) == ("completed", "corpus-123", "gs://rag-bucket/doc.txt")
+    assert (result["status"], result["vector_store_id"], result["file_id"]) == (
+        "completed",
+        "corpus-123",
+        "gs://rag-bucket/doc.txt",
+    )
     assert [(c["corpus_name"], c["paths"]) for c in import_calls] == [
         ("projects/test-project/locations/us-central1/ragCorpora/corpus-123", ["gs://rag-bucket/doc.txt"])
     ]

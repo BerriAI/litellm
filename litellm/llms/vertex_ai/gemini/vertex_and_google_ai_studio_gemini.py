@@ -39,6 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.gemini.common_utils import get_api_key_from_env
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
@@ -2953,7 +2954,9 @@ class VertexLLM(VertexBase):
             return headers
         try:
             token, _ = await self._ensure_access_token_async(
-                credentials=vertex_credentials, project_id=vertex_project, custom_llm_provider=custom_llm_provider
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider=custom_llm_provider,
             )
         except Exception as e:
             raise VertexAIError(status_code=401, message=str(e), headers=None) from e
@@ -2971,7 +2974,9 @@ class VertexLLM(VertexBase):
             return headers
         try:
             token, _ = self._ensure_access_token(
-                credentials=vertex_credentials, project_id=vertex_project, custom_llm_provider=custom_llm_provider
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider=custom_llm_provider,
             )
         except Exception as e:
             raise VertexAIError(status_code=401, message=str(e), headers=None) from e
@@ -3002,24 +3007,32 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> CustomStreamWrapper:
-        _auth_header, vertex_project = await self._ensure_access_token_async(
+        effective_gemini_key: Final[str | None] = gemini_api_key or get_api_key_from_env() or litellm.api_key
+        is_gemini_target: Final = custom_llm_provider == "gemini" or (
+            effective_gemini_key is not None and not vertex_credentials and not vertex_project
+        )
+        resolved_custom_llm_provider: Final[Literal["vertex_ai", "vertex_ai_beta", "gemini"]] = (
+            "gemini" if is_gemini_target else custom_llm_provider
+        )
+
+        _auth_header, resolved_vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Extract use_psc_endpoint_format from optional_params
         use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
-        auth_header, api_base = self._get_token_and_url(
+        auth_header, resolved_api_base = self._get_token_and_url(
             model=model,
-            gemini_api_key=gemini_api_key,
+            gemini_api_key=effective_gemini_key,
             auth_header=_auth_header,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_credentials=vertex_credentials,
             stream=stream,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             api_base=api_base,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -3035,7 +3048,7 @@ class VertexLLM(VertexBase):
 
         request_body: Final = await async_transform_request_body(
             **data,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
         )
@@ -3046,7 +3059,7 @@ class VertexLLM(VertexBase):
             api_key="",
             additional_args={
                 "complete_input_dict": request_body,
-                "api_base": api_base,
+                "api_base": resolved_api_base,
                 "headers": headers,
             },
         )
@@ -3057,7 +3070,7 @@ class VertexLLM(VertexBase):
             make_call=partial(
                 make_call,
                 gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                api_base=api_base,
+                api_base=resolved_api_base,
                 headers=headers,
                 data=request_body_str,
                 model=model,
@@ -3069,13 +3082,13 @@ class VertexLLM(VertexBase):
                     headers,
                     extra_headers,
                     vertex_credentials,
-                    vertex_project,
-                    custom_llm_provider,
+                    resolved_vertex_project,
+                    resolved_custom_llm_provider,
                 ),
                 timeout=timeout,
             ),
             model=model,
-            custom_llm_provider="vertex_ai_beta",
+            custom_llm_provider=resolved_custom_llm_provider,
             logging_obj=logging_obj,
         )
         return streaming_response
@@ -3105,24 +3118,32 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        _auth_header, vertex_project = await self._ensure_access_token_async(
+        effective_gemini_key: Final[str | None] = gemini_api_key or get_api_key_from_env() or litellm.api_key
+        is_gemini_target: Final = custom_llm_provider == "gemini" or (
+            effective_gemini_key is not None and not vertex_credentials and not vertex_project
+        )
+        resolved_custom_llm_provider: Final[Literal["vertex_ai", "vertex_ai_beta", "gemini"]] = (
+            "gemini" if is_gemini_target else custom_llm_provider
+        )
+
+        _auth_header, resolved_vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Extract use_psc_endpoint_format from optional_params
         use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
-        auth_header, api_base = self._get_token_and_url(
+        auth_header, resolved_api_base = self._get_token_and_url(
             model=model,
-            gemini_api_key=gemini_api_key,
+            gemini_api_key=effective_gemini_key,
             auth_header=_auth_header,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_credentials=vertex_credentials,
             stream=stream,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             api_base=api_base,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -3138,7 +3159,7 @@ class VertexLLM(VertexBase):
 
         request_body: Final = await async_transform_request_body(
             **data,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
         )
@@ -3156,19 +3177,24 @@ class VertexLLM(VertexBase):
             api_key="",
             additional_args={
                 "complete_input_dict": request_body,
-                "api_base": api_base,
+                "api_base": resolved_api_base,
                 "headers": headers,
             },
         )
 
         fresh_headers: Final = partial(
-            self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
+            self._fresh_headers_async,
+            headers,
+            extra_headers,
+            vertex_credentials,
+            resolved_vertex_project,
+            resolved_custom_llm_provider,
         )
 
         async def post(body: RequestBody) -> httpx.Response:
             try:
                 response: Final = await client.post(
-                    url_for(api_base, body),
+                    url_for(resolved_api_base, body),
                     headers=dict(await fresh_headers()),
                     json=dict(body),
                     logging_obj=logging_obj,
@@ -3225,8 +3251,16 @@ class VertexLLM(VertexBase):
     ) -> ModelResponse | CustomStreamWrapper:
         stream: Final[bool | None] = optional_params.pop("stream", None)
 
+        effective_gemini_key: Final[str | None] = gemini_api_key or get_api_key_from_env() or litellm.api_key
+        is_gemini_target: Final = custom_llm_provider == "gemini" or (
+            effective_gemini_key is not None and not vertex_credentials and not vertex_project
+        )
+        resolved_custom_llm_provider: Final[Literal["vertex_ai", "vertex_ai_beta", "gemini"]] = (
+            "gemini" if is_gemini_target else custom_llm_provider
+        )
+
         transform_request_params: Final = {
-            "gemini_api_key": gemini_api_key,
+            "gemini_api_key": effective_gemini_key,
             "messages": messages,
             "api_base": api_base,
             "model": model,
@@ -3235,7 +3269,7 @@ class VertexLLM(VertexBase):
             "extra_headers": extra_headers,
             "optional_params": optional_params,
             "logging_obj": logging_obj,
-            "custom_llm_provider": custom_llm_provider,
+            "custom_llm_provider": resolved_custom_llm_provider,
             "litellm_params": litellm_params,
         }
 
@@ -3261,8 +3295,8 @@ class VertexLLM(VertexBase):
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
-                    gemini_api_key=gemini_api_key,
-                    custom_llm_provider=custom_llm_provider,
+                    gemini_api_key=effective_gemini_key,
+                    custom_llm_provider=resolved_custom_llm_provider,
                     extra_headers=extra_headers,
                 )
             ### ASYNC COMPLETION
@@ -3284,15 +3318,15 @@ class VertexLLM(VertexBase):
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
-                gemini_api_key=gemini_api_key,
-                custom_llm_provider=custom_llm_provider,
+                gemini_api_key=effective_gemini_key,
+                custom_llm_provider=resolved_custom_llm_provider,
                 extra_headers=extra_headers,
             )
 
-        _auth_header, vertex_project = self._ensure_access_token(
+        _auth_header, resolved_vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Extract use_psc_endpoint_format from optional_params
@@ -3300,13 +3334,13 @@ class VertexLLM(VertexBase):
 
         auth_header, url = self._get_token_and_url(
             model=model,
-            gemini_api_key=gemini_api_key,
+            gemini_api_key=effective_gemini_key,
             auth_header=_auth_header,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_credentials=vertex_credentials,
             stream=stream,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             api_base=api_base,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -3322,7 +3356,7 @@ class VertexLLM(VertexBase):
         ## TRANSFORMATION ##
         data: Final = sync_transform_request_body(
             **transform_request_params,
-            vertex_project=vertex_project,
+            vertex_project=resolved_vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
         )
@@ -3339,7 +3373,12 @@ class VertexLLM(VertexBase):
         )
 
         fresh_headers: Final = partial(
-            self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
+            self._fresh_headers,
+            headers,
+            extra_headers,
+            vertex_credentials,
+            resolved_vertex_project,
+            resolved_custom_llm_provider,
         )
 
         ## SYNC STREAMING CALL ##
@@ -3361,7 +3400,7 @@ class VertexLLM(VertexBase):
                     timeout=timeout,
                 ),
                 model=model,
-                custom_llm_provider="vertex_ai_beta",
+                custom_llm_provider=resolved_custom_llm_provider,
                 logging_obj=logging_obj,
             )
 

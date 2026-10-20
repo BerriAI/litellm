@@ -548,9 +548,7 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(
-        self, block: dict[str, object], named_in_error: str
-    ) -> None:
+    def test_malformed_block_answers_400_naming_the_field(self, block: dict[str, object], named_in_error: str) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
