@@ -44,8 +44,6 @@ CachingSupportedCallTypes = Literal[
 DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
     "completion",
     "acompletion",
-    "embedding",
-    "aembedding",
     "atranscription",
     "transcription",
     "atext_completion",

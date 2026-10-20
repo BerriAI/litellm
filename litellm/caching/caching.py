@@ -108,6 +108,8 @@ class Cache:
         default_in_memory_ttl: float | None = None,
         default_in_redis_ttl: float | None = None,
         similarity_threshold: float | None = None,
+        # Note: embeddings are excluded by default to prevent per-input caching from exhausting shared Redis/memory limits.
+        # Users can opt-in by passing `supported_call_types=["embedding", "aembedding"]` via cache_params.
         supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
         # s3 Bucket, boto3 configuration
         azure_account_url: str | None = None,
