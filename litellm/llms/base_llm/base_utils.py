@@ -9,11 +9,12 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs lands in typing only on 3.13
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its system member by the role literal
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
@@ -49,6 +50,7 @@ class BaseTokenCounter(ABC):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 

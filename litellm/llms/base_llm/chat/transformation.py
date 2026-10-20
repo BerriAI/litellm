@@ -435,7 +435,7 @@ class BaseConfig(ABC):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         pass
 
     def get_model_response_iterator_for_request(

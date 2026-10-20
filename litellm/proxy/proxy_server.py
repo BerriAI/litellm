@@ -146,7 +146,6 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -308,10 +307,8 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
 )
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
@@ -343,6 +340,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+    SPEND_LOG_SIZE_CHECK_INTERVAL,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -3118,8 +3116,9 @@ def cost_tracking():
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
-        litellm.logging_callback_manager.add_litellm_callback(ProxyDBLogger(spend_event_producer))
-        litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer))
+        db_logger: Final = ProxyDBLogger(spend_event_producer)
+        litellm.logging_callback_manager.add_litellm_callback(db_logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
@@ -4235,73 +4234,61 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     return tuple(float(current_value) for current_value in results or ())
 
 
-def update_cache_read_keys(
-    user_id: str | None,
-    end_user_id: str | None,
-    tags: Sequence[object] | None,
-    response_cost: float | None,
-) -> tuple[str, ...]:
-    if response_cost is None:
-        return ()
-    user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
-    end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + tag_keys
+_CachedSpendObjectT = TypeVar(
+    "_CachedSpendObjectT", LiteLLM_UserTable, LiteLLM_EndUserTable, LiteLLM_TeamTableCachedObj, LiteLLM_TagTable
+)
 
 
-_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
-
-
-async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
-    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
-    round trip as the post-call spend counter read instead of its own."""
-    request: Final = active_request_redis_batches()
-    target: Final = user_api_key_cache if cache is None else cache
-    if request is None or target.redis_cache is None or not keys:
+def _add_spend_to_locally_cached_object(
+    cache: UserApiKeyCache, key: str, model_type: type[_CachedSpendObjectT], response_cost: float
+) -> None:
+    current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
+    if current is None:
         return
-    with service_target(AUTH_OBJECTS_TARGET):
-        request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
-            keys, request.batch(target.redis_cache)
-        )
+    cache.set_cache(
+        key=key,
+        value=current.model_copy(update={"spend": (current.spend or 0.0) + response_cost}),
+        local_only=True,
+        model_type=model_type,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
-async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
-    request: Final = active_request_redis_batches()
-    if request is None:
+async def _add_spend_to_shared_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> float | None:
+    if cache.redis_cache is None:
         return None
-    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
-    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
-        return None
-    values: Final = await cache.async_resolve_batch_get(armed)
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
-
-
-async def _read_update_cache_values(
-    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
-) -> Mapping[str, object]:
-    """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
-    exactly as a failed per-object GET left that object untouched."""
-    if not keys:
-        return MappingProxyType({})
-    target: Final = user_api_key_cache if cache is None else cache
     try:
-        armed: Final = await _take_armed_update_cache_read(keys, target)
-        if armed is not None:
-            return armed
-        values: Final = await target.async_batch_get_cache(
-            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
+        return await cache.redis_cache.async_increment_if_present(
+            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
         )
     except Exception as e:
         verbose_proxy_logger.warning(
-            "Spend tracking - failed to read cached spend objects. Budget enforcement may use stale spend values. "
-            "keys=%s - %s",
-            keys,
+            "Spend tracking - failed to add spend to the global proxy spend in Redis. "
+            "Budget enforcement may use stale spend values. response_cost=%s - %s",
+            response_cost,
             str(e),
         )
-        return MappingProxyType({})
-    if values is None:
-        return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
+        return None
+
+
+async def _add_spend_to_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> None:
+    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    if not isinstance(local_total, (int, float)):
+        return
+    if shared_total is not None and local_total != local_before and shared_total < local_total:
+        return
+    cache.set_cache(
+        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=local_total + response_cost if shared_total is None else shared_total,
+        local_only=True,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
 async def update_cache(
@@ -4312,6 +4299,7 @@ async def update_cache(
     response_cost: float | None,
     parent_otel_span: Span | None,
     tags: list[str] | None = None,
+    cache: UserApiKeyCache | None = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -4319,14 +4307,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: Final[list[tuple[str, object]]] = []
-    with service_target(AUTH_OBJECTS_TARGET):
-        cached_values: Final = await _read_update_cache_values(
-            keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
-            ),
-            parent_otel_span=parent_otel_span,
-        )
+    target: Final = user_api_key_cache if cache is None else cache
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4336,7 +4317,7 @@ async def update_cache(
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        existing_spend_obj = await target.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -4378,184 +4359,17 @@ async def update_cache(
             )
             # set cooldown on alert
 
-    ### UPDATE USER SPEND ###
-    async def _update_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        if response_cost is None:
-            return
-        user_ids: Final = [user_id]
+    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> None:
         try:
-            for _id in user_ids:
-                # Fetch the existing cost for the given user
-                if _id is None:
-                    continue
-                cached_user = cached_values.get(_id)
-                if cached_user is None:
-                    # do nothing if there is no cache value
-                    return
-                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
-                if existing_spend_obj is None:
-                    return
-                verbose_proxy_logger.debug(
-                    "_update_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-                )
-
-                existing_spend = existing_spend_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        _id,
-                        CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
-                    )
-                )
-            ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if not isinstance(global_proxy_spend, (int, float)):
-                # do nothing if not in cache
-                return
-            elif response_cost is not None:
-                increment: Final = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
+            _add_spend_to_locally_cached_object(target, key, model_type, cost)
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Spend tracking - failed to update user spend in cache. "
+                "Spend tracking - failed to update %s spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "user_id=%s, response_cost=%s - %s\n%s",
-                user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE END-USER SPEND ###
-    async def _update_end_user_cache():
-        if end_user_id is None or response_cost is None:
-            return
-
-        _id: Final = end_user_cache_key(end_user_id)
-        try:
-            # Fetch the existing cost for the given user
-            cached_end_user: Final = cached_values.get(_id)
-            if cached_end_user is None:
-                # if user does not exist in LiteLLM_UserTable, create a new user
-                # do nothing if end-user not in api key cache
-                return
-            existing_spend_obj: Final = CacheCodec.deserialize(cached_end_user, LiteLLM_EndUserTable)
-            if existing_spend_obj is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_end_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-            )
-
-            existing_spend: Final = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_EndUserTable),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update end user spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "end_user_id=%s, response_cost=%s - %s\n%s",
-                end_user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TEAM SPEND ###
-    def _update_team_cache():
-        if team_id is None or response_cost is None:
-            return
-
-        _id: Final = f"team_id:{team_id}"
-        try:
-            current_team: Final = CacheCodec.deserialize(
-                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
-            )
-            if current_team is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
-            )
-            user_api_key_cache.set_cache(
-                key=_id,
-                value=CacheCodec.serialize(
-                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
-                    model_type=LiteLLM_TeamTableCachedObj,
-                ),
-                local_only=True,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update team spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "team_id=%s, response_cost=%s - %s\n%s",
-                team_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TAG SPEND ###
-    async def _update_tag_cache():
-        """
-        Update the tag cache with the new spend.
-        """
-        if tags is None or response_cost is None:
-            return
-
-        try:
-            for tag_name in tags:
-                if not tag_name or not isinstance(tag_name, str):
-                    continue
-
-                cache_key = tag_cache_key(tag_name)
-                # Fetch the existing tag object from cache
-                cached_tag = cached_values.get(cache_key)
-                if cached_tag is None:
-                    # do nothing if tag not in api key cache
-                    continue
-
-                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
-                if existing_tag_obj is None:
-                    continue
-
-                verbose_proxy_logger.debug(
-                    "_update_tag_cache: existing spend for tag=%s: %s; response_cost: %s",
-                    tag_name,
-                    existing_tag_obj,
-                    response_cost,
-                )
-
-                existing_spend = existing_tag_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_tag_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        cache_key,
-                        CacheCodec.serialize(existing_tag_obj, model_type=LiteLLM_TagTable),
-                    )
-                )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update tag spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "tags=%s, response_cost=%s - %s\n%s",
-                tags,
-                response_cost,
+                "key=%s, response_cost=%s - %s\n%s",
+                model_type.__name__,
+                key,
+                cost,
                 str(e),
                 traceback.format_exc(),
             )
@@ -4563,42 +4377,23 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         if token is not None and response_cost is not None:
             await _update_key_cache(token=token, response_cost=response_cost)
+    if response_cost is None:
+        return
 
-        if user_id is not None:
-            await _update_user_cache()
+    if user_id is not None:
+        _add_spend(user_id, LiteLLM_UserTable, response_cost)
+    if end_user_id is not None:
+        _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)
+    if team_id is not None:
+        _add_spend(f"team_id:{team_id}", LiteLLM_TeamTableCachedObj, response_cost)
+    for tag_name in tags or ():
+        if tag_name and isinstance(tag_name, str):
+            _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
 
-        if end_user_id is not None:
-            await _update_end_user_cache()
-
-        if team_id is not None:
-            _update_team_cache()
-
-        if tags is not None:
-            await _update_tag_cache()
-
-    global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-    local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
-    shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
-
-    if local_object_updates:
-        with service_target(AUTH_OBJECTS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(local_object_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
-            )
-    if shared_scalar_updates:
-        with service_target(SPEND_COUNTERS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(shared_scalar_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                )
-            )
+    if litellm.max_budget <= 0:
+        return
+    with service_target(SPEND_COUNTERS_TARGET):
+        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
 
 
 def run_ollama_serve():
@@ -5728,18 +5523,42 @@ def _current_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
-_CLEANUP_SCHEDULE_KEYS: Final = (
+_RETENTION_RULE_KEYS: Final = (
     "maximum_spend_logs_retention_period",
     "maximum_autorouter_session_retention_period",
     "maximum_health_check_retention_period",
     "maximum_daily_tag_spend_retention_period",
+)
+_CLEANUP_SCHEDULE_KEYS: Final = (
+    *_RETENTION_RULE_KEYS,
     "maximum_spend_logs_cleanup_cron",
     "maximum_spend_logs_retention_interval",
+    "maximum_spend_logs_size",
+    "maximum_spend_logs_cleanup_target_size",
+    "maximum_spend_logs_size_check_interval",
 )
+_SPEND_LOG_CLEANUP_JOB_ID: Final = "spend_log_cleanup_job"
+_SPEND_LOG_SIZE_CHECK_JOB_ID: Final = "spend_log_size_check_job"
 
 
 def _cleanup_schedule_of(settings: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(settings.get(key) for key in _CLEANUP_SCHEDULE_KEYS)
+
+
+def _wants_retention_job(settings: Mapping[str, object]) -> bool:
+    """The retention job runs the age rules, and the size rule too when one cron drives both."""
+    return any(settings.get(key) is not None for key in _RETENTION_RULE_KEYS) or (
+        settings.get("maximum_spend_logs_size") is not None and bool(settings.get("maximum_spend_logs_cleanup_cron"))
+    )
+
+
+def _wants_size_check_job(settings: Mapping[str, object]) -> bool:
+    """The size rule gets its own job on maximum_spend_logs_size_check_interval unless a cleanup cron is set."""
+    return settings.get("maximum_spend_logs_size") is not None and not settings.get("maximum_spend_logs_cleanup_cron")
+
+
+def _wants_cleanup_jobs(settings: Mapping[str, object]) -> bool:
+    return _wants_retention_job(settings) or _wants_size_check_job(settings)
 
 
 @lru_cache(maxsize=4096)
@@ -8258,39 +8077,73 @@ class ProxyConfig:
         if scheduler is None:
             return
 
-        wants_job: Final = any(
-            general_settings.get(key) is not None
-            for key in (
-                "maximum_spend_logs_retention_period",
-                "maximum_autorouter_session_retention_period",
-                "maximum_health_check_retention_period",
-                "maximum_daily_tag_spend_retention_period",
-            )
-        )
-        if not wants_job:
-            if scheduler.get_job("spend_log_cleanup_job") is not None:
-                scheduler.remove_job("spend_log_cleanup_job")
-                verbose_proxy_logger.info("Removed existing spend log cleanup job")
-            return
-
-        trigger: Final = self._spend_log_cleanup_trigger()
-        if trigger is None:
-            return
         from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
             SpendLogCleanup,
         )
 
-        scheduler.add_job(
-            SpendLogCleanup().cleanup_old_spend_logs,
-            trigger,
+        if not _wants_retention_job(general_settings):
+            if scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None:
+                scheduler.remove_job(_SPEND_LOG_CLEANUP_JOB_ID)
+                verbose_proxy_logger.info("Removed existing spend log cleanup job")
+        else:
+            trigger: Final = self._spend_log_cleanup_trigger()
+            if trigger is not None:
+                scheduler.add_job(
+                    SpendLogCleanup().cleanup_old_spend_logs,
+                    trigger,
+                    args=[prisma_client],
+                    id=_SPEND_LOG_CLEANUP_JOB_ID,
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
+
+        if not _wants_size_check_job(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
+            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                verbose_proxy_logger.info("Removed existing spend log size check job")
+            return
+        size_trigger: Final = self._spend_log_size_check_trigger()
+        if size_trigger is None:
+            return
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            SpendLogCleanup().cleanup_spend_logs_by_size,
+            size_trigger,
             args=[prisma_client],
-            id="spend_log_cleanup_job",
+            id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
-        verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
+        verbose_proxy_logger.info("Spend log size check rescheduled with trigger: %s", size_trigger)
 
-    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+    def _spend_log_size_check_trigger(self) -> object | None:
+        return self._staggered_interval_trigger(
+            _SPEND_LOG_SIZE_CHECK_JOB_ID,
+            "maximum_spend_logs_size_check_interval",
+            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is an untyped module dict
+        )
+
+    @staticmethod
+    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> object | None:
+        if not isinstance(interval, str):
+            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
+            return None
+        # this runs against a started scheduler, which the startup stagger sweep
+        # cannot reach, so the offset is applied here or the job reconverges across
+        # replicas the first time an admin edits the settings
+        try:
+            interval_seconds: Final = duration_in_seconds(interval)
+            return stagger_trigger(
+                job_id=job_id,
+                trigger=IntervalTrigger(seconds=interval_seconds),
+                period_seconds=interval_seconds,
+                settings=parse_stagger_settings(general_settings),  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
+            )
+        except (ValueError, OverflowError):
+            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
+            return None
+
+    def _spend_log_cleanup_trigger(self) -> object | None:
         cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
         if cleanup_cron:
             from apscheduler.triggers.cron import CronTrigger
@@ -8301,24 +8154,11 @@ class ProxyConfig:
                 verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
                 return None
             return cron_trigger
-        retention_interval: Final[object] = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-        if not isinstance(retention_interval, str):
-            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
-            return None
-        # this runs against a started scheduler, which the startup stagger sweep
-        # cannot reach, so the offset is applied here or the job reconverges across
-        # replicas the first time an admin edits the retention settings
-        try:
-            interval_seconds: Final = duration_in_seconds(retention_interval)
-            return stagger_trigger(
-                job_id="spend_log_cleanup_job",
-                trigger=IntervalTrigger(seconds=interval_seconds),
-                period_seconds=interval_seconds,
-                settings=parse_stagger_settings(general_settings),
-            )
-        except (ValueError, OverflowError):
-            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
-            return None
+        return self._staggered_interval_trigger(
+            _SPEND_LOG_CLEANUP_JOB_ID,
+            "maximum_spend_logs_retention_interval",
+            general_settings.get("maximum_spend_logs_retention_interval", "1d"),
+        )
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -8475,8 +8315,11 @@ class ProxyConfig:
         if scheduler is not None and scheduler.state == STATE_STOPPED:
             return
         schedule: Final = self._resolved_cleanup_schedule()
-        wants_job: Final = any(value is not None for value in schedule[:4])
-        has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        wants_job: Final = _wants_cleanup_jobs(self.settings)
+        has_job: Final = scheduler is not None and (
+            scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None
+            or scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+        )
         baseline: Final = (
             self._last_cleanup_schedule_attempt
             if has_job and self._last_cleanup_schedule_attempt is not None
@@ -11623,12 +11466,29 @@ class ProxyStartupEvent:
 
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
-        if (
-            cleanup_settings.get("maximum_spend_logs_retention_period") is not None
-            or cleanup_settings.get("maximum_autorouter_session_retention_period") is not None
-            or cleanup_settings.get("maximum_health_check_retention_period") is not None
-            or cleanup_settings.get("maximum_daily_tag_spend_retention_period") is not None
-        ):
+        if _wants_size_check_job(cleanup_settings):
+            size_check_interval: Final = cleanup_settings.get(
+                "maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL
+            )
+            try:
+                if not isinstance(size_check_interval, str):
+                    raise TypeError(size_check_interval)
+                size_check_seconds: Final = duration_in_seconds(size_check_interval)
+                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                    SpendLogCleanup().cleanup_spend_logs_by_size,
+                    "interval",
+                    seconds=size_check_seconds + random.randint(0, 60),
+                    args=[prisma_client],
+                    id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log size check scheduled every %s", size_check_interval)
+            except (TypeError, ValueError, OverflowError):
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_size_check_interval value: %r", size_check_interval
+                )
+        if _wants_retention_job(cleanup_settings):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
@@ -11643,7 +11503,7 @@ class ProxyStartupEvent:
                         spend_log_cleanup.cleanup_old_spend_logs,
                         cron_trigger,
                         args=[prisma_client],
-                        id="spend_log_cleanup_job",
+                        id=_SPEND_LOG_CLEANUP_JOB_ID,
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
@@ -11662,7 +11522,7 @@ class ProxyStartupEvent:
                         "interval",
                         seconds=interval_seconds + random.randint(0, 60),
                         args=[prisma_client],
-                        id="spend_log_cleanup_job",
+                        id=_SPEND_LOG_CLEANUP_JOB_ID,
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
@@ -11670,6 +11530,7 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error(
                         "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
                     )
+        if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
@@ -14701,7 +14562,9 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14714,6 +14577,11 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.litellm_completion_transformation.count_request import (
+    ChatCountBridgeError,
+    chat_count_request,
+    with_provider_file_ids,
+)
 
 
 def _get_provider_token_counter(
@@ -14771,6 +14639,18 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _provider_count_outcome(
+    result: Union["TokenCountResponse", None],
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if result is not None and result.error is True:
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
+            message=result.error_message or "Token counting failed",
+            rejected_before_provider_call=result.rejected_before_provider_call,
+        )
+    return result
+
+
 def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
     call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
     try:
@@ -14783,6 +14663,12 @@ def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
             code=401,
         ) from e
     return call_params
+
+
+def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+    if deployment is None:
+        return None
+    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -14825,6 +14711,7 @@ async def _try_provider_token_count(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14844,31 +14731,44 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=None
-            if deployment_in_region is None
-            else {
-                **deployment_in_region,
-                "litellm_params": _with_resolved_api_key(deployment_in_region.get("litellm_params", {})),
-            },
+            deployment=_with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            chat_params=chat_params,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
             status_code=getattr(e, "status_code", None) or e.response.status_code,
             message=getattr(e, "message", None) or str(e),
         )
-    if result is not None and result.error is True:
-        return ProviderCountFailure(
-            status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
-            rejected_before_provider_call=result.rejected_before_provider_call,
+    return _provider_count_outcome(result)
+
+
+async def _try_native_responses_count(
+    provider_counter: OpenAITokenCounter,
+    custom_llm_provider: str | None,
+    model_to_use: str,
+    _region: str | None,
+    responses_request: Mapping[str, object],
+    policy: DropPolicy,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
+        return None
+    return _provider_count_outcome(
+        await provider_counter.count_responses_request(
+            model_to_use=model_to_use,
+            request=responses_request,
+            policy=policy,
+            deployment=_with_resolved_credentials(deployment),
+            request_model=request_model,
         )
-    return result
+    )
 
 
 async def _provider_token_count(
@@ -15150,6 +15050,7 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
@@ -15228,6 +15129,43 @@ def _count_context_management(
     )
 
 
+def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
+    previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
+    return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
+
+
+def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+
+
+def _native_responses_count(
+    provider_counter: BaseTokenCounter,
+    custom_llm_provider: str | None,
+    responses_request: Mapping[str, object] | None,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
+    if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
+        return None
+    return partial(
+        _try_native_responses_count,
+        provider_counter,
+        custom_llm_provider,
+        responses_request=responses_request,
+        policy=_count_drop_policy(deployment, responses_request),
+        deployment=deployment,
+        request_model=request_model,
+    )
+
+
+def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -15260,6 +15198,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    responses_request: Mapping[str, object] | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15281,7 +15220,7 @@ async def count_request_tokens(
         try:
             deployment = await llm_router.async_get_available_deployment(
                 model=request.model,
-                request_kwargs={},
+                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
             )
         except Exception:
             verbose_proxy_logger.exception(
@@ -15335,23 +15274,54 @@ async def count_request_tokens(
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
+    routed_request: Final = (
+        None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
+    )
+    chat_count: Final = (
+        None
+        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        else await chat_count_request(
+            model_to_use,
+            custom_llm_provider,
+            _deployment_api_base(deployment_view),
+            routed_request,
+            _count_drop_policy(routed_deployment, routed_request),
+        )
+    )
+    if isinstance(chat_count, ChatCountBridgeError):
+        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
     ladder: Final = (
         None
         if provider_counter is None
         else await _provider_token_count(
-            count_with=partial(
+            count_with=_native_responses_count(
+                provider_counter,
+                custom_llm_provider,
+                routed_request,
+                routed_deployment,
+                request.model,
+            )
+            or partial(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
+                messages=(
+                    [dict(message) for message in chat_count.messages]
+                    if chat_count is not None
+                    else [{"role": "user", "content": prompt}]
+                    if prompt_as_message
+                    else request_messages
+                ),
                 contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
-                tools=tools,
+                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
                 system=system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
             settings=settings,
