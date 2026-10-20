@@ -15,6 +15,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
@@ -187,6 +188,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "used_client_oauth_token",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
+        BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
     )
 )
@@ -249,6 +251,7 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             internal_call_origin=None,
             litellm_roi_estimator=False,
+            billed_retry_attempt=False,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
@@ -270,6 +273,8 @@ def _get_spend_logs_metadata(
         )
     verbose_proxy_logger.debug("getting payload for SpendLogs, available keys in metadata: %s", [*metadata])
 
+    retry_key: Final = BILLED_RETRY_ATTEMPT_METADATA_KEY
+    billed_retry_attempt: Final = retry_key in metadata and metadata[retry_key] is True
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
@@ -283,6 +288,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
@@ -453,7 +459,12 @@ def _sl_attribution_fallback(
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
-    litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    return deployment_params_provider(litellm_params)
+
+
+def deployment_params_provider(litellm_params: LiteLLM_Params) -> str | None:
+    """The provider a deployment's ``litellm_params`` authenticate against, None when its model cannot be resolved."""
     if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(litellm_params=litellm_params):
         return LlmProviders.LITELLM_PROXY.value
     declared: Final = declared_authenticating_provider(litellm_params.model, litellm_params.custom_llm_provider)
