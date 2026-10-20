@@ -3288,6 +3288,30 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
     assert contents[3] == blocks[0][:-1]
 
 
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD), id="one_block_per_field"),
+        pytest.param(
+            tuple(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()),
+            id="one_partial_object_per_field",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_stream_ends_in_its_last_block(
+    blocks: tuple[str, ...],
+):
+    message_start, *_ = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+    )[:-1]
+
+    iterator = _cut_stream_iterator(True, iter(tuple(f"data: {json.dumps(event)}\n".encode() for event in events)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
+
+
 def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():
     blocks = ("{}", *(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()))
 

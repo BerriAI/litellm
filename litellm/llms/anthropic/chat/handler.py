@@ -1316,13 +1316,8 @@ class ModelResponseIterator:
         return _split_answer_text(blocks, self.response_format_schema)
 
     def cut_stream_chunk(self) -> ModelResponseStream | None:
-        verdict: Final = self._response_format_verdict
-        held: Final = "" if verdict == "pass_through" else self._response_format_buffer.getvalue()
-        schema: Final = self.response_format_schema
-        unsent: Final = _held_answer(held, schema) if held and schema is not None else held
-        self._response_format_buffer = io.StringIO()
-        self._response_format_verdict = "undecided"
-        text: Final = self._release_answer_close() + self._drain_split_answer_blocks() + unsent
+        unsent: Final = self._flush_response_format_buffer() if self._response_format_buffer.getvalue() else ""
+        text: Final = unsent + self._release_answer_close() + self._drain_split_answer_blocks()
         if not text:
             return None
         return ModelResponseStream(

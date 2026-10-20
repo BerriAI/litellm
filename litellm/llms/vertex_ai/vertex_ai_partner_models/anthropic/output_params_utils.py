@@ -45,7 +45,7 @@ def _as_output_config(value: object) -> Mapping[str, object] | None:
 
 
 def _fold_output_format_into_output_config(
-    output_config: Mapping[str, object] | None, output_format: object, model: str, drop_params: object
+    output_config: Mapping[str, object] | None, output_format: object, model: str
 ) -> Mapping[str, object] | None:
     if output_format is None:
         return output_config
@@ -53,10 +53,7 @@ def _fold_output_format_into_output_config(
     if output_format_object is not None:
         return {**(output_config or {}), "format": output_format_object}
     from litellm.exceptions import UnsupportedParamsError
-    from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 
-    if drops_unsupported_params(drop_params):
-        return output_config
     raise UnsupportedParamsError(
         message=(
             f"{model} on vertex_ai needs `output_format` to be a JSON object, got {type(output_format).__name__}. "
@@ -66,7 +63,7 @@ def _fold_output_format_into_output_config(
     )
 
 
-def sanitize_vertex_anthropic_output_params(data: dict, model: str, drop_params: object = None) -> None:
+def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
     """
     Strip Vertex-unsupported keys from ``output_config`` /
     ``output_format`` in-place; forward whatever remains.
@@ -82,14 +79,15 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str, drop_params:
       * ``output_format`` is moved into ``output_config.format``, because
         Vertex AI Claude rejects the top-level field as deprecated. When both
         are set, a dict ``output_format`` wins, as it does in the Anthropic
-        adapter. A non-dict ``output_format`` is dropped under ``drop_params``
-        and raises a 400 ``UnsupportedParamsError`` otherwise.
+        adapter. A non-dict ``output_format`` raises a 400
+        ``UnsupportedParamsError``, since the parent config already dropped it
+        under ``drop_params``.
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
     request: Final[dict[str, object]] = data  # mutable-ok: the caller's request body is sanitized in place
     output_config: Final = _fold_output_format_into_output_config(
-        _as_output_config(request.get("output_config")), request.pop("output_format", None), model, drop_params
+        _as_output_config(request.get("output_config")), request.pop("output_format", None), model
     )
     if output_config is None:
         request.pop("output_config", None)

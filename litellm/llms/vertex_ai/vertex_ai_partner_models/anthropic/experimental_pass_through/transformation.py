@@ -157,8 +157,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 
-        sanitize_vertex_anthropic_output_params(
-            anthropic_messages_request, model, drop_params=litellm_params.drop_params
-        )
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request

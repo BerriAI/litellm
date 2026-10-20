@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -543,7 +544,7 @@ _CALLER_OUTPUT_CONFIG: Final = {
 }
 
 
-def _messages_request_with_output_format(output_format: object, drop_params: bool) -> dict:
+def _messages_request_with_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
     return VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-opus-4-6",
         messages=[{"role": "user", "content": "What is 6 times 7?"}],
