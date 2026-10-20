@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import re
 import threading
 import time
@@ -42,9 +43,9 @@ class KnownCachedContents:
     """Process-local record of the cachedContents this process created or found.
 
     Vertex meters every cachedContents list page against a per-minute, per-location quota,
-    so listing on every cache-marked request exhausts it under load. A cache is only
-    remembered with the ``expireTime`` Vertex reported, and is never reused within
-    ``KNOWN_CACHE_EXPIRY_MARGIN_SECONDS`` of it.
+    so listing on every cache-marked request exhausts it under load. A cache is remembered
+    until ``KNOWN_CACHE_EXPIRY_MARGIN_SECONDS`` before the ``expireTime`` Google reported,
+    and after that requests list again, as they did before the record existed.
     """
 
     def __init__(self, clock: Callable[[], float] = time.time) -> None:
@@ -71,9 +72,9 @@ class KnownCachedContents:
         sent_keys: Final = [value for name, value in headers.items() if name.lower() == "x-goog-api-key"]
         return (base_url, sent_keys[-1] if sent_keys else "")
 
-    def is_usable(self, expire_time: object) -> bool:
+    def has_not_expired(self, expire_time: object) -> bool:
         expires_at: Final = parse_expire_time(expire_time)
-        return expires_at is None or expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS > self._clock()
+        return expires_at is None or expires_at > self._clock()
 
     def get(self, scope: tuple[str, str], cache_key: str) -> str | None:
         with self._lock:
@@ -101,8 +102,8 @@ class KnownCachedContents:
                     del self._entries[next(iter(self._entries))]
             self._entries[(scope, cache_key)] = (name, reuse_until)
 
-    def forget_rejected(self, cached_content: str | None, status_code: int, message: str) -> None:
-        if cached_content is None or not names_rejected_cache(status_code, message):
+    def forget_rejected(self, cached_content: str | None, status_code: int) -> None:
+        if cached_content is None or status_code not in _CACHE_REJECTED_STATUS_CODES:
             return
         with self._lock:
             self._entries = {key: entry for key, entry in self._entries.items() if entry[0] != cached_content}
@@ -117,9 +118,9 @@ class KnownCachedContents:
         """Run ``resolve`` once per (scope, cache_key) at a time within this event loop.
 
         Concurrent requests for the same prefix wait for the first one's lookup-or-create
-        instead of each listing (and creating a duplicate cache). If that first attempt
-        fails, each waiter resolves on its own. A waiter waits at most ``wait_seconds`` and
-        then raises ``asyncio.TimeoutError`` without cancelling the first request.
+        instead of each listing (and creating a duplicate cache). A waiter resolves on its
+        own when that first attempt fails or has not finished within ``wait_seconds``, and
+        never cancels it.
         """
         loop: Final = asyncio.get_running_loop()
         own: Final[asyncio.Future[str | None]] = loop.create_future()
@@ -127,9 +128,9 @@ class KnownCachedContents:
             inflight: Final = self._inflight.setdefault(loop, {})
             leader: Final = inflight.setdefault((scope, cache_key), own)
         if leader is not own:
-            name: Final = await asyncio.wait_for(asyncio.shield(leader), wait_seconds)
-            if name:
-                return name
+            with contextlib.suppress(asyncio.TimeoutError):
+                if name := await asyncio.wait_for(asyncio.shield(leader), wait_seconds):
+                    return name
             return await resolve()
         try:
             resolved: Final = await resolve()

@@ -131,17 +131,37 @@ def test_listed_cache_is_reused_without_listing_again(endpoints: ContextCachingE
     client.post.assert_not_called()
 
 
-def test_listed_cache_about_to_expire_is_not_used(endpoints: ContextCachingEndpoints):
+def test_listed_cache_past_its_expire_time_is_not_used(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
     )
     client.get.return_value = _response(
-        {"cachedContents": [{"name": "cachedContents/stale", "displayName": key, "expireTime": _expire_time(3)}]}
+        {"cachedContents": [{"name": "cachedContents/stale", "displayName": key, "expireTime": _expire_time(-1)}]}
     )
     client.post.return_value = _response(_created("cachedContents/fresh", _expire_time(60)))
 
     assert _sync_call(endpoints, client)[2] == "cachedContents/fresh"
+
+
+def test_short_lived_cache_is_reused_from_the_listing(endpoints: ContextCachingEndpoints, clock: MagicMock):
+    client: Final = MagicMock(spec=HTTPHandler)
+    key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
+        messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
+    )
+    client.get.side_effect = [
+        _response({}),
+        _response(
+            {"cachedContents": [{"name": "cachedContents/1", "displayName": key, "expireTime": _expire_time(8)}]}
+        ),
+    ]
+    client.post.return_value = _response(_created("cachedContents/1", _expire_time(8)))
+
+    assert _sync_call(endpoints, client)[2] == "cachedContents/1"
+    clock.return_value = _NOW + 1
+    assert _sync_call(endpoints, client)[2] == "cachedContents/1"
+
+    assert client.post.call_count == 1
 
 
 def test_cache_without_expire_time_is_not_remembered(endpoints: ContextCachingEndpoints):
@@ -252,14 +272,14 @@ async def test_async_created_cache_is_reused_by_a_later_request(endpoints: Conte
 
 
 @pytest.mark.asyncio
-async def test_async_listed_cache_about_to_expire_is_not_used(endpoints: ContextCachingEndpoints):
+async def test_async_listed_cache_past_its_expire_time_is_not_used(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
     )
     client.get = AsyncMock(
         return_value=_response(
-            {"cachedContents": [{"name": "cachedContents/stale", "displayName": key, "expireTime": _expire_time(3)}]}
+            {"cachedContents": [{"name": "cachedContents/stale", "displayName": key, "expireTime": _expire_time(-1)}]}
         )
     )
     client.post = AsyncMock(return_value=_response(_created("cachedContents/fresh", _expire_time(60))))
@@ -307,7 +327,7 @@ async def test_waiters_resolve_on_their_own_when_the_first_request_fails(endpoin
 
 @pytest.mark.parametrize("waiter_timeout", [0.05, httpx.Timeout(30.0, read=0.05)])
 @pytest.mark.asyncio
-async def test_waiter_stops_waiting_for_the_first_request_at_its_own_timeout(
+async def test_waiter_resolves_on_its_own_once_its_timeout_passes(
     endpoints: ContextCachingEndpoints, waiter_timeout: float | httpx.Timeout
 ):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
@@ -319,13 +339,10 @@ async def test_waiter_stops_waiting_for_the_first_request_at_its_own_timeout(
     client.get = AsyncMock(side_effect=slow_list)
     client.post = AsyncMock(return_value=_response(_created("cachedContents/1", _expire_time(60))))
 
-    results: Final = await asyncio.gather(
-        _async_call(endpoints, client), _async_call(endpoints, client, waiter_timeout), return_exceptions=True
-    )
+    first, waiter = await asyncio.gather(_async_call(endpoints, client), _async_call(endpoints, client, waiter_timeout))
 
-    assert results[0][2] == "cachedContents/1"
-    assert isinstance(results[1], VertexAIError)
-    assert results[1].status_code == 408
+    assert (first[2], waiter[2]) == ("cachedContents/1", "cachedContents/1")
+    assert client.get.await_count == 2
 
 
 def test_parse_expire_time_accepts_nanosecond_precision():
@@ -443,46 +460,61 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize(
-    "message",
+    ("status_code", "message", "forgotten"),
     [
-        "Invalid value at 'generation_config.temperature'",
-        "Tool config, tools and system instruction should not be set in therequest when using cached content.",
-        "CachedContent can not be used with GenerateContent request setting system_instruction, tools or tool_config.",
+        (400, "Invalid value at 'generation_config.temperature'", True),
+        (
+            400,
+            "Tool config, tools and system instruction should not be set in therequest when using cached content.",
+            True,
+        ),
+        (
+            400,
+            "CachedContent can not be used with GenerateContent request setting system_instruction, tools or tool_config.",
+            True,
+        ),
+        (404, "Requested entity was not found.", True),
+        (429, "Resource has been exhausted (e.g. check quota).", False),
+        (500, "Internal error encountered.", False),
     ],
 )
 @pytest.mark.asyncio
-async def test_error_that_is_not_about_a_missing_cache_keeps_the_remembered_cache(
+async def test_error_that_does_not_name_a_missing_cache_is_not_retried(
     respx_mock: respx.MockRouter,
     fake_provider_credentials: None,
     monkeypatch: pytest.MonkeyPatch,
     sync_mode: bool,
     stream: bool,
+    status_code: int,
     message: str,
+    forgotten: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
         return_value=httpx.Response(200, json={})
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        return_value=httpx.Response(200, json=_created("cachedContents/kept", _FAR_FUTURE))
+        side_effect=[
+            httpx.Response(200, json=_created("cachedContents/first", _FAR_FUTURE)),
+            httpx.Response(200, json=_created("cachedContents/second", _FAR_FUTURE)),
+        ]
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[
-            _generated(stream),
-            _rejected(400, message),
-            _generated(stream),
-        ]
+        side_effect=[_generated(stream), _rejected(status_code, message), _generated(stream)]
     )
 
     assert await _complete(sync_mode, stream) == "ok"
-    with pytest.raises(openai.BadRequestError):
+    with pytest.raises(openai.APIStatusError):
         await _complete(sync_mode, stream)
     assert await _complete(sync_mode, stream) == "ok"
 
+    third: Final = "cachedContents/second" if forgotten else "cachedContents/first"
     assert [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls] == [
-        "cachedContents/kept"
-    ] * 3
-    assert list_route.call_count == 1
+        "cachedContents/first",
+        "cachedContents/first",
+        third,
+    ]
+    assert list_route.call_count == (2 if forgotten else 1)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

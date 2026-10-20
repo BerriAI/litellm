@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import Sequence
 from typing import Final, Literal
 
@@ -221,7 +220,7 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not self._known_caches.is_usable(expire_time):
+                if not self._known_caches.has_not_expired(expire_time):
                     continue
                 name = cached_item.get("name")
                 self._known_caches.remember(scope, cache_key, name, expire_time)
@@ -318,7 +317,7 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not self._known_caches.is_usable(expire_time):
+                if not self._known_caches.has_not_expired(expire_time):
                     continue
                 name = cached_item.get("name")
                 self._known_caches.remember(scope, cache_key, name, expire_time)
@@ -652,12 +651,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return raw_response_cached.get("name")
 
-        try:
-            cache_name: Final = await self._known_caches.single_flight(
-                scope, generated_cache_key, lookup_or_create, _wait_seconds(timeout)
-            )
-        except asyncio.TimeoutError:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+        cache_name: Final = await self._known_caches.single_flight(
+            scope, generated_cache_key, lookup_or_create, _wait_seconds(timeout)
+        )
         return non_cached_messages, optional_params, cache_name
 
     def get_cache(self):

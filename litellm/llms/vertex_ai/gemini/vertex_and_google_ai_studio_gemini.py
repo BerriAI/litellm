@@ -2852,9 +2852,7 @@ async def make_call(
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
-        known_cached_contents.forget_rejected(
-            request_body.get("cachedContent"), e.response.status_code, exception_string
-        )
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
@@ -2924,9 +2922,7 @@ def make_sync_call(
             timeout=timeout,
         )
     except httpx.HTTPStatusError as e:
-        known_cached_contents.forget_rejected(
-            request_body.get("cachedContent"), e.response.status_code, e.response.text
-        )
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         raise
 
     if response.status_code != 200 and response.status_code != 201:
@@ -3217,9 +3213,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
-                known_cached_contents.forget_rejected(
-                    body.get("cachedContent"), err.response.status_code, err.response.text
-                )
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3439,9 +3433,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
-                known_cached_contents.forget_rejected(
-                    body.get("cachedContent"), err.response.status_code, err.response.text
-                )
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
