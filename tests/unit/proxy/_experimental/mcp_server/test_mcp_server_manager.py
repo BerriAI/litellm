@@ -16446,6 +16446,7 @@ async def test_health_check_logs_upstream_exchange_only_for_http_failures(
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
+        self.tools: tuple[dict[str, object], ...] = ()
         self.outcome = "supported"
         self.ttl_ms = 60000
         self.entered = asyncio.Event()
@@ -16507,7 +16508,7 @@ class _DiscoveryUpstream:
             "resources/templates/list": {
                 "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
             },
-            "tools/list": {"tools": []},
+            "tools/list": {"tools": list(self.tools)},
         }[payload.method]
         continuation: Final = (
             {"nextCursor": "last-page"}
@@ -16542,6 +16543,64 @@ def _discovery_server() -> MCPServer:
         transport=MCPTransport.http,
         protocol_version="2026-07-28",
     )
+
+
+@pytest.mark.asyncio
+async def test_per_user_authorization_server_lists_without_static_credential() -> None:
+    upstream: Final = _DiscoveryUpstream()
+    upstream.tools = ({"name": "search", "inputSchema": {"type": "object"}},)
+    server: Final = MCPServer(
+        server_id="per-user-auth",
+        name="per-user-auth",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2026-07-28",
+        auth_type=MCPAuth.authorization,
+    )
+    manager: Final = MCPServerManager()
+    manager.registry[server.server_id] = server
+
+    with _mcp_upstream(upstream.respond):
+        tools: Final = await manager.get_tools_from_server(server, add_prefix=False)
+
+    assert [tool.name for tool in tools] == ["search"]
+    assert ("tools/list", "") in upstream.requests
+    with pytest.raises(HTTPException, match="requires a usable upstream credential"):
+        await manager.create_mcp_client(server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_type", "credential", "upstream_token_header"),
+    (
+        (MCPAuth.authorization, "Bearer", None),
+        (MCPAuth.authorization, "Bearer", "X-Token"),
+        (MCPAuth.authorization, "   ", None),
+        (MCPAuth.authorization, "   ", "X-Token"),
+        (MCPAuth.bearer_token, None, None),
+    ),
+)
+async def test_tool_listing_rejects_malformed_or_other_missing_static_credentials(
+    auth_type: MCPAuth, credential: str | None, upstream_token_header: str | None
+) -> None:
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = MCPServer(
+        server_id="invalid-static-auth",
+        name="invalid-static-auth",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2026-07-28",
+        auth_type=auth_type,
+        authentication_token=credential,
+        upstream_token_header=upstream_token_header,
+    )
+    manager: Final = MCPServerManager()
+    manager.registry[server.server_id] = server
+
+    with _mcp_upstream(upstream.respond), pytest.raises(MCPServerListError):
+        await manager.get_tools_from_server(server)
+
+    assert upstream.requests == ()
 
 
 @pytest.mark.asyncio
