@@ -147,6 +147,7 @@ ignored_function_names = [
     "_configured_model_info",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_declares_batch_endpoint",  # Tested through the declared-endpoint mixed-group acreate_batch test in test_router.py
     "model_info_with_deployment_endpoints",  # Tested through the /model/info batch endpoint tests in test_routes_model_info.py
+    "_listed_endpoints",  # Read by model_info_with_deployment_endpoints, tested through the /model/info batch endpoint tests in test_routes_model_info.py
 ]
 
 
