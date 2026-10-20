@@ -321,7 +321,7 @@ def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, o
 
 
 def reject_unknown_gemini_tts_voice_keys(
-    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str
+    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
 ) -> None:
     nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
     unknown_keys: Final = sorted({key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS})
@@ -1390,6 +1390,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return speech_config_without_language
 
+    def _map_chat_audio_params(
+        self, model: str, value: Mapping[str, object], drop_params: bool
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        if _gemini_speech_config_wrapper(value) is not None:
+            reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
+        return self._map_audio_params(value)
+
     def map_audio_params(
         self,
         value: dict[str, object],  # mutable-ok: mirrors override contract
@@ -1463,7 +1470,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
-                optional_params["speechConfig"] = self._map_audio_params(value)
+                optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]

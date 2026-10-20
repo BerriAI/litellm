@@ -217,6 +217,34 @@ def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, u
     reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, True, "vertex_ai")
 
 
+def test_chat_audio_speech_config_unknown_keys_are_rejected_unless_dropped():
+    audio: Final = {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="voice keys style\\."):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"audio": audio},
+            optional_params={},
+            model="gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": audio},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=True,
+    )
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+    voice_only: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"voice": "Kore", "format": "pcm16", "style": "calm"}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+    assert voice_only["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
 
 def test_top_logprobs():
     non_default_params = {
