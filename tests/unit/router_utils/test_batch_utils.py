@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 from io import BytesIO
-from typing import Dict, List
+from typing import Dict, Final, List
 
 import pytest
 
@@ -346,3 +346,31 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "cost", "eligible"),
+    (("aretrieve_batch", 0.25, True), ("retrieve_batch", 0.25, True), ("acompletion", 0.25, False),
+     ("aretrieve_batch", 0, False), ("aretrieve_batch", -0.25, False)),
+)
+def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str, cost: float, eligible: bool) -> None:
+    from openai.types import Batch
+    from litellm.router_utils.batch_utils import batch_id_to_charge_once
+
+    batch: Final = Batch(
+        id="batch-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
+        input_file_id="file-budget", object="batch", status="completed",
+    )
+    assert batch_id_to_charge_once(call_type, batch, cost) == (batch.id if eligible else None)
+    assert batch_id_to_charge_once(call_type, {"id": batch.id}, cost) is None
+
+
+def test_batch_charge_markers_keep_counters_and_batches_independent() -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.router_utils.batch_utils import batch_charged_once_marker_key
+
+    cache: Final = InMemoryCache()
+    cache.set_cache(batch_charged_once_marker_key("provider-spend", "first-batch"), 1)
+    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "first-batch")) == 1
+    assert cache.get_cache(batch_charged_once_marker_key("deployment-spend", "first-batch")) is None
+    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "second-batch")) is None
