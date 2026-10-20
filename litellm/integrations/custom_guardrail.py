@@ -1126,6 +1126,9 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def preserve_request_text_metadata(self) -> bool:
+        return False
+
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.
 

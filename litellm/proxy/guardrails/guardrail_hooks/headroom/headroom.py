@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 
 import httpx
@@ -16,7 +17,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.compression.compress import get_protected_indices
+from litellm.compression.compress import get_cached_prefix_indices, get_protected_indices
 from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -36,7 +37,8 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
     assistant_text_from_response,
     content_to_text,
     is_all_text_parts,
-    merge_rewritten_text_parts,
+    is_rewriteable_text_content,
+    replace_text_content,
 )
 from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from litellm.secret_managers.main import get_secret_str
@@ -110,35 +112,32 @@ def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list
     return flattened
 
 
-def _restore_content_shapes(
-    originals: list[dict[str, object]], returned: list[dict[str, object]]
-) -> list[dict[str, object]]:
-    """Write compressed text back into each original row's content shape.
+def _compressed_message_content(original: Mapping[str, object], rewritten: Mapping[str, object]) -> object:
+    content: Final = rewritten.get("content")
+    original_content: Final = original.get("content")
+    if content == original_content or (
+        is_all_text_parts(original_content) and content == content_to_text(original_content)
+    ):
+        return original_content
+    if not isinstance(content, str):
+        return None
+    return replace_text_content(original.get("content"), content)
 
-    Rows are matched positionally; the pairing is only trusted when the
-    service kept the row count and every role lines up. If it restructured
-    the conversation (e.g. dropped rows), its output is adopted as-is, which
-    is the pre-flattening behavior.
-    """
-    if len(returned) != len(originals):
-        return returned
-    for orig, ret in zip(originals, returned):
-        if orig.get("role") != ret.get("role"):
-            return returned
-    restored: Final[list[dict[str, object]]] = []
-    for orig, ret in zip(originals, returned):
-        orig_content = orig.get("content")
-        ret_content = ret.get("content")
-        if isinstance(orig_content, list) and isinstance(ret_content, str):
-            if ret_content == content_to_text(orig_content):
-                # Untouched row: keep the exact original parts, including
-                # per-part fields like cache_control on later text parts.
-                restored.append({**ret, "content": orig_content})
-            else:
-                restored.append({**ret, "content": merge_rewritten_text_parts(orig_content, ret_content)})
-        else:
-            restored.append(ret)
-    return restored
+
+def _restore_compressed_text(
+    originals: Sequence[Mapping[str, object]], returned: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...] | None:
+    if any(
+        original.get("role") != rewritten.get("role") or original.get("tool_call_id") != rewritten.get("tool_call_id")
+        for original, rewritten in zip(originals, returned)
+    ):
+        return None
+    contents: Final = tuple(
+        _compressed_message_content(original, rewritten) for original, rewritten in zip(originals, returned)
+    )
+    if any(content is None for content in contents):
+        return None
+    return tuple({**original, "content": content} for original, content in zip(originals, contents))
 
 
 def _tool_call_name(tool_call: Mapping[str, object]) -> str | None:
@@ -241,42 +240,28 @@ def _retrieval_result_indices(
 def _protected_indices(
     messages: Sequence[Mapping[str, object]], extra_retrieve_call_ids: frozenset[str] = frozenset()
 ) -> frozenset[int]:
-    """Indices headroom must not send to the compression service.
-
-    ``get_protected_indices`` is litellm's own compression policy: the system
-    rows, the last user row, the last assistant row. Rows carrying just-retrieved
-    ``headroom_retrieve`` output are added so re-compression can't collapse them
-    back to the marker they were expanded from. The union is expanded over whole
-    tool exchanges the way ``compress()`` expands it, so a protected assistant
-    tool call cannot end up answered by a marker standing in for the result the
-    model just asked for.
-
-    Every assistant row is then withheld without expanding its tool exchange:
-    the service protects assistant text blocks but has no gate for assistant
-    strings, and the Anthropic adapter hands assistant blocks over as strings,
-    so the model's own earlier tables came back rewritten and it imitated the
-    shape. The tool results those turns asked for stay compressible.
-    """
-    protected: Final = frozenset(get_protected_indices(messages)) | _retrieval_result_indices(
+    pinned: Final = frozenset(get_cached_prefix_indices(messages)) | _retrieval_result_indices(
         messages, extra_retrieve_call_ids
     )
+    pinned_exchanges: Final = tuple(
+        group for group in group_tool_exchanges(messages) if any(member in pinned for member in group)
+    )
     return (
-        protected
-        | frozenset(
-            index
-            for group in group_tool_exchanges(messages)
-            if any(member in protected for member in group)
-            for index in group
-        )
+        frozenset(get_protected_indices(messages))
+        | frozenset(chain.from_iterable(pinned_exchanges))
+        | pinned
         | frozenset(index for index, message in enumerate(messages) if message.get("role") == "assistant")
+        | frozenset(
+            index for index, message in enumerate(messages) if not is_rewriteable_text_content(message.get("content"))
+        )
     )
 
 
 def _restore_protected_messages(
-    messages: Sequence[dict[str, object]],
-    compressed: Sequence[dict[str, object]],
+    messages: Sequence[Mapping[str, object]],
+    compressed: Sequence[Mapping[str, object]],
     protected_indices: frozenset[int],
-) -> Sequence[dict[str, object]]:
+) -> Sequence[Mapping[str, object]]:
     """Put the rows that were held back from compression at their original positions.
 
     Requires one returned row per row actually sent, which ``_call_compress``
@@ -530,6 +515,9 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout = self._resolve_timeout(timeout)
 
+    def preserve_request_text_metadata(self) -> bool:
+        return True
+
     def _should_bypass(self, request_data: dict) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
@@ -688,7 +676,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
 
-        if len(filtered) != len(messages):
+        if len(filtered) != len(messages) or len(filtered) != len(compressed_messages):
             # Rows are matched positionally when the never-compressed messages
             # are put back, so a reshaped conversation cannot be applied at all.
             return _CompressResult(
@@ -773,11 +761,28 @@ class HeadroomGuardrail(CustomGuardrail):
 
         return str(body)
 
+    def _record_skipped_rewrite(self, request_data: dict[str, object], start_time: float, end_time: float) -> None:
+        from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "error": "Headroom rewrite could not be mapped safely",
+                "compression_applied": False,
+            },
+            request_data=request_data,
+            guardrail_status="guardrail_failed_to_respond",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -800,20 +805,41 @@ class HeadroomGuardrail(CustomGuardrail):
         if not messages:
             return inputs
 
-        # The last user message is the instruction the model is being asked to
-        # act on, so replacing it with a marker means the model answers a
-        # retrieval result instead of the request. Protected rows are held back
-        # from the payload rather than pinned after the fact, so their tokens
-        # are not counted as savings we never apply; the Anthropic write-back
-        # discards a compressed system prompt outright. Keep it that way unless
-        # /v1/compress grows a field for sending the live turn as the retrieval
-        # query without compressing it: query-aware compression reads the newest
-        # user message, so it is withheld here at some cost to history ranking.
-        # request_data is a bare dict on the base signature; narrow it before
-        # reading the untranslated messages so long tool names can be recovered.
-        raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            effective_skip_system_message_for_guardrail,
+            scoped_structured_message_indices,
+        )
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+            patch_response_request_fields,
+            rewriteable_response_message_indices,
+        )
+
+        native_request: Final = "input" in request_data
+        full_messages: Final = (
+            OpenAIResponsesHandler().get_structured_messages(request_data) or [] if native_request else []
+        )
+        scoped_indices: Final = scoped_structured_message_indices(
+            full_messages,
+            scan_only_tool_results=False,
+            skip_system=effective_skip_system_message_for_guardrail(self),
+            skip_tool=False,
+        )
+        rewriteable: Final = (
+            rewriteable_response_message_indices(
+                request_data.get("input"), request_data.get("instructions"), full_messages
+            )
+            if native_request
+            else frozenset()
+        )
+        native_protected: Final = frozenset(
+            index for index, original_index in enumerate(scoped_indices) if original_index not in rewriteable
+        )
+
+        typed_request: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data)
+        raw_messages: Final = typed_request.get("messages")
         raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
-        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
+        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids) | native_protected
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs
@@ -847,11 +873,30 @@ class HeadroomGuardrail(CustomGuardrail):
             # write-back and restructures it for nothing.
             return inputs
 
+        restored: Final = _restore_compressed_text(compressible, result.messages)
+        if restored is None:
+            self._record_skipped_rewrite(request_data, start_time, end_time)
+            return inputs
         compressed: Final = _restore_protected_messages(
             messages=messages,
-            compressed=_restore_content_shapes(originals=compressible, returned=result.messages),
+            compressed=restored,
             protected_indices=protected_indices,
         )
+
+        if (
+            native_request
+            and patch_response_request_fields(
+                typed_request.get("input"),
+                typed_request.get("instructions"),
+                full_messages,
+                compressed,
+                preserve_text_metadata=True,
+                scoped_indices=scoped_indices,
+            )
+            is None
+        ):
+            self._record_skipped_rewrite(request_data, start_time, end_time)
+            return inputs
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=result.stats,
