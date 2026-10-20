@@ -42,9 +42,11 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and (
+                    "router" in os.path.relpath(file_path, dir_path).lower() or test_dir == "unit"
+                ):
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
@@ -112,6 +114,8 @@ ignored_function_names = [
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_register_continuation_prefill_check",  # Tested through the continuation tests in test_router.py
@@ -132,6 +136,9 @@ ignored_function_names = [
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
+    "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
 ]
 
 

@@ -1,11 +1,11 @@
 "use client";
 
-import { getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
-import { useCallback, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/utils/roles";
+import { useCurrentUser } from "./currentUser/useCurrentUser";
+import { redirectToLogin } from "./redirectToLogin";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
@@ -15,16 +15,14 @@ const useAuthorized = () => {
 
   const decoded = useMemo(() => decodeToken(token), [token]);
   const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
-  const isLoading = isUIConfigLoading;
-  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
-
-  // Helper function to redirect to login while preserving the current URL
-  const redirectToLogin = useCallback(() => {
-    storeReturnUrl();
-    const baseLoginUrl = getUiPageUrl(getLoginUrl(getProxyBaseUrl()));
-    const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
-    window.location.replace(loginUrlWithReturn);
-  }, []);
+  const {
+    data: currentUser,
+    isLoading: isCurrentUserLoading,
+    isError: isCurrentUserError,
+  } = useCurrentUser(isTokenValid ? decoded?.key ?? null : null, decoded?.auth_header_name, !isUIConfigLoading);
+  const serverRole = currentUser?.user_role ?? "";
+  const isLoading = isUIConfigLoading || isCurrentUserLoading;
+  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled && !isCurrentUserError;
 
   // Single useEffect for all redirect logic
   useEffect(() => {
@@ -36,18 +34,18 @@ const useAuthorized = () => {
       }
       redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+  }, [isLoading, isAuthorized, token]);
 
   return {
     isLoading,
     isAuthorized,
     token: isAuthorized ? token : null,
     accessToken: decoded?.key ?? null,
-    userId: decoded?.user_id ?? null,
-    userEmail: decoded?.user_email ?? null,
-    userRole: effectiveSessionRole(decoded?.user_role),
-    userRoleLabel: formatUserRole(decoded?.user_role),
-    isViewOnly: isViewOnlySessionRole(decoded?.user_role),
+    userId: currentUser?.user_id ?? null,
+    userEmail: currentUser?.user_email ?? null,
+    userRole: effectiveSessionRole(serverRole),
+    userRoleLabel: formatUserRole(serverRole),
+    isViewOnly: isViewOnlySessionRole(serverRole),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     loginMethod: decoded?.login_method ?? null,

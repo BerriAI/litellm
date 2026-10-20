@@ -22,6 +22,7 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import reject_malformed_tool_result_text
 from litellm.llms.anthropic.pass_through.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -139,7 +140,7 @@ def request_safeguards_evaluator(
     )
 
 
-async def _prepare_context_managed_request(
+async def prepare_context_managed_request(
     *,
     model: str,
     messages: _AnthropicMessages,
@@ -152,6 +153,8 @@ async def _prepare_context_managed_request(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
+    count_only: bool = False,
+    drop_invalid_edits: bool = False,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
@@ -193,6 +196,8 @@ async def _prepare_context_managed_request(
         user_api_key_auth=user_api_key_auth,
         sub_call_logging_kwargs=sub_call_logging_kwargs,
         parent_trace_id=parent_trace_id,
+        count_only=count_only,
+        drop_invalid_edits=drop_invalid_edits,
     )
 
     if polyfill_result is not None:
@@ -266,16 +271,14 @@ def _spec_has_non_compact_edits(
     return any(isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE for edit in edits)
 
 
-def _context_management_explicitly_dropped(additional_drop_params: list[str] | None) -> bool:
+def context_management_explicitly_dropped(additional_drop_params: object) -> bool:
     """True when the caller opted out of context_management via ``additional_drop_params``.
 
     ``drop_params`` deliberately does NOT gate the polyfill: ``context_management``
     is a LiteLLM-supported param (native on Anthropic, polyfilled elsewhere), and
     ``drop_params`` only exists to drop genuinely unsupported params.
     """
-    if not isinstance(additional_drop_params, list):
-        return False
-    return "context_management" in additional_drop_params
+    return isinstance(additional_drop_params, list) and "context_management" in additional_drop_params
 
 
 def _normalize_spec_edits(
@@ -291,7 +294,7 @@ def _normalize_spec_edits(
     if not context_management_spec:
         return None
 
-    if _context_management_explicitly_dropped(additional_drop_params):
+    if context_management_explicitly_dropped(additional_drop_params):
         return None
 
     from litellm.llms.anthropic.pass_through.context_management.dispatcher import (
@@ -317,20 +320,23 @@ async def _run_polyfill_if_enabled(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
+    count_only: bool = False,
+    drop_invalid_edits: bool = False,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
     Returns ``None`` when the spec is empty or ``context_management`` is
     listed in ``additional_drop_params`` (the explicit opt-out; ``drop_params``
-    does not disable the polyfill because context_management is a supported
+    does not disable a valid spec because context_management is a supported
     param). Raises ``AnthropicContextManagementError`` so the /v1/messages
-    endpoint can emit an Anthropic-format 400. All other exceptions are
+    endpoint can emit an Anthropic-format 400, unless ``drop_invalid_edits``
+    (``drop_params``) drops the invalid spec. All other exceptions are
     best-effort swallowed (matches v0 behavior).
     """
     if not context_management_spec:
         return None
 
-    if _context_management_explicitly_dropped(additional_drop_params):
+    if context_management_explicitly_dropped(additional_drop_params):
         return None
 
     try:
@@ -345,13 +351,17 @@ async def _run_polyfill_if_enabled(
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=parent_trace_id,
+            count_only=count_only,
         )
     except AnthropicContextManagementError:
+        if drop_invalid_edits:
+            return None
         # Surface validation errors so the endpoint can emit an Anthropic-format
         # 400. Other exception types fall into the best-effort branch below.
         raise
     except Exception as e:
-        verbose_logger.exception("context_management polyfill: skipping edits due to error: %s", e)
+        log_failure: Final = verbose_logger.debug if count_only else verbose_logger.exception
+        log_failure("context_management polyfill: skipping edits due to error: %s", e)
         # Best-effort swallow is only safe for compact-only specs, where the
         # caller's compaction-block-slicing safety net produces a correct
         # (if degraded) result. When the spec also requested non-compact
@@ -492,7 +502,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary, responses_api_bridge_check
+        from litellm.responses.bridge_check import (
+            chat_target_accepts_reasoning_summary,
+            responses_api_bridge_check,
+            str_keyed_mapping,
+        )
 
         if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
             return _ChatTargetReasoning(effort=effort, summary=requested_summary)
@@ -501,6 +515,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
+        client_summary: Final = thinking.get("summary")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
@@ -508,8 +523,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
             ),
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=effort if client_summary is None else {"effort": effort, "summary": client_summary},
             api_base=resolved_api_base,
+            deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
@@ -709,14 +725,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
+        drop_invalid_edits: Final = litellm.drop_params is True or (
+            "drop_params" in kwargs and kwargs["drop_params"] is True
+        )
         litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        reject_malformed_tool_result_text(messages, model, request_kwargs)
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
-        polyfill_result: Final = await _prepare_context_managed_request(
+        polyfill_result: Final = await prepare_context_managed_request(
             model=model,
             messages=messages,
             tools=tools,
@@ -728,6 +748,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=sub_call_trace_id,
+            drop_invalid_edits=drop_invalid_edits,
         )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
@@ -834,6 +855,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
+        reject_malformed_tool_result_text(messages, model, _REQUEST_KWARGS.validate_python(kwargs))
+
         # Run the context_management polyfill on the sync path too so that
         # ``litellm.messages.create()`` callers don't silently lose edits like
         # ``clear_tool_uses_20250919``. The dispatcher is async (so the
@@ -841,6 +864,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
+        drop_invalid_edits: Final = litellm.drop_params is True or (
+            "drop_params" in kwargs and kwargs["drop_params"] is True
+        )
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx
@@ -866,7 +892,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
             request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
             polyfill_result = run_async_function(
-                _prepare_context_managed_request,
+                prepare_context_managed_request,
                 model=model,
                 messages=messages,
                 tools=tools,
@@ -878,6 +904,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 user_api_key_auth=user_api_key_auth,
                 sub_call_logging_kwargs=proxy_sub_call_logging_kwargs(request_kwargs),
                 parent_trace_id=proxy_sub_call_trace_id(request_kwargs),
+                drop_invalid_edits=drop_invalid_edits,
             )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages

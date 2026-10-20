@@ -38,6 +38,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
 from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
@@ -2022,7 +2023,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         ]
     )
 
-    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+    def inject_alias_into_kwargs(
+        deployment: dict, kwargs: dict, function_name: str | None = None, splits_stream_timeout: bool = False
+    ) -> None:
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
         # calling the helper through async_function_with_fallbacks).
@@ -9739,6 +9742,96 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
     assert kwargs["tool_choice"] == "none"
 
 
+@pytest.mark.parametrize(
+    "deployment_params, router_defaults, request_params, expected_tools",
+    [
+        ({"drop_params": True}, {}, {}, [{"type": "web_search"}]),
+        ({}, {"drop_params": True}, {}, [{"type": "web_search"}]),
+        ({}, {}, {"additional_drop_params": ["tools"]}, [{"type": "web_search"}]),
+        ({"drop_params": True}, {}, {"drop_params": False}, 5),
+        ({}, {}, {}, 5),
+    ],
+    ids=[
+        "deployment_drop_params",
+        "router_default_drop_params",
+        "request_drops_tools",
+        "request_overrides_deployment_drop",
+        "no_drop_policy",
+    ],
+)
+def test_update_kwargs_with_deployment_keeps_deployment_tools_when_malformed_request_tools_drop(
+    deployment_params: dict[str, object],
+    router_defaults: dict[str, object],
+    request_params: dict[str, object],
+    expected_tools: object,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    **deployment_params,
+                },
+            },
+        ],
+        default_litellm_params={**router_defaults},
+    )
+    kwargs: Final[dict[str, object]] = {"metadata": {}, "tools": 5, **request_params}
+    router._update_kwargs_with_deployment(
+        deployment=router.get_deployment_by_model_group_name(model_group_name="o3-deep-research"), kwargs=kwargs
+    )
+
+    assert kwargs["tools"] == expected_tools
+
+
+_NAMED_REQUEST_TOOL_CHOICE: Final = {"type": "function", "function": {"name": "lookup_order"}}
+
+
+@pytest.mark.parametrize(
+    "deployment_params, expected_tool_fields",
+    [
+        (
+            {"drop_params": True, "tool_choice": "required"},
+            {"tools": [{"type": "web_search"}], "tool_choice": "required"},
+        ),
+        ({"drop_params": True}, {"tools": [{"type": "web_search"}]}),
+        ({}, {"tools": 5, "tool_choice": _NAMED_REQUEST_TOOL_CHOICE, "parallel_tool_calls": False}),
+    ],
+    ids=["deployment_tool_choice_applies", "no_deployment_tool_choice", "no_drop_policy"],
+)
+def test_update_kwargs_with_deployment_drops_request_tool_settings_with_malformed_request_tools(
+    deployment_params: dict[str, object], expected_tool_fields: dict[str, object]
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    **deployment_params,
+                },
+            },
+        ],
+    )
+    kwargs: Final[dict[str, object]] = {
+        "metadata": {},
+        "tools": 5,
+        "tool_choice": _NAMED_REQUEST_TOOL_CHOICE,
+        "parallel_tool_calls": False,
+    }
+    router._update_kwargs_with_deployment(
+        deployment=router.get_deployment_by_model_group_name(model_group_name="o3-deep-research"), kwargs=kwargs
+    )
+
+    tool_fields: Final = ("tools", "tool_choice", "parallel_tool_calls")
+    assert {name: kwargs[name] for name in tool_fields if name in kwargs} == expected_tool_fields
+
+
 def test_credential_name_injected_as_tag():
     """
     Test that litellm_credential_name from deployment litellm_params
@@ -9883,6 +9976,94 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     assert model_info["id"] == "custom-pricing-id"
     assert model_info["input_cost_per_token"] == 0.0003
     assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_clears_pod_routing_on_non_discovery_fallback() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    discovery_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    fallback_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    router: Final = litellm.Router(model_list=[discovery_deployment])
+    kwargs: Final = {"metadata": {}}
+
+    router._update_kwargs_with_deployment(deployment=discovery_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+
+    router._update_kwargs_with_deployment(deployment=fallback_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+
+
+def test_update_kwargs_with_deployment_synchronizes_existing_litellm_metadata_pod_routing() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    spoofed_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.9",
+        "pod_count": 3,
+        "selection": "round_robin",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: spoofed_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"] is not original_litellm_metadata
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == spoofed_record
+
+
+def test_update_kwargs_with_non_discovery_deployment_clears_other_pod_routing_bucket() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    previous_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: previous_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == previous_record
 
 
 def test_combine_fallback_usage():
@@ -16004,6 +16185,7 @@ class _AnthropicMessagesFakeByteStream:
         self._chunks = list(chunks)
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
+        self.closed_as_superseded = False
 
     def __aiter__(self):
         return self
@@ -16014,6 +16196,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
 
@@ -17257,6 +17440,30 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
+    """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
+    logging must be queued before the retry starts producing its own: the router closes the dropped stream
+    before it asks the group for another."""
+    router = _anthropic_messages_retry_router(num_retries=1)
+    superseded = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+    superseded_closed_when_retry_opened: list[bool] = []
+
+    def retry_stream():
+        superseded_closed_when_retry_opened.append(superseded.closed_as_superseded)
+        return _anthropic_messages_retried_stream()
+
+    provider = _AnthropicMessagesScriptedProvider(lambda: superseded, retry_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert superseded_closed_when_retry_opened == [True]
+
+
+@pytest.mark.asyncio
 async def test_a_ptu_share_holders_messages_stream_dropped_before_content_is_retried_on_its_shared_group(monkeypatch):
     """The same-group retry has to look the group's health up as the calling team; looked up with no
     team a shared PTU group looks empty, so the share holder's dropped stream is never retried."""
@@ -18387,7 +18594,7 @@ async def test_aanthropic_messages_recover_stream_error_flushes_buffered_frames_
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt") as mock_attempt:
         recovery = router._aanthropic_messages_recover_stream_error(
-            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper()
+            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         with pytest.raises(BedrockError) as exc_info:
             await drain(recovery)
@@ -18408,7 +18615,7 @@ async def test_aanthropic_messages_recover_stream_error_hands_converted_raise_to
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt", new=fake_attempt):
         recovery = router._aanthropic_messages_recover_stream_error(
-            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper()
+            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         collected = [chunk async for chunk in recovery]
     assert collected == [b"fallback"]
@@ -18464,6 +18671,25 @@ async def test_anthropic_messages_post_first_chunk_error_skips_fallback():
 
     assert collected == [content, error_chunk]
     mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_the_client_closes_at_a_forwarded_error_is_not_closed_as_superseded():
+    """An error frame forwarded to the client ends that request, and the SDK hangs up on it. No retry took the
+    request over, so the source must not be closed as a superseded attempt, which would log it as a failure and
+    drop the usage the provider billed for it."""
+    router = _anthropic_messages_make_router()
+    error_chunk = _anthropic_messages_overloaded_error_chunk()
+    source = _AnthropicMessagesFakeByteStream([_anthropic_messages_content_chunk("partial answer"), error_chunk])
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
+    async for chunk in wrapped:
+        if chunk == error_chunk:
+            break
+    await wrapped.aclose()
+
+    assert source.closed is True
+    assert source.closed_as_superseded is False
 
 
 @pytest.mark.asyncio
@@ -23775,6 +24001,105 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
     # so the router can find all sibling deployments via team_id filtering
     result = router.map_team_model(team_model_name="team-model", team_id="team-1")
     assert result == "team-model", f"Expected public name 'team-model', got {result}"
+
+
+def _team_deployment(
+    public_name: str,
+    litellm_model: str,
+    team_id: str = "team-a",
+    deployment_id: str | None = None,
+) -> DeploymentTypedDict:
+    return {
+        "model_name": f"internal-{team_id}-{public_name}",
+        "litellm_params": {"model": litellm_model},
+        "model_info": {
+            "id": deployment_id or f"{team_id}-{public_name}",
+            "team_id": team_id,
+            "team_public_model_name": public_name,
+        },
+    }
+
+
+_LANGGRAPH_AGENT: Final[DeploymentTypedDict] = _team_deployment("a-langgraph-agent", "langgraph/repro-agent")
+_BEDROCK_CLAUDE: Final[DeploymentTypedDict] = _team_deployment(
+    "a-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6"
+)
+_OPENAI_GPT: Final[DeploymentTypedDict] = _team_deployment("a-gpt", "openai/gpt-4o-mini")
+
+
+@pytest.mark.parametrize(
+    "team_models, custom_llm_provider, expected",
+    [
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], "bedrock", "a-bedrock-claude", id="match-is-second"),
+        pytest.param([_BEDROCK_CLAUDE, _LANGGRAPH_AGENT], "bedrock", "a-bedrock-claude", id="match-is-first"),
+        pytest.param([_LANGGRAPH_AGENT, _OPENAI_GPT], "bedrock", None, id="no-match-returns-none"),
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], None, "a-langgraph-agent", id="no-provider-keeps-first"),
+        pytest.param(
+            [_team_deployment("b-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6", team_id="team-b")],
+            "bedrock",
+            None,
+            id="other-teams-match-ignored",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-langgraph-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-bedrock-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-one"),
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-two"),
+            ],
+            "bedrock",
+            "shared",
+            id="same-provider-public-name-keeps-load-balancing",
+        ),
+    ],
+)
+def test_map_team_model_without_model_picks_deployment_serving_the_requested_provider(
+    team_models: list[DeploymentTypedDict], custom_llm_provider: str | None, expected: str | None
+) -> None:
+    """A model-less vector store call routed through the team's first deployment, so a langgraph
+    team model made a Bedrock vector store search fail with "not supported for langgraph"."""
+    router = Router(model_list=team_models)
+
+    result = router.map_team_model(None, "team-a", custom_llm_provider=custom_llm_provider)
+
+    assert result == expected, (
+        f"team models {[m['litellm_params']['model'] for m in team_models]}, provider {custom_llm_provider}"
+    )
+
+
+def test_map_team_model_with_explicit_model_ignores_requested_provider() -> None:
+    router = Router(model_list=[_LANGGRAPH_AGENT, _BEDROCK_CLAUDE])
+
+    result = router.map_team_model("a-langgraph-agent", "team-a", custom_llm_provider="bedrock")
+
+    assert result == "a-langgraph-agent", (
+        "an explicit model is the caller's choice and must not be re-picked by provider"
+    )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestPreCallChecksOptimization:

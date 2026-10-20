@@ -1196,6 +1196,9 @@ def _map_sagemaker_exception(
             )
 
 
+_VERTEX_403_STATUS_CODE_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])403(?![0-9A-Za-z])")
+
+
 def _map_vertex_exception(
     *,
     model: str,
@@ -1206,6 +1209,8 @@ def _map_vertex_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    status_code: Final[object] = getattr(original_exception, "status_code", None)
+    body_code: Final[int | None] = _get_body_error_code(error_str)
     if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
         raise BadRequestError(
             message=f"litellm.BadRequestError: {custom_llm_provider}Exception - {error_str}",
@@ -1252,7 +1257,11 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif "403" in error_str:
+    elif (
+        (not isinstance(status_code, int) or status_code in (403, 500))
+        and body_code in (None, 403)
+        and _VERTEX_403_STATUS_CODE_PATTERN.search(error_str)
+    ):
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,
@@ -1306,7 +1315,7 @@ def _map_vertex_exception(
     elif (
         isinstance(getattr(original_exception, "status_code", None), int)
         and 500 <= original_exception.status_code < 600
-        and _get_body_error_code(error_str) == 429
+        and body_code == 429
     ):
         # upstream gateway wraps a 429 inside a 5xx envelope
         # e.g. HTTP 500/503 with {"error":{"code":429,...}}.
@@ -2413,6 +2422,35 @@ def _map_exception_by_status(
             )
 
 
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+_URL_SCHEME: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*")
+_HOST_WITH_OPTIONAL_PORT: Final = re.compile(
+    r"(?:(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+|localhost|\[[0-9A-Fa-f:.]+\])(?::\d+)?"
+)
+
+
+def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
+    params: Final = as_str_mapping(litellm_params) or _NO_LITELLM_PARAMS
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    deployment_api_base: Final = None if metadata is None else metadata.get("api_base")
+    if not isinstance(deployment_api_base, str) or not deployment_api_base:
+        return params
+    return MappingProxyType({**params, "api_base": deployment_api_base})
+
+
+def _api_base_without_credentials(api_base: str) -> str:
+    scheme, separator, _ = api_base.partition("://")
+    scheme_prefix: Final = scheme + separator if separator and _URL_SCHEME.fullmatch(scheme) else ""
+    authority_and_rest: Final = api_base[len(scheme_prefix) :]
+    authority: Final = re.split(r"[/?#]", authority_and_rest, maxsplit=1)[0]
+    after_authority: Final = authority_and_rest[len(authority) :]
+    host: Final = authority.rpartition("@")[2]
+    if "@" in after_authority and _HOST_WITH_OPTIONAL_PORT.fullmatch(host) is None:
+        return ""
+    path: Final = re.split(r"[?#]", after_authority, maxsplit=1)[0]
+    return f"{scheme_prefix}{host}{path}"
+
+
 def _is_guardrail_block(original_exception: Exception) -> bool:
     from litellm.integrations.custom_guardrail import is_guardrail_intervention
 
@@ -2483,8 +2521,9 @@ def exception_type(
                 if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
                     exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-                if _api_base:
-                    extra_information += f"\nAPI Base: `{_api_base}`"
+                shown_api_base: Final = _api_base_without_credentials(_api_base) if _api_base else ""
+                if shown_api_base:
+                    extra_information += f"\nAPI Base: `{shown_api_base}`"
                 if messages and len(messages) > 0 and litellm.redact_messages_in_exceptions is False:
                     extra_information += f"\nMessages: `{messages}`"
 
@@ -2512,7 +2551,8 @@ def exception_type(
             ################################################################################
 
             if (
-                "Request Timeout Error" in error_str
+                isinstance(original_exception, httpx.TimeoutException)
+                or "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
                 or "The read operation timed out" in error_str
@@ -2520,7 +2560,7 @@ def exception_type(
                 exception_mapping_worked = True
 
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str or type(mappable_exception).__name__}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,

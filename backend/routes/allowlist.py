@@ -165,6 +165,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
 BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/admin",
+        "/metrics",
         "/swagger",  # API documentation static assets belong to the backend
         "/mcp",  # lazily-mounted MCP sub-app serves on the backend component
     }

@@ -81,6 +81,7 @@ class BaseContainerConfig(ABC):
         self,
         headers: dict,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
         return {}
 

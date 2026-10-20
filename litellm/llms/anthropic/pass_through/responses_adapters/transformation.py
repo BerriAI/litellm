@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -371,10 +372,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
                             tool_breakpoint, covered_image_parts, later_image_parts = (
-                                self._tool_result_images_by_breakpoint(
-                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
-                                )
+                                self._tool_result_images_by_breakpoint(tool_result_block)
                             )
                             document_candidates = (
                                 tuple(
@@ -391,10 +391,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
-                                ]
-                                output_text = "\n".join(parts)
+                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
@@ -544,6 +541,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        auto_summary_level: str = "detailed",
     ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -576,7 +574,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if summary:
             result["summary"] = summary
         elif auto_summary:
-            result["summary"] = "detailed"
+            result["summary"] = auto_summary_level
         return result
 
     @classmethod
@@ -591,6 +589,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        auto_summary_level: str = "detailed",
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -599,7 +598,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
-        Responses API rejects ``include``.
+        Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
+        opt-in auto summary injects when the client sent none.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -670,6 +670,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
+                auto_summary_level=auto_summary_level,
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning

@@ -6,12 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -49,6 +51,7 @@ from litellm.types.utils import (
     Function,
     LLMResponseTypes,
     StandardCallbackDynamicParams,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
 )
 
@@ -105,6 +108,14 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+
+class _CacheHitView(TypedDict, total=False):
+    cache_hit: ReadOnly[object]
+    saved_cache_cost: ReadOnly[object]
+
+
+_CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -2411,9 +2422,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = cast(  # cast-ok: payload metadata follows the standard logging contract
+                StandardLoggingMetadata, standard_logging_payload["metadata"]
+            )
             for key, value in metadata.items():
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"metadata.{key}",
+                    value=safe_dumps(value) if key == KUBERNETES_POD_ROUTING_KEY and value is not None else value,
+                )
             decision: Final = metadata.get("routing_decision")
             span.set_attributes(routing_decision_attributes(decision))
 
@@ -2434,6 +2451,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 litellm_params=litellm_params,
             )
             # Cost breakdown tracking
+            cache_view: Final = _CACHE_HIT_VIEW.validate_python(standard_logging_payload)
+            cache_hit: Final = cache_view.get("cache_hit") is True
             cost_breakdown: Final[CostBreakdown | None] = standard_logging_payload.get("cost_breakdown")
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
@@ -2443,6 +2462,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
+            self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=cache_hit)
+            if cache_hit:
+                saved_cache_cost: Final = cache_view.get("saved_cache_cost")
+                if isinstance(saved_cache_cost, (int, float)):
+                    self.safe_set_attribute(span=span, key=LiteLLM.SAVED_CACHE_COST, value=saved_cache_cost)
             #############################################
             ########## LLM Request Attributes ###########
             #############################################

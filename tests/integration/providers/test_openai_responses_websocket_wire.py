@@ -22,7 +22,7 @@ from integration._support.responses_ws_peer import (
 from integration._support.tls import write_self_signed_cert
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 PROXY_OPENAI_KEY: Final = "sk-proxy-environment-openai-key"
 PROXY_AZURE_KEY: Final = "proxy-environment-azure-key"
 
