@@ -360,6 +360,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15193,7 +15194,7 @@ def _count_context_management(
     return CountContextManagement(
         spec=context_management,
         drop_invalid_edits=litellm.drop_params is True
-        or any(params.get("drop_params") is True for params in sent_params),
+        or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
 
 
