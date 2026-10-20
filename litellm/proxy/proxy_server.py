@@ -146,7 +146,6 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -308,10 +307,8 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
 )
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
@@ -4236,73 +4233,61 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     return tuple(float(current_value) for current_value in results or ())
 
 
-def update_cache_read_keys(
-    user_id: str | None,
-    end_user_id: str | None,
-    tags: Sequence[object] | None,
-    response_cost: float | None,
-) -> tuple[str, ...]:
-    if response_cost is None:
-        return ()
-    user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
-    end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + tag_keys
+_CachedSpendObjectT = TypeVar(
+    "_CachedSpendObjectT", LiteLLM_UserTable, LiteLLM_EndUserTable, LiteLLM_TeamTableCachedObj, LiteLLM_TagTable
+)
 
 
-_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
-
-
-async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
-    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
-    round trip as the post-call spend counter read instead of its own."""
-    request: Final = active_request_redis_batches()
-    target: Final = user_api_key_cache if cache is None else cache
-    if request is None or target.redis_cache is None or not keys:
+def _add_spend_to_locally_cached_object(
+    cache: UserApiKeyCache, key: str, model_type: type[_CachedSpendObjectT], response_cost: float
+) -> None:
+    current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
+    if current is None:
         return
-    with service_target(AUTH_OBJECTS_TARGET):
-        request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
-            keys, request.batch(target.redis_cache)
-        )
+    cache.set_cache(
+        key=key,
+        value=current.model_copy(update={"spend": (current.spend or 0.0) + response_cost}),
+        local_only=True,
+        model_type=model_type,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
-async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
-    request: Final = active_request_redis_batches()
-    if request is None:
+async def _add_spend_to_shared_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> float | None:
+    if cache.redis_cache is None:
         return None
-    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
-    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
-        return None
-    values: Final = await cache.async_resolve_batch_get(armed)
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
-
-
-async def _read_update_cache_values(
-    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
-) -> Mapping[str, object]:
-    """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
-    exactly as a failed per-object GET left that object untouched."""
-    if not keys:
-        return MappingProxyType({})
-    target: Final = user_api_key_cache if cache is None else cache
     try:
-        armed: Final = await _take_armed_update_cache_read(keys, target)
-        if armed is not None:
-            return armed
-        values: Final = await target.async_batch_get_cache(
-            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
+        return await cache.redis_cache.async_increment_if_present(
+            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
         )
     except Exception as e:
         verbose_proxy_logger.warning(
-            "Spend tracking - failed to read cached spend objects. Budget enforcement may use stale spend values. "
-            "keys=%s - %s",
-            keys,
+            "Spend tracking - failed to add spend to the global proxy spend in Redis. "
+            "Budget enforcement may use stale spend values. response_cost=%s - %s",
+            response_cost,
             str(e),
         )
-        return MappingProxyType({})
-    if values is None:
-        return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
+        return None
+
+
+async def _add_spend_to_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> None:
+    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    if not isinstance(local_total, (int, float)):
+        return
+    if shared_total is not None and local_total != local_before and shared_total < local_total:
+        return
+    cache.set_cache(
+        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=local_total + response_cost if shared_total is None else shared_total,
+        local_only=True,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
 async def update_cache(
@@ -4313,6 +4298,7 @@ async def update_cache(
     response_cost: float | None,
     parent_otel_span: Span | None,
     tags: list[str] | None = None,
+    cache: UserApiKeyCache | None = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -4320,14 +4306,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: Final[list[tuple[str, object]]] = []
-    with service_target(AUTH_OBJECTS_TARGET):
-        cached_values: Final = await _read_update_cache_values(
-            keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
-            ),
-            parent_otel_span=parent_otel_span,
-        )
+    target: Final = user_api_key_cache if cache is None else cache
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4337,7 +4316,7 @@ async def update_cache(
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        existing_spend_obj = await target.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -4379,184 +4358,17 @@ async def update_cache(
             )
             # set cooldown on alert
 
-    ### UPDATE USER SPEND ###
-    async def _update_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        if response_cost is None:
-            return
-        user_ids: Final = [user_id]
+    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> None:
         try:
-            for _id in user_ids:
-                # Fetch the existing cost for the given user
-                if _id is None:
-                    continue
-                cached_user = cached_values.get(_id)
-                if cached_user is None:
-                    # do nothing if there is no cache value
-                    return
-                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
-                if existing_spend_obj is None:
-                    return
-                verbose_proxy_logger.debug(
-                    "_update_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-                )
-
-                existing_spend = existing_spend_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        _id,
-                        CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
-                    )
-                )
-            ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if not isinstance(global_proxy_spend, (int, float)):
-                # do nothing if not in cache
-                return
-            elif response_cost is not None:
-                increment: Final = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
+            _add_spend_to_locally_cached_object(target, key, model_type, cost)
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Spend tracking - failed to update user spend in cache. "
+                "Spend tracking - failed to update %s spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "user_id=%s, response_cost=%s - %s\n%s",
-                user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE END-USER SPEND ###
-    async def _update_end_user_cache():
-        if end_user_id is None or response_cost is None:
-            return
-
-        _id: Final = end_user_cache_key(end_user_id)
-        try:
-            # Fetch the existing cost for the given user
-            cached_end_user: Final = cached_values.get(_id)
-            if cached_end_user is None:
-                # if user does not exist in LiteLLM_UserTable, create a new user
-                # do nothing if end-user not in api key cache
-                return
-            existing_spend_obj: Final = CacheCodec.deserialize(cached_end_user, LiteLLM_EndUserTable)
-            if existing_spend_obj is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_end_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-            )
-
-            existing_spend: Final = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_EndUserTable),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update end user spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "end_user_id=%s, response_cost=%s - %s\n%s",
-                end_user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TEAM SPEND ###
-    def _update_team_cache():
-        if team_id is None or response_cost is None:
-            return
-
-        _id: Final = f"team_id:{team_id}"
-        try:
-            current_team: Final = CacheCodec.deserialize(
-                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
-            )
-            if current_team is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
-            )
-            user_api_key_cache.set_cache(
-                key=_id,
-                value=CacheCodec.serialize(
-                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
-                    model_type=LiteLLM_TeamTableCachedObj,
-                ),
-                local_only=True,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update team spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "team_id=%s, response_cost=%s - %s\n%s",
-                team_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TAG SPEND ###
-    async def _update_tag_cache():
-        """
-        Update the tag cache with the new spend.
-        """
-        if tags is None or response_cost is None:
-            return
-
-        try:
-            for tag_name in tags:
-                if not tag_name or not isinstance(tag_name, str):
-                    continue
-
-                cache_key = tag_cache_key(tag_name)
-                # Fetch the existing tag object from cache
-                cached_tag = cached_values.get(cache_key)
-                if cached_tag is None:
-                    # do nothing if tag not in api key cache
-                    continue
-
-                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
-                if existing_tag_obj is None:
-                    continue
-
-                verbose_proxy_logger.debug(
-                    "_update_tag_cache: existing spend for tag=%s: %s; response_cost: %s",
-                    tag_name,
-                    existing_tag_obj,
-                    response_cost,
-                )
-
-                existing_spend = existing_tag_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_tag_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        cache_key,
-                        CacheCodec.serialize(existing_tag_obj, model_type=LiteLLM_TagTable),
-                    )
-                )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update tag spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "tags=%s, response_cost=%s - %s\n%s",
-                tags,
-                response_cost,
+                "key=%s, response_cost=%s - %s\n%s",
+                model_type.__name__,
+                key,
+                cost,
                 str(e),
                 traceback.format_exc(),
             )
@@ -4564,42 +4376,23 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         if token is not None and response_cost is not None:
             await _update_key_cache(token=token, response_cost=response_cost)
+    if response_cost is None:
+        return
 
-        if user_id is not None:
-            await _update_user_cache()
+    if user_id is not None:
+        _add_spend(user_id, LiteLLM_UserTable, response_cost)
+    if end_user_id is not None:
+        _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)
+    if team_id is not None:
+        _add_spend(f"team_id:{team_id}", LiteLLM_TeamTableCachedObj, response_cost)
+    for tag_name in tags or ():
+        if tag_name and isinstance(tag_name, str):
+            _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
 
-        if end_user_id is not None:
-            await _update_end_user_cache()
-
-        if team_id is not None:
-            _update_team_cache()
-
-        if tags is not None:
-            await _update_tag_cache()
-
-    global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-    local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
-    shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
-
-    if local_object_updates:
-        with service_target(AUTH_OBJECTS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(local_object_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
-            )
-    if shared_scalar_updates:
-        with service_target(SPEND_COUNTERS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(shared_scalar_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                )
-            )
+    if litellm.max_budget <= 0:
+        return
+    with service_target(SPEND_COUNTERS_TARGET):
+        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
 
 
 def run_ollama_serve():
