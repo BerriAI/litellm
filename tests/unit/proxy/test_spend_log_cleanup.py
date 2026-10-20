@@ -20,6 +20,9 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SizeCleanupState,
+    StorageProbe,
+    advance_size_state,
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
     TableCleanupResult,
@@ -88,10 +91,10 @@ def test_spend_log_cleanup_cron_scheduling():
     assert trigger_weekly is not None
 
     # Invalid cron expression should raise ValueError
-    with pytest.raises(ValueError, match='Wrong number of fields; got'):
+    with pytest.raises(ValueError, match="Wrong number of fields; got"):
         CronTrigger.from_crontab("invalid cron")
 
-    with pytest.raises(ValueError, match='is higher than the maximum value'):
+    with pytest.raises(ValueError, match="is higher than the maximum value"):
         CronTrigger.from_crontab("60 25 * * *")  # Invalid minute and hour
 
 
@@ -151,15 +154,11 @@ def test_spend_log_cleanup_cron_scheduler_integration():
         # No cron, so it should fall back to interval
     }
 
-    cleanup_cron_fallback = general_settings_interval.get(
-        "maximum_spend_logs_cleanup_cron"
-    )
+    cleanup_cron_fallback = general_settings_interval.get("maximum_spend_logs_cleanup_cron")
     assert cleanup_cron_fallback is None  # No cron configured
 
     # Simulate interval-based scheduling fallback
-    retention_interval = general_settings_interval.get(
-        "maximum_spend_logs_retention_interval", "1d"
-    )
+    retention_interval = general_settings_interval.get("maximum_spend_logs_retention_interval", "1d")
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
     interval_seconds = duration_in_seconds(retention_interval)
@@ -187,27 +186,19 @@ async def test_should_delete_spend_logs():
     assert cleaner._should_delete_spend_logs() is False
 
     # Test case 2: Valid seconds string
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "3600s"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "3600s"})
     assert cleaner._should_delete_spend_logs() is True
 
     # Test case 3: Valid days string
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "30d"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "30d"})
     assert cleaner._should_delete_spend_logs() is True
 
     # Test case 4: Valid hours string
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "24h"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "24h"})
     assert cleaner._should_delete_spend_logs() is True
 
     # Test case 5: Invalid format
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "invalid"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "invalid"})
     assert cleaner._should_delete_spend_logs() is False
 
 
@@ -338,9 +329,7 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
     # Verify the cutoff date is correct
     cutoff_date = mock_db.execute_raw.call_args[0][1]
     expected_cutoff = datetime.now(timezone.utc) - timedelta(seconds=86400)
-    assert (
-        abs((cutoff_date - expected_cutoff).total_seconds()) < 1
-    )  # Allow 1 second difference for test execution time
+    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 1  # Allow 1 second difference for test execution time
 
 
 @pytest.mark.asyncio
@@ -360,9 +349,7 @@ async def test_cleanup_drops_partitions_when_enabled_and_partitioned():
     partition_manager = MagicMock()
     partition_manager.is_partitioned = AsyncMock(return_value=True)
     partition_manager.ensure_partitions = AsyncMock(return_value=["p1"])
-    partition_manager.drop_partitions_older_than = AsyncMock(
-        return_value=["LiteLLM_SpendLogs_p20260601"]
-    )
+    partition_manager.drop_partitions_older_than = AsyncMock(return_value=["LiteLLM_SpendLogs_p20260601"])
 
     cleaner = SpendLogCleanup(
         general_settings={
@@ -500,9 +487,7 @@ async def test_integer_retention_treated_as_days():
     An integer value for maximum_spend_logs_retention_period should be treated
     as days (e.g., 3 → '3d' → 259200 seconds).
     """
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": 3}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": 3})
     result = cleaner._should_delete_spend_logs()
     assert result is True
     assert cleaner.retention_seconds == 3 * 86400  # 3 days in seconds
@@ -519,13 +504,11 @@ def test_string_retention_still_works():
         ("2w", 2 * 604800),
     ]
     for setting, expected_seconds in cases:
-        cleaner = SpendLogCleanup(
-            general_settings={"maximum_spend_logs_retention_period": setting}
-        )
+        cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": setting})
         assert cleaner._should_delete_spend_logs() is True, f"Failed for {setting}"
-        assert (
-            cleaner.retention_seconds == expected_seconds
-        ), f"Expected {expected_seconds} for {setting}, got {cleaner.retention_seconds}"
+        assert cleaner.retention_seconds == expected_seconds, (
+            f"Expected {expected_seconds} for {setting}, got {cleaner.retention_seconds}"
+        )
 
 
 @pytest.mark.asyncio
@@ -539,9 +522,7 @@ async def test_delete_old_logs_aborts_on_non_int_execute_raw_return():
     mock_db.execute_raw = AsyncMock(return_value=None)
     mock_prisma_client.db = mock_db
 
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, _far_deadline())
@@ -560,9 +541,7 @@ async def test_delete_old_logs_continues_on_valid_int_return():
     mock_db.execute_raw = AsyncMock(side_effect=[500, 300, 0])
     mock_prisma_client.db = mock_db
 
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, _far_deadline())
@@ -609,9 +588,7 @@ async def test_delete_old_tool_index_rows_deletes_on_composite_key():
     mock_db.execute_raw = AsyncMock(side_effect=[5, 0])
     mock_prisma_client.db = mock_db
 
-    cleaner = SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_tool_index_rows(mock_prisma_client, cutoff_date, _far_deadline())
@@ -631,9 +608,7 @@ async def test_delete_old_logs_continues_after_single_batch_failure(monkeypatch)
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     # Zero out the failure backoff so the test doesn't take ~0.5s of real sleep.
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0
-    )
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0)
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
@@ -641,14 +616,10 @@ async def test_delete_old_logs_continues_after_single_batch_failure(monkeypatch)
     _wire_tx(mock_db)
     # batch 1 succeeds, batch 2 raises (one-off DB timeout), batches 3-4 succeed,
     # batch 5 returns 0 → loop exits naturally.
-    mock_db.execute_raw = AsyncMock(
-        side_effect=[100, TimeoutError("simulated DB timeout"), 200, 50, 0]
-    )
+    mock_db.execute_raw = AsyncMock(side_effect=[100, TimeoutError("simulated DB timeout"), 200, 50, 0])
     mock_prisma_client.db = mock_db
 
-    cleaner = cleanup_module.SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, _far_deadline())
@@ -665,26 +636,18 @@ async def test_delete_old_logs_aborts_after_consecutive_failures(monkeypatch):
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     # Lower the threshold so the test is fast and deterministic.
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3
-    )
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0
-    )
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0)
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
     mock_db = MagicMock()
     _wire_tx(mock_db)
     # Every batch raises — must abort after exactly 3 attempts, not loop forever.
-    mock_db.execute_raw = AsyncMock(
-        side_effect=ConnectionError("simulated persistent DB outage")
-    )
+    mock_db.execute_raw = AsyncMock(side_effect=ConnectionError("simulated persistent DB outage"))
     mock_prisma_client.db = mock_db
 
-    cleaner = cleanup_module.SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, _far_deadline())
@@ -699,12 +662,8 @@ async def test_delete_old_logs_resets_consecutive_failures_on_success(monkeypatc
     intermittent timeouts don't trip the abort threshold."""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3
-    )
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0
-    )
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0)
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
@@ -725,9 +684,7 @@ async def test_delete_old_logs_resets_consecutive_failures_on_success(monkeypatc
     )
     mock_prisma_client.db = mock_db
 
-    cleaner = cleanup_module.SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, _far_deadline())
@@ -748,9 +705,7 @@ async def test_cleanup_uses_logger_exception_for_full_traceback(monkeypatch):
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
     # Force the outer try/except to fire by making _should_delete_spend_logs raise.
-    cleaner = cleanup_module.SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     cleaner.pod_lock_manager = None
 
     def boom():
@@ -775,12 +730,8 @@ async def test_cleanup_releases_lock_after_persistent_batch_failures(monkeypatch
     must still be released so the next scheduled run isn't permanently blocked."""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 2
-    )
-    monkeypatch.setattr(
-        cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0
-    )
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 2)
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0)
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
@@ -794,9 +745,7 @@ async def test_cleanup_releases_lock_after_persistent_batch_failures(monkeypatch
     mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
     mock_pod_lock_manager.release_lock = AsyncMock()
 
-    cleaner = cleanup_module.SpendLogCleanup(
-        general_settings={"maximum_spend_logs_retention_period": "7d"}
-    )
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     cleaner.pod_lock_manager = mock_pod_lock_manager
 
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
@@ -1081,9 +1030,7 @@ async def test_each_batch_carries_a_statement_and_lock_timeout():
         }
     )
 
-    await cleaner._delete_old_logs(
-        mock_prisma_client, datetime.now(timezone.utc) - timedelta(days=7), _far_deadline()
-    )
+    await cleaner._delete_old_logs(mock_prisma_client, datetime.now(timezone.utc) - timedelta(days=7), _far_deadline())
 
     assert "SET LOCAL statement_timeout = 12000" in recorded
     assert "SET LOCAL lock_timeout = 12000" in recorded
@@ -1219,9 +1166,7 @@ async def test_remaining_rows_probe_is_capped_so_it_cannot_scan_the_table():
 
     cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
 
-    await cleaner._delete_old_logs(
-        mock_prisma_client, datetime.now(timezone.utc) - timedelta(days=7), _far_deadline()
-    )
+    await cleaner._delete_old_logs(mock_prisma_client, datetime.now(timezone.utc) - timedelta(days=7), _far_deadline())
 
     count_sql = mock_db.query_raw.call_args[0][0]
     assert "count(*)" in count_sql
@@ -1733,3 +1678,100 @@ async def test_a_cleanup_delete_batch_renders_a_postgres_delete_span_for_its_tab
     )
 
     assert await postgres_span_names() == ("postgres.delete LiteLLM_SpendLogs",)
+
+
+# --- size rule (maximum_spend_logs_size) ---------------------------------------------------------------
+
+
+def _storage(allocated: int, live: int, dead: int, inserted: int | None = None, deleted: int | None = None) -> dict:
+    return {
+        "allocated_bytes": allocated,
+        "live_rows": live,
+        "dead_rows": dead,
+        "inserted_total": live + dead if inserted is None else inserted,
+        "deleted_total": dead if deleted is None else deleted,
+    }
+
+
+def _size_cleaner(settings: dict, **kwargs) -> SpendLogCleanup:
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_size": "1GB", **settings}, **kwargs)
+    cleaner.pod_lock_manager = None
+    return cleaner
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("180GB", 180 * 1024**3),
+        ("20 GiB", 20 * 1024**3),
+        ("512MB", 512 * 1024**2),
+        ("1.5TB", int(1.5 * 1024**4)),
+        ("4096", 4096),
+        (4096, 4096),
+    ],
+)
+def test_size_in_bytes_reads_the_units_pg_size_pretty_prints(value, expected):
+    from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import size_in_bytes
+
+    assert size_in_bytes(value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "big", "-1GB", "0", 0, "1PB"])
+def test_size_in_bytes_rejects_what_cannot_be_a_size(value):
+    from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import size_in_bytes
+
+    with pytest.raises(ValueError, match="size"):
+        size_in_bytes(value)
+
+
+def test_an_unset_size_means_no_size_rule_and_a_bad_target_falls_back_to_the_size(caplog):
+    assert SpendLogCleanup(general_settings={})._size_rule() is None
+    rule = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "200MB"})._size_rule()
+    assert rule is not None
+    assert (rule.limit_bytes, rule.target_bytes) == (1024**3, 200 * 1024**2)
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        rule_without_room = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "2GB"})._size_rule()
+    assert rule_without_room is not None
+    assert rule_without_room.target_bytes == rule_without_room.limit_bytes == 1024**3
+    assert any("must be below maximum_spend_logs_size" in record.getMessage() for record in caplog.records)
+
+
+_RUN_STATE = SizeCleanupState(
+    allocated_bytes=32_030_720,
+    reclaimable_bytes=24_015_000,
+    bytes_per_row=1601.0,
+    inserted_total=20_000,
+    deleted_total=15_000,
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "probe", "reclaimable_expected"),
+    [
+        (
+            "vacuum zeroed the dead rows, nothing else changed",
+            _storage(32_030_720, 5000, 0, 20_000, 15_000),
+            24_015_000,
+        ),
+        ("7000 new rows written into the free space", _storage(32_030_720, 12_000, 0, 27_000, 15_000), 12_808_000),
+        (
+            "7000 new rows that all grew the files",
+            _storage(32_030_720 + 7000 * 1601, 12_000, 0, 27_000, 15_000),
+            24_015_000,
+        ),
+        ("VACUUM FULL handed the free space back", _storage(8_015_720, 5000, 0, 20_000, 15_000), 0),
+        ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
+        (
+            "statistics reset: counters restart from the dead rows",
+            _storage(32_030_720, 5000, 1000, 5000, 1000),
+            5_338_453,
+        ),
+    ],
+)
+def test_advance_size_state_tracks_free_space_through_vacuum_inserts_and_other_deletes(
+    name, probe, reclaimable_expected
+):
+    advanced = advance_size_state(_RUN_STATE, StorageProbe(**probe))
+
+    assert advanced.reclaimable_bytes == reclaimable_expected, name
+    assert 0 <= probe["allocated_bytes"] - advanced.reclaimable_bytes <= probe["allocated_bytes"], name

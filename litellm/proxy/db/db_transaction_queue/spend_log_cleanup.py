@@ -1,11 +1,12 @@
 import asyncio
+import re
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -35,6 +36,162 @@ from litellm.proxy.utils import PrismaClient
 from litellm.types.llms.base import LiteLLMBaseModel
 
 StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reached", "aborted"]
+
+_SIZE_RE: Final = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)I?B?\s*$", re.IGNORECASE)
+_SIZE_UNITS: Final = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+
+
+def size_in_bytes(value: str | int) -> int:
+    """
+    Parse a storage size such as '180GB', '512 MiB' or '1.5TB' into bytes; a bare int is bytes already.
+
+    Units are powers of 1024, the same convention pg_size_pretty uses, so the number an operator reads
+    off `SELECT pg_size_pretty(pg_total_relation_size(...))` is the number they can put in the config.
+    """
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(f"size must be positive, got {value}")
+        return value
+    match: Final = _SIZE_RE.match(value)
+    if match is None:
+        raise ValueError(f"invalid size {value!r}, expected a number with a unit such as '180GB'")
+    size: Final = int(float(match.group(1)) * _SIZE_UNITS[match.group(2).upper()])
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {value!r}")
+    return size
+
+
+@dataclass(frozen=True, slots=True)
+class SizeRule:
+    """The size cleanup rule as configured: start cleaning above `limit_bytes`, stop under `target_bytes`."""
+
+    limit_bytes: int
+    target_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class StorageProbe:
+    """
+    What the catalog says about the spend-log tables, read without scanning them.
+
+    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
+    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    tuples, autovacuum later turns them into free space that new rows reuse, and only VACUUM FULL or pg_repack
+    hands the bytes back to the filesystem. Neither dead tuples nor free space are live data, and Postgres
+    tracks only the former (`n_dead_tup`, zeroed by vacuum), so the size rule keeps its own count of the
+    reclaimable bytes, see `SizeCleanupState`. `inserted_total` and `deleted_total` are the cumulative
+    `n_tup_ins` and `n_tup_del` counters that count is driven by.
+    """
+
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+    inserted_total: int
+    deleted_total: int
+
+    @property
+    def stats_are_stale(self) -> bool:
+        """No row counters at all while the files hold data: the statistics were reset, e.g. by a crash."""
+        return self.allocated_bytes > 0 and self.live_rows + self.dead_rows == 0
+
+
+class SizeCleanupState(LiteLLMBaseModel):
+    """
+    The size rule's running count of reclaimable bytes, kept in LiteLLM_Config between checks.
+
+    `reclaimable_bytes` is the space inside the files that holds no live row: the bytes of every row deleted
+    since the count started (by this job or anyone else, from `n_tup_del`), less the free space new rows have
+    since been written into (bytes inserted beyond what the files grew by), less what a VACUUM FULL handed back.
+    Live bytes are `allocated_bytes - reclaimable_bytes`, whether or not autovacuum has run yet. `bytes_per_row`
+    converts rows to bytes and is refreshed from live bytes over live rows on every check.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    allocated_bytes: int
+    reclaimable_bytes: int
+    bytes_per_row: float
+    inserted_total: int
+    deleted_total: int
+
+
+def advance_size_state(state: SizeCleanupState | None, probe: StorageProbe) -> SizeCleanupState:
+    """
+    Roll the reclaimable count forward to what the catalog shows now.
+
+    Without a prior state, or after the cumulative counters went backwards (a statistics reset), the count
+    starts from the dead rows Postgres still knows about, at the files' average bytes per row.
+    """
+    if state is None or probe.inserted_total < state.inserted_total or probe.deleted_total < state.deleted_total:
+        seed_bytes_per_row: Final = probe.allocated_bytes / max(probe.live_rows + probe.dead_rows, 1)
+        return SizeCleanupState(
+            allocated_bytes=probe.allocated_bytes,
+            reclaimable_bytes=min(probe.allocated_bytes, round(probe.dead_rows * seed_bytes_per_row)),
+            bytes_per_row=max(seed_bytes_per_row, 1.0),
+            inserted_total=probe.inserted_total,
+            deleted_total=probe.deleted_total,
+        )
+    growth: Final = probe.allocated_bytes - state.allocated_bytes
+    bytes_deleted: Final = (probe.deleted_total - state.deleted_total) * state.bytes_per_row
+    free_space_refilled: Final = max(
+        0.0, (probe.inserted_total - state.inserted_total) * state.bytes_per_row - max(0, growth)
+    )
+    returned_to_filesystem: Final = max(0, -growth)
+    reclaimable: Final = min(
+        probe.allocated_bytes,
+        max(0, round(state.reclaimable_bytes + bytes_deleted - free_space_refilled - returned_to_filesystem)),
+    )
+    live_bytes: Final = probe.allocated_bytes - reclaimable
+    return SizeCleanupState(
+        allocated_bytes=probe.allocated_bytes,
+        reclaimable_bytes=reclaimable,
+        bytes_per_row=max(live_bytes / probe.live_rows, 1.0) if probe.live_rows > 0 else state.bytes_per_row,
+        inserted_total=probe.inserted_total,
+        deleted_total=probe.deleted_total,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SpendLogStorage:
+    """What the spend-log tables weigh at one point: the files on disk and the live bytes inside them."""
+
+    allocated_bytes: int
+    reclaimable_bytes: int
+    bytes_per_row: float
+    live_rows: int
+
+    @property
+    def estimated_live_bytes(self) -> int:
+        return max(0, self.allocated_bytes - self.reclaimable_bytes)
+
+    def after_deleting(self, rows: int, allocated_bytes: int) -> "SpendLogStorage":
+        """
+        The same storage once `rows` more rows are gone and the files measure `allocated_bytes`.
+
+        Files that grew while the pass only deleted (a visibility map or free space map fork a DELETE creates,
+        an index page split) hold no live row, so the growth counts as reclaimable; rows inserted meanwhile are
+        taken back out at the next check from n_tup_ins.
+        """
+        return SpendLogStorage(
+            allocated_bytes=allocated_bytes,
+            reclaimable_bytes=min(
+                allocated_bytes,
+                round(
+                    self.reclaimable_bytes + rows * self.bytes_per_row + max(0, allocated_bytes - self.allocated_bytes)
+                ),
+            ),
+            bytes_per_row=self.bytes_per_row,
+            live_rows=max(0, self.live_rows - rows),
+        )
+
+    def to_state(self, inserted_total: int, deleted_total: int) -> SizeCleanupState:
+        return SizeCleanupState(
+            allocated_bytes=self.allocated_bytes,
+            reclaimable_bytes=self.reclaimable_bytes,
+            bytes_per_row=self.bytes_per_row,
+            inserted_total=inserted_total,
+            deleted_total=deleted_total,
+        )
+
 
 Cutoff: TypeAlias = datetime | str
 """Rows strictly older than this are expired: a timestamp, or an ISO calendar day for tables keyed by day"""
@@ -86,6 +243,57 @@ class _RemainingRow(LiteLLMBaseModel):
 
 
 _REMAINING_ROWS: Final = TypeAdapter(list[_RemainingRow])
+
+
+class _StorageRow(LiteLLMBaseModel):
+    """One row of the storage probe, validated out of prisma's untyped result."""
+
+    model_config = ConfigDict(frozen=True)
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+    inserted_total: int
+    deleted_total: int
+
+
+_STORAGE_ROWS: Final = TypeAdapter(list[_StorageRow])
+
+
+class _SizeStateRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    state_json: str
+
+
+_SIZE_STATE_ROWS: Final = TypeAdapter(list[_SizeStateRow])
+SPEND_LOG_SIZE_CLEANUP_STATE_PARAM: Final = "spend_logs_size_cleanup_state"
+_LOAD_SIZE_STATE_SQL: Final = 'SELECT param_value::text AS state_json FROM "LiteLLM_Config" WHERE param_name = $1'
+_SAVE_SIZE_STATE_SQL: Final = """
+    INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES ($1, $2::jsonb)
+    ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value
+    """
+
+
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+
+# Partition children are counted with their parent: a partitioned parent has no storage of its own.
+_STORAGE_SQL: Final = """
+    SELECT coalesce(sum(pg_total_relation_size(s.relid)), 0)::bigint AS allocated_bytes,
+           coalesce(sum(s.n_live_tup), 0)::bigint AS live_rows,
+           coalesce(sum(s.n_dead_tup), 0)::bigint AS dead_rows,
+           coalesce(sum(s.n_tup_ins), 0)::bigint AS inserted_total,
+           coalesce(sum(s.n_tup_del), 0)::bigint AS deleted_total
+    FROM pg_stat_user_tables s
+    WHERE s.schemaname = current_schema()
+      AND (
+        s.relname = ANY($1::text[])
+        OR s.relid IN (
+          SELECT i.inhrelid FROM pg_inherits i
+          JOIN pg_class p ON p.oid = i.inhparent
+          JOIN pg_namespace n ON n.oid = p.relnamespace
+          WHERE p.relname = ANY($1::text[]) AND n.nspname = current_schema()
+        )
+      )
+    """
 
 SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_batch_size",
@@ -243,6 +451,98 @@ class SpendLogCleanup:
         """
         self.retention_seconds = self._retention_seconds_for("maximum_spend_logs_retention_period")
         return self.retention_seconds is not None
+
+    def _setting(self, setting_name: str) -> object:
+        return self.general_settings.get(setting_name)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped settings dict
+
+    def _size_bytes_setting(self, setting_name: str) -> int | None:
+        """Parse one size setting into bytes, or None when unset or unusable."""
+        raw: Final = self._setting(setting_name)
+        if raw is None:
+            return None
+        if not isinstance(raw, (str, int)):
+            verbose_proxy_logger.warning("Invalid %s value: %r, ignoring it", setting_name, raw)
+            return None
+        try:
+            return size_in_bytes(raw)
+        except ValueError as e:
+            verbose_proxy_logger.warning("Invalid %s value: %r (%s), ignoring it", setting_name, raw, e)
+            return None
+
+    def _size_rule(self) -> SizeRule | None:
+        """
+        The size rule from settings, or None when maximum_spend_logs_size is unset.
+
+        A target at or above the limit cannot be what the operator meant, so it is reported and the run
+        cleans only until it is back under the limit, which is also what an unset target means.
+        """
+        limit_bytes: Final = self._size_bytes_setting("maximum_spend_logs_size")
+        if limit_bytes is None:
+            return None
+        target_bytes: Final = self._size_bytes_setting("maximum_spend_logs_cleanup_target_size")
+        if target_bytes is None:
+            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
+        if target_bytes >= limit_bytes:
+            verbose_proxy_logger.error(
+                "maximum_spend_logs_cleanup_target_size (%s bytes) must be below maximum_spend_logs_size (%s bytes); "
+                "cleaning down to maximum_spend_logs_size instead",
+                target_bytes,
+                limit_bytes,
+            )
+            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
+        return SizeRule(limit_bytes=limit_bytes, target_bytes=target_bytes)
+
+    async def _probe_storage(self, prisma_client: PrismaClient, deadline: float) -> StorageProbe | None:
+        """Read what the spend-log tables weigh from the catalog, or None when the probe fails or has no budget."""
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("measure_storage", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                rows: Final = _STORAGE_ROWS.validate_python(
+                    await tx.query_raw(trusted_sql(_STORAGE_SQL), list(_SPEND_LOG_TABLES))
+                )
+        except Exception as e:  # noqa: BLE001 - a failed measurement skips the size pass, it must not fail the run
+            verbose_proxy_logger.warning("Could not measure spend-log storage: %s: %s", type(e).__name__, e)
+            return None
+        if not rows:
+            return None
+        row: Final = rows[0]
+        return StorageProbe(
+            allocated_bytes=row.allocated_bytes,
+            live_rows=row.live_rows,
+            dead_rows=row.dead_rows,
+            inserted_total=row.inserted_total,
+            deleted_total=row.deleted_total,
+        )
+
+    async def _load_size_state(self, prisma_client: PrismaClient, deadline: float) -> SizeCleanupState | None:
+        """The reclaimable count saved by the last check, or None on the first check or when it cannot be read."""
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("load_size_state", "LiteLLM_Config"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                rows: Final = _SIZE_STATE_ROWS.validate_python(
+                    await tx.query_raw(trusted_sql(_LOAD_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM)
+                )
+            return SizeCleanupState.model_validate_json(rows[0].state_json) if rows else None
+        except Exception as e:  # noqa: BLE001 - an unreadable count restarts from the catalog, it must not fail the run
+            verbose_proxy_logger.warning("Could not read the spend-log size cleanup state: %s: %s", type(e).__name__, e)
+            return None
+
+    async def _save_size_state(self, prisma_client: PrismaClient, deadline: float, state: SizeCleanupState) -> None:
+        timeout_ms: Final = max(self._timeout_ms(deadline), 1000)
+        try:
+            async with db_span("save_size_state", "LiteLLM_Config"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                await tx.execute_raw(
+                    trusted_sql(_SAVE_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM, state.model_dump_json()
+                )
+        except Exception as e:  # noqa: BLE001 - a lost save costs one re-seed from the catalog, it must not fail the run
+            verbose_proxy_logger.warning("Could not save the spend-log size cleanup state: %s: %s", type(e).__name__, e)
 
     def _timeout_ms(self, deadline: float) -> int:
         """
