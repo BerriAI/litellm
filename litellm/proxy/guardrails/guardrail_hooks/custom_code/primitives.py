@@ -13,6 +13,7 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
+import regex
 from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict
 
@@ -21,6 +22,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, validate_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+from .bounded_execution import ExecutionInterrupted, remaining_execution_time
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -110,6 +113,26 @@ def modify(
 # =============================================================================
 
 
+_REGEX_FLAGS: Final = (
+    (re.ASCII, regex.ASCII),
+    (re.IGNORECASE, regex.IGNORECASE),
+    (re.LOCALE, regex.LOCALE),
+    (re.UNICODE, regex.UNICODE),
+    (re.MULTILINE, regex.MULTILINE),
+    (re.DOTALL, regex.DOTALL),
+    (re.VERBOSE, regex.VERBOSE),
+    (re.TEMPLATE, regex.TEMPLATE),
+    (re.DEBUG, regex.DEBUG),
+)
+
+
+def _regex_flags(pattern: str, flags: int) -> int:
+    validated: Final = re.compile(pattern, flags).flags
+    return regex.VERSION0 | sum(
+        int(safe_flag) for standard_flag, safe_flag in _REGEX_FLAGS if validated & standard_flag
+    )
+
+
 def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
     """
     Check if a regex pattern matches anywhere in the text.
@@ -123,8 +146,14 @@ def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
         True if pattern matches, False otherwise
     """
     try:
-        return bool(re.search(pattern, text, flags))
-    except re.error as e:
+        return bool(
+            regex.search(
+                pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
+            )
+        )
+    except TimeoutError:
+        raise ExecutionInterrupted from None
+    except (re.error, regex.error) as e:
         verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
@@ -142,8 +171,14 @@ def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
         True if pattern matches entire text, False otherwise
     """
     try:
-        return bool(re.fullmatch(pattern, text, flags))
-    except re.error as e:
+        return bool(
+            regex.fullmatch(
+                pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
+            )
+        )
+    except TimeoutError:
+        raise ExecutionInterrupted from None
+    except (re.error, regex.error) as e:
         verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
@@ -162,8 +197,17 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
         The text with replacements applied
     """
     try:
-        return re.sub(pattern, replacement, text, flags=flags)
-    except re.error as e:
+        return regex.sub(
+            pattern,
+            replacement,
+            text,
+            flags=_regex_flags(pattern, flags),
+            timeout=remaining_execution_time(),
+            concurrent=True,
+        )
+    except TimeoutError:
+        raise ExecutionInterrupted from None
+    except (re.error, regex.error) as e:
         verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
@@ -181,8 +225,12 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
         List of all matches
     """
     try:
-        return re.findall(pattern, text, flags)
-    except re.error as e:
+        return regex.findall(
+            pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
+        )
+    except TimeoutError:
+        raise ExecutionInterrupted from None
+    except (re.error, regex.error) as e:
         verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
 
