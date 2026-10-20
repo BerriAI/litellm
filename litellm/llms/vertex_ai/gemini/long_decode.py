@@ -8,11 +8,13 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import Timeout
+from litellm.litellm_core_utils.env_utils import get_env_int_or_none
 from litellm.types.llms.vertex_ai import (
     Candidates,
     Citation,
     CitationMetadata,
     GenerateContentResponseBody,
+    GenerationConfig,
     GroundingMetadata,
     GroundingSegment,
     GroundingSupport,
@@ -47,6 +49,9 @@ HOP_FAILURES: Final = (VertexAIError, httpx.HTTPError, Timeout)
 
 HOP_END_FINISH_REASON: Final = "CONTINUATION"
 CUT_OFF_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", HOP_END_FINISH_REASON})
+
+DEFAULT_OUTPUT_BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
+_OUTPUT_LIMIT_KEYS: Final = frozenset({"max_output_tokens", "maxOutputTokens"})
 
 _VERTEX_V1_PATH: Final = "/v1/projects/"
 _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
@@ -83,6 +88,19 @@ def continuation_cap_of(request_body: RequestBody) -> int | None:
     if "candidate_count" in generation_config and _int_or_none(generation_config["candidate_count"]) != 1:
         return None
     return _int_or_none(generation_config["max_output_tokens"])
+
+
+def with_default_output_budget(
+    request_body: RequestBody, model_max_output_tokens: Callable[[], int | None]
+) -> RequestBody:
+    generation_config: Final = request_body.get("generationConfig", GenerationConfig())
+    budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
+    if budget is None or budget <= 0 or not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
+        return request_body
+    model_max: Final = model_max_output_tokens()
+    if model_max is None:
+        return request_body
+    return {**request_body, "generationConfig": {**generation_config, "max_output_tokens": min(budget, model_max)}}
 
 
 def client_continuation_token(candidate: Candidates) -> str | None:
