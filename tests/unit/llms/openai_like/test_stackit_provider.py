@@ -170,6 +170,7 @@ def test_stackit_cost_map_entries():
         assert qwen_vl["output_cost_per_token"] == pytest.approx(1.75e-6)
         assert qwen_vl["supports_vision"] is True
 
+
 def test_stackit_chat_completion_request():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{_BASE_URL}/chat/completions").respond(200, json=_CHAT_COMPLETION)
