@@ -101,15 +101,11 @@ def test_responses_reach_chat_without_a_provider_config_or_when_asked(
 
 
 @pytest.mark.parametrize(
-    ("responses_mode_model", "skip_responses_api_bridge", "expected"),
+    ("has_config", "expected"),
     [
-        (True, False, NativeResponses()),
-        (True, True, NativeChat()),
-        (False, False, NativeChat()),
-        (False, True, NativeChat()),
+        (True, NativeResponses()),
+        (False, NativeChat()),
     ],
 )
-def test_chat_bridges_to_responses_only_for_responses_mode_models(
-    responses_mode_model: bool, skip_responses_api_bridge: bool, expected: RoutePlan
-):
-    assert plan_chat_route(responses_mode_model, skip_responses_api_bridge) == expected
+def test_chat_bridges_to_responses_only_when_the_provider_serves_it(has_config: bool, expected: RoutePlan):
+    assert plan_chat_route(OpenAIResponsesAPIConfig() if has_config else None) == expected
