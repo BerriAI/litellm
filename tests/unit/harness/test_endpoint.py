@@ -387,6 +387,61 @@ async def test_sdk_stream_cost_prices_cached_prompt_tokens_like_litellm(
     )
 
 
+ANTHROPIC_CACHED_USAGE: Final = {
+    "input_tokens": 100,
+    "cache_read_input_tokens": 800,
+    "cache_creation_input_tokens": 100,
+    "output_tokens": 10,
+}
+
+
+def anthropic_cached_sse() -> bytes:
+    start: Final = {"type": "message_start", "message": {"usage": {**ANTHROPIC_CACHED_USAGE, "output_tokens": 1}}}
+    delta: Final = {"type": "message_delta", "usage": {"output_tokens": 10}}
+    return (
+        f"event: message_start\ndata: {json.dumps(start)}\n\n"
+        f"event: message_delta\ndata: {json.dumps(delta)}\n\n"
+    ).encode()
+
+
+async def anthropic_cached_message(**kwargs: Any) -> dict[str, Any]:
+    return {"type": "message", "content": [], "usage": ANTHROPIC_CACHED_USAGE}
+
+
+@pytest.mark.parametrize("route", ["gateway stream", "gateway json", "sdk json"])
+async def test_claude_code_cost_counts_anthropic_cached_prompt_tokens(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    monkeypatch.setattr(litellm, "cost_per_token", REAL_COST_PER_TOKEN)
+    monkeypatch.setattr(litellm.anthropic.messages, "acreate", anthropic_cached_message)
+    upstream: Final = (
+        sse_response(anthropic_cached_sse())
+        if route == "gateway stream"
+        else httpx.Response(200, json={"usage": ANTHROPIC_CACHED_USAGE})
+    )
+    endpoint: Final = (
+        ModelEndpoint(Harness.CLAUDE_CODE, CACHED_MODEL, None)
+        if route == "sdk json"
+        else gateway_endpoint(Recorder(upstream), model=CACHED_MODEL)
+    )
+    async with endpoint as ep:
+        async with httpx.AsyncClient(base_url=ep.url) as client:
+            await client.post("/v1/messages", json={"stream": route == "gateway stream"}, headers=auth(ep))
+    cached_price: Final = sum(
+        REAL_COST_PER_TOKEN(
+            model=CACHED_MODEL,
+            prompt_tokens=1000,
+            completion_tokens=10,
+            cache_read_input_tokens=800,
+            cache_creation_input_tokens=100,
+        )
+    )
+    assert cached_price > sum(REAL_COST_PER_TOKEN(model=CACHED_MODEL, prompt_tokens=100, completion_tokens=10))
+    assert ep.usage.cost == pytest.approx(cached_price), (
+        "Anthropic counts cached prompt tokens outside input_tokens, so leaving them out understates the turn's cost"
+    )
+
+
 async def test_sdk_error_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing(**kwargs: Any) -> Any:
         raise litellm.RateLimitError(
