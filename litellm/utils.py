@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -3251,6 +3251,100 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInfoLookupMiss:
+    tripped: bool
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    try:
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError:
+        return ModelInfoLookupMiss(tripped=False)
+    except Exception:
+        return ModelInfoLookupMiss(tripped=True)
+    return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def runtime_model_cost_registrations(
+    model: str, custom_llm_provider: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    names: Final = _get_potential_model_names(model, custom_llm_provider)
+    candidates: Final = (
+        model,
+        names["combined_model_name"],
+        f"{custom_llm_provider}/{names['split_model']}",
+        names["split_model"],
+        names["stripped_model_name"],
+    )
+    return tuple(
+        (key, MappingProxyType({name: value for name, value in entry.items() if value is not None}))
+        for key, entry in ((key, _runtime_registered_model_cost.get(key)) for key in dict.fromkeys(candidates))
+        if entry
+    )
+
+
+_TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
+_DIRECTION_RATE_FIELDS: Final = MappingProxyType(
+    {
+        "input_cost_per_token": ("input_cost_per_token",),
+        "output_cost_per_token": ("output_cost_per_token", "output_cost_per_reasoning_token"),
+    }
+)
+_RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
+_RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _is_overridden_rate(name: str, overridden_fields: tuple[str, ...]) -> bool:
+    is_variant: Final = name.startswith(tuple(f"{rate_field}_" for rate_field in overridden_fields))
+    return name in overridden_fields or (is_variant and "_cache_" not in name)
+
+
+def _without_overridden_rates(rates: Mapping[str, object], overridden_fields: tuple[str, ...]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {name: rate for name, rate in rates.items() if not _is_overridden_rate(name, overridden_fields)}
+    )
+
+
+def _rate_table_with_flat_prices(
+    name: str, table: object, overridden_fields: tuple[str, ...], flat_prices: Mapping[str, object]
+) -> object:
+    try:
+        if name == "tiered_pricing":
+            return [
+                {**_without_overridden_rates(tier, overridden_fields), **flat_prices}
+                for tier in _RATE_TIERS.validate_python(table)
+            ]
+        if name == "off_peak_pricing":
+            return dict(_without_overridden_rates(_RATE_TABLE.validate_python(table), overridden_fields))
+    except ValidationError:
+        return table
+    return table
+
+
+def _without_overridden_price_variants(
+    entry: Mapping[str, object], value: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A flat ``input_cost_per_token`` / ``output_cost_per_token`` replaces every inherited rate that would stand in
+    for it (token thresholds, service tiers, batches, ``tiered_pricing`` tiers, off-peak windows, and the reasoning
+    rate for output)."""
+    flat_prices: Final = MappingProxyType(
+        {cost_field: value[cost_field] for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None}
+    )
+    overridden_fields: Final = tuple(
+        itertools.chain.from_iterable(_DIRECTION_RATE_FIELDS[cost_field] for cost_field in flat_prices)
+    )
+    if not overridden_fields:
+        return entry
+    return MappingProxyType(
+        {
+            name: _rate_table_with_flat_prices(name, field_value, overridden_fields, flat_prices)
+            for name, field_value in entry.items()
+            if not _is_overridden_rate(name, overridden_fields)
+        }
+    )
 
 
 class _LiveDeploymentReplay:
