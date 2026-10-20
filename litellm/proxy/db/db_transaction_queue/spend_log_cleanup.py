@@ -111,8 +111,20 @@ def advance_size_state(state: SizeCleanupState | None, probe: StorageProbe) -> S
     Roll the reclaimable count forward to what the catalog shows now.
 
     Without a prior state, or after the cumulative counters went backwards (a statistics reset), the count
-    starts from the dead rows Postgres still knows about, at the files' average bytes per row.
+    starts from the dead rows Postgres still knows about, at the files' average bytes per row. A probe with no
+    row counters at all (`stats_are_stale`) cannot seed anything: the prior count is carried forward, and with
+    no prior count the files are taken as fully reclaimable so nothing is deleted on its say-so.
     """
+    if probe.stats_are_stale:
+        return SizeCleanupState(
+            allocated_bytes=probe.allocated_bytes,
+            reclaimable_bytes=probe.allocated_bytes
+            if state is None
+            else min(probe.allocated_bytes, state.reclaimable_bytes),
+            bytes_per_row=1.0 if state is None else state.bytes_per_row,
+            inserted_total=probe.inserted_total,
+            deleted_total=probe.deleted_total,
+        )
     if state is None or probe.inserted_total < state.inserted_total or probe.deleted_total < state.deleted_total:
         seed_bytes_per_row: Final = probe.allocated_bytes / max(probe.live_rows + probe.dead_rows, 1)
         return SizeCleanupState(

@@ -1743,6 +1743,11 @@ _RUN_STATE = SizeCleanupState(
             24_015_000,
         ),
         ("VACUUM FULL handed the free space back", _storage(8_015_720, 5000, 0, 20_000, 15_000), 0),
+        (
+            "statistics wiped while the files still hold data: the count is carried forward, not reseeded",
+            _storage(32_030_720, 0, 0, 0, 0),
+            24_015_000,
+        ),
         ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
         (
             "statistics reset: counters restart from the dead rows",
