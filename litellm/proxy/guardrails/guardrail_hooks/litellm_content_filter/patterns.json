@@ -32,6 +32,7 @@
       "name": "visa",
       "display_name": "Credit Card (Visa)",
       "pattern": "\\b4\\d{3}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "validator": "luhn",
       "category": "Payment Card Patterns",
       "description": "Detects Visa credit card numbers"
     },
@@ -39,6 +40,7 @@
       "name": "mastercard",
       "display_name": "Credit Card (Mastercard)",
       "pattern": "\\b5[1-5]\\d{2}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "validator": "luhn",
       "category": "Payment Card Patterns",
       "description": "Detects Mastercard credit card numbers"
     },
@@ -46,6 +48,7 @@
       "name": "amex",
       "display_name": "Credit Card (American Express)",
       "pattern": "\\b3[47]\\d{2}[\\s\\-]?\\d{6}[\\s\\-]?\\d{5}\\b",
+      "validator": "luhn",
       "category": "Payment Card Patterns",
       "description": "Detects American Express credit card numbers"
     },
@@ -53,6 +56,7 @@
       "name": "discover",
       "display_name": "Credit Card (Discover)",
       "pattern": "\\b6(?:011|5\\d{2})[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "validator": "luhn",
       "category": "Payment Card Patterns",
       "description": "Detects Discover credit card numbers"
     },
@@ -60,6 +64,7 @@
       "name": "credit_card",
       "display_name": "Credit Card (Any)",
       "pattern": "(?:\\b4\\d{3}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b|\\b5[1-5]\\d{2}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b|\\b3[47]\\d{2}[\\s\\-]?\\d{6}[\\s\\-]?\\d{5}\\b|\\b6(?:011|5\\d{2})[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b)",
+      "validator": "luhn",
       "category": "Payment Card Patterns",
       "description": "Detects any major credit card number"
     },
@@ -395,6 +400,7 @@
       "name": "iban",
       "display_name": "IBAN (International Bank Account Number)",
       "pattern": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b",
+      "validator": "iban_mod97",
       "category": "Payment Card Patterns",
       "description": "Detects IBANs (2 letter country code + 2 check digits + 4 char bank code + 7 digit base + optional 0-16 alphanumeric)"
     },
@@ -409,6 +415,7 @@
       "name": "eu_iban_enhanced",
       "display_name": "IBAN (Enhanced EU Format)",
       "pattern": "\\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}[A-Z0-9]{0,16}\\b",
+      "validator": "iban_mod97",
       "category": "EU PII Patterns",
       "description": "Enhanced IBAN detection with more specific format validation (2 letter country + 2 check digits + 4 char bank code + 7 digit account base + optional 0-16 alphanumeric)"
     },

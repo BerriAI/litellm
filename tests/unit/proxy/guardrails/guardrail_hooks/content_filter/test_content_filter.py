@@ -367,9 +367,42 @@ class TestContentFilterGuardrail:
         )
 
         # Test Visa card
-        result = guardrail._check_patterns("My card is 4532-1234-5678-9010")
+        result = guardrail._check_patterns("My card is 4532-0151-1283-0366")
         assert result is not None
         assert result[1] == "visa"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("pattern_name", "checksum_valid", "checksum_invalid"),
+        [
+            ("credit_card", "4532 0151 1283 0366", "4532 0151 1283 0367"),
+            ("visa", "4532-0151-1283-0366", "4532-1234-5678-9010"),
+            ("mastercard", "5555555555554444", "5555555555554445"),
+            ("amex", "3782 822463 10005", "3782 822463 10006"),
+            ("discover", "6011111111111117", "6011111111111118"),
+            ("iban", "GB82WEST12345698765432", "GB83WEST12345698765432"),
+            ("eu_iban_enhanced", "DE89370400440532013000", "DE88370400440532013000"),
+        ],
+    )
+    async def test_checksum_pattern_masks_only_values_that_pass_the_checksum(
+        self, pattern_name: str, checksum_valid: str, checksum_invalid: str
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.MASK)
+            ],
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [f"real {checksum_valid} and look-alike {checksum_invalid}"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [
+            f"real [{pattern_name.upper()}_REDACTED] and look-alike {checksum_invalid}"
+        ]
 
     def test_api_key_patterns(self):
         """
