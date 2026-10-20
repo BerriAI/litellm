@@ -3123,3 +3123,100 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("soft_budget", "live_spend", "should_alert"),
+    [(None, 400.0, False), (300.0, 299.99, False), (300.0, 300.0, True), (300.0, 301.0, True), (0.0, 0.0, True)],
+)
+async def test_group_soft_alert_uses_live_spend_and_includes_threshold(soft_budget, live_spend, should_alert):  # test-quality-ok: asserts delivered alert content after real cache and counter reads; delivery is the output boundary
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        model_access_group_cache_key,
+        model_access_group_spend_counter_key,
+    )
+    from litellm.proxy.hooks.proxy_track_cost_callback import alert_model_access_group_soft_budgets
+    from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
+    from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+
+    budget: Final = ModelAccessGroupBudget(
+        access_group_name="shared-pool",
+        spend=1.0,
+        soft_budget=soft_budget,
+        budget_reset_at=datetime(2030, 2, 1, tzinfo=timezone.utc),
+    )
+    cache: Final = UserApiKeyCache()
+    counters: Final = DualCache()
+    await cache.async_set_cache(
+        key=model_access_group_cache_key(budget.access_group_name), value=budget, model_type=ModelAccessGroupBudget
+    )
+    counters.set_cache(key=model_access_group_spend_counter_key(budget.access_group_name), value=live_spend)
+    delivery: Final = SimpleNamespace(alerting=["webhook"], budget_alerts=AsyncMock())
+    with patch.multiple(  # test-quality-ok: budget and counter readers import proxy_server globals, with no injection seam
+        "litellm.proxy.proxy_server", prisma_client=object(), user_api_key_cache=cache, spend_counter_cache=counters
+    ):
+        await alert_model_access_group_soft_budgets((budget.access_group_name,), delivery)
+    if should_alert:
+        delivery.budget_alerts.assert_awaited_once_with(
+            type="soft_budget",
+            user_info=CallInfo(
+                spend=live_spend,
+                soft_budget=soft_budget,
+                token=f"model_access_group:shared-pool:{budget.budget_reset_at}",
+                key_alias="shared-pool",
+                event_group=Litellm_EntityType.MODEL_ACCESS_GROUP,
+            ),
+        )
+    else:
+        delivery.budget_alerts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", ["groups", "database", "alerting"])
+async def test_group_soft_alert_skips_when_a_required_input_is_unavailable(disabled):  # test-quality-ok: no delivery or database access is the required behavior when disabled
+    from litellm.proxy.hooks.proxy_track_cost_callback import alert_model_access_group_soft_budgets
+
+    delivery: Final = SimpleNamespace(alerting=[] if disabled == "alerting" else ["webhook"], budget_alerts=AsyncMock())
+    cache: Final = SimpleNamespace(async_get_cache=AsyncMock(side_effect=AssertionError("unexpected budget read")))
+    with patch.multiple(  # test-quality-ok: the entry point imports its database and cache from proxy_server
+        "litellm.proxy.proxy_server",
+        prisma_client=None if disabled == "database" else object(),
+        user_api_key_cache=cache,
+    ):
+        await alert_model_access_group_soft_budgets(() if disabled == "groups" else ("shared-pool",), delivery)
+    cache.async_get_cache.assert_not_awaited()
+    delivery.budget_alerts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_soft_alert_delivery_failure_does_not_suppress_other_groups():  # test-quality-ok: verifies independent alert deliveries after a failing output boundary
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        model_access_group_cache_key,
+        model_access_group_spend_counter_key,
+    )
+    from litellm.proxy.hooks.proxy_track_cost_callback import alert_model_access_group_soft_budgets
+    from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+
+    cache: Final = UserApiKeyCache()
+    counters: Final = DualCache()
+    for name in ("broken-delivery", "healthy-delivery"):
+        await cache.async_set_cache(
+            key=model_access_group_cache_key(name),
+            value=ModelAccessGroupBudget(access_group_name=name, soft_budget=300),
+            model_type=ModelAccessGroupBudget,
+        )
+        counters.set_cache(key=model_access_group_spend_counter_key(name), value=350)
+    delivery: Final = SimpleNamespace(
+        alerting=["webhook"], budget_alerts=AsyncMock(side_effect=[RuntimeError("delivery failed"), None])
+    )
+    with patch.multiple(  # test-quality-ok: budget and counter readers import proxy_server globals, with no injection seam
+        "litellm.proxy.proxy_server", prisma_client=object(), user_api_key_cache=cache, spend_counter_cache=counters
+    ):
+        await alert_model_access_group_soft_budgets(("broken-delivery", "healthy-delivery"), delivery)
+    assert [
+        (call.kwargs["user_info"].key_alias, call.kwargs["user_info"].spend)
+        for call in delivery.budget_alerts.await_args_list
+    ] == [("broken-delivery", 350), ("healthy-delivery", 350)]
