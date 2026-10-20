@@ -7,7 +7,7 @@ from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -30,6 +30,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
+    ChoiceLogprobs,
     Choices,
     CompletionTokensDetails,
     CompletionTokensDetailsWrapper,
@@ -248,6 +249,31 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+class _ChoiceLogprobsView(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    logprobs: ChoiceLogprobs | None = None
+
+
+class _ChunkLogprobsView(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    choices: tuple[_ChoiceLogprobsView, ...] = ()
+
+
+def _first_choice_logprobs(chunk: object) -> ChoiceLogprobs | None:
+    try:
+        choices: Final = _ChunkLogprobsView.model_validate(chunk).choices
+    except ValidationError:
+        return None
+    return choices[0].logprobs if choices else None
+
+
+def _streamed_chat_logprobs(chunks: Sequence[object]) -> ChoiceLogprobs | None:
+    sent: Final = tuple(logprobs for logprobs in map(_first_choice_logprobs, chunks) if logprobs is not None)
+    if not sent:
+        return None
+    return ChoiceLogprobs(content=_joined_or_none(logprobs.content for logprobs in sent))
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -416,6 +442,7 @@ class ChunkProcessor:
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
         service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
+        logprobs: Final = _streamed_chat_logprobs(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
@@ -452,6 +479,7 @@ class ChunkProcessor:
                         "index": 0,
                         "message": {"role": role, "content": ""},
                         "finish_reason": finish_reason,
+                        **(MappingProxyType({"logprobs": logprobs}) if logprobs is not None else MappingProxyType({})),
                     }
                 ],
                 "usage": {

@@ -2517,3 +2517,58 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+def _chat_chunk(
+    delta: Delta, logprobs: dict[str, object] | None, finish_reason: str | None = None
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-lp",
+        created=1,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, delta=delta, logprobs=logprobs, finish_reason=finish_reason)],
+    )
+
+
+def _token_logprobs(token: str, logprob: float) -> dict[str, object]:
+    return {
+        "content": [
+            {
+                "token": token,
+                "logprob": logprob,
+                "bytes": list(token.encode()),
+                "top_logprobs": [{"token": token, "logprob": logprob, "bytes": list(token.encode())}],
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize("first_delta", [Delta(role="assistant"), Delta(role="assistant", reasoning_content="hmm")])
+@pytest.mark.parametrize("dumped", [False, True])
+def test_stream_chunk_builder_keeps_logprobs_from_every_chat_chunk(first_delta: Delta, dumped: bool) -> None:
+    chunks: Final = (
+        _chat_chunk(first_delta, None),
+        _chat_chunk(Delta(content="Hello"), _token_logprobs("Hello", -0.1)),
+        _chat_chunk(Delta(content=" world"), _token_logprobs(" world", -0.2)),
+        _chat_chunk(Delta(), None, "stop"),
+    )
+
+    response: Final = stream_chunk_builder(chunks=[chunk.model_dump() if dumped else chunk for chunk in chunks])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+    token_logprobs: Final = response.choices[0].logprobs.content
+    assert [(item.token, item.logprob, item.top_logprobs[0].token) for item in token_logprobs] == [
+        ("Hello", -0.1, "Hello"),
+        (" world", -0.2, " world"),
+    ]
+
+
+def test_stream_chunk_builder_leaves_chat_logprobs_unset_when_no_chunk_sent_any() -> None:
+    response: Final = stream_chunk_builder(
+        chunks=[_chat_chunk(Delta(role="assistant", content="Hi"), None), _chat_chunk(Delta(), None, "stop")]
+    )
+
+    assert response is not None
+    assert response.choices[0].model_dump().get("logprobs") is None
