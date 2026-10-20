@@ -2,6 +2,7 @@ import asyncio, importlib, os, uuid
 import json
 import logging
 import re
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
@@ -6512,6 +6513,33 @@ def test_gemini_3_sampling_deprecation_is_logged_once_per_model(caplog: pytest.L
     assert flash_lite in deprecations[0]
     assert pro in deprecations[1]
     assert all((m["temperature"], m["top_p"], m["top_k"]) == (0.2, 0.9, 5) for m in mapped)
+
+
+def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
+    model: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
+
+    def map_sampling_params() -> None:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+        )
+
+    racing_call: Final = threading.Thread(target=map_sampling_params)
+
+    def start_racing_call_while_first_warning_logs(record: logging.LogRecord) -> bool:
+        if "DeprecationWarning" in record.getMessage() and racing_call.ident is None:
+            racing_call.start()
+            racing_call.join(timeout=0.5)
+        return True
+
+    verbose_logger.addFilter(start_racing_call_while_first_warning_logs)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            map_sampling_params()
+            racing_call.join()
+    finally:
+        verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
+
+    assert sum("DeprecationWarning" in r.getMessage() for r in caplog.records) == 1
 
 
 @pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
