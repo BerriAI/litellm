@@ -15,7 +15,6 @@ tests:
       ingress.componentHosts.ui: ui.example.com
       ingress.componentHosts.backend: backend.example.com
       ingress.componentHosts.gateway: gateway.example.com
-      lensWorker.mode: disabled
       ingress.tls:
         - hosts:
             - ui.example.com
@@ -83,12 +82,12 @@ tests:
       ui.backendUrl: https://backend.example.com
       ui.publicUrl: https://ui.example.com
       backend.gatewayUrl: https://gateway.example.com
-      lensWorker.mode: external
-      lensWorker.externalServiceName: existing-lens
-      lensWorker.externalUrl: https://lens.example.com
-      lensWorker.publicUrl: https://lens.example.com
-      lensWorker.serviceTokenSecret.name: existing-lens-signing
-      lensWorker.gateway.secretName: existing-lens-signing
+      lens.enabled: true
+      lens.service.name: existing-lens
+      lens.url: http://existing-lens:4318
+      lens.publicUrl: https://lens.example.com
+      lens.serviceTokenSecret.name: existing-lens-signing
+      lens.gatewaySecret.name: existing-lens-signing
     asserts:
       - equal:
           path: spec.rules[2].http.paths[0].path

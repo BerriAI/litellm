@@ -1,0 +1,63 @@
+suite: Lens connection validation
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+values:
+  - ./values/required.yaml
+set:
+  lens.enabled: true
+  lens.url: http://lens.lens.svc:4318
+  lens.publicUrl: https://lens.example
+  lens.gatewaySecret.name: lens-connection
+  lens.serviceTokenSecret.name: lens-connection
+tests:
+  - it: requires the service address
+    template: gateway/deployment.yaml
+    set:
+      lens.url: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.url is required when lens.enabled is true
+  - it: requires the address agents upload to
+    template: gateway/deployment.yaml
+    set:
+      lens.publicUrl: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.publicUrl is required when lens.enabled is true
+  - it: requires the gateway signing secret
+    template: gateway/deployment.yaml
+    set:
+      lens.gatewaySecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.gatewaySecret.name is required when lens.enabled is true
+  - it: requires the service token secret
+    template: gateway/deployment.yaml
+    set:
+      lens.serviceTokenSecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.serviceTokenSecret.name is required when lens.enabled is true
+  - it: needs none of them while Lens is disabled
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: false
+      lens.url: ""
+      lens.publicUrl: ""
+      lens.gatewaySecret.name: ""
+      lens.serviceTokenSecret.name: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+  - it: rejects the removed lensWorker values
+    template: gateway/deployment.yaml
+    set:
+      lensWorker:
+        mode: bundled
+    asserts:
+      - failedTemplate:
+          errorPattern: lensWorker was replaced by lens
