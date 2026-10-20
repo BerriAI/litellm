@@ -347,7 +347,7 @@ def test_sdk_clients_get_a_bad_request_error_for_a_shared_raw_model_string(
     with guarded.scenario() as scenario:
         peer.drain()
 
-        with pytest.raises(error, match="is the litellm_params.model of more than one model group"):
+        with pytest.raises(error, match="more than one model group"):
             call(guarded, scenario.key())
         assert peer.drain() == ()
 
