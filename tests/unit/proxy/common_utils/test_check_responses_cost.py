@@ -7,7 +7,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1217,8 +1217,6 @@ class TestCheckResponsesCost:
         """The poll's billing event is the one billed event of a background job, so its spend row must name
         the key, team, org, user, and tags of the create it settles, read off the managed object row,
         never the poller itself."""
-        from types import SimpleNamespace
-
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_attributed"
         mock_job.id = "job-attributed"
@@ -1496,10 +1494,6 @@ async def test_the_billing_event_carries_the_creators_end_user():
 
 @pytest.mark.asyncio
 async def test_the_billing_event_carries_the_creating_keys_project_and_every_creator_model_budget():
-    """Project spend and the key, team, and user per-model budgets are counted off the billed event,
-    so it must name them the way the creating request's own metadata would."""
-    from types import SimpleNamespace
-
     key_budget: Final = {"gpt-5": {"max_budget": 1.0, "budget_duration": "1d"}}
     team_budget: Final = {"gpt-5": {"max_budget": 2.0, "budget_duration": "7d"}}
     user_budget: Final = {"gpt-5": {"max_budget": 3.0, "budget_duration": "30d"}}
@@ -1555,6 +1549,60 @@ async def test_the_billing_event_carries_the_creating_keys_project_and_every_cre
         "user_api_key_team_model_max_budget": team_budget,
         "user_api_key_user_model_max_budget": user_budget,
     }
+
+
+_TIER_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 4.0, "budget_duration": "1d"}}
+_KEY_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 1.0, "budget_duration": "1d"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_max_budget", "key_model_max_budget", "billed_max_budget", "billed_model_max_budget"),
+    [
+        (None, {}, 5.0, _TIER_MODEL_BUDGET),
+        (None, None, 5.0, _TIER_MODEL_BUDGET),
+        (2.0, _KEY_MODEL_BUDGET, 2.0, _KEY_MODEL_BUDGET),
+    ],
+    ids=["key_with_an_empty_budget_map", "key_with_no_budget_map", "key_with_its_own_budgets"],
+)
+async def test_the_billing_event_takes_the_keys_budget_tier_only_where_the_key_sets_no_budget_of_its_own(
+    key_max_budget: float | None,
+    key_model_max_budget: dict[str, object] | None,
+    billed_max_budget: float,
+    billed_model_max_budget: dict[str, object],
+):
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-tier",
+                unified_object_id="resp_tier",
+                status="queued",
+                created_by="key:hash-tier",
+                api_key="hash-tier",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=key_max_budget,
+            project_id=None,
+            model_max_budget=key_model_max_budget,
+            litellm_budget_table=SimpleNamespace(max_budget=5.0, model_max_budget=_TIER_MODEL_BUDGET),
+        )
+    )
+
+    await poller.bill_if_finished(response_id="resp_tier", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert (billed.metadata.get("user_api_key_max_budget"), billed.metadata.get("user_api_key_model_max_budget")) == (
+        billed_max_budget,
+        billed_model_max_budget,
+    )
 
 
 @pytest.mark.asyncio

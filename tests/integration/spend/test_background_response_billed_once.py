@@ -626,8 +626,18 @@ def _next_create(scenario: Scenario, key: str, model: str) -> httpx.Response:
     return response
 
 
+def _key_budget(scenario: Scenario, budget_owner: str, model_budget: JsonValue) -> Mapping[str, JsonValue]:
+    if budget_owner == "key":
+        return {"model_max_budget": model_budget}
+    if budget_owner == "user":
+        return {"user_id": scenario.user(model_max_budget=model_budget)}
+    if budget_owner == "budget_tier":
+        return {"budget_id": scenario.budget(model_max_budget=model_budget)}
+    return {}
+
+
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("budget_owner", ["key", "team"])
+@pytest.mark.parametrize("budget_owner", ["key", "team", "user", "budget_tier"])
 def test_a_billed_background_response_counts_toward_its_creators_project_and_model_budget(
     gateway: Gateway, budget_owner: str
 ) -> None:
@@ -637,9 +647,7 @@ def test_a_billed_background_response_counts_toward_its_creators_project_and_mod
         team_id: Final = scenario.team(**({"model_max_budget": model_budget} if budget_owner == "team" else {}))
         project_id: Final = scenario.project(team_id)
         key: Final = scenario.key(
-            team_id=team_id,
-            project_id=project_id,
-            **({"model_max_budget": model_budget} if budget_owner == "key" else {}),
+            team_id=team_id, project_id=project_id, **_key_budget(scenario, budget_owner, model_budget)
         )
         response_id: Final = create_background_response(scenario, key, upstream.model)
         read: Final = read_response(gateway, key, response_id)
