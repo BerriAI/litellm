@@ -600,6 +600,8 @@ async def handle_mcp_proxy_tool(
     raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    guardrail_auth: UserAPIKeyAuth | None = None,
+    resolved_tool: Tool | None | EllipsisType = ...,
 ) -> CallToolResult:
     from fastapi import HTTPException
 
@@ -646,18 +648,22 @@ async def handle_mcp_proxy_tool(
 
     tool_id: Final = arguments.get("tool_id")
     tool: Final = (
-        await find_mcp_proxy_tool(
-            tool_id,
-            user_api_key_auth=user_api_key_dict,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
+        resolved_tool
+        if resolved_tool is not ...
+        else (
+            await find_mcp_proxy_tool(
+                tool_id,
+                user_api_key_auth=user_api_key_dict,
+                mcp_servers=mcp_servers,
+                client_ip=client_ip,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            if isinstance(tool_id, str)
+            else None
         )
-        if isinstance(tool_id, str)
-        else None
     )
     if tool is None:
         return _text_tool_result("Unknown or unauthorized tool_id", is_error=True)
@@ -687,6 +693,7 @@ async def handle_mcp_proxy_tool(
         raw_headers=raw_headers,
         litellm_logging_obj=litellm_logging_obj,
         incoming_bearer_token=incoming_bearer_token,
+        guardrail_auth=guardrail_auth,
     )
 
 
@@ -704,6 +711,7 @@ async def handle_mcp_tool_call(
     requested_server_id: str | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    guardrail_auth: UserAPIKeyAuth | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
@@ -745,6 +753,7 @@ async def handle_mcp_tool_call(
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
+        guardrail_auth=guardrail_auth,
         incoming_bearer_token=incoming_bearer_token,
     )
     return complete_call_tool_result(result, WireCompat.LEGACY)

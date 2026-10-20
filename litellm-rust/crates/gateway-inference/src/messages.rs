@@ -24,7 +24,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
     "x-openrouter-experimental-metadata",
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
-    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter";
+    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,

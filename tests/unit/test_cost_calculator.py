@@ -2,7 +2,7 @@ import json
 import asyncio
 import datetime
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
@@ -17,6 +17,10 @@ from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.fallback_generalizations import (
+    get_fallback_generalization_rules,
+    set_fallback_generalizations,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -73,6 +77,48 @@ class ResponseCostCapture(CustomLogger):
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+@pytest.fixture
+def _claude_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "claude-family-baseline",
+                    "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
+                    "model_info": {"mode": "chat", "max_input_tokens": 200000, "max_output_tokens": 64000},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+@pytest.fixture
+def _priced_claude_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "claude-family-priced",
+                    "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
+                    "model_info": {
+                        "mode": "chat",
+                        "max_input_tokens": 200000,
+                        "max_output_tokens": 64000,
+                        "input_cost_per_token": 0.0000321,
+                        "output_cost_per_token": 0.0000765,
+                    },
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
@@ -147,6 +193,265 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_completion_cost_prefers_exact_route_price_over_capability_generalization(
+    _local_model_cost_map: None,
+    _claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced_model: Final = "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+    priced_entry: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.0000123,
+        "output_cost_per_token": 0.0000456,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {priced_model: priced_entry})
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[],
+        usage=usage,
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=priced_model,
+        custom_llm_provider="bedrock",
+    )
+
+    input_rate: Final = priced_entry["input_cost_per_token"]
+    output_rate: Final = priced_entry["output_cost_per_token"]
+    assert isinstance(input_rate, (int, float)), priced_entry
+    assert isinstance(output_rate, (int, float)), priced_entry
+    assert cost == usage.prompt_tokens * input_rate + usage.completion_tokens * output_rate
+
+
+def test_completion_cost_keeps_priced_generalization_before_later_exact_candidate(
+    _local_model_cost_map: None,
+    _priced_claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced_model: Final = "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+    exact_entry: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.0000123,
+        "output_cost_per_token": 0.0000456,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {priced_model: exact_entry})
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[],
+        usage=usage,
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=priced_model,
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
+
+
+@pytest.fixture
+def _per_second_priced_claude_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "claude-family-per-second",
+                    "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
+                    "model_info": {"cost_per_second": 0.25},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+def test_completion_cost_keeps_per_second_priced_generalization_before_later_exact_candidate(
+    _local_model_cost_map: None,
+    _per_second_priced_claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced_model: Final = "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            priced_model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000123,
+                "output_cost_per_token": 0.0000456,
+            }
+        },
+    )
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[],
+        usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=priced_model,
+        custom_llm_provider="bedrock",
+        total_time=2000,
+    )
+
+    assert cost == pytest.approx(0.25 * 2)
+
+
+@pytest.fixture
+def _price_free_gpt_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "gpt-family-baseline",
+                    "pattern": r"gpt-\d+(?:\.\d+)?",
+                    "model_info": {"mode": "chat", "supports_reasoning": True},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment_rate(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment_model: Final = "azure/gpt-4o-2024-11-20"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            deployment_model: {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=deployment_model,
+        custom_llm_provider="azure",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "lazy-candidate-regression-org/lazy-candidate-model"
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model=model,
+        choices=[],
+        usage=usage,
+    )
+
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(
+            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+        )
+        cost: Final = completion_cost(
+            completion_response=response,
+            model=f"huggingface/{model}",
+            custom_llm_provider="huggingface",
+        )
+
+        assert len(huggingface.calls) == 1
+    assert cost == 0.0
+
+
+def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "unmapped-cost-regression-org/unmapped-model"
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model=model,
+        choices=[],
+        usage=usage,
+    )
+
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(
+            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+        )
+        cost: Final = completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="huggingface",
+            custom_pricing=True,
+            custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+        )
+
+        assert len(huggingface.calls) == 0
+    assert cost == pytest.approx(usage.prompt_tokens * 0.001 + usage.completion_tokens * 0.002)
+
+
+def test_completion_cost_returns_zero_for_capability_only_generalization(
+    _local_model_cost_map: None,
+    _claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "bedrock/invoke/anthropic.claude-haiku-9-9-20991231-v1:0"
+    monkeypatch.setattr(litellm, "model_cost", {})
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-9-9-20991231-v1:0",
+        choices=[],
+        usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "hosted_vllm"])
+def test_completion_cost_prices_base_model_under_its_own_provider(
+    custom_llm_provider: str, _local_model_cost_map: None
+) -> None:
+    response: Final = ModelResponse(
+        model="my-deploy",
+        choices=[],
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=f"{custom_llm_provider}/my-deploy",
+        custom_llm_provider=custom_llm_provider,
+        base_model="claude-sonnet-4-5",
+    )
+
+    info: Final = litellm.get_model_info("claude-sonnet-4-5", custom_llm_provider="anthropic")
+    assert cost == pytest.approx(
+        1000 * info["input_cost_per_token"] + 1000 * info["output_cost_per_token"]
+    )
 
 
 def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
@@ -227,6 +532,62 @@ def test_response_cost_calculator_custom_pricing_ignores_upstream_response_cost_
     )
 
     assert cost == pytest.approx(expected_cost)
+
+
+def _header_cost_chat_response(additional_headers: dict[str, str]) -> ModelResponse:
+    response: Final = ModelResponse(
+        model="cc-header-cost-chat",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    response._hidden_params = {"additional_headers": additional_headers}
+    return response
+
+
+def _cost_with_upstream_headers(monkeypatch: pytest.MonkeyPatch, additional_headers: dict[str, str]) -> float:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    return response_cost_calculator(
+        response_object=_header_cost_chat_response(additional_headers),
+        model="cc-header-cost-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+
+
+@pytest.mark.parametrize("header_cost", ("-5", "not-a-number", "nan", "inf"))
+def test_response_cost_calculator_prices_from_the_map_when_upstream_cost_header_is_not_billable(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+) -> None:
+    price_map_cost: Final = _cost_with_upstream_headers(monkeypatch, {})
+
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert price_map_cost > 0
+    assert cost == pytest.approx(price_map_cost)
+
+
+@pytest.mark.parametrize(("header_cost", "expected_cost"), (("0", 0.0), ("0.25", 0.25)))
+def test_response_cost_calculator_bills_a_finite_non_negative_upstream_cost_header(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+    expected_cost: float,
+) -> None:
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert cost == expected_cost
 
 
 def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
@@ -3702,6 +4063,29 @@ def _batch_cache_usage() -> Usage:
     )
 
 
+def test_batch_cost_calculator_vertex_regional_costs_uplift_over_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/46880: a Vertex batch
+    on a regional location must cost the global batch times the model's
+    regional_endpoint_uplift_multiplier, the same invariant the online path keeps.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
+    global_prompt, global_completion = batch_cost_calculator(
+        usage=usage, model="gemini-3.5-flash", custom_llm_provider="vertex_ai", vertex_location="global"
+    )
+    regional_prompt, regional_completion = batch_cost_calculator(
+        usage=usage, model="gemini-3.5-flash", custom_llm_provider="vertex_ai", vertex_location="us-central1"
+    )
+
+    uplift = litellm.get_model_info("vertex_ai/gemini-3.5-flash")["regional_endpoint_uplift_multiplier"]
+    assert global_prompt + global_completion > 0
+    assert regional_prompt == pytest.approx(global_prompt * uplift, rel=1e-9)
+    assert regional_completion == pytest.approx(global_completion * uplift, rel=1e-9)
+
+
 def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
     model_info: ModelInfo = {
         "input_cost_per_token_batches": 1e-7,
@@ -6424,6 +6808,78 @@ def test_whisper_azure():
         5,
     )
     assert round(cost, 5) == round(expected_cost, 5)
+
+
+@pytest.mark.parametrize(
+    ("provider", "requested_model", "response_extras", "expected_seconds"),
+    [
+        ("openai", "openai/gpt-fake-transcribe", {}, 2.0),
+        ("openai", "openai/gpt-fake-transcribe", {"_audio_transcription_duration": 1.35}, 1.35),
+        ("openai", "openai/gpt-fake-transcribe", {"duration": 1.34}, 1.34),
+        ("openai", "openai/whisper-fake", {}, 0.0),
+        ("azure", "gpt-fake-transcribe", {}, 0.0),
+    ],
+    ids=[
+        "undecodable_upload_bills_provider_seconds",
+        "measured_duration_still_wins",
+        "provider_duration_still_wins",
+        "whisper_models_never_bill_provider_seconds",
+        "azure_never_bills_provider_seconds",
+    ],
+)
+def test_transcription_cost_falls_back_to_provider_billed_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    requested_model: str,
+    response_extras: Mapping[str, float],
+    expected_seconds: float,
+) -> None:
+    model: Final = requested_model.removeprefix(f"{provider}/")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={
+            "text": "What is the weather in Paris?",
+            "usage": {"type": "duration", "seconds": 2},
+            **response_extras,
+        },
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": provider},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=requested_model, call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
+def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "priced-deployment",
+        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription,
+        model="openai/gpt-fake-transcribe",
+        call_type="atranscription",
+        custom_pricing=True,
+        router_model_id="priced-deployment",
+    )
+
+    assert cost == pytest.approx(0.000075 * 2)
 
 
 def test_gpt_image_2_azure_cost_tracking():
