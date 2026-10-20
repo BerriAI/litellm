@@ -49,6 +49,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.credential_hydration import (
+    decrypted_credential,
     hydrate_named_credential_authoritative,
     named_credential_wif_fields,
     stored_credential_provider,
@@ -61,7 +62,7 @@ from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.types.router import server_owned_wif_fields_named
+from litellm.types.router import server_owned_wif_fields_named, server_owned_wif_fields_written
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 from .user_provider_credentials import (
@@ -97,7 +98,7 @@ def _reject_non_admin_wif_fields(
     raise ProxyException(
         message=(
             f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation "
-            "or OAuth token exchange parameter."
+            "or OAuth token exchange parameter or oidc/ api_key secret reference."
         ),
         type=ProxyErrorTypes.auth_error.value,
         code=status.HTTP_403_FORBIDDEN,
@@ -112,13 +113,13 @@ def _incoming_wif_fields(incoming_values: Mapping[str, object], credential: Upda
     names in ``credential_values_to_delete``, since dropping a federation field off the stored
     credential breaks every deployment referencing it just as installing one would redirect them.
     """
-    return server_owned_wif_fields_named(incoming_values) + server_owned_wif_fields_named(
+    return server_owned_wif_fields_written(incoming_values) + server_owned_wif_fields_named(
         credential.credential_values_to_delete or ()
     )
 
 
 def _stored_wif_fields(stored_credential: CredentialItem) -> tuple[str, ...]:
-    return server_owned_wif_fields_named(stored_credential.credential_values)
+    return server_owned_wif_fields_written(decrypted_credential(stored_credential).credential_values)
 
 
 def _reject_overlapping_credential_values(credential: UpdateCredentialItem) -> None:
@@ -317,7 +318,7 @@ async def create_credential(
                 status_code=400,
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
-        _reject_non_admin_wif_fields(server_owned_wif_fields_named(credential_values), user_api_key_dict)
+        _reject_non_admin_wif_fields(server_owned_wif_fields_written(credential_values), user_api_key_dict)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )

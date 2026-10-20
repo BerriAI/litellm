@@ -235,6 +235,29 @@ async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
 
 
 # Your bearer token
+@pytest.mark.asyncio
+async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_commit_was_writing():
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    queued: list[str] = []
+    committed: list[str] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+        await asyncio.sleep(0.05)
+
+    async def failure_row() -> None:
+        await asyncio.sleep(0.01)
+        queued.append("failure row spend")
+
+    spawn_logging_task(asyncio.get_running_loop(), failure_row(), task_name="failure row")
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend=commit_spend)
+
+    assert committed == ["failure row spend"]
+
+
 token = MASTER_KEY
 
 headers = {"Authorization": f"Bearer {token}"}
