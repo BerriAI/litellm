@@ -191,10 +191,11 @@ class AWSEventStreamDecoder:
             usage=None,
         )
 
-    def _record_to_chunk(self, record: object) -> GChunk | StreamingChatCompletionChunk | None:
-        if isinstance(record, Mapping) and "error" in record:
-            verbose_logger.error("SageMaker endpoint streamed an error: %s", json.dumps(record))
-            return None
+    def _record_to_chunk(self, record: object) -> GChunk | StreamingChatCompletionChunk | SagemakerError | None:
+        if isinstance(record, Mapping) and record.get("error") is not None:
+            return SagemakerError(
+                status_code=500, message=f"SageMaker endpoint streamed an error: {json.dumps(record)}"
+            )
         try:
             if self.is_messages_api:
                 return self._chunk_parser_messages_api(
@@ -206,7 +207,11 @@ class AWSEventStreamDecoder:
             return None
 
     def _chunks(self, records: tuple[object, ...]) -> Iterator[GChunk | StreamingChatCompletionChunk]:
-        return (chunk for chunk in map(self._record_to_chunk, records) if chunk is not None)
+        for outcome in map(self._record_to_chunk, records):
+            if isinstance(outcome, SagemakerError):
+                raise outcome
+            if outcome is not None:
+                yield outcome
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
@@ -238,13 +243,9 @@ class AWSEventStreamDecoder:
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
-                try:
-                    if payload := self._parse_message_from_event(event):
-                        verbose_logger.debug("sagemaker  parsed chunk bytes %s", payload)
-                        for chunk in self._chunks(records.feed(payload)):
-                            yield chunk
-                except Exception as e:
-                    verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
+                if payload := self._parse_message_from_event(event):
+                    for parsed_chunk in self._chunks(records.feed(payload)):
+                        yield parsed_chunk
 
         unparsed: Final = records.unparsed()
         if unparsed:

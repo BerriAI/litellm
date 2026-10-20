@@ -2,7 +2,7 @@ import json
 import logging
 import struct
 import zlib
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,7 @@ import pytest
 
 from botocore.exceptions import ClientError, ConnectionClosedError
 
-from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, client_error_details
+from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, SagemakerError, client_error_details
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
@@ -248,13 +248,22 @@ _PAYLOAD_PART_HEADERS: Final = (
     + _event_header(":content-type", "application/octet-stream")
     + _event_header(":message-type", "event")
 )
+_MODEL_STREAM_ERROR_HEADERS: Final = (
+    _event_header(":exception-type", "ModelStreamError")
+    + _event_header(":content-type", "application/json")
+    + _event_header(":message-type", "exception")
+)
+
+
+def _frame(headers: bytes, body: str | bytes) -> bytes:
+    encoded: Final = body.encode() if isinstance(body, str) else body
+    prelude: Final = struct.pack("!II", 16 + len(headers) + len(encoded), len(headers))
+    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude)) + headers + encoded
+    return message + struct.pack("!I", zlib.crc32(message))
 
 
 def _payload_part(body: str | bytes) -> bytes:
-    encoded: Final = body.encode() if isinstance(body, str) else body
-    prelude: Final = struct.pack("!II", 16 + len(_PAYLOAD_PART_HEADERS) + len(encoded), len(_PAYLOAD_PART_HEADERS))
-    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude)) + _PAYLOAD_PART_HEADERS + encoded
-    return message + struct.pack("!I", zlib.crc32(message))
+    return _frame(_PAYLOAD_PART_HEADERS, body)
 
 
 def _cut(stream: str, size: int) -> tuple[bytes, ...]:
@@ -292,19 +301,33 @@ _LMI_STREAM: Final = "".join(
 )
 
 
-async def _decode(
-    parts: tuple[str | bytes, ...], is_messages_api: bool, mode: str
-) -> list[GChunk | StreamingChatCompletionChunk | None]:
+async def _stream_frames(
+    frames: tuple[bytes, ...], is_messages_api: bool, mode: str
+) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
     decoder: Final = AWSEventStreamDecoder(model="m", is_messages_api=is_messages_api)
-    frames: Final = tuple(map(_payload_part, parts))
     if mode == "sync":
-        return list(decoder.iter_bytes(iter(frames)))
+        for chunk in decoder.iter_bytes(iter(frames)):
+            yield chunk
+        return
 
     async def stream():
         for frame in frames:
             yield frame
 
-    return [chunk async for chunk in decoder.aiter_bytes(stream())]
+    async for chunk in decoder.aiter_bytes(stream()):
+        yield chunk
+
+
+async def _decode(
+    parts: tuple[str | bytes, ...], is_messages_api: bool, mode: str
+) -> list[GChunk | StreamingChatCompletionChunk | None]:
+    return [chunk async for chunk in _stream_frames(tuple(map(_payload_part, parts)), is_messages_api, mode)]
+
+
+def _text(chunk: GChunk | StreamingChatCompletionChunk | None, is_messages_api: bool) -> str | None:
+    if chunk is None:
+        return None
+    return chunk.choices[0].delta.content if is_messages_api else chunk["text"]
 
 
 @pytest.mark.asyncio
@@ -402,16 +425,62 @@ async def test_truncated_last_record_is_reported_after_the_complete_ones(mode: s
         ),
     ],
 )
-async def test_container_error_event_is_logged_with_its_message_and_the_stream_keeps_its_chunks(
+async def test_container_error_event_raises_with_its_message_after_the_chunks_before_it(
+    parts: tuple[str, ...], is_messages_api: bool, mode: str
+):
+    stream: Final = _stream_frames(tuple(map(_payload_part, parts)), is_messages_api, mode)
+
+    assert _text(await anext(stream), is_messages_api) == "Hél"
+    with pytest.raises(SagemakerError, match="CUDA out of memory while decoding"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_model_stream_error_raises_after_the_chunks_before_it(mode: str):
+    frames: Final = (
+        _payload_part(_VLLM_EVENTS[1]),
+        _frame(_MODEL_STREAM_ERROR_HEADERS, json.dumps({"Message": "container exited", "ErrorCode": "ModelError"})),
+        _payload_part(_VLLM_EVENTS[2]),
+    )
+    stream: Final = _stream_frames(frames, True, mode)
+
+    assert _text(await anext(stream), True) == "Hél"
+    with pytest.raises(ValueError, match="container exited"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("parts", "is_messages_api"),
+    [
+        pytest.param(
+            tuple(
+                _vllm_chunk([{"index": 0, "delta": {"content": text}, "finish_reason": None}], error=None)
+                for text in ("Hél", "lo 👋")
+            ),
+            True,
+            id="vllm-chunks-with-null-error",
+        ),
+        pytest.param(
+            tuple(
+                f"data:{json.dumps({'index': 0, 'token': {'text': text}, 'error': None}, ensure_ascii=False)}\n\n"
+                for text in ("Hél", "lo 👋")
+            ),
+            False,
+            id="tgi-tokens-with-null-error",
+        ),
+    ],
+)
+async def test_chunk_with_a_null_error_field_is_delivered(
     parts: tuple[str, ...], is_messages_api: bool, mode: str, caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         chunks: Final = await _decode(parts, is_messages_api=is_messages_api, mode=mode)
 
-    texts: Final = [chunk.choices[0].delta.content if is_messages_api else chunk["text"] for chunk in chunks]
-    assert texts == ["Hél"]
-    assert [record.levelno for record in caplog.records] == [logging.ERROR]
-    assert "CUDA out of memory while decoding" in caplog.records[0].getMessage()
+    assert "".join(_text(chunk, is_messages_api) or "" for chunk in chunks) == "Héllo 👋"
+    assert caplog.records == []
 
 
 @pytest.mark.asyncio
