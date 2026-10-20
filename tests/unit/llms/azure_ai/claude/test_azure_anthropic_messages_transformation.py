@@ -596,3 +596,49 @@ async def test_outgoing_azure_request_keeps_an_object_output_format_under_drop_p
     body: Final = await _azure_request_body_for_output_format(output_format, drop_params=True)
 
     assert body["output_format"] == output_format
+
+
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("messages", "params"),
+    [
+        ([{"role": "user", "content": "Summarize the chat so far."}], {"compaction": {"type": "summarize"}}),
+        (
+            [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "Go on"}],
+            {},
+        ),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+async def test_outgoing_azure_compaction_request_carries_the_compact_2026_09_04_beta(
+    messages: list[object], params: dict[str, object]
+) -> None:
+    """Foundry answers 400 "compaction: this parameter requires anthropic-beta: compact-2026-09-04" for the param
+    and 400 "Input tag 'compaction' ... does not match" for a replayed block without the header, and 200 with it
+    (live, claude-sonnet-5-5 on Azure AI Foundry, 2026-10-20)."""
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _foundry_answer(request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=messages,
+            model="azure_ai/claude-sonnet-5-5",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            client=upstream,
+            **params,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    assert received[0].headers["anthropic-beta"].split(",").count("compact-2026-09-04") == 1, dict(received[0].headers)

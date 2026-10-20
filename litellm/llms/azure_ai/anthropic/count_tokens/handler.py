@@ -79,6 +79,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             headers: Final = self.get_required_headers(
                 api_key=api_key,
                 litellm_params=litellm_params,
+                messages=messages,
             )
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(

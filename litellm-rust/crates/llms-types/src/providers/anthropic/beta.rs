@@ -208,7 +208,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::Compact20260904 => &[
-                BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,

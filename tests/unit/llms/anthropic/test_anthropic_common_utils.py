@@ -4529,7 +4529,7 @@ _SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so 
 
 @pytest.mark.parametrize(
     "provider,expected",
-    [("anthropic", True), ("vertex_ai", True), ("azure_ai", False), ("bedrock", False), ("bedrock_converse", False)],
+    [("anthropic", True), ("vertex_ai", True), ("azure_ai", True), ("bedrock", False), ("bedrock_converse", False)],
 )
 @pytest.mark.parametrize(
     "optional_params,messages",
@@ -4547,7 +4547,7 @@ def test_requires_native_compaction_beta_per_provider(
     assert requires_native_compaction_beta(provider, optional_params, messages) is expected
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
 @pytest.mark.parametrize(
     "optional_params,messages",
     [

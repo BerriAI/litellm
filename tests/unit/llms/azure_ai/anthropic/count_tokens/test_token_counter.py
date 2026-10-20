@@ -215,3 +215,36 @@ async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest
     assert result is not None
     assert result.total_tokens == 6
     assert route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("assistant_content", "expected_beta"),
+    [
+        (
+            [{"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"}],
+            "compact-2026-09-04,token-counting-2024-11-01",
+        ),
+        ("Use Recipe and Step tables.", "token-counting-2024-11-01"),
+    ],
+    ids=("signed_compaction_block", "plain_turn"),
+)
+async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_compaction_block(
+    monkeypatch: pytest.MonkeyPatch, assistant_content: object, expected_beta: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 376}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": "What tables did we pick?"},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 376
+    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta

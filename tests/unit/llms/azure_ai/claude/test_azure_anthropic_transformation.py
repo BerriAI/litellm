@@ -5,10 +5,12 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -484,3 +486,31 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "messages", "expected"),
+    [
+        ({"compaction": {"type": "summarize"}}, [{"role": "user", "content": "Hello"}], True),
+        (
+            {},
+            [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "Summary.", "signature": "sig"}]},
+                {"role": "user", "content": "Go on"},
+            ],
+            True,
+        ),
+        ({}, [{"role": "user", "content": "Hello"}], False),
+    ],
+    ids=["compaction_param", "signed_compaction_block", "no_compaction"],
+)
+def test_azure_chat_compaction_sends_the_compact_2026_09_04_beta(
+    local_beta_headers_config: None, optional_params: dict[str, object], messages: list[object], expected: bool
+) -> None:
+    headers: Final = AzureAnthropicConfig().update_headers_with_optional_anthropic_beta(
+        headers={}, optional_params=optional_params, messages=messages
+    )
+
+    filtered: Final = update_headers_with_filtered_beta(headers=headers, provider="azure_ai")
+
+    assert ("compact-2026-09-04" in filtered.get("anthropic-beta", "").split(",")) is expected

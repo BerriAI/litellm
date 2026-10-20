@@ -119,7 +119,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
-NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "vertex_ai"})
+NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "vertex_ai"})
 
 
 def is_anthropic_messages_url(url: str) -> bool:

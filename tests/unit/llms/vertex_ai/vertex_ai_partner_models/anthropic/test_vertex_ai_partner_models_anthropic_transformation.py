@@ -1307,21 +1307,29 @@ def test_vertex_ai_anthropic_client_sent_body_header_only_beta_moves_to_the_head
 
 
 @pytest.mark.parametrize(
-    "client_beta,header",
+    "client_beta,body,header",
     [
-        ("context-1m-2025-08-07", "context-management-2025-06-27"),
-        ("inline-tools-2026-09-15", "context-management-2025-06-27,inline-tools-2026-09-15"),
+        (
+            "context-1m-2025-08-07",
+            ["context-1m-2025-08-07", "context-management-2025-06-27"],
+            "context-management-2025-06-27",
+        ),
+        (
+            "inline-tools-2026-09-15",
+            ["context-management-2025-06-27"],
+            "context-management-2025-06-27,inline-tools-2026-09-15",
+        ),
     ],
     ids=["body_beta", "header_only_beta"],
 )
-def test_vertex_ai_anthropic_litellm_betas_replace_the_client_body_betas(
-    local_beta_headers_config: None, client_beta: str, header: str
+def test_vertex_ai_anthropic_litellm_betas_merge_with_the_client_body_betas(
+    local_beta_headers_config: None, client_beta: str, body: list[str], header: str
 ) -> None:
     headers: Final[dict[str, str]] = {}
 
     result: Final = _vertex_request({"context_management": _CLEAR_TOOL_USES, "anthropic_beta": [client_beta]}, headers)
 
-    assert result["anthropic_beta"] == ["context-management-2025-06-27"]
+    assert result["anthropic_beta"] == body
     assert headers["anthropic-beta"] == header
 
 

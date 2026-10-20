@@ -28,6 +28,7 @@ from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
 from ...common_utils import (
+    NATIVE_COMPACTION_PROVIDERS,
     AnthropicError,
     AnthropicModelInfo,
     merge_anthropic_beta_headers,
@@ -99,7 +100,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
-            *(("compaction",) if self._resolved_provider == "anthropic" else ()),
+            *(("compaction",) if self._resolved_provider in NATIVE_COMPACTION_PROVIDERS else ()),
             "output_format",
             "inference_geo",
             "speed",
