@@ -852,20 +852,26 @@ class CheckBatchCost:
             )
             return None
 
-        try:
-            await logging_obj.async_success_handler(
-                result=response,
-                batch_cost=batch_result.cost,
-                batch_usage=batch_result.usage,
-                batch_models=batch_result.models,
-                batch_successful_requests=batch_result.successful_requests,
-                batch_failed_requests=batch_result.failed_requests,
-                batch_prompt_cost=batch_result.prompt_cost,
-                batch_completion_cost=batch_result.completion_cost,
-            )
-        except Exception:
-            await self._release_job_claim(job, original_status, original_file_object)
-            raise
+        from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+        with track_batch_accounting(logging_obj.litellm_call_id) as accounting:
+            try:
+                await logging_obj.async_success_handler(
+                    result=response,
+                    batch_cost=batch_result.cost,
+                    batch_usage=batch_result.usage,
+                    batch_models=batch_result.models,
+                    batch_successful_requests=batch_result.successful_requests,
+                    batch_failed_requests=batch_result.failed_requests,
+                    batch_prompt_cost=batch_result.prompt_cost,
+                    batch_completion_cost=batch_result.completion_cost,
+                )
+            finally:
+                if accounting.retryable_failure:
+                    await self._release_job_claim(job, original_status, original_file_object)
+
+        if accounting.retryable_failure:
+            return None
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:
