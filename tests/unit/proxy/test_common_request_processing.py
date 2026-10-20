@@ -8482,9 +8482,11 @@ class _RecordingSuccessLogger(CustomLogger):
     def __init__(self):
         super().__init__()
         self.success_events = []
+        self.logged: Final = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+        self.logged.set()
 
 
 class TestStreamingClientDisconnectBilling:
@@ -8639,10 +8641,7 @@ class TestStreamingClientDisconnectBilling:
             {"litellm_logging_obj": logging_obj},
             response,
         )
-        for _ in range(50):
-            if recorder.success_events:
-                break
-            await asyncio.sleep(0.1)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
 
         assert billed is True
         assert len(recorder.success_events) == 1

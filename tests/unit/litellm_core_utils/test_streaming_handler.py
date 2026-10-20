@@ -2932,14 +2932,17 @@ class _LoggedResponseRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.responses: list[object] = []
+        self.logged: Final = threading.Event()
 
     def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
         self.responses.append(response_obj)
+        self.logged.set()
 
     async def async_log_success_event(
         self, kwargs: object, response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.responses.append(response_obj)
+        self.logged.set()
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2984,11 +2987,8 @@ async def test_stream_without_provider_usage_logs_the_estimate_with_the_final_ch
     _add_mcp_metadata_to_response(wrapper, openai_tools=None, tool_calls=tool_calls)
 
     _ = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
-    for _attempt in range(50):
-        if recorder.responses:
-            break
-        await asyncio.sleep(0.1)
 
+    assert await asyncio.to_thread(recorder.logged.wait, 5)
     assert len(recorder.responses) == 1
     logged: Final = recorder.responses[0]
     assert isinstance(logged, ModelResponse)
