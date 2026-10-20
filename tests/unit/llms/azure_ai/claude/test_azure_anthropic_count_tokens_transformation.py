@@ -5,7 +5,7 @@ Verifies that the CountTokens API uses the correct authentication headers.
 """
 
 
-
+import pytest
 
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
@@ -112,3 +112,16 @@ class TestAzureAIAnthropicCountTokensConfig:
         endpoint = config.get_count_tokens_endpoint("https://anthropic-res.services.ai.azure.com")
 
         assert endpoint == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages/count_tokens"
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://my-resource.services.ai.azure.com/anthropic/v1/messages",
+            "https://my-resource.services.ai.azure.com/anthropic/v1/messages/",
+            "https://my-resource.services.ai.azure.com/anthropic/v1",
+        ],
+    )
+    def test_get_count_tokens_endpoint_sits_next_to_the_messages_url(self, api_base):
+        endpoint = AzureAIAnthropicCountTokensConfig().get_count_tokens_endpoint(api_base)
+
+        assert endpoint == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
