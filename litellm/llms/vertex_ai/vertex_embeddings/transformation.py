@@ -1,5 +1,5 @@
 import types
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -23,7 +23,7 @@ class _PredictResponseWithoutBillableCount(TypedDict, total=False):
     pass
 
 
-_PredictResponse = Annotated[
+_PredictResponse: TypeAlias = Annotated[
     _PredictResponseMetadata | _PredictResponseWithoutBillableCount, Field(union_mode="left_to_right")
 ]
 _PREDICT_RESPONSE_METADATA: Final[TypeAdapter[_PredictResponse]] = TypeAdapter(_PredictResponse)
