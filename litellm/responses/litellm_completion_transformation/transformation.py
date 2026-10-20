@@ -1005,7 +1005,7 @@ class LiteLLMCompletionResponsesConfig:
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
@@ -3406,6 +3406,10 @@ class LiteLLMCompletionResponsesConfig:
                 if cache_write_tokens is not None
                 else MappingProxyType({})
             )
+            cache_type: Final = getattr(prompt_details, "cache_type", None)
+            cache_type_extra: Final[Mapping[str, str]] = (
+                MappingProxyType({"cache_type": cache_type}) if cache_type is not None else MappingProxyType({})
+            )
             # The cost path reads the grounding counters off the input details, and a realtime
             # session's usage is rebuilt from its own response.done, so dropping them here bills
             # no per-query grounding fee at all.
@@ -3432,6 +3436,7 @@ class LiteLLMCompletionResponsesConfig:
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),
                 **cache_write_extra,
+                **cache_type_extra,
                 **grounding_request_counts,
             )
 
