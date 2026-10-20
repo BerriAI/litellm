@@ -2558,7 +2558,7 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
         )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
 
 
