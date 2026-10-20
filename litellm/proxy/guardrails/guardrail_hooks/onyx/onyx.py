@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -28,21 +26,6 @@ from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _GuardResult(TypedDict, total=False):
-    allowed: ReadOnly[object]
-    violated_rules: ReadOnly[NotRequired[list[str]]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _ModelResponseJson(TypedDict, total=False):
-    response: ReadOnly[object]
-
-
-_GUARD_RESULT: Final = TypeAdapter(_GuardResult)
-_MODEL_RESPONSE_JSON: Final = TypeAdapter(_ModelResponseJson)
 
 
 class OnyxGuardrail(CustomGuardrail):
@@ -83,7 +66,7 @@ class OnyxGuardrail(CustomGuardrail):
         payload: object,
         input_type: Literal["request", "response"],
         conversation_id: str,
-    ) -> _GuardResult:
+    ) -> dict:
         """
         Call external Onyx Guard server for validation
         """
@@ -99,7 +82,7 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result: Final[_GuardResult] = _GUARD_RESULT.validate_python(response.json())
+        result: Final = response.json()
         if not result.get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
@@ -131,7 +114,7 @@ class OnyxGuardrail(CustomGuardrail):
         else:
             try:
                 response: Final = ModelResponse(**request_data)
-                parsed: Final[_ModelResponseJson] = _MODEL_RESPONSE_JSON.validate_python(response.json())
+                parsed: Final = response.json()
                 payload = parsed.get("response", {})
             except Exception as e:
                 verbose_proxy_logger.error(
