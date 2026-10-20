@@ -905,9 +905,10 @@ def print_startup_message(message: str) -> None:
     """Write a boot-time message meant for the operator's terminal.
 
     Plain mode prints it unchanged, colors and spacing included. With JSON logs on, every line of
-    stdout is read by a log pipeline, so the message goes out as one INFO record on the proxy logger
-    instead, on stdout like the print, with the ANSI color codes and surrounding blank lines removed,
-    located at the caller and emitted at any log level; a blank spacer produces no record.
+    stdout is read by a log pipeline, so the message goes out as one INFO record of the proxy logger
+    instead, on stdout like the print whatever handlers the logging config gave that logger, with the
+    ANSI color codes and surrounding blank lines removed, located at the caller and emitted at any log
+    level; a blank spacer produces no record.
     """
     if not litellm.json_logs:
         print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
@@ -940,15 +941,16 @@ def print_startup_message(message: str) -> None:
         redact=_ENABLE_SECRET_REDACTION,
     ):
         return
-    # uvicorn applies an operator --log_config after proxy_cli's turn_on_json() and before initialize()
-    # re-installs the JSON handler through load_config(); a config that names "LiteLLM Proxy" leaves the
-    # logger without handlers in that window, where the banner and the feedback box are emitted.
-    for json_handler in verbose_proxy_logger.handlers or (_fallback_json_handler(),):
-        json_handler.handle(record)
+    # The print wrote to stdout whatever the logging config said, so the record goes through the proxy's
+    # own JSON handler on stdout rather than the proxy logger's handlers: uvicorn applies an operator
+    # --log_config after proxy_cli's turn_on_json() and before initialize() re-installs the JSON handler
+    # through load_config(), and in that window, where the banner and the feedback box are emitted, a
+    # config that names "LiteLLM Proxy" has left the logger with no handler or with the operator's own.
+    _startup_json_handler().handle(record)
 
 
-def _fallback_json_handler() -> logging.Handler:
-    """JSON handler for a startup message that arrives while the proxy logger has no handler of its own."""
+def _startup_json_handler() -> logging.Handler:
+    """The proxy's JSON handler on stdout, filters included, for one startup message."""
     handler: Final = LevelRoutingStreamHandler()
     handler.setFormatter(JsonFormatter())
     handler.addFilter(_secret_filter)

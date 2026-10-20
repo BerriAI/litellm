@@ -7,7 +7,8 @@ rejects any line of its output that is not one JSON record, while checking that 
 startup information those lines used to carry is still present as JSON records. JSON mode is switched
 on through the environment and through the config, at one and two uvicorn workers, at the INFO, the
 default and the WARNING log level, under a concurrent burst that lands on both workers, under an operator
---log_config that names the proxy logger, and with a policy list longer than the stdout cap.
+--log_config that names the proxy logger or gives it a handler of its own, and with a policy list longer
+than the stdout cap.
 """
 
 from __future__ import annotations
@@ -59,6 +60,18 @@ OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
     "formatters": {"json": {"()": "litellm._logging.JsonFormatter"}},
     "handlers": {"stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "json"}},
     "loggers": {"LiteLLM Proxy": {"level": "INFO"}},
+    "root": {"level": "INFO", "handlers": ["stdout"]},
+}
+# an operator logging config that silences the proxy logger with a handler of its own and keeps the rest JSON
+OPERATOR_SILENCING_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"json": {"()": "litellm._logging.JsonFormatter"}},
+    "handlers": {
+        "stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "json"},
+        "silence": {"class": "logging.NullHandler"},
+    },
+    "loggers": {"LiteLLM Proxy": {"level": "INFO", "handlers": ["silence"], "propagate": False}},
     "root": {"level": "INFO", "handlers": ["stdout"]},
 }
 
@@ -226,6 +239,25 @@ def test_json_logs_with_operator_log_config_keeps_every_line_json(
     config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
     log_config: Final = tmp_path / "operator_log_config.yaml"
     log_config.write_text(yaml.safe_dump(dict(OPERATOR_LOG_CONFIG)))
+    log: Final = _boot_serve_and_stop(
+        gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models, ("--log_config", str(log_config))
+    )
+    _assert_every_line_is_json(log, workers, models, redis_auth_cache_line=False)
+
+
+@pytest.mark.parametrize("workers", WORKER_COUNTS)
+def test_json_logs_with_operator_handler_on_the_proxy_logger_keeps_the_startup_notices(
+    gateway: Gateway, tmp_path: Path, workers: int
+) -> None:
+    """An operator `--log_config` that gives the proxy logger a handler of its own, here a NullHandler that
+    silences it, is in force in the window where the banner and the feedback box are emitted. The prints
+    they replace wrote to stdout whatever the logging config said, so both still arrive there as JSON, one
+    per worker. The Redis auth-cache line is a regular logger line written in that same window and goes
+    to the operator's handler, so it is silenced on main and here alike."""
+    models: Final = _models()
+    config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
+    log_config: Final = tmp_path / "operator_silencing_log_config.yaml"
+    log_config.write_text(yaml.safe_dump(dict(OPERATOR_SILENCING_LOG_CONFIG)))
     log: Final = _boot_serve_and_stop(
         gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models, ("--log_config", str(log_config))
     )
