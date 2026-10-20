@@ -32,7 +32,7 @@ CASE: Final = replace(
         allowlist=(
             KnownStall("garbage collection", max_count=4),
             KnownStall("LifespanOn.main", max_count=4),
-            KnownStall("RequestResponseCycle.run_asgi", max_count=6),
+            KnownStall("RequestResponseCycle.run_asgi", max_count=2),
             KnownStall("with_proxy_compaction_executor", max_count=2),
             KnownStall("Logging.async_success_handler", max_count=2),
             KnownStall("Logging.dispatch_success_handlers", max_count=2),
@@ -43,6 +43,7 @@ CASE: Final = replace(
             KnownStall("RedisBatch.flush", max_count=2),
             KnownStall("run_coroutine_job", max_count=2),
             KnownStall("user_api_key_auth.py", max_count=2),
+            KnownStall("route_streaming_logging_to_handler", max_count=2),
         ),
     ),
 )

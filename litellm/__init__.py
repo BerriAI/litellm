@@ -7,6 +7,7 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -62,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -354,6 +354,7 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
+reasoning_effort_rounding: Literal["up", "down"] = "up"
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -624,6 +625,7 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
 perplexity_models: Set = set()
@@ -676,6 +678,7 @@ qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+openinfer_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -741,8 +744,18 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    for key, value in model_cost_map.items():
+    for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -841,6 +854,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
@@ -945,6 +963,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "openinfer":
+            openinfer_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1113,6 +1133,7 @@ model_list = list(
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | openinfer_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1229,6 +1250,7 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "openinfer": openinfer_models,
         "v0": v0_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,

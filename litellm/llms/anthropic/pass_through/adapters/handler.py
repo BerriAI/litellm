@@ -23,6 +23,7 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import reject_malformed_tool_result_text
 from litellm.llms.anthropic.pass_through.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -509,7 +510,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary, responses_api_bridge_check
+        from litellm.responses.bridge_check import (
+            chat_target_accepts_reasoning_summary,
+            responses_api_bridge_check,
+            str_keyed_mapping,
+        )
 
         if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
             return _ChatTargetReasoning(effort=effort, summary=requested_summary)
@@ -518,6 +523,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
+        client_summary: Final = thinking.get("summary")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
@@ -525,8 +531,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
             ),
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=effort if client_summary is None else {"effort": effort, "summary": client_summary},
             api_base=resolved_api_base,
+            deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
@@ -550,16 +557,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        deployment_model_info: Final = completion_kwargs.get("model_info")
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
-                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
             )
             if normalized != reasoning_effort:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+            normalized = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+            )
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,
@@ -640,6 +656,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            drop_params=litellm.drop_params is True or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
         )
 
         if openai_request is None:
@@ -730,6 +747,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        reject_malformed_tool_result_text(messages, model, request_kwargs)
         drop_invalid_edits: Final = _drops_invalid_edits(request_kwargs)
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
@@ -853,6 +871,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
+        sync_request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        reject_malformed_tool_result_text(messages, model, sync_request_kwargs)
+
         # Run the context_management polyfill on the sync path too so that
         # ``litellm.messages.create()`` callers don't silently lose edits like
         # ``clear_tool_uses_20250919``. The dispatcher is async (so the
@@ -860,7 +881,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        drop_invalid_edits: Final = _drops_invalid_edits(_REQUEST_KWARGS.validate_python(kwargs))
+        drop_invalid_edits: Final = _drops_invalid_edits(sync_request_kwargs)
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx

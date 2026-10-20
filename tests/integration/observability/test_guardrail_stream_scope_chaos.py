@@ -25,6 +25,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ChaosEndpoint: TypeAlias = Literal["chat", "messages", "responses"]
 CHAOS_ENDPOINTS: Final[tuple[ChaosEndpoint, ...]] = ("chat", "messages", "responses")
 CHAOS_MODELS: Final = MappingProxyType(
@@ -959,7 +961,6 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pytest.skip("BUG: LIT-9050 spend rows for requests served during a Postgres restart are dropped")
     postgres_directory: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"]) / f"owned-postgres-{uuid.uuid4().hex}"
     with _owned_postgres(postgres_directory) as database, wire_server(_sink) as sink:
         monkeypatch.setenv("INTEGRATION_PROXY_DATABASE_URL", database.database_url)

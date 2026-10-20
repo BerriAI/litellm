@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
+    get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
@@ -676,6 +677,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
@@ -1103,6 +1105,8 @@ def get_usage_object(
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
+    if isinstance(completion_response, HttpxBinaryResponseContent):
+        return completion_response.usage
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
@@ -2783,6 +2787,8 @@ def batch_cost_calculator(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     data_residency: str | None = None,
+    *,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculate the cost of a batch job.
@@ -2872,7 +2878,8 @@ def batch_cost_calculator(
         total_prompt_cost *= uplift
         total_completion_cost *= uplift
 
-    return total_prompt_cost, total_completion_cost
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
 def _batch_prompt_cost(
@@ -3113,14 +3120,19 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         return response_ids[-1] if response_ids else None
 
     @staticmethod
-    def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
+    def create_logging_object(
+        results: Sequence[Mapping[str, object]], litellm_model_name: str | None = None
+    ) -> LiteLLMRealtimeStreamLoggingObject:
         tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
-        return LiteLLMRealtimeStreamLoggingObject(
+        logging_object: Final = LiteLLMRealtimeStreamLoggingObject(
             id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
             usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
             results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
             service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
         )
+        if litellm_model_name is not None:
+            logging_object.hidden_params = {"litellm_model_name": litellm_model_name}
+        return logging_object
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"

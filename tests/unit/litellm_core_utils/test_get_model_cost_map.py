@@ -8,12 +8,15 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
+from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils import get_model_cost_map as get_model_cost_map_module
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -686,6 +689,25 @@ def test_boot_load_does_not_retry_non_retryable_failure():
     assert source["fallback_reason"] is not None
 
 
+def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
+    client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(
+        url="http://[bad/model_prices.json",
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+    )
+    assert calls["count"] == 0
+    assert sleeper.waits == []
+    assert _retry_threads() == []
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert "invalid URL" in (source["fallback_reason"] or "")
+
+
 def test_boot_load_respects_local_env_override(monkeypatch):
     """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -1227,3 +1249,16 @@ def test_get_backup_model_cost_map():
         print("inside backup")
         content = json.load(f)
         print("content", content)
+
+
+@pytest.mark.parametrize("backup", [b'["only-in-the-backup"]', b'"only-in-the-backup"', b"null"])
+def test_a_bundled_backup_that_is_not_a_json_object_is_rejected_without_quoting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backup: bytes
+):
+    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(backup)
+    monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path)
+
+    with pytest.raises(ValidationError) as rejected:
+        GetModelCostMap.load_local_model_cost_map_with_revision()
+
+    assert "only-in-the-backup" not in str(rejected.value)
