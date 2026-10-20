@@ -39,7 +39,7 @@ from litellm import main as litellm_main
 from litellm._logging import session_id_var, trace_id_var
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
-from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.constants import CONTROL_OPTIONS_KEY, INITIAL_RETRY_DELAY, JITTER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -9895,6 +9895,27 @@ def test_completion_with_retries_internal_server_error_500():
         assert res == {"status": "recovered"}
         assert mock_completion.call_count == 2
         mock_sleep.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retries_backoff_starts_at_the_initial_retry_delay(sync_mode: bool):
+    outcomes: Final = [_make_internal_server_error(), _make_internal_server_error(), {"status": "recovered"}]
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch("time.sleep") as sync_sleep, patch("asyncio.sleep", new_callable=AsyncMock) as async_sleep:
+        if sync_mode:
+            completion_with_retries(
+                model="gpt-4o", messages=messages, num_retries=3, original_function=MagicMock(side_effect=outcomes)
+            )
+        else:
+            await acompletion_with_retries(
+                model="gpt-4o", messages=messages, num_retries=3, original_function=AsyncMock(side_effect=outcomes)
+            )
+
+    first_wait, second_wait = [call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list)]
+    assert INITIAL_RETRY_DELAY <= first_wait < INITIAL_RETRY_DELAY + JITTER
+    assert 2 * INITIAL_RETRY_DELAY <= second_wait < 2 * INITIAL_RETRY_DELAY + JITTER
 
 
 @pytest.mark.asyncio

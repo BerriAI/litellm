@@ -6399,7 +6399,7 @@ class _RetryState(Protocol):
 
 def _compute_retry_wait(
     exc: BaseException | None,
-    attempt_number: int,
+    retries_sent: int,
     num_retries: int,
     retry_strategy: str,
 ) -> float:
@@ -6407,7 +6407,7 @@ def _compute_retry_wait(
     if retry_strategy == "exponential_backoff_retry":
         return float(
             calculate_retry_after(
-                remaining_retries=max(0, num_retries - attempt_number),
+                remaining_retries=max(0, num_retries - retries_sent),
                 max_retries=num_retries,
                 response_headers=headers,
             )
@@ -6478,13 +6478,15 @@ def _run_completion_retries(
         time.sleep(
             _compute_retry_wait(
                 exc=plan.initial_exception,
-                attempt_number=0,
+                retries_sent=0,
                 num_retries=plan.num_retries,
                 retry_strategy=retry_strategy,
             )
         )
     retryer: Final = tenacity.Retrying(
-        wait=_build_retry_wait_fn(plan.num_retries, retry_strategy),
+        wait=_build_retry_wait_fn(
+            plan.num_retries, retry_strategy, first_attempt_is_a_retry=plan.initial_exception is not None
+        ),
         stop=tenacity.stop_after_attempt(plan.num_retries),
         retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
@@ -6508,13 +6510,15 @@ async def _run_acompletion_retries(
         await asyncio.sleep(
             _compute_retry_wait(
                 exc=plan.initial_exception,
-                attempt_number=0,
+                retries_sent=0,
                 num_retries=plan.num_retries,
                 retry_strategy=retry_strategy,
             )
         )
     retryer: Final = tenacity.AsyncRetrying(
-        wait=_build_retry_wait_fn(plan.num_retries, retry_strategy),
+        wait=_build_retry_wait_fn(
+            plan.num_retries, retry_strategy, first_attempt_is_a_retry=plan.initial_exception is not None
+        ),
         stop=tenacity.stop_after_attempt(plan.num_retries),
         retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
@@ -6522,7 +6526,9 @@ async def _run_acompletion_retries(
     return await retryer(original_function, *args, **kwargs)
 
 
-def _build_retry_wait_fn(num_retries: int, retry_strategy: str) -> Callable[[_RetryState], float]:
+def _build_retry_wait_fn(
+    num_retries: int, retry_strategy: str, first_attempt_is_a_retry: bool
+) -> Callable[[_RetryState], float]:
     """Tenacity wait callback honoring provider Retry-After headers and jitter via calculate_retry_after."""
 
     def _wait_fn(retry_state: _RetryState) -> float:
@@ -6530,7 +6536,7 @@ def _build_retry_wait_fn(num_retries: int, retry_strategy: str) -> Callable[[_Re
         exc: Final[BaseException | None] = outcome.exception() if outcome is not None else None
         return _compute_retry_wait(
             exc=exc,
-            attempt_number=retry_state.attempt_number,
+            retries_sent=retry_state.attempt_number if first_attempt_is_a_retry else retry_state.attempt_number - 1,
             num_retries=num_retries,
             retry_strategy=retry_strategy,
         )
