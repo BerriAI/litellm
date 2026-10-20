@@ -602,7 +602,7 @@ def _usage_test_logging(
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="completion",
-        start_time=time.time(),
+        start_time=1_790_000_000.0,
         litellm_call_id="12345",
         function_id="1245",
         kwargs={"_litellm_stream_usage_injected": True} if stream_usage_injected else {},

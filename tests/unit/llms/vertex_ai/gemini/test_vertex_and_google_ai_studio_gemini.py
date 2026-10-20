@@ -1889,7 +1889,9 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
         ("get_weather", {"location": "Lima, Peru"})
     ]
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == ["tool_calls"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)

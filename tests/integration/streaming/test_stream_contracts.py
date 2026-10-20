@@ -301,19 +301,22 @@ def test_caller_requested_stream_usage_has_no_choices_even_with_a_client_sent_in
 def test_stream_usage_the_deployment_adds_keeps_one_empty_choice(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "deployment-stream-usage-" + uuid.uuid4().hex
     with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as wire:
-        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-        config["model_list"] = [
-            {
-                "model_name": "deployment-usage",
-                "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
-                    "api_key": "synthetic-deployment-usage-key",
-                    "api_base": wire.url + "/v1",
-                    "stream_options": {"include_usage": True},
-                },
-            }
-        ]
-        config["general_settings"]["always_include_stream_usage"] = False
+        shared_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config: Final = {
+            **shared_config,
+            "model_list": [
+                {
+                    "model_name": "deployment-usage",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "synthetic-deployment-usage-key",
+                        "api_base": wire.url + "/v1",
+                        "stream_options": {"include_usage": True},
+                    },
+                }
+            ],
+            "general_settings": {**shared_config["general_settings"], "always_include_stream_usage": False},
+        }
         path: Final = tmp_path / "deployment-stream-usage.yaml"
         path.write_text(yaml.safe_dump(config))
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:
