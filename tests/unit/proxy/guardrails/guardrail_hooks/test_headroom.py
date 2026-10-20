@@ -3098,7 +3098,7 @@ async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
     ]
     anthropic_rows: Final = [*prefix, {"role": "user", "content": "List files"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "call_files", "name": "list_files", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_files", "content": tool_text}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_files", "content": tool_text, "is_error": True}]},
     ]
     request: Final = {"input": native_items} if surface == "responses" else {
         "messages": anthropic_rows if surface == "messages" else chat_rows
@@ -3120,7 +3120,7 @@ async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
     else:
         assert result["messages"][0] == history
         assert result["messages"][-1]["content"] == [
-            {"type": "tool_result", "tool_use_id": "call_files", "content": "file summary"}
+            {"type": "tool_result", "tool_use_id": "call_files", "content": "file summary", "is_error": True}
         ]
     assert extract_compression_saved_tokens({"guardrail_information": _recorded_guardrail_entries(result)}) == 990
 

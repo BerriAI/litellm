@@ -676,6 +676,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
+                    preserve_text_metadata=guardrail_to_apply.preserve_request_text_metadata(),
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
@@ -840,6 +841,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
+        preserve_text_metadata: bool = False,
     ) -> None:
         """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -903,7 +905,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
-        data["messages"] = keep_non_string_tool_result_texts(converted, data.get("messages"))
+        data["messages"] = keep_non_string_tool_result_texts(
+            converted, data.get("messages"), preserve_metadata=preserve_text_metadata
+        )
 
     @staticmethod
     def _extract_midturn_system_text(

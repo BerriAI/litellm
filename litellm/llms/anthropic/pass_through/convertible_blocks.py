@@ -127,7 +127,12 @@ class _KeptPart:
 
 
 _KeptParts: TypeAlias = Mapping[int, _KeptPart]
-_NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class _KeptToolResult:
+    block: Mapping[str, object]
+    parts: _KeptParts
 
 
 def _scannable_text(text: object) -> str:
@@ -252,10 +257,15 @@ def _non_string_text_parts(content: object) -> _KeptParts:
     )
 
 
-def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptParts], ...]:
+def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptToolResult], ...]:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
-            return ((sanitize_anthropic_tool_use_id(tool_use_id), _non_string_text_parts(tool_result.get("content"))),)
+            return (
+                (
+                    sanitize_anthropic_tool_use_id(tool_use_id),
+                    _KeptToolResult(tool_result, _non_string_text_parts(tool_result.get("content"))),
+                ),
+            )
         case _:
             return ()
 
@@ -279,22 +289,38 @@ def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _K
     return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
-def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
+def _restored_block(
+    block: object, kept: Mapping[str, Iterator[_KeptToolResult]], *, preserve_metadata: bool = False
+) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
             sanitize_anthropic_tool_use_id(tool_use_id) in kept
         ):
-            return _with_kept_parts(
-                block, tool_result, next(kept[sanitize_anthropic_tool_use_id(tool_use_id)], _NO_KEPT_PARTS)
+            original: Final = next(kept[sanitize_anthropic_tool_use_id(tool_use_id)], None)
+            if original is None:
+                return block
+            if not preserve_metadata:
+                return _with_kept_parts(block, tool_result, original.parts)
+            from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text, replace_text_content
+
+            content: Final = replace_text_content(
+                original.block.get("content"), content_to_text(tool_result.get("content"))
             )
+            restored: Final = {
+                **original.block,
+                "content": original.block.get("content") if content is None else content,
+            }
+            return _with_kept_parts(restored, restored, original.parts)
         case _:
             return block
 
 
-def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
+def keep_non_string_tool_result_texts(
+    rewritten: Sequence[object], original: object, *, preserve_metadata: bool = False
+) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
     by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=itemgetter(0)))
-    if not any(parts for _, parts in by_id):
+    if not preserve_metadata and not any(result.parts for _, result in by_id):
         return rewritten
     kept_in_order: Final = MappingProxyType(
         {
@@ -302,7 +328,10 @@ def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: obj
             for tool_use_id, group in groupby(by_id, key=itemgetter(0))
         }
     )
-    return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
+    return [
+        _with_user_blocks(message, partial(_restored_block, kept=kept_in_order, preserve_metadata=preserve_metadata))
+        for message in rewritten
+    ]
 
 
 def _without_non_string_text(block: object) -> object:

@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    keep_non_string_tool_result_texts,
     malformed_tool_result_text_error,
     unconvertible_anthropic_blocks,
     unconvertible_blocks_error,
@@ -210,3 +211,38 @@ def test_a_non_string_tool_result_text_is_named_with_or_without_a_tool_use_id(
     tool_result: Mapping[str, object], error: str
 ) -> None:
     assert malformed_tool_result_text_error([{"role": "user", "content": [tool_result]}]) == error
+
+
+@pytest.mark.parametrize("is_error", [True, False])
+@pytest.mark.parametrize("content", ["original text", [{"type": "text", "text": "original text", "trace": "original"}]])
+def test_tool_result_rewrite_preserves_native_metadata(content: object, is_error: bool) -> None:
+    original: Final = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "read", "content": content, "is_error": is_error},
+    ]}]
+    rewritten: Final = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "read", "content": "summary"},
+    ]}]
+    result: Final = keep_non_string_tool_result_texts(rewritten, original, preserve_metadata=True)
+    assert result == [{"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "read", "is_error": is_error,
+        "content": "summary" if isinstance(content, str) else [{"type": "text", "text": "summary", "trace": "original"}],
+    }]}]
+    assert keep_non_string_tool_result_texts(rewritten, original) is rewritten
+
+
+def test_tool_result_metadata_restoration_tracks_each_occurrence() -> None:
+    original: Final = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "read", "content": "first", "is_error": True},
+        {"type": "tool_result", "tool_use_id": "read", "content": "second", "is_error": False},
+    ]}]
+    extra: Final = {"type": "tool_result", "tool_use_id": "read", "content": "third"}
+    rewritten: Final = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "read", "content": "short first"},
+        {"type": "tool_result", "tool_use_id": "read", "content": "short second"}, extra,
+    ]}]
+    assert keep_non_string_tool_result_texts(rewritten, original, preserve_metadata=True) == [{
+        "role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "read", "content": "short first", "is_error": True},
+            {"type": "tool_result", "tool_use_id": "read", "content": "short second", "is_error": False}, extra,
+        ],
+    }]
