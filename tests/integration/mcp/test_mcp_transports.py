@@ -1,3 +1,6 @@
+from integration._support.process import owned_proxy
+import yaml
+from pathlib import Path
 import json
 import uuid
 from typing import Final
@@ -216,3 +219,51 @@ def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_calle
         body: Final = response.json()
         assert body["isError"] is False, response.text[:500]
         assert body["content"][0]["text"] == payload
+
+
+def test_configured_sse_limit_rejects_large_results_and_allows_the_next_call(tmp_path: Path) -> None:
+    limit: Final = 4096
+    payload: Final = "x" * 512
+    small: Final = ScriptedTool("small", lambda _: text_result(payload), event_stream=True)
+    large: Final = ScriptedTool("large", lambda _: text_result("x" * (2 * limit)), event_stream=True)
+    key: Final = "sk-local-mcp-sse-limit-regression-key"
+    with scripted_peer(small, large) as peer, httpx.Client() as client:
+        config: Final = tmp_path / "sse-limit.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "general_settings": {"master_key": key, "store_model_in_db": False},
+                    "mcp_servers": {"limited": peer.registration()},
+                }
+            )
+        )
+        seed: Final = Gateway(client, key, peer.url)
+        with owned_proxy(
+            seed,
+            tmp_path / "proxy",
+            {
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES": str(limit),
+            },
+            config=config,
+            database_setup=(),
+            remove_environment=(
+                "DATABASE_URL",
+                "DATABASE_URL_READ_REPLICA",
+                "DIRECT_URL",
+                "INTEGRATION_PROXY_DATABASE_URL",
+                "INTEGRATION_PROXY_READ_REPLICA_URL",
+            ),
+        ) as gateway:
+            assert set(listed_tools(gateway, key)) == {"small", "large"}
+            for name in ("small", "large", "small"):
+                response: Final = call_tool(gateway, key, "limited", name, {})
+                assert response.status_code == 200, response.text[:500]
+                body: Final = response.json()
+                assert body["isError"] is (name == "large"), response.text[:500]
+                if name == "large":
+                    assert str(limit) in body["content"][0]["text"], response.text[:500]
+                else:
+                    assert body["content"][0]["text"] == payload, response.text[:500]
