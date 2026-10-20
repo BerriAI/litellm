@@ -3468,7 +3468,10 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
+            _runtime_registered_model_cost[_registered_key] = _update_dictionary(
+                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                dict(_RATE_TABLE.validate_python(_registered_value)),
+            )
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
