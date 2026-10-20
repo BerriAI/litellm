@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, Final, List, Optional, Set, Union
 
 import pytest
 
@@ -171,10 +171,10 @@ async def test_push_refused_by_the_open_circuit_breaker_is_not_logged_as_an_erro
 
 @pytest.mark.asyncio
 async def test_an_increment_counted_after_retire_still_reaches_redis():
-    server = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    redis_cache = RedisCache(host="127.0.0.1", port=server.server_address[1])
-    strategy = BaseRoutingStrategy(
+    redis_cache: Final = RedisCache(host="127.0.0.1", port=server.server_address[1])
+    strategy: Final = BaseRoutingStrategy(
         dual_cache=DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()),
         should_batch_redis_writes=True,
         default_sync_interval=60,
