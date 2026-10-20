@@ -173,7 +173,7 @@ class PatternMatchRouter:
         return None  # No matching pattern found
 
     def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:
-        deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.route(request) or ())
+        deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.get_pattern(request) or ())
         return any(
             (deployment.litellm_params.custom_llm_provider or inferred_provider(deployment.litellm_params.model))
             == custom_llm_provider

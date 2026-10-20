@@ -782,6 +782,19 @@ async def test_video_status_polls_the_deployment_that_created_the_video(
     assert keys == {"Bearer key-b"}
 
 
+def test_sync_video_status_polls_the_deployment_that_created_the_video(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get("https://api.openai.com/v1/videos/video_raw").respond(
+        200, json={"id": "video_raw", "object": "video", "status": "in_progress"}
+    )
+    router: Final = _two_account_sora_router()
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="dep-b")
+
+    for _ in range(10):
+        router.video_status(model="sora", video_id=video_id)
+
+    assert {call.request.headers["authorization"] for call in route.calls} == {"Bearer key-b"}
+
+
 @pytest.mark.asyncio
 async def test_video_status_on_a_routing_group_polls_the_member_deployment_that_created_the_video(
     respx_mock: respx.MockRouter,

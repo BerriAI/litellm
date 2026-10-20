@@ -289,16 +289,22 @@ def test_encode_video__routed_deployment_replaces_the_one_in_the_id() -> None:
 
 
 @pytest.mark.parametrize(
-    ("polled_deployment", "returned_deployment"),
-    [(None, "deployment-routed"), ("deployment-creator", "deployment-creator")],
+    ("polled_deployment", "answering_deployment", "returned_deployment"),
+    [
+        (None, "deployment-routed", "deployment-routed"),
+        ("deployment-gone", "deployment-routed", "deployment-routed"),
+        ("deployment-creator", None, "deployment-creator"),
+    ],
 )
-def test_encode_video__a_poll_keeps_the_deployment_its_id_named_else_takes_the_one_that_answered(
+def test_encode_video__a_poll_takes_the_deployment_that_answered_else_keeps_the_one_its_id_named(
     polled_deployment: str | None,
+    answering_deployment: str | None,
     returned_deployment: str,
 ) -> None:
     polled_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=polled_deployment)
     video: Final = _video(
-        encode_video_id_with_provider("video_raw", "openai", ""), hidden_params={"model_id": "deployment-routed"}
+        encode_video_id_with_provider("video_raw", "openai", ""),
+        hidden_params={} if answering_deployment is None else {"model_id": answering_deployment},
     )
 
     out: Final = encode_video_id_in_response(
@@ -485,6 +491,20 @@ def test_video_model_group__keeps_an_alias_of_the_creating_deployments_group(dep
     provider_model: Final = f"sora-{deployment_id.removeprefix('dep-')}"
 
     assert video_model_group(_decoded(provider_model, deployment_id), router) == "sora-alias"
+
+
+def test_video_model_group__names_a_team_model_by_its_public_name() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-1_internal",
+                "litellm_params": {"model": "azure/sora-2", "api_key": "team-key"},
+                "model_info": {"id": "dep-team", "team_id": "team-1", "team_public_model_name": "team-sora"},
+            }
+        ]
+    )
+
+    assert video_model_group(_decoded("sora-2", "dep-team"), router) == "team-sora"
 
 
 def test_video_model_group__is_none_without_a_router() -> None:

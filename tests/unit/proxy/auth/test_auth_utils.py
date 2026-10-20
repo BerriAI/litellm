@@ -1442,6 +1442,62 @@ def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_
     )
 
 
+def test_get_model_from_request_checks_a_video_created_through_a_provider_wildcard_by_its_own_name():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="openai", model_id="sora-2", deployment_id="dep-wildcard"
+    )
+    routed_ids: Final = [
+        deployment["model_info"]["id"] for deployment in llm_router.pattern_router.get_deployments_by_pattern("sora-2")
+    ]
+
+    assert routed_ids == ["dep-wildcard"]
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-2"
+    )
+
+
+def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not_route_by_its_prefixed_name():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="operations/op_1", provider="gemini", model_id="unlisted-video-model", deployment_id="dep-wildcard"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "gemini/unlisted-video-model"
+    )
+
+
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
 
 
