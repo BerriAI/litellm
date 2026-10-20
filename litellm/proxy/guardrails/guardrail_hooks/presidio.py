@@ -388,7 +388,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async with self._session_lock:
                 if self._http_session is None or self._http_session.closed:
                     self._http_session = aiohttp.ClientSession()
-                yield self._http_session
+                session = self._http_session
+            yield session
         else:
             # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
