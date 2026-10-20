@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Mapping
 from concurrent.futures import Future, wait
+from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
@@ -1434,14 +1435,51 @@ def _count_user_content(content: list[dict]) -> int:
     )
 
 
+def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
+    def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
+        escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        page: Final = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {4 + 2 * index} 0 R >>"
+        ).encode()
+        return content, page
+
+    kids: Final = " ".join(f"{5 + 2 * index} 0 R" for index in range(len(pages)))
+    bodies: Final = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
+    )
+    header: Final = b"%PDF-1.4\n"
+    objects: Final = tuple(
+        f"{number} 0 obj\n".encode() + body + b"\nendobj\n" for number, body in enumerate(bodies, start=1)
+    )
+    offsets: Final = accumulate((len(header), *(len(obj) for obj in objects[:-1])))
+    xref: Final = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode() + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer: Final = (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{len(header) + sum(len(obj) for obj in objects)}\n%%EOF\n"
+    ).encode()
+    return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
+
+
+_READABLE_PDF_BASE64: Final = _pdf_base64(("Count this document without parsing its text locally.",))
+
+
 @pytest.mark.parametrize(
     "source",
     [
         {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
         {"type": "url", "url": "https://example.com/report.pdf"},
         {"type": "file", "file_id": "file-abc123"},
+        {"type": "base64", "media_type": "application/pdf", "data": _READABLE_PDF_BASE64},
     ],
-    ids=["base64", "url", "file"],
+    ids=["base64", "url", "file", "readable_pdf"],
 )
 def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
     """A `document` whose bytes can't be tokenized locally is priced like an `image`, not raised on."""
@@ -1483,7 +1521,8 @@ def test_anthropic_document_title_and_context_add_their_tokens():
     )
 
 
-def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
+@pytest.mark.parametrize("pdf_data", ("JVBERi0xLjQK", _READABLE_PDF_BASE64), ids=("opaque", "readable"))
+def test_openai_file_block_prices_like_the_equivalent_anthropic_document(pdf_data: str) -> None:
     """An inline `file` is a `document` in the chat-completions dialect, so it must price identically, not raise.
 
     Before the fix `file` was missing from the content-block match even though `ChatCompletionFileObject`
@@ -1493,16 +1532,20 @@ def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
     prompt = {"type": "text", "text": "Summarize this file."}
     inline_file = {
         "type": "file",
-        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + pdf_data},
     }
     document = {
         "type": "document",
         "title": "report.pdf",
-        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
     }
 
     assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
     assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
+
+    assert _count_user_content([prompt, inline_file]) == _count_user_content(
+        [prompt, {"type": "text", "text": "report.pdf"}, {"type": "image", "source": document["source"]}]
+    )
 
 
 def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
@@ -1513,9 +1556,7 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
 
     named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
-    assert _count_user_content([prompt, named]) == _count_user_content(
-        [prompt, {"type": "text", "text": "report.pdf"}]
-    )
+    assert _count_user_content([prompt, named]) == _count_user_content([prompt, {"type": "text", "text": "report.pdf"}])
 
 
 def _png_data_url(width: int, height: int) -> str:

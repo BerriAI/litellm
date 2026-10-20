@@ -5,11 +5,13 @@ Bedrock Token Counter implementation using the CountTokens API.
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from pydantic import JsonValue
+
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -33,6 +35,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using AWS Bedrock's CountTokens API.

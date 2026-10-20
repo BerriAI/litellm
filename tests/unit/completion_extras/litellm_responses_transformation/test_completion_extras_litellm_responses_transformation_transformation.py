@@ -7,6 +7,15 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputText,
+)
+from openai.types.responses.response_reasoning_item import (
+    ResponseReasoningItem,
+    Summary,
+)
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -3307,6 +3316,148 @@ def test_convert_response_output_generic_pydantic_message_item():
     assert choices[0].finish_reason == "stop"
 
 
+def test_convert_response_output_merges_message_reasoning_and_function_call() -> None:
+    message: Final = ResponseOutputMessage(
+        id="msg_weather",
+        content=[
+            ResponseOutputText(
+                annotations=[
+                    {
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 5,
+                        "title": "Forecast",
+                        "url": "https://example.com/forecast",
+                    }
+                ],
+                text="Sunny.",
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    reasoning: Final = ResponseReasoningItem(
+        id="rs_before",
+        summary=[Summary(type="summary_text", text="Checking the forecast.")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    pending_reasoning: Final = ResponseReasoningItem(
+        id="rs_after",
+        summary=[Summary(type="summary_text", text="The location is Paris.")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    message_and_call: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (message, function_call)
+    )
+    assert len(message_and_call) == 1
+    assert message_and_call[0].index == 0
+    assert message_and_call[0].finish_reason == "tool_calls"
+    assert message_and_call[0].message.role == "assistant"
+    assert message_and_call[0].message.content == "Sunny."
+    assert message_and_call[0].message.annotations == [
+        {
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": 5,
+            "title": "Forecast",
+            "url": "https://example.com/forecast",
+        }
+    ]
+    function_calls: Final = message_and_call[0].message.tool_calls
+    assert function_calls is not None
+    assert len(function_calls) == 1
+    assert function_calls[0].function.name == "get_weather"
+    assert function_calls[0].function.arguments == '{"city":"Paris"}'
+
+    reasoning_before_message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning, message, function_call)
+    )
+    assert len(reasoning_before_message) == 1
+    assert reasoning_before_message[0].message.reasoning_content == "Checking the forecast."
+    reasoning_before_items: Final = reasoning_before_message[0].message.reasoning_items
+    assert reasoning_before_items is not None
+    assert reasoning_before_items[0]["id"] == "rs_before"
+
+    reasoning_after_message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (message, pending_reasoning, function_call)
+    )
+    assert len(reasoning_after_message) == 1
+    assert reasoning_after_message[0].message.reasoning_content == "The location is Paris."
+    reasoning_after_items: Final = reasoning_after_message[0].message.reasoning_items
+    assert reasoning_after_items is not None
+    assert reasoning_after_items[0]["id"] == "rs_after"
+
+    merged_reasoning: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning, message, pending_reasoning, function_call)
+    )
+    assert len(merged_reasoning) == 1
+    assert merged_reasoning[0].message.reasoning_content == "Checking the forecast. The location is Paris."
+    merged_reasoning_items: Final = merged_reasoning[0].message.reasoning_items
+    assert merged_reasoning_items is not None
+    assert [item["id"] for item in merged_reasoning_items] == ["rs_before", "rs_after"]
+
+    tool_only: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((function_call,))
+    assert len(tool_only) == 1
+    assert tool_only[0].index == 0
+    assert tool_only[0].finish_reason == "tool_calls"
+    assert tool_only[0].message.content is None
+    assert tool_only[0].message.tool_calls is not None
+    assert len(tool_only[0].message.tool_calls) == 1
+
+    message_only: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((message,))
+    assert len(message_only) == 1
+    assert message_only[0].index == 0
+    assert message_only[0].finish_reason == "stop"
+    assert message_only[0].message.content == "Sunny."
+    assert message_only[0].message.tool_calls is None
+
+
+def test_convert_response_output_merges_raw_dict_message_and_function_call() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    raw_message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Let me check.", "annotations": []}],
+    }
+    raw_function_call: Final = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": '{"city":"Paris"}',
+    }
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message, raw_function_call),
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.role == "assistant"
+    assert choices[0].message.content == "Let me check."
+    assert choices[0].message.tool_calls is not None
+    assert len(choices[0].message.tool_calls) == 1
+
+
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -4388,3 +4539,61 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
     relayed = [iterator.chunk_parser(event).model_dump().get("service_tier") for event in events]
 
     assert relayed == ["default"] * len(events), relayed
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    first: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_first",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+        }
+    )
+    second_annotation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Second",
+        "url": "https://example.com/second",
+    }
+    second: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_second",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Second message.", "annotations": [second_annotation]}],
+        }
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (first, second, function_call)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "First message.Second message."
+    assert choices[0].message.annotations == [
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
+    ]
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [call.model_dump(exclude_none=True) for call in tool_calls] == [
+        {
+            "id": "fc_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+            "index": 0,
+        }
+    ]
