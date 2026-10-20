@@ -14779,8 +14779,9 @@ async def _provider_token_count(
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
-    Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    Returns None when the count should be estimated locally, or the provider's failure when the local estimate
+    stands in for it (token_count_local_fallback, or a framed model the provider cannot count) and that failure
+    is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use
@@ -14804,7 +14805,13 @@ async def _provider_token_count(
             "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
         )
     )
-    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+    if local_estimate_allowed and litellm.token_count_local_fallback is True:
+        verbose_proxy_logger.warning(
+            "Provider token count failed with status %s, counting locally because token_count_local_fallback is on",
+            failure.status_code,
+        )
+        return failure
+    if local_estimate_allowed and count_model is None and failure.cannot_count_model and settings.framing is not None:
         return failure
     raise failure.to_proxy_exception()
 

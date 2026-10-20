@@ -318,6 +318,7 @@ otel_tenant_destination_mode: str | None = None
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
+token_count_local_fallback: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
