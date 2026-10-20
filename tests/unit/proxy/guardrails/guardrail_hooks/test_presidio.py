@@ -645,8 +645,10 @@ async def test_logging_hook_does_not_mutate_client_request_or_response(presidio_
 
     presidio_guardrail.check_pii = mock_check_pii
 
+    shared_messages = [{"role": "user", "content": "My email is user@example.com"}]
     test_kwargs = {
-        "messages": [{"role": "user", "content": "My email is user@example.com"}],
+        "messages": shared_messages,
+        "input": shared_messages,
         "model": "gpt-4",
     }
     response = ModelResponse(
@@ -672,13 +674,16 @@ async def test_logging_hook_does_not_mutate_client_request_or_response(presidio_
         call_type="completion",
     )
 
-    # 1. The returned logging objects MUST be redacted
+    # 1. The returned logging objects MUST be redacted (both messages and input representation)
     assert "[EMAIL]" in result_kwargs["messages"][0]["content"]
+    assert "[EMAIL]" in result_kwargs["input"][0]["content"]
     assert "[CREDIT_CARD]" in result_response.choices[0].message.content
 
     # 2. The original client-facing request kwargs and response MUST NOT be mutated in-place
     assert "user@example.com" in test_kwargs["messages"][0]["content"]
     assert "[EMAIL]" not in test_kwargs["messages"][0]["content"]
+    assert "user@example.com" in test_kwargs["input"][0]["content"]
+    assert "[EMAIL]" not in test_kwargs["input"][0]["content"]
     assert "4111-1111-1111-1111" in response.choices[0].message.content
     assert "[CREDIT_CARD]" not in response.choices[0].message.content
 
