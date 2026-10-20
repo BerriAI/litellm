@@ -4333,3 +4333,36 @@ def test_native_compression_excludes_invalid_input_shapes(raw_input: object) -> 
     from litellm.llms.openai.responses.guardrail_translation.handler import rewriteable_response_message_indices
 
     assert rewriteable_response_message_indices(raw_input, None, []) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_headroom_cached_tool_definition_preserves_latest_output_compression(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+    from litellm.responses.litellm_completion_transformation.transformation import TOOL_CALLS_CACHE
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    call_id: Final = "call_headroom_cached_definition"
+    TOOL_CALLS_CACHE.set_cache(key=call_id, value={
+        "id": call_id, "type": "function", "function": {"name": "read", "arguments": "{}"},
+    })
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    items: Final = [
+        {"role": "user", "content": "Read data"},
+        {"type": "function_call_output", "call_id": call_id, "output": "long " * 500},
+    ]
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={"messages": [
+        {"role": "user", "content": "Read data"},
+        {"role": "tool", "tool_call_id": call_id, "content": "short summary"},
+    ]})
+    try:
+        result: Final = await OpenAIResponsesHandler().process_input_messages({"input": items}, callback)
+        assert route.called
+        assert json.loads(route.calls.last.request.content)["messages"] == [
+            {"role": "user", "content": "Read data"},
+            {"role": "tool", "tool_call_id": call_id, "content": "long " * 500},
+        ]
+        assert result["input"] == [items[0], {**items[1], "output": "short summary"}]
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key=call_id)

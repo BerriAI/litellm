@@ -501,10 +501,15 @@ def rewriteable_response_message_indices(
     if provenance is None:
         return frozenset()
     item_for_message, tainted = provenance
-    item_counts: Final = Counter(item_for_message.values())
+    text_rows: Final = tuple(
+        (message_index, item_index)
+        for message_index, item_index in item_for_message.items()
+        if stream_item_field(original_messages[message_index + offset], "role") != "assistant"
+    )
+    item_counts: Final = Counter(item_index for _, item_index in text_rows)
     return frozenset(
         message_index + offset
-        for message_index, item_index in item_for_message.items()
+        for message_index, item_index in text_rows
         if message_index not in tainted
         and item_counts[item_index] == 1
         and (field := _item_rewrite_field(items[item_index])) is not None
