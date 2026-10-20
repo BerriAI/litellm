@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from httpx import Response
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -898,7 +898,12 @@ def _bedrock_registered_pricing_model(model: str) -> str | None:
     )
 
 
-_MODEL_INFO_ADAPTER: Final = TypeAdapter(ModelInfo)
+@with_config(ConfigDict(extra="allow"))
+class _BedrockPricingInfo(ModelInfo):
+    pass
+
+
+_BEDROCK_PRICING_INFO: Final = TypeAdapter(_BedrockPricingInfo)
 
 
 def _bedrock_cache_overlay(
@@ -927,7 +932,7 @@ def _bedrock_cache_overlay(
         for field, value in registration.items()
         if value is not None and field.startswith("cache_") and is_server_derived_pricing_key(field)
     }
-    return _MODEL_INFO_ADAPTER.validate_python({**profile, **overrides})
+    return _BEDROCK_PRICING_INFO.validate_python({**profile, **overrides})
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
@@ -1666,6 +1671,13 @@ def completion_cost(
             invoked_model_id,
             _get_provider_for_cost_calc(model, custom_llm_provider),
             explicit_pricing,
+        ) or (
+            _cost_map_model_info(selected_model, "bedrock")
+            if selected_model is not None
+            and not explicit_pricing
+            and _get_provider_for_cost_calc(model, custom_llm_provider) == "bedrock"
+            and _bedrock_registered_pricing_model(selected_model) is not None
+            else None
         )
         requested_model: Final = model
         request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -2147,6 +2159,7 @@ def completion_cost(
                             data_residency=data_residency,
                             vertex_location=vertex_location,
                             custom_cost_per_token=custom_cost_per_token,
+                            model_info=bedrock_model_info,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost

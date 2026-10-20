@@ -1692,20 +1692,23 @@ def get_billed_token_rates(
     vertex_location: str | None = None,
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
     if custom_cost_per_token is not None:
         return _custom_pricing_rates(custom_cost_per_token)
     try:
-        model_info: Final = apply_provider_cache_read_default(
-            get_model_info(model=model, custom_llm_provider=custom_llm_provider),
+        resolved_model_info: Final = apply_provider_cache_read_default(
+            model_info
+            if model_info is not None
+            else get_model_info(model=model, custom_llm_provider=custom_llm_provider),
             custom_llm_provider,
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
     return _cost_map_billed_rates(
-        model_info=model_info,
+        model_info=resolved_model_info,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
         service_tier=service_tier,
@@ -1724,6 +1727,7 @@ def get_token_type_cost_breakdown(
     vertex_location: str | None = None,
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1748,6 +1752,7 @@ def get_token_type_cost_breakdown(
         vertex_location=vertex_location,
         current_time=current_time,
         custom_cost_per_token=custom_cost_per_token,
+        model_info=model_info,
     )
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)

@@ -4113,3 +4113,28 @@ def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(_local_model_co
         key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
     }
     assert vertex_row["litellm_provider"].startswith("vertex_ai")
+
+
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: float) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": rate,
+        "cache_creation_input_token_cost": rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=20, completion_tokens=3, total_tokens=23,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5), cache_creation_input_tokens=5,
+    )
+    prompt_cost, output_cost = generic_cost_per_token(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    breakdown: Final = get_token_type_cost_breakdown(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    assert breakdown.cache_read_cost == pytest.approx(5 * rate)
+    assert breakdown.cache_creation_cost == pytest.approx(5 * rate)
+    assert breakdown.rates is not None
+    assert prompt_cost == pytest.approx(10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost)
+    assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)

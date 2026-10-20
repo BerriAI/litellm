@@ -9911,13 +9911,26 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
         usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
 
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="registered-pricing",
+        function_id="registered-pricing",
+    )
     assert completion_cost(
         completion_response=response,
         model=f"bedrock/converse/{model}",
         custom_llm_provider="bedrock",
         optional_params={"model_id": f"us.{model}"},
+        litellm_logging_obj=logging_obj,
     ) == pytest.approx(15 * rate)
 
+    assert logging_obj.billed_token_rates is not None
+    assert logging_obj.billed_token_rates.input_cost_per_token == rate
+    assert logging_obj.billed_token_rates.output_cost_per_token == rate
     entry: Final = pricing_entry_for_cost_calc(model, response, "bedrock", False, None, None, None, None)
     assert entry is not None
     assert entry[0] == model
@@ -10041,7 +10054,17 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
         model=f"bedrock/converse/{model}",
         custom_llm_provider=provider,
         optional_params={"model_id": profile},
+        litellm_logging_obj=logging_obj,
     ) == pytest.approx(expected)
+    breakdown_key: Final = "cache_read_cost" if cache_field == "cache_read_input_token_cost" else "cache_creation_cost"
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown.get(breakdown_key, 0.0) == pytest.approx(5 * rate)
+    assert logging_obj.billed_token_rates is not None
+    assert (
+        logging_obj.billed_token_rates.cache_read_input_token_cost
+        if cache_field == "cache_read_input_token_cost"
+        else logging_obj.billed_token_rates.cache_creation_input_token_cost
+    ) == rate
     entry: Final = pricing_entry_for_cost_calc(
         f"bedrock/converse/{model}", response, provider, False, None, None, None, logging_obj
     )
@@ -10062,6 +10085,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
         model=f"bedrock/converse/{model}",
         custom_llm_provider=provider,
         optional_params={"model_id": profile},
+        litellm_logging_obj=logging_obj,
     ) == pytest.approx(expected_after_reload)
 
 
@@ -10103,3 +10127,92 @@ def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates
         custom_llm_provider="bedrock",
         optional_params={"model_id": profile},
     ) == pytest.approx(10 * 0.01 + 3 * 0.02 + 5 * 0.001)
+
+
+@pytest.mark.parametrize("prompt_tokens", (299_999, 300_000, 300_001))
+@pytest.mark.parametrize("cache_field", ("cache_read_input_token_cost", "cache_creation_input_token_cost"))
+@pytest.mark.parametrize("tier_override", (None, 0.0, 0.003))
+def test_bedrock_cache_overlay_preserves_dynamic_threshold_rates(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt_tokens: int,
+    cache_field: str,
+    tier_override: float | None,
+) -> None:
+    import litellm.utils as model_utils
+    from litellm.cost_calculator import pricing_entry_for_cost_calc
+
+    model: Final = "openai.threshold-overlay-test"
+    profile: Final = f"us.{model}"
+    tier_field: Final = f"{cache_field}_above_300k_tokens"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            profile: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "input_cost_per_token_above_300k_tokens": 0.03,
+                "output_cost_per_token_above_300k_tokens": 0.06,
+                tier_field: 0.007,
+            },
+        },
+    )
+    model_utils._invalidate_model_cost_lowercase_map()
+    litellm.register_model(
+        {
+            model: {
+                cache_field: 0.001,
+                **({tier_field: tier_override} if tier_override is not None else {}),
+            }
+        },
+        persist_across_reloads=False,
+    )
+    usage: Final = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=3,
+        total_tokens=prompt_tokens + 3,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=5 if cache_field == "cache_read_input_token_cost" else 0
+        ),
+        cache_creation_input_tokens=5 if cache_field == "cache_creation_input_token_cost" else 0,
+    )
+    response: Final = ModelResponse(model=model, usage=usage)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="threshold-overlay",
+        function_id="threshold-overlay",
+    )
+    logging_obj.model_call_details["model_id"] = profile
+    expected_input_rate: Final = 0.03 if prompt_tokens > 300_000 else 0.01
+    expected_output_rate: Final = 0.06 if prompt_tokens > 300_000 else 0.02
+    expected_cache_rate: Final = (
+        (tier_override if tier_override is not None else 0.007) if prompt_tokens > 300_000 else 0.001
+    )
+    total: Final = completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": profile},
+        litellm_logging_obj=logging_obj,
+    )
+    assert total == pytest.approx(
+        (prompt_tokens - 5) * expected_input_rate + 3 * expected_output_rate + 5 * expected_cache_rate
+    )
+    breakdown_key: Final = "cache_read_cost" if cache_field == "cache_read_input_token_cost" else "cache_creation_cost"
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown.get(breakdown_key, 0.0) == pytest.approx(5 * expected_cache_rate)
+    assert logging_obj.billed_token_rates is not None
+    assert logging_obj.billed_token_rates.input_cost_per_token == expected_input_rate
+    assert logging_obj.billed_token_rates.output_cost_per_token == expected_output_rate
+    entry: Final = pricing_entry_for_cost_calc(model, response, "bedrock", False, None, None, None, logging_obj)
+    assert entry is not None
+    assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
+    assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
