@@ -1,12 +1,15 @@
 
 import json
+import logging
 import uuid
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -471,23 +474,14 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
 
 
-def test_no_text_in_user_content_is_logged_at_debug(caplog):
-    """Adding a blank text part is a handled condition; it should log at debug, not warning."""
-    import logging
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
-            ],
-        }
+def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}]}
     ]
-    from litellm._logging import verbose_logger
 
     with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
-        transformation._gemini_convert_messages_with_history(messages)
+        contents: Final = transformation.gemini_convert_messages_with_history(messages)
 
-    debug_records = [r for r in caplog.records if "No text in user content" in r.getMessage()]
-    assert len(debug_records) == 1
-    assert debug_records[0].levelno == logging.DEBUG
+    fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
+    assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
+    assert contents[0]["parts"][-1] == {"text": " "}

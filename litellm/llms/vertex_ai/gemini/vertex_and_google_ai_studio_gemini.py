@@ -1,13 +1,12 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-import functools
 import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -18,6 +17,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -196,7 +196,7 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
-@functools.lru_cache(maxsize=None)
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _warn_gemini_sampling_params_deprecated(model: str) -> None:
     verbose_logger.warning(
         "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",

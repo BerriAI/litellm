@@ -1,5 +1,6 @@
 import asyncio, importlib, os, uuid
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -6489,65 +6491,42 @@ def test_supported_reasoning_efforts_still_map(model):
         assert "thinkingConfig" in result
 
 
-def test_gemini_3_sampling_deprecation_warning_logged_once_per_process(caplog):
-    """The Gemini 3+ sampling DeprecationWarning must fire once per process per model, not per request or per param."""
-    import logging
+def test_gemini_3_sampling_deprecation_is_logged_once_per_model(caplog: pytest.LogCaptureFixture) -> None:
+    flash_lite: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
+    pro: Final = f"gemini-3-pro-{uuid.uuid4().hex}"
+    config: Final = VertexGeminiConfig()
 
-    from litellm._logging import verbose_logger
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-        _warn_gemini_sampling_params_deprecated,
-    )
-
-    _warn_gemini_sampling_params_deprecated.cache_clear()
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-        config = VertexGeminiConfig()
-        for _ in range(3):
-            result = config.map_openai_params(
+        mapped: Final = tuple(
+            config.map_openai_params(
                 non_default_params={"temperature": 0.2, "top_p": 0.9, "top_k": 5},
                 optional_params={},
-                model="gemini-3.1-flash-lite",
+                model=model,
                 drop_params=True,
             )
-            assert result["temperature"] == 0.2
-            assert result["top_p"] == 0.9
-            assert result["top_k"] == 5
-
-        config.map_openai_params(
-            non_default_params={"temperature": 0.2},
-            optional_params={},
-            model="gemini-3-pro",
-            drop_params=True,
+            for model in (flash_lite, flash_lite, flash_lite, pro)
         )
 
-    warnings = [r for r in caplog.records if "DeprecationWarning" in r.getMessage()]
-    assert len(warnings) == 2
-    assert "gemini-3.1-flash-lite" in warnings[0].getMessage()
-    assert "gemini-3-pro" in warnings[1].getMessage()
+    deprecations: Final = tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+    assert len(deprecations) == 2
+    assert flash_lite in deprecations[0]
+    assert pro in deprecations[1]
+    assert all((m["temperature"], m["top_p"], m["top_k"]) == (0.2, 0.9, 5) for m in mapped)
 
 
-def test_gemini_2_5_sampling_params_do_not_warn(caplog):
-    """Gemini 2.x models must not emit the Gemini 3+ sampling DeprecationWarning."""
-    import logging
-
-    from litellm._logging import verbose_logger
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-        _warn_gemini_sampling_params_deprecated,
-    )
-
-    _warn_gemini_sampling_params_deprecated.cache_clear()
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
+def test_gemini_2_5_sampling_params_log_no_deprecation(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-        result = VertexGeminiConfig().map_openai_params(
-            non_default_params={"temperature": 0.2, "top_p": 0.9, "top_k": 5},
+        mapped: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={param: value},
             optional_params={},
-            model="gemini-2.5-flash",
+            model=f"gemini-2.5-flash-{uuid.uuid4().hex}",
             drop_params=True,
         )
 
-    assert result["temperature"] == 0.2
-    assert result["top_p"] == 0.9
-    assert result["top_k"] == 5
+    assert mapped[param] == value
     assert not any("DeprecationWarning" in r.getMessage() for r in caplog.records)
 
 
