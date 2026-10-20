@@ -1,7 +1,10 @@
 //! `litellm/llms/anthropic/pass_through/adapters/transformation.py`: a Messages request for a
 //! provider that only speaks Chat Completions, and that provider's answer read back as Messages.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use litellm_llms_types::{
     formats::messages::{
@@ -40,6 +43,40 @@ pub struct ToolNames(HashMap<String, String>);
 impl ToolNames {
     pub fn original<'a>(&'a self, name: &'a str) -> &'a str {
         self.0.get(name).map_or(name, String::as_str)
+    }
+}
+
+/// What the provider behind a translated answer reported, for whoever accounts for the call:
+/// its usage once the provider sends it, and the model it answered as. The zero counts a
+/// translated stream opens with are there for the client and never land here.
+#[derive(Clone, Debug, Default)]
+pub struct UpstreamReport(Arc<Mutex<Reported>>);
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Reported {
+    pub usage: Option<MessagesStreamUsage>,
+    pub model: Option<String>,
+}
+
+impl UpstreamReport {
+    pub fn get(&self) -> Reported {
+        self.lock().clone()
+    }
+
+    pub(super) fn usage(&self, usage: MessagesStreamUsage) {
+        self.lock().usage = Some(usage);
+    }
+
+    /// Keeps the first model the provider names.
+    pub(super) fn model(&self, model: Option<&str>) {
+        let mut reported = self.lock();
+        if reported.model.is_none() {
+            reported.model = model.filter(|model| !model.is_empty()).map(str::to_owned);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Reported> {
+        self.0.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 
@@ -472,9 +509,14 @@ pub fn translate_openai_response_to_anthropic(
     body: &[u8],
     model: &str,
     tool_names: &ToolNames,
+    report: &UpstreamReport,
 ) -> Result<MessagesResponse, Error> {
     let response: ChatResponse = serde_json::from_slice(body)
         .map_err(|error| Error::InvalidResponse(ErrorDetail::invalid("chat completion", error)))?;
+    report.model(response.model.as_deref());
+    if let Some(usage) = &response.usage {
+        report.usage(usage.anthropic());
+    }
     let (message, finish_reason) = response
         .choices
         .into_iter()
@@ -755,8 +797,13 @@ mod tests {
 
     fn respond(response: Value, tool_names: &ToolNames) -> Result<Value, Error> {
         let body = serde_json::to_vec(&response).unwrap();
-        translate_openai_response_to_anthropic(&body, "fallback-model", tool_names)
-            .map(|message| serde_json::to_value(message).unwrap())
+        translate_openai_response_to_anthropic(
+            &body,
+            "fallback-model",
+            tool_names,
+            &UpstreamReport::default(),
+        )
+        .map(|message| serde_json::to_value(message).unwrap())
     }
 
     #[rstest]
@@ -832,5 +879,33 @@ mod tests {
             respond(response, &ToolNames::default()),
             Err(Error::InvalidResponse(_))
         ));
+    }
+
+    #[rstest]
+    #[case::reported(
+        json!({"model": "gpt-6-astra-2026", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2}}),
+        Reported {
+            usage: Some(MessagesStreamUsage {
+                input_tokens: Some(3),
+                output_tokens: Some(2),
+                ..MessagesStreamUsage::default()
+            }),
+            model: Some("gpt-6-astra-2026".into()),
+        }
+    )]
+    #[case::nothing_reported(json!({"choices": []}), Reported::default())]
+    fn a_completion_reports_its_own_usage_and_model(
+        #[case] response: Value,
+        #[case] expected: Reported,
+    ) {
+        let report = UpstreamReport::default();
+        translate_openai_response_to_anthropic(
+            &serde_json::to_vec(&response).unwrap(),
+            "fallback-model",
+            &ToolNames::default(),
+            &report,
+        )
+        .unwrap();
+        assert_eq!(report.get(), expected);
     }
 }

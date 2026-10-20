@@ -197,7 +197,11 @@ general_settings:
 }
 
 async fn send(app: &Router, body: Value) -> (u16, String) {
-    let request = Request::post("/v1/chat/completions")
+    send_to(app, "/v1/chat/completions", body).await
+}
+
+async fn send_to(app: &Router, path: &str, body: Value) -> (u16, String) {
+    let request = Request::post(path)
         .header("content-type", "application/json")
         .header("authorization", "Bearer sk-master")
         .body(Body::from(body.to_string()))
@@ -290,4 +294,44 @@ async fn an_unsupported_param_is_refused_before_the_call() {
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("reasoning_effort"), "{body}");
     assert!(harness.calls.lock().unwrap().is_empty());
+}
+
+#[rstest]
+#[case::unary(false, (5, 6))]
+#[case::stream(true, (7, 3))]
+#[tokio::test]
+async fn messages_for_an_azure_deployment_are_priced_by_the_response_model(
+    #[case] stream: bool,
+    #[case] usage: (u64, u64),
+) {
+    let harness = harness().await;
+    let (status, body) = send_to(
+        &harness.app,
+        "/v1/messages",
+        json!({"model": "chat", "max_tokens": 8, "stream": stream,
+            "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    match stream {
+        true => assert!(body.contains("event: message_stop"), "{body}"),
+        false => assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["model"],
+            RESPONSE_MODEL
+        ),
+    }
+    let sent = harness.calls.lock().unwrap()[0].clone();
+    assert_eq!(sent.path, "/openai/deployments/chat-prod/chat/completions");
+
+    litellm_gateway::hooks::close(&harness.inference).await;
+    let seen = harness.seen.0.lock().unwrap();
+    let [seen] = seen.as_slice() else {
+        panic!("{seen:?}")
+    };
+    assert_eq!(seen.deployment.as_deref(), Some("azure-1"));
+    assert_eq!(seen.usage, Some(usage));
+    assert!(
+        close(seen.cost.unwrap(), cost(usage, RESPONSE_MODEL_RATES)),
+        "{seen:?}"
+    );
 }

@@ -4,14 +4,18 @@
 use std::sync::Arc;
 
 use futures_util::{StreamExt, TryStreamExt, future::ready};
-use litellm_host::{call::CallOutput, interceptors::Interceptors};
-use litellm_inference::{context::CallContext, provider::resolve_llm_provider};
+use litellm_host::{
+    call::{CallOutput, hosted_call},
+    interceptors::Interceptors,
+};
+use litellm_inference::{CallOptions, context::CallContext, provider::resolve_llm_provider};
 use litellm_inference_chat::{ChatCompletionsRoute, openai::OpenAiChatCall};
 use litellm_llms::{
     anthropic::adapters::{
         streaming_iterator::anthropic_events,
         transformation::{
-            ChatRequest, translate_anthropic_to_openai, translate_openai_response_to_anthropic,
+            ChatRequest, UpstreamReport, translate_anthropic_to_openai,
+            translate_openai_response_to_anthropic,
         },
     },
     base_llm::{messages::streaming, model_info::ModelInfo},
@@ -20,11 +24,14 @@ use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, MessagesCall, MessagesCallResponse, common_utils::messages_provider,
-    route::MessagesStreamHead,
+    Error, MessagesCall, MessagesCallResponse,
+    common_utils::messages_provider,
+    route::{MessagesMachine, MessagesStreamHead},
 };
 
-/// The Chat Completions route a Messages route hands such deployments to.
+/// Serves a Messages call through the Chat Completions route. Kept apart from
+/// [`crate::MessagesRoute`] so a host that never routes Messages to chat providers does not
+/// link the chat providers' code.
 #[derive(Clone)]
 pub struct ChatCompletions {
     pub route: ChatCompletionsRoute,
@@ -36,17 +43,38 @@ pub struct ChatCompletions {
 
 impl ChatCompletions {
     /// Whether `call` names a deployment with no Messages config that Chat Completions serves.
-    pub(crate) fn serves(call: &MessagesCall) -> bool {
+    pub fn serves(call: &MessagesCall) -> bool {
         let provider = call.custom_llm_provider.as_deref();
         resolve_llm_provider(&call.body.model, provider, "messages")
             .is_ok_and(|resolved| messages_provider(resolved.provider, resolved.model).is_none())
             && ChatCompletionsRoute::serves_openai(&call.body.model, provider)
     }
 
-    pub(crate) async fn run(
+    /// The call as a hosted machine, as [`crate::MessagesRoute::machine`] runs a native one. The
+    /// usage and model the provider reports go to `report`, apart from the placeholder counts
+    /// the client sees before the provider sends any.
+    pub fn machine(self, call: MessagesCall, report: UpstreamReport) -> MessagesMachine {
+        hosted_call(
+            call,
+            None,
+            move |call, _, interceptors, observers| async move {
+                let context = CallContext::new(
+                    &interceptors,
+                    CallOptions {
+                        cache: None,
+                        observers,
+                    },
+                );
+                self.run(call, context, report).await
+            },
+        )
+    }
+
+    async fn run(
         &self,
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
+        report: UpstreamReport,
     ) -> Result<MessagesCallResponse, Error> {
         let MessagesCall {
             body,
@@ -83,7 +111,7 @@ impl ChatCompletions {
         Ok(
             match Box::pin(self.route.run_openai(call, context)).await? {
                 CallOutput::Complete(body) => CallOutput::Complete(Box::new(
-                    translate_openai_response_to_anthropic(&body, &model, &tool_names)?,
+                    translate_openai_response_to_anthropic(&body, &model, &tool_names, &report)?,
                 )),
                 CallOutput::Stream { chunks, .. } => CallOutput::Stream {
                     head: MessagesStreamHead {
@@ -93,6 +121,7 @@ impl ChatCompletions {
                         chunks.map_err(std::io::Error::other).boxed(),
                         model,
                         tool_names,
+                        report,
                     )
                     .and_then(|event| ready(streaming::encode(&event)))
                     .map_err(Error::from)

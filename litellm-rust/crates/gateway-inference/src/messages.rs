@@ -12,6 +12,7 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{ChatCompletions, MessagesCall, messages_body, route::Messages};
+use litellm_llms::anthropic::adapters::transformation::UpstreamReport;
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -81,14 +82,12 @@ async fn handle(
         edit(&mut body);
         Ok(body)
     };
-    let route = gateway
-        .messages
-        .clone()
-        .with_chat_completions(ChatCompletions {
-            route: gateway.chat_completions.clone(),
-            drop_params: gateway.drop_params(),
-            model_info: gateway.model_info(),
-        });
+    let chat = ChatCompletions {
+        route: gateway.chat_completions.clone(),
+        drop_params: gateway.drop_params(),
+        model_info: gateway.model_info(),
+    };
+    let route = gateway.messages.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
             cache.clone(),
@@ -111,6 +110,7 @@ async fn handle(
                 // that can hold a million tokens.
                 let body = body.take().map_or_else(&reparse, Ok);
                 let route = route.clone();
+                let chat = chat.clone();
                 let cache_headers = cache_headers.clone();
                 let name = name.as_str();
                 if let Some(tracking) = &tracking {
@@ -120,11 +120,22 @@ async fn handle(
                     crate::observe::record(name, attempt.deployment);
                     request::authorize(identity, name, attempt.deployment).await?;
                     let call = project(attempt.deployment, body?, upstream_headers)?;
-                    let machine = route.machine(call, cache_options.policy);
+                    // A translated answer's usage and model reach the hooks through `report`,
+                    // since the placeholder usage its stream opens with is not the provider's.
+                    let report = ChatCompletions::serves(&call).then(UpstreamReport::default);
+                    let machine = match &report {
+                        Some(report) => chat.machine(call, report.clone()),
+                        None => route.machine(call, cache_options.policy),
+                    };
                     let stream = Sse::<Messages, _, _>::new(Json, |error| {
                         Bytes::from(Error::from(error).sse_frame())
                     });
-                    Ok(litellm_host_http::serve(machine, (), cache_headers, stream, None).await?)
+                    let mut response =
+                        litellm_host_http::serve(machine, (), cache_headers, stream, None).await?;
+                    if let Some(report) = report {
+                        response.extensions_mut().insert(report);
+                    }
+                    Ok(response)
                 }
             },
             Error::failure,

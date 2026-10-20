@@ -27,7 +27,6 @@ pub struct MessagesRoute {
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
-    chat: Option<ChatCompletions>,
 }
 
 impl MessagesRoute {
@@ -41,7 +40,6 @@ impl MessagesRoute {
             auth,
             secrets,
             cache: None,
-            chat: None,
         }
     }
 
@@ -49,16 +47,6 @@ impl MessagesRoute {
     pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
         Self {
             cache: Some(cache),
-            ..self
-        }
-    }
-
-    /// Serves deployments with no Messages API of their own through `chat`. Without it such a
-    /// request is refused as an invalid provider.
-    #[must_use]
-    pub fn with_chat_completions(self, chat: ChatCompletions) -> Self {
-        Self {
-            chat: Some(chat),
             ..self
         }
     }
@@ -87,13 +75,6 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        if let Some(chat) = self
-            .chat
-            .as_ref()
-            .filter(|_| ChatCompletions::serves(&call))
-        {
-            return chat.run(call, context).await;
-        }
         litellm_inference::diagnostic::call(async {
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(

@@ -9,7 +9,9 @@ use litellm_llms_types::formats::messages::streaming::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::transformation::{ChatToolCall, ChatUsage, ToolNames, message_id, stop_reason};
+use super::transformation::{
+    ChatToolCall, ChatUsage, ToolNames, UpstreamReport, message_id, stop_reason,
+};
 use crate::{
     Error, ErrorDetail,
     anthropic::common_utils::normalize_anthropic_tool_use_id,
@@ -20,11 +22,17 @@ use crate::{
     },
 };
 
-/// A Chat Completions SSE body as Messages events, `model` naming the message they open.
-pub fn anthropic_events(bytes: ByteStream, model: String, tool_names: ToolNames) -> EventStream {
+/// A Chat Completions SSE body as Messages events, `model` naming the message they open. The
+/// usage and model the provider sends go to `report` as they arrive.
+pub fn anthropic_events(
+    bytes: ByteStream,
+    model: String,
+    tool_names: ToolNames,
+    report: UpstreamReport,
+) -> EventStream {
     transform_stream(
         sse::event_stream::<ChatChunk>(bytes, sse::is_done),
-        AnthropicStreamWrapper::new(model, tool_names),
+        AnthropicStreamWrapper::new(model, tool_names, report),
     )
     .map_err(|error| match error {
         StreamError::Decode(error) | StreamError::Transform(error) => error,
@@ -34,6 +42,7 @@ pub fn anthropic_events(bytes: ByteStream, model: String, tool_names: ToolNames)
 
 #[derive(Deserialize)]
 struct ChatChunk {
+    model: Option<String>,
     #[serde(default)]
     choices: Vec<ChunkChoice>,
     usage: Option<ChatUsage>,
@@ -77,10 +86,11 @@ struct AnthropicStreamWrapper {
     finish_reason: Option<String>,
     refused: bool,
     usage: Option<ChatUsage>,
+    report: UpstreamReport,
 }
 
 impl AnthropicStreamWrapper {
-    fn new(model: String, tool_names: ToolNames) -> Self {
+    fn new(model: String, tool_names: ToolNames, report: UpstreamReport) -> Self {
         Self {
             id: message_id(),
             model,
@@ -91,6 +101,7 @@ impl AnthropicStreamWrapper {
             finish_reason: None,
             refused: false,
             usage: None,
+            report,
         }
     }
 
@@ -223,7 +234,9 @@ impl StreamTransformer for AnthropicStreamWrapper {
         }
         let mut events = Vec::new();
         self.start(&mut events);
+        self.report.model(chunk.model.as_deref());
         if let Some(usage) = chunk.usage {
+            self.report.usage(usage.anthropic());
             self.usage = Some(usage);
         }
         for choice in chunk.choices {
@@ -300,7 +313,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::adapters::transformation::{
-        translate_anthropic_to_openai, truncate_tool_name,
+        Reported, translate_anthropic_to_openai, truncate_tool_name,
     };
 
     fn wire(chunks: &[Value]) -> String {
@@ -311,8 +324,12 @@ mod tests {
             .collect()
     }
 
-    /// The events as `(type, the rest)`, the message id replaced since it is generated.
-    async fn events(wire: &str, size: usize, tool_names: ToolNames) -> Result<Vec<Value>, Error> {
+    fn translated(
+        wire: &str,
+        size: usize,
+        tool_names: ToolNames,
+        report: UpstreamReport,
+    ) -> EventStream {
         let pieces: Vec<Result<Bytes, std::io::Error>> = wire
             .as_bytes()
             .chunks(size)
@@ -322,17 +339,23 @@ mod tests {
             stream::iter(pieces).boxed(),
             "gpt-6-astra".into(),
             tool_names,
+            report,
         )
-        .map_ok(|event| {
-            let mut event = serde_json::to_value(event).unwrap();
-            if let Some(id) = event.pointer_mut("/message/id") {
-                assert!(id.as_str().unwrap().starts_with("msg_"));
-                *id = json!("msg");
-            }
-            event
-        })
-        .try_collect()
-        .await
+    }
+
+    /// The events as JSON, the message id replaced since it is generated.
+    async fn events(wire: &str, size: usize, tool_names: ToolNames) -> Result<Vec<Value>, Error> {
+        translated(wire, size, tool_names, UpstreamReport::default())
+            .map_ok(|event| {
+                let mut event = serde_json::to_value(event).unwrap();
+                if let Some(id) = event.pointer_mut("/message/id") {
+                    assert!(id.as_str().unwrap().starts_with("msg_"));
+                    *id = json!("msg");
+                }
+                event
+            })
+            .try_collect()
+            .await
     }
 
     fn message_start() -> Value {
@@ -490,5 +513,43 @@ mod tests {
             events(&wire, 4096, ToolNames::default()).await,
             Err(Error::InvalidResponse(_))
         ));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_report_holds_only_what_the_provider_sent() {
+        let report = UpstreamReport::default();
+        let wire = wire(&[
+            json!({"id": "c", "model": "gpt-6-astra-2026", "choices": [{"index": 0, "delta": {"content": "hi"}}]}),
+            json!({"id": "c", "model": "gpt-6-astra-2026", "choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5}}),
+        ]);
+        let mut events = translated(&wire, 4096, ToolNames::default(), report.clone());
+
+        let opened: Vec<MessagesStreamEvent> = (&mut events).take(3).try_collect().await.unwrap();
+        assert!(matches!(
+            opened.as_slice(),
+            [
+                MessagesStreamEvent::MessageStart { .. },
+                _,
+                MessagesStreamEvent::ContentBlockDelta { .. }
+            ]
+        ));
+        assert_eq!(
+            report.get(),
+            Reported {
+                usage: None,
+                model: Some("gpt-6-astra-2026".into())
+            }
+        );
+
+        events.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(
+            report.get().usage,
+            Some(MessagesStreamUsage {
+                input_tokens: Some(4),
+                output_tokens: Some(1),
+                ..MessagesStreamUsage::default()
+            })
+        );
     }
 }
