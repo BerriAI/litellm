@@ -1031,9 +1031,7 @@ def _failure_usage_to_lift(
     at the rate the router registered under ``deployment_id`` (``Logging.get_router_model_id``)
     when the deployment declares one, else the cost map's rate for ``base_model`` (an Azure
     deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
-    failure stays at zero cost. The raw request body backfills
-    the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
-    chat-completions provider) without filling optional_params. Returns the
+    failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
     failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
@@ -1047,6 +1045,22 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
+    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body)
+    if estimated_usage is None:
+        return None
+    if not provider_billed:
+        return estimated_usage, 0.0
+    return estimated_usage, _estimated_input_cost(
+        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
+    )
+
+
+def _estimated_prompt_usage(
+    model_call_details: Mapping[str, object], request_body: Mapping[str, object]
+) -> Usage | None:
+    """The input-only Usage estimate for the prompt this request sent, or None when the call type has no
+    estimable input. The raw request body backfills the system prompt when the SDK bridges an endpoint
+    (e.g. /v1/messages on a chat-completions provider) without filling optional_params."""
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
     optional_params: Final = model_call_details.get("optional_params")
@@ -1056,17 +1070,10 @@ def _failure_usage_to_lift(
         else None
     )
     system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
-    estimated_usage: Final = _estimate_dispatched_failure_usage(
+    return _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),
         system_input=system_input,
-    )
-    if estimated_usage is None:
-        return None
-    if not provider_billed:
-        return estimated_usage, 0.0
-    return estimated_usage, _estimated_input_cost(
-        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
     )
 
 
@@ -1384,9 +1391,14 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         deployment_id=_deployment_id,
         base_model=_base_model,
     )
+    _prompt_estimate: Final = (
+        _estimated_prompt_usage(_model_call_details, request_data)
+        if provider_billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
+        else None
+    )
     _earlier_attempts: Final = (
-        _billed_earlier_attempts(_model_call_details, _litellm_params, _usage_to_lift[0], _base_model, _deployment_id)
-        if provider_billed and _usage_to_lift is not None and isinstance(_usage_to_lift[0], Usage)
+        _billed_earlier_attempts(_model_call_details, _litellm_params, _prompt_estimate, _base_model, _deployment_id)
+        if _prompt_estimate is not None
         else ()
     )
     _entries: Final = (

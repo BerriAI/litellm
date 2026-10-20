@@ -2174,6 +2174,67 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
     assert all(a.usage is usage for a in attempts)
 
 
+def test_earlier_attempts_are_priced_from_the_prompt_estimate_not_the_final_streams_recovered_usage():
+    """A final attempt whose stream broke mid-flight lifts its recovered usage (prompt plus the chunks
+    delivered); the earlier timed-out attempts never produced output, so they are priced from the
+    input-only estimate and not from that recovered usage."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _estimated_prompt_usage, _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    recovered = litellm.Usage(prompt_tokens=500, completion_tokens=40, total_tokens=540)
+    logging_obj.model_call_details["combined_usage_object"] = recovered
+    logging_obj.model_call_details["response_cost"] = 0.01
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    estimate = _estimated_prompt_usage(logging_obj.model_call_details, {})
+    assert lifted["combined_usage_object"] is recovered
+    assert [(a.usage.prompt_tokens, a.usage.completion_tokens) for a in lifted["billed_failed_attempts"]] == [
+        (estimate.prompt_tokens, 0)
+    ]
+    assert estimate.prompt_tokens < recovered.prompt_tokens
+
+
+def test_attempts_already_summed_into_the_final_row_are_not_lifted_again():
+    """``Logging.carry_failed_attempt_usage`` moves a cut stream's usage into ``failed_attempts_usage``
+    and the final row already bills every entry of it, so no earlier attempt gets a row of its own."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    logging_obj.model_call_details["failed_attempts_usage"] = (
+        (litellm.Usage(prompt_tokens=24, completion_tokens=3, total_tokens=27), 0.001),
+    )
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert lifted["combined_usage_object"].prompt_tokens == 24
+    assert "billed_failed_attempts" not in lifted
+
+
 def test_a_timed_out_attempt_from_the_group_a_fallback_left_is_still_billed():
     """After a fallback hop the router restarts ``attempted_retries`` at 0 for the new model group and
     re-logs the attempt that exhausted the previous group, so the final attempt (dep-b, retry 1) must be
