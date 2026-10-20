@@ -10457,6 +10457,24 @@ async def test_async_completion_with_a_malformed_retry_policy_still_logs_the_fai
 
 
 @pytest.mark.asyncio
+async def test_async_completion_with_a_caller_sent_retry_marker_still_logs_the_failure(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(litellm.AuthenticationError):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, _litellm_wrapper_retry_attempt=True)
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 1
+    assert tuple(recorder.outcomes) == ("failure:AuthenticationError",)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("num_retries", [None, 2], ids=["policy-only", "policy-and-num-retries"])
 async def test_aresponses_bridged_to_chat_applies_its_retry_policy_only_on_the_first_attempt(
     retry_upstream: respx.MockRouter, num_retries: int | None

@@ -1592,6 +1592,7 @@ def _add_retry_context(error: Exception, kwargs: Mapping[str, object]) -> None:
 
 
 _RETRY_ATTEMPT_KWARG: Final = "_litellm_wrapper_retry_attempt"
+_RETRY_ATTEMPT_MARKER: Final = object()
 
 
 def _with_retry_policy_spent(kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -2180,7 +2181,7 @@ def client(original_function):
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
-        is_wrapper_retry_attempt: Final = kwargs.pop(_RETRY_ATTEMPT_KWARG, None) is True
+        is_wrapper_retry_attempt: Final = kwargs.pop(_RETRY_ATTEMPT_KWARG, None) is _RETRY_ATTEMPT_MARKER
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
         request_kwargs: Final = {**kwargs}
@@ -2426,7 +2427,7 @@ def client(original_function):
                         *args,
                         original_function=litellm.acompletion,
                         _initial_exception=e,
-                        **{**request_kwargs, "num_retries": num_retries, _RETRY_ATTEMPT_KWARG: True},
+                        **{**request_kwargs, "num_retries": num_retries, _RETRY_ATTEMPT_KWARG: _RETRY_ATTEMPT_MARKER},
                     )
                 except openai.APIError as retry_err:
                     _add_retry_context(retry_err, kwargs)
