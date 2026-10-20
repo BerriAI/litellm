@@ -1979,6 +1979,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups",
     "public_model_groups_links",
     "cost_discount_config",
+    "apply_search_free_tier",
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",

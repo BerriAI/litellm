@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
@@ -33,6 +33,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     debitable_model_access_groups,
     get_llm_router,
 )
+from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -487,8 +488,21 @@ class _ProxyDBLogger(CustomLogger):
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
+            raw_cost: Final = _str_keyed_fields(
+                sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
+            ).get("response_cost")
+            priced_cost: Final = raw_cost if isinstance(raw_cost, (int, float)) else None
             response_cost: Final = (
-                sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
+                await apply_search_free_tier(
+                    kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
+                    sl_object=sl_object,  # pyright: ignore[reportUnknownArgumentType]  # payload carries untyped lists
+                    response_cost=priced_cost,
+                    completion_response=completion_response,
+                    counter=proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache,
+                    now=datetime.now(timezone.utc),
+                )
+                if litellm.apply_search_free_tier and sl_object is not None and priced_cost is not None
+                else priced_cost
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,
