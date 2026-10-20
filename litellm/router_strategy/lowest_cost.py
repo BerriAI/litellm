@@ -3,7 +3,9 @@
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -13,30 +15,42 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
+_STR_KEYED: Final = TypeAdapter(dict[str, object])
+
+
+def _str_keyed(value: object) -> Mapping[str, object]:
+    try:
+        return MappingProxyType(_STR_KEYED.validate_python(value))
+    except ValidationError:
+        return _EMPTY
+
 
 def _deployment_pricing_models(deployment: Mapping[str, object]) -> tuple[str, ...]:
     """Cost-map keys to price a deployment under, ``model_info.base_model`` first, then the
     deployment's own model, the same order ``completion_cost`` walks for its spend row."""
-    litellm_params: Final = deployment.get("litellm_params")
-    model_info: Final = deployment.get("model_info")
-    params: Final = litellm_params if isinstance(litellm_params, Mapping) else _EMPTY
-    info: Final = model_info if isinstance(model_info, Mapping) else _EMPTY
+    params: Final = _str_keyed(deployment.get("litellm_params"))
+    info: Final = _str_keyed(deployment.get("model_info"))
     candidates: Final = (info.get("base_model") or params.get("base_model"), params.get("model"))
     return tuple(candidate for candidate in candidates if isinstance(candidate, str) and candidate)
 
 
-def _deployment_cost_map_entry(deployment: Mapping[str, object]) -> Mapping[str, object]:
-    """The first cost-map row among the deployment's pricing models that carries a token price;
-    empty when none does, so the caller falls back to its unmapped default."""
-    rows: Final = (litellm.model_cost.get(model) or _EMPTY for model in _deployment_pricing_models(deployment))
-    return next((row for row in rows if _declares_token_price(row)), _EMPTY)
+def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
+    """Input and output per-token prices from the first cost-map row among the deployment's
+    pricing models that carries one; (None, None) when no row does, so the caller falls back to
+    its unmapped default."""
+    cost_map: Final = cast("Mapping[str, object]", litellm.model_cost)
+    rows: Final = (_str_keyed(cost_map.get(model)) for model in _deployment_pricing_models(_str_keyed(deployment)))
+    row: Final = next((row for row in rows if _declares_token_price(row)), _EMPTY)
+    return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
 
 
 def _declares_token_price(row: Mapping[str, object]) -> bool:
     return row.get("input_cost_per_token") is not None or row.get("output_cost_per_token") is not None
 
 
-_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
+def _as_rate(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -270,7 +284,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_cost_map = _deployment_cost_map_entry(_deployment)
+            map_input_cost, map_output_cost = _deployment_cost_map_rates(cast(object, _deployment))
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
@@ -282,10 +296,10 @@ class LowestCostLoggingHandler(CustomLogger):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                item_input_cost = map_input_cost if map_input_cost is not None else 5.0
 
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                item_output_cost = map_output_cost if map_output_cost is not None else 5.0
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
