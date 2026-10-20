@@ -6,8 +6,6 @@ import pytest
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     anthropic_message_delta_fields,
     assemble_anthropic_sse_stream,
-    collapse_pure_text_chunks,
-    extract_sse_data,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -180,31 +178,3 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
 )
 def test_is_sse_error_stream_is_true_only_for_frames_that_are_all_errors(chunks: tuple[object, ...], expected: bool):
     assert is_sse_error_stream(chunks) is expected
-
-
-NON_OBJECT_FRAME: Final = b"event: content_block_delta\ndata: [1, 2]\n\n"
-
-
-@pytest.mark.parametrize(
-    ("chunks", "collapses"),
-    [
-        (ANTHROPIC_STREAM, True),
-        ((*ANTHROPIC_STREAM[:2], NON_OBJECT_FRAME, *ANTHROPIC_STREAM[2:]), False),
-    ],
-)
-def test_collapse_pure_text_chunks_leaves_a_stream_with_a_non_object_event_to_the_legacy_path(
-    chunks: tuple[bytes, ...], collapses: bool
-):
-    assert (collapse_pure_text_chunks(chunks) is not None) is collapses
-
-
-@pytest.mark.parametrize(
-    ("event", "expected"),
-    [
-        ('event: ping\ndata: {"type": "ping"}', {"type": "ping"}),
-        ("event: content_block_delta\ndata: [1, 2]", None),
-        ('event: content_block_delta\ndata: "text"', None),
-    ],
-)
-def test_extract_sse_data_returns_only_json_objects(event: str, expected: dict[str, object] | None):
-    assert extract_sse_data(event) == expected

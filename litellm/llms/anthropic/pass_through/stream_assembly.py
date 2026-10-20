@@ -4,9 +4,6 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
@@ -100,29 +97,6 @@ _FAST_PATH_DISALLOWED_DELTA_TYPES: Final = frozenset(
 )
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _SseContentBlock(TypedDict):
-    type: ReadOnly[NotRequired[object]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _SseDelta(TypedDict):
-    type: ReadOnly[NotRequired[object]]
-    text: ReadOnly[NotRequired[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _SseEvent(TypedDict):
-    type: ReadOnly[NotRequired[object]]
-    index: ReadOnly[NotRequired[object]]
-    content_block: ReadOnly[NotRequired[_SseContentBlock | None]]
-    delta: ReadOnly[NotRequired[_SseDelta | None]]
-
-
-_SSE_EVENT: Final = TypeAdapter(_SseEvent)
-_SSE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
-
-
 def collapse_pure_text_chunks(
     all_chunks: Sequence[str | bytes],
 ) -> list[str] | None:
@@ -145,10 +119,10 @@ def collapse_pure_text_chunks(
             if ev:
                 normalized.append(ev)
 
-    text_block_indexes: Final[set[object]] = set()
+    text_block_indexes: Final[set] = set()
     out: Final[list[str]] = []
     pending_text: list[str] = []
-    pending_index: object = None
+    pending_index: int | None = None
     saw_any_text_delta = False
 
     def flush() -> None:
@@ -181,20 +155,20 @@ def collapse_pure_text_chunks(
 
         json_str = ev[idx + len("data:") :].strip()
         try:
-            data = _SSE_EVENT.validate_python(json.loads(json_str))
+            data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError):
             return None
 
         etype = data.get("type")
         if etype == "content_block_start":
-            block: _SseContentBlock = data.get("content_block") or {}
+            block = data.get("content_block") or {}
             if block.get("type") != "text":
                 return None
             text_block_indexes.add(data.get("index"))
             flush()
             out.append(ev)
         elif etype == "content_block_delta":
-            delta: _SseDelta = data.get("delta") or {}
+            delta = data.get("delta") or {}
             dtype = delta.get("type")
             if dtype in _FAST_PATH_DISALLOWED_DELTA_TYPES:
                 return None
@@ -302,7 +276,7 @@ def extract_sse_data(event_str: str) -> dict | None:
             if not payload or payload == "[DONE]":
                 return None
             try:
-                return _SSE_DATA.validate_python(json.loads(payload))
+                return json.loads(payload)
             except (ValueError, TypeError):
                 return None
     return None
