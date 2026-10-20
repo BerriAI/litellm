@@ -1517,6 +1517,7 @@ async def test_the_billing_event_carries_the_creating_keys_project_and_every_cre
             organization_id=None,
             spend=0.0,
             max_budget=None,
+            team_id="team-alpha",
             project_id="project-1",
             model_max_budget=key_budget,
         )
@@ -1549,6 +1550,50 @@ async def test_the_billing_event_carries_the_creating_keys_project_and_every_cre
         "user_api_key_team_model_max_budget": team_budget,
         "user_api_key_user_model_max_budget": user_budget,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_team_id", "billed_project_id"),
+    [("team-alpha", "project-1"), ("team-beta", None)],
+    ids=["key_still_on_the_creating_team", "key_moved_to_another_team"],
+)
+async def test_the_billing_event_bills_the_keys_project_only_while_the_key_stays_on_the_creating_team(
+    key_team_id: str, billed_project_id: str | None
+):
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-moved",
+                unified_object_id="resp_moved",
+                status="queued",
+                created_by="alice",
+                api_key="hash-alice",
+                team_id="team-alpha",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=None,
+            team_id=key_team_id,
+            project_id="project-1",
+            model_max_budget=None,
+        )
+    )
+
+    await poller.bill_if_finished(response_id="resp_moved", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert (billed.metadata["user_api_key_team_id"], billed.metadata["user_api_key_project_id"]) == (
+        "team-alpha",
+        billed_project_id,
+    )
 
 
 _TIER_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 4.0, "budget_duration": "1d"}}
