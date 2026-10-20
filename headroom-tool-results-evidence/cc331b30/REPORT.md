@@ -2,7 +2,7 @@
 
 Candidate `cc331b300c0ecc370640549afac9b8561f29b733` was tested against baseline `f43f2d8c1598e640daa7345d1d46925fe61b9783`
 
-The `<scratch>/run-cc33/res` captures contain 10 final cc331b30 cases: K1_chat, K1_resp, N3, N4, N5, N6, C2, C3, N7 and N7c. They also contain two fresh base cases, N7 and N7c. Base for all other cases is the retained run812 baseline. The two copied K1 request bodies have SHA-256 values matching both run812 base requests and retained 572e5f60 final request copies
+The original `<scratch>/run-cc33/res` captures contain 10 final cc331b30 cases: K1_chat, K1_resp, N3, N4, N5, N6, C2, C3, N7 and N7c. They also contain two fresh base cases, N7 and N7c. The bounded N6 follow-up adds one base and one final capture named `N6_msgs_searchresult_plus_safe_mt2048`. Base for all other original cases is the retained run812 baseline. The two copied K1 request bodies have SHA-256 values matching both run812 base requests and retained 572e5f60 final request copies
 
 ## Results
 
@@ -15,19 +15,42 @@ Token columns are provider input, cache_read and cache_create. Row lengths are r
 | N3 | run812 | 200/200 | 30,787 | 0 | 0 | 18,419 | 0 | 0 | N/Y | 0/9,985 | 2 | 53,929 -> 26,808 | 62,849 -> 27,330 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 | N4 | run812 | 200/200 | 2 | 30,746 | 0 | 2 | 0 | 18,781 | N/Y | 0/9,983 | 2 | 53,841 -> 27,122 | 62,829 -> 27,713 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 | N5 | run812 | 200/200 | 31,796 | 0 | 0 | 31,796 | 0 | 0 | N/N | 0/0 | none | 53,921 -> 53,921 | 63,214 -> 63,214 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
-| N6 | run812 | 200/200 | 62,562 | 0 | 0 | 50,597 | 0 | 0 | N/Y | 0/9,982 | 2 | 107,758 -> 81,039 | 125,923 -> 90,807 | No text answer, `stop_reason=max_tokens`, 300 thinking tokens |
+| N6 | run812 | 200/200 | 62,562 | 0 | 0 | 50,597 | 0 | 0 | N/Y | 0/9,982 | 2 | 107,758 -> 81,039 | 125,923 -> 90,807 | Truncated by thinking, no text answer (`max_tokens=300`) |
 | C2 | run812 | 200/200 | 30,748 | 0 | 0 | 18,783 | 0 | 0 | N/Y | 0/9,983 | 2 | 53,841 -> 27,122 | 62,741 -> 27,625 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 | C3 | run812 | 200/200 | 30,748 | 0 | 0 | 18,783 | 0 | 0 | N/Y | 0/9,983 | 2 | 53,841 -> 27,122 | 62,742 -> 27,626 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 | N7 | fresh base in run-cc33 | 200/200 | 30,748 | 0 | 0 | 18,783 | 0 | 0 | N/Y | 0/9,983 | 2 | 53,841 -> 27,122 | 62,742 -> 27,626 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 | N7c | fresh base in run-cc33 | 200/200 | 30,742 | 0 | 0 | 18,777 | 0 | 0 | N/Y | 0/9,983 | 2 | 53,841 -> 27,122 | 62,741 -> 27,625 | `/srv/app/pkg6/mod_263.lock`, 77,777 bytes |
 
-Full per-case fields and answer excerpts are in `analysis.tsv`. The byte-level prefix comparison is in `byte-check.tsv`
+The original matrix fields and answer excerpts are in `analysis.tsv`. The byte-level prefix comparison is in `byte-check.tsv`; the N6 mt2048 follow-up is below
 
 ## Control checks
 
 N5 made no Headroom call and saved zero tokens. The client and upstream `tool_result` are byte-identical at 63,151 bytes. No retrieval or CCR text was injected upstream
 
-N6 sent only `toolu_n6_0002` to Headroom. The mixed `toolu_n5_0001` result was byte-identical from client to upstream. The safe result shrank from 53,837 to 27,118 raw text characters and Headroom saved 9,982 tokens. The 200 response contained no text answer because it used all 300 output tokens for thinking and ended at `max_tokens`
+The original N6 captures used `max_tokens=300` on both paths and are truncated by thinking with no text answer. Those captures remain unchanged. The mt2048 follow-up changes only `max_tokens`; the remaining client request fields match the original request on each path
+
+| Path | HTTP | Input | Cache read | Cache create | Output | Stop reason | Headroom called | Headroom before / after / saved | `toolu_n5_0001` client/upstream | Headroom tool-result IDs | Safe result raw chars | Safe provider-row bytes |
+|---|---:|---:|---:|---:|---:|---|---|---:|---|---|---:|---:|
+| base | 200 | 62,562 | 0 | 0 | 536 | `end_turn` | no | 0 / 0 / 0 | byte-identical, 63,183 bytes | no Headroom call | 53,837 | 62,707 |
+| cc331b30 final | 200 | 50,597 | 0 | 0 | 595 | `end_turn` | yes | 22,813 / 12,831 / 9,982 | byte-identical, 63,183 bytes | only `toolu_n6_0002` | 27,118 | 27,591 |
+
+The base and final mt2048 request bodies differ from their respective original N6 bodies only at `max_tokens`, 300 to 2048. The `toolu_n5_0001` result was byte-identical from client to upstream on both paths. The final Headroom request contained one tool message with `tool_call_id=toolu_n6_0002` and the original 53,837-character safe result; it contained no `toolu_n5_0001`. The final provider-bound safe result was compressed to 27,118 raw characters
+
+Base answer, exact text:
+
+```text
+The file is **/srv/app/pkg6/mod_263.lock**, and it is **77777 bytes**. In the directory listing, this entry has type "file", size 77777, modified 2026-10-12T12:23:00Z, owner "zeta-canary-7731", and mode 0644. I scanned the rest of the listing and found no other file in /srv/app with that owner.
+
+I also listed /srv/lib by mistake. It wasn't needed, and it doesn't change the answer.
+```
+
+Final answer, exact text:
+
+```text
+The only file in /srv/app owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. The directory listing shows it with an mtime of 2026-10-12T12:23:00Z and mode 0644 "path": "/srv/app/pkg6/mod_263.lock", "type": "file", "size": 77777, "mtime": "2026-10-12T12:23:00Z", "owner": "zeta-canary-7731", "mode": "0644". I checked the remaining entries, and every other file in that listing is owned by "dev".
+```
+
+Both mt2048 responses ended at `end_turn` and contain answer text. Only the original max_tokens=300 N6 results were truncated by thinking
 
 C2 compressed the fresh result and preserved its call ID `call_c2_0001` and name `list_dir`. The base and cc33 provider prefixes match byte-for-byte: row 0 is 170 bytes on both, row 1 is 210 bytes on both. The assistant row's text block has `cache_control={"type":"ephemeral"}`; the `tool_use` block itself has no `cache_control`
 

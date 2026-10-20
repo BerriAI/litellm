@@ -1,0 +1,37 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD9XtZEkqYdW5imCmGwU",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQSvQoKEAgTGAI4AUIIdGhpbmtpbmcSDNSL0bvbNNaeNsz/dRoMOnzXSB4Mb+QNbmhFIjBApBt4VwMst2qCrGiE8cp7RM8L/9ZgK+NVN2bB98ETwwT9g/gP+4QU9PeyGxLfdMUq2gn8+7FBUELJyg9Deu7LyjylAwdApnDtLAH5PT6tJwX8YDAlE68to/3DHhvTOFMIZX5QMgHCO5jvIUmERxuY4Q8MO2XTcjJpsR4m03jSn3qkKgpD0lHUpbeM6lwq/pQTaFEyiMVpDcHgBMpQ7/hBSdYJyykRrgwPnMLNA0JaaiHKVZokO94/g4P/k6yDasipPkg1hnsW5zGg4Y0rBphoY/ATURZQPD24YTPuz3Vu/71hHikoayh2/dHtSvEcMKI3l4GVXcrIn9paudixWUNddP+D7c9ertSnCf8/YpwrA790lGqkA28AQ0fUEuCNqVzCV5JmMOPpj1MnH+2vBv8YWCQ7mkUicCUxn/fIBpAKgJQ/q0T4RZeG7ZIG5tfI+e2q202FwIuOzppCnmW+jIYbHl1SnUAsdP+q46NJsQDZmFZQnuSMEaQiY2q+9AHiqhylgNU/mliLsqDUh74a6I3UUOIh1+NLpieINXFth4ZR9fp699BCKE54FxWZPeJkyzVjBTyDOFPaKbAJePuXeEavHFD42ato0AzoS7vitfVkj5/sVSLgMFLqjbB97u2StVNn9Ao1JtkCJm3AJB86AauIjTqwZ46xdD3udFD3BoffVfr27NfP0UKZ7zyj23UnJI8w5dUFL7P/p09MDupqOlHIhi/DqYso8LeO66adctCSemP9LKnxGc+VD7JrbA/W2wGBWMkaDZuPo7fNTzR8Lr4CBlbCA80OC/zkyQsNmCV8FxAffiSKrsrkazskZefdgDn6KhHa0nN6hDE1owO7gKeGiI74LD53Ypb7WUiNH/+HhIF8hDlDyHRuS8iAjMKtwM1vsRBu2Zbz67HO6m+5NFn+elhm1mBYUFZhu6Mq5uGsUtl1d3ayBkCg6UMvaID9SFlWblHtb9b7cYeIm+3Bdk3vqLyuV7qyYnyw7wANgMsKlwwO/cbltX97DYerGjZkUcv33mUKiccrnMC0RQ/DjaQZ91sDr73svFCpoHgyRUlePf4aEIvUcAwubcg9mqFnGsr6DPtWeJs9/HXd9PgSYgWubaaT5CWhncfGJk3iZ+XP/CKhc6WlwS8T7S8vabjl1n23QtYaWcIhMDkR53DVqoe12Tq4HlB+0NAccxWc7BuAFcsKNyNV75f76wLv3N5RC6sVPAijlghlUFmV3Kq7EZY0NRJr1LFPFNuO077wJbrsF9MZKCrr0AfnqXXltRE+XDpki8Ok8RTbUd5TInoKe7DyhtQgmU6C1LcF/ZMSAv5BOiQEPQAbonlB046L/eSqWok0mBRqdPhAm5Qy8wgT4xqjQGoNEOND/ETyodJ1kc/lhhyXmyRUH73pGd1TYcvnfOqP8Ln65lg5r/mioS7OlFcpgf0lt08r5sEZVDbd6TCa2U6qULexygIpb3DaJAq60jvWfZ4E8o4F8j8rtfwVJRgIBULwue+OJ9EIX6THleGpQlKDchU2PaUwa9cyoqN2/AV9upTFqapPH7ki5WEDRof9yAmtK/LgeP+AcDK2nE4om3PZb1c64saLqRPfKYdcCBZ2a6kdU4sUc6i5W3sdkMjInksitosJ4g5EaNgQAsL0jryW4rxzUHNounGzE/z4avXNuhCWPWb8y9c/I6K3XC935n0vqbflmHYkfzjimz5sBPMj070orr5VB/04Xj8YAQ=="
+   }
+  ],
+  "container": null,
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 62562,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 300,
+   "output_tokens_details": {
+    "thinking_tokens": 300
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}
