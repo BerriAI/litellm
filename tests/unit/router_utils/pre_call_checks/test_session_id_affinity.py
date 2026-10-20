@@ -3,7 +3,9 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.caching.affinity_cache import claim_affinity_pin
@@ -24,6 +26,121 @@ class MockResponse:
 
     def json(self):
         return self._json_data
+
+
+@pytest.mark.asyncio
+async def test_retry_skips_failed_session_affinity_deployment(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://failed.local/v1",
+                },
+                "model_info": {"id": "failed"},
+            },
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://healthy.local/v1",
+                },
+                "model_info": {"id": "healthy"},
+            },
+        ],
+        optional_pre_call_checks=["session_affinity"],
+        num_retries=2,
+        allowed_fails=1,
+    )
+    affinity: Final = next(
+        callback for callback in router.optional_callbacks or () if isinstance(callback, DeploymentAffinityCheck)
+    )
+    session_id: Final = "pinned-session"
+    await affinity.cache.async_set_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key(
+            model_group="affinity-model", session_id=session_id, user_key=None
+        ),
+        {"model_id": "failed"},
+    )
+    failed: Final = respx_mock.post("https://failed.local/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            500,
+            json={"error": {"message": "deployment unavailable", "type": "server_error", "code": "internal_error"}},
+        )
+    )
+    healthy: Final = respx_mock.post("https://healthy.local/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-affinity-retry",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = await router.acompletion(
+        model="affinity-model",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"session_id": session_id},
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert failed.call_count == 1
+    assert healthy.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_with_only_session_affinity_deployment_stays_bounded(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://only.local/v1",
+                },
+                "model_info": {"id": "only"},
+            }
+        ],
+        optional_pre_call_checks=["session_affinity"],
+        num_retries=2,
+        disable_cooldowns=True,
+    )
+    only: Final = respx_mock.post("https://only.local/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            500,
+            json={"error": {"message": "deployment unavailable", "type": "server_error", "code": "internal_error"}},
+        )
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        await router.acompletion(
+            model="affinity-model",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"session_id": "pinned-session"},
+        )
+
+    assert only.call_count == 3
 
 
 @pytest.mark.asyncio
