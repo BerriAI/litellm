@@ -4943,7 +4943,7 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.69.post1"
+version = "0.1.69.post2"
 source = { editable = "enterprise" }
 
 [[package]]
