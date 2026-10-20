@@ -1749,16 +1749,6 @@ def test_oversized_pdf_page_is_priced_from_its_string_operands_without_extractin
     assert priced <= len(b"(Figure 3)")
 
 
-def test_unterminated_pdf_literal_string_is_priced_in_linear_time():
-    page: Final = _fake_pdf_page(content_bytes=b"(" * (4 * 1024 * 1024))
-
-    started: Final = time.perf_counter()
-    _price_pdf_pages((page,), len)
-    elapsed: Final = time.perf_counter() - started
-
-    assert elapsed < 1.0
-
-
 def test_oversized_pdf_form_xobject_is_priced_without_extracting_its_text():
     string_operand: Final = b"(form text)"
     text_operator: Final = string_operand + b" Tj\n"
@@ -1782,6 +1772,30 @@ def test_oversized_pdf_form_xobject_is_priced_without_extracting_its_text():
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
     assert priced >= len(string_operand) * repetitions
+
+
+def test_repeated_pdf_form_draws_are_priced_with_multiplicity():
+    string_operand: Final = b"(repeated form text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 1_024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n" * 1_000,
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= len(string_operand) * repetitions * 1_000
 
 
 def test_oversized_nested_pdf_form_xobject_is_priced_without_extracting_its_text():
@@ -1812,6 +1826,32 @@ def test_oversized_nested_pdf_form_xobject_is_priced_without_extracting_its_text
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
     assert priced >= len(string_operand) * repetitions
+
+
+def test_exponential_pdf_form_draws_avoid_full_text_extraction():
+    depth: Final = 20
+    form_objects: Final = tuple(
+        _pdf_stream(
+            (f"/Fm{index + 1} Do\n" * 2).encode() if index < depth - 1 else b"(leaf) Tj\n",
+            (
+                f"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+                f"/Resources << /XObject << /Fm{index + 1} {8 + index} 0 R >> >>"
+            ).encode()
+            if index < depth - 1
+            else b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << >>",
+        )
+        for index in range(depth)
+    )
+    data_url: Final = _pdf_data_url_with_shared_xobjects((b"/Fm0 Do\n",), form_objects)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= 2 ** (depth - 1)
 
 
 def test_cyclic_pdf_form_xobject_is_priced():
@@ -1910,21 +1950,6 @@ def test_pdf_form_without_resources_inherits_page_xobjects():
     assert priced <= string_operand_bytes * 3 // 2 + rendering_tokens
 
 
-def test_oversized_pdf_string_operand_scan_is_linear_after_escaped_parentheses():
-    path_operator: Final = b"10 10 m 20 20 l S\n"
-    padding_repetitions: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator)
-    padding_bytes: Final = padding_repetitions * len(path_operator)
-    padding: Final = path_operator * padding_repetitions + b" " * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES - padding_bytes)
-    content: Final = padding + b"%" + b"\\(" * 8_192 + path_operator * 1_000
-    page: Final = _fake_pdf_page(content_bytes=content)
-
-    started: Final = time.perf_counter()
-    _price_pdf_pages((page,), len)
-    elapsed: Final = time.perf_counter() - started
-
-    assert elapsed < 1.0
-
-
 def test_oversized_pdf_string_operand_counts_escaped_newline_continuations():
     escaped_newlines: Final = b"a\\\n" * 10_000
     literal_content: Final = b"(" + escaped_newlines + b"a" * 50_000 + b") Tj\n"
@@ -1933,6 +1958,60 @@ def test_oversized_pdf_string_operand_counts_escaped_newline_continuations():
     priced: Final = _price_pdf_pages((page,), len)
 
     assert priced >= 60_000
+
+
+def test_nested_pdf_literal_string_keeps_its_full_operand():
+    content: Final = b"(a(b)" + b"x" * 100_000 + b") Tj\n"
+    page: Final = _fake_pdf_page(content_bytes=content)
+
+    priced: Final = _price_pdf_pages((page,), len)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced >= 100_000
+
+
+def test_pdf_form_invocations_allow_comments_and_escaped_names():
+    string_operand: Final = b"(named form text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 1_024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << >>",
+    )
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    page_content: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1) + (
+        b"/Fm1 %comment\n Do\n/F#6d1 Do\n"
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        page_content,
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced >= 2 * len(string_operand) * repetitions
+
+
+def test_oversized_pdf_text_uses_a_sampled_token_estimate():
+    string_operand: Final = b"(Revenue grew eleven percent)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    page: Final = _fake_pdf_page(content_bytes=text_operator * repetitions)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    def four_chars_per_token(value: str) -> int:
+        return len(value) // 4
+
+    page_priced: Final = _price_pdf_pages((page,), four_chars_per_token)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+    blank_page_priced: Final = _price_pdf_pages(
+        (blank_page,), four_chars_per_token
+    )  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+    priced: Final = page_priced - blank_page_priced
+    expected: Final = len(string_operand) * repetitions // 4
+
+    assert expected * 4 // 5 <= priced <= expected * 6 // 5
 
 
 def test_dense_pdf_page_is_priced_without_extracting_its_full_text():

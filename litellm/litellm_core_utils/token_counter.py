@@ -6,9 +6,8 @@ import math
 import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from functools import reduce
-from itertools import accumulate
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
+from itertools import accumulate, chain, islice
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 import anyio.lowlevel
@@ -347,8 +346,10 @@ Type for a function that counts tokens in a string.
 
 EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
-PDF_STRING_OPERAND: Final = re.compile(rb"\(+(?:\\[\s\S]|[^\\()])*\)?|<[0-9A-Fa-f\s]+>")
-PDF_XOBJECT_INVOCATION: Final = re.compile(rb"/([^\s/\[\]()<>{}%]+)\s+Do\b")
+PDF_STRING_OPERAND: Final = re.compile(rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?|<[0-9A-Fa-f\s]+>")
+PDF_XOBJECT_INVOCATION: Final = re.compile(
+    rb"%[^\r\n]*(?:\r\n?|\n|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:\r\n?|\n|\Z))+Do\b"
+)
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
@@ -833,11 +834,6 @@ class _PdfResourceDictionary(Protocol):
 
 
 @runtime_checkable
-class _PdfXObjectDictionary(_PdfResourceDictionary, Protocol):
-    def values(self) -> Iterable[object]: ...
-
-
-@runtime_checkable
 class _PdfFormXObject(_PdfResourceDictionary, Protocol):
     def get_data(self) -> bytes: ...
 
@@ -868,74 +864,88 @@ def _pdf_resolve_object(value: object) -> object:
     return value.get_object() if isinstance(value, _PdfIndirectReference) else value
 
 
-def _pdf_collect_invoked_form_xobject(
-    collected: tuple[tuple[bytes, ...], frozenset[int]],
-    invocation: re.Match[bytes],
-    xobjects: _PdfXObjectDictionary,
-    inherited_resources: _PdfResourceDictionary,
-) -> tuple[tuple[bytes, ...], frozenset[int]]:
-    collected_streams, visited = collected
-    xobject_name: Final = "/" + invocation.group(1).decode("latin-1")
-    xobject: Final = _pdf_resolve_object(xobjects.get(xobject_name))
-    xobject_streams, updated_visited = _pdf_form_xobject_content_streams(
-        xobject,
-        inherited_resources,
-        visited,
-    )
-    return (collected_streams + xobject_streams, updated_visited)
+_PdfStreamMetrics: TypeAlias = tuple[int, int, tuple[tuple[int, bytes], ...], bool]
 
 
-def _pdf_collect_invoked_form_xobjects(
-    content: bytes,
-    resources: _PdfResourceDictionary,
-    visited: frozenset[int],
-) -> tuple[tuple[bytes, ...], frozenset[int]]:
-    xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
-    if not isinstance(xobjects, _PdfXObjectDictionary):
-        return (), visited
+def _pdf_decode_name(name: bytes) -> str:
+    def decode_escape(match: re.Match[bytes]) -> bytes:
+        return bytes((int(match.group(1), 16),))
 
-    def collect(
-        collected: tuple[tuple[bytes, ...], frozenset[int]],
-        invocation: re.Match[bytes],
-    ) -> tuple[tuple[bytes, ...], frozenset[int]]:
-        return _pdf_collect_invoked_form_xobject(collected, invocation, xobjects, resources)
-
-    return reduce(collect, PDF_XOBJECT_INVOCATION.finditer(content), ((), visited))
+    return "/" + re.sub(rb"#([0-9A-Fa-f]{2})", decode_escape, name).decode("latin-1")
 
 
-def _pdf_form_xobject_content_streams(
-    xobject: object,
-    inherited_resources: _PdfResourceDictionary,
-    visited: frozenset[int],
-) -> tuple[tuple[bytes, ...], frozenset[int]]:
-    resolved: Final = _pdf_resolve_object(xobject)
-    identity: Final = id(resolved)
-    if identity in visited:
-        return (), visited
-    if not isinstance(resolved, _PdfFormXObject):
-        return (), visited
-    if resolved.get("/Subtype") != "/Form":
-        return (), visited
-    visited_with_xobject: Final = visited | {identity}
-    content: Final = resolved.get_data()
-    form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
-    resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
-    nested_streams, final_visited = _pdf_collect_invoked_form_xobjects(content, resources, visited_with_xobject)
-    return ((content, *nested_streams), final_visited)
+def _pdf_invocation_name(invocation: re.Match[bytes]) -> str | None:
+    name: Final = invocation.group(1)
+    return _pdf_decode_name(name) if name is not None else None
 
 
-def _pdf_page_form_xobject_content_streams(page: _PdfPage, content: bytes) -> tuple[bytes, ...]:
+def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
+    form_data_memo: Final[dict[int, bytes]] = {}  # mutable-ok: page-local cache avoids repeated stream decoding
+    form_metrics_memo: Final[dict[int, _PdfStreamMetrics]] = {}  # mutable-ok: page-local cache avoids repeated walks
+
+    def stream_metrics(
+        content: bytes,
+        resources: _PdfResourceDictionary,
+        ancestors: frozenset[int],
+    ) -> _PdfStreamMetrics:
+        xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
+        if not isinstance(xobjects, _PdfResourceDictionary):
+            return len(content), _pdf_string_operand_bytes(content), (), False
+        invoked_names: Final = tuple(
+            name
+            for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
+            if (name := _pdf_invocation_name(invocation)) is not None
+        )
+        form_metrics: Final = tuple(
+            form_metrics_for_xobject(
+                _pdf_resolve_object(xobjects.get(name)),
+                resources,
+                ancestors,
+            )
+            for name in invoked_names
+        )
+        return (
+            len(content) + sum(metric[0] for metric in form_metrics),
+            _pdf_string_operand_bytes(content) + sum(metric[1] for metric in form_metrics),
+            tuple(dict.fromkeys(chain.from_iterable(metric[2] for metric in form_metrics))),
+            any(metric[3] for metric in form_metrics),
+        )
+
+    def form_metrics_for_xobject(
+        xobject: object,
+        inherited_resources: _PdfResourceDictionary,
+        ancestors: frozenset[int],
+    ) -> _PdfStreamMetrics:
+        resolved: Final = _pdf_resolve_object(xobject)
+        identity: Final = id(resolved)
+        if identity in ancestors:
+            return 0, 0, (), True
+        if not isinstance(resolved, _PdfFormXObject) or resolved.get("/Subtype") != "/Form":
+            return 0, 0, (), False
+        cached: Final = form_metrics_memo.get(identity)
+        if cached is not None:
+            return cached
+        cached_content: Final = form_data_memo.get(identity)
+        content: Final = cached_content if cached_content is not None else resolved.get_data()
+        if cached_content is None:
+            form_data_memo[identity] = content
+        form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
+        resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
+        metrics: Final = stream_metrics(content, resources, ancestors | {identity})
+        result: Final = (
+            metrics[0],
+            metrics[1],
+            tuple(dict.fromkeys(((identity, _pdf_string_operand_sample(content)), *metrics[2]))),
+            metrics[3],
+        )
+        if not result[3]:
+            form_metrics_memo[identity] = result
+        return result
+
     resources: Final = _pdf_resolve_object(page.get("/Resources"))
     if not isinstance(resources, _PdfResourceDictionary):
-        return ()
-    streams, _ = _pdf_collect_invoked_form_xobjects(content, resources, frozenset())
-    return streams
-
-
-def _pdf_page_content_streams(page: _PdfPage) -> tuple[bytes, ...]:
-    contents: Final = page.get_contents()
-    content: Final = contents.get_data() if contents is not None else b""
-    return (content, *_pdf_page_form_xobject_content_streams(page, content))
+        return len(page_content), _pdf_string_operand_bytes(page_content), (), False
+    return stream_metrics(page_content, resources, frozenset())
 
 
 def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
@@ -948,13 +958,31 @@ def _pdf_string_operand_bytes(content: bytes) -> int:
     return sum(match.end() - match.start() for match in PDF_STRING_OPERAND.finditer(content))
 
 
+def _pdf_string_operand_sample(content: bytes) -> bytes:
+    return bytes(
+        islice(
+            chain.from_iterable(match.group(0) for match in PDF_STRING_OPERAND.finditer(content)),
+            PDF_PAGE_MAX_EXACT_CONTENT_BYTES,
+        )
+    )
+
+
+def _pdf_bounded_operand_sample(samples: Iterable[bytes]) -> bytes:
+    return bytes(islice(chain.from_iterable(samples), PDF_PAGE_MAX_EXACT_CONTENT_BYTES))
+
+
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
-    """A page whose content streams are too large to extract cheaply is priced at one token per byte of their string
-    operands, which no byte-level tokenizer undercuts."""
-    content_streams: Final = _pdf_page_content_streams(page)
-    content_bytes: Final = sum(len(content) for content in content_streams)
+    """Oversized pages use bounded string-operand sampling and scale its token estimate to the full page."""
+    contents: Final = page.get_contents()
+    content: Final = contents.get_data() if contents is not None else b""
+    content_bytes, operand_bytes, form_samples, _ = _pdf_page_content_metrics(page, content)
     if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
-        return sum(_pdf_string_operand_bytes(content) for content in content_streams)
+        sample: Final = _pdf_bounded_operand_sample(
+            (_pdf_string_operand_sample(content), *(form_sample for _, form_sample in form_samples))
+        )
+        if not sample:
+            return 0
+        return round(count_function(sample.decode("latin-1")) * operand_bytes / len(sample))
     return count_function(page.extract_text() or "")
 
 
