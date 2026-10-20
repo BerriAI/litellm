@@ -2189,6 +2189,26 @@ def test_gemini_response_schema_sends_integer_enums_to_gemini_3(model: str, expe
     assert request_params["response_schema"]["properties"]["level"] == expected_level
 
 
+def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> None:
+    level_schema: Final = {"type": "object", "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}}}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "function", "function": {"name": "set_priority", "parameters": level_schema}}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "task", "schema": level_schema}},
+        },
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+        allow_integer_enums=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"] == {
+        "type": "integer"
+    }
+    assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
+
+
 _TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
 
 
