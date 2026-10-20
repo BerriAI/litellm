@@ -115,7 +115,7 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
 
     provider, _, model_name = candidate.model.partition("/")
     try:
-        info: Final = router.get_deployment_model_info(candidate.deployment_id or "", candidate.model)
+        info: Final = router.cached_deployment_model_info(candidate.deployment_id or "", candidate.model)
         if info is None:
             return None
         prompt_cost, completion_cost = generic_cost_per_token(
