@@ -691,6 +691,7 @@ class RequestRateLimiterStash:
     owner_litellm_call_id: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
+    parallel_slot_reused_at: datetime | None = None
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
@@ -785,6 +786,19 @@ def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
     if isinstance(owner_call_id, str):
         stash.owner_litellm_call_id = owner_call_id
     return stash
+
+
+def _ended_before_slot_reuse(ended_at: datetime | None, reused_at: datetime | None) -> bool:
+    if ended_at is None or reused_at is None or (ended_at.tzinfo is None) != (reused_at.tzinfo is None):
+        return False
+    return ended_at <= reused_at
+
+
+def _callback_kwargs_mapping(kwargs: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_RATE_LIMIT_DATA.validate_python(kwargs)
+    except ValidationError:
+        return MappingProxyType({})
 
 
 def get_request_stash_for_call(litellm_call_id: str | None) -> RequestRateLimiterStash | None:
@@ -2017,12 +2031,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None,
         *,
         in_logging_callback: bool = False,
+        round_ended_at: datetime | None = None,
     ) -> None:
         if stash is None:
             return
         async with stash.parallel_slot_release_lock:
             acquisition: Final = stash.parallel_slot
-            if acquisition is None:
+            if acquisition is None or _ended_before_slot_reuse(round_ended_at, stash.parallel_slot_reused_at):
                 return
             deferred: Final = in_logging_callback and await self._defer_parallel_slot_release(
                 acquisition, parent_otel_span
@@ -4177,6 +4192,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         stash: Final = claim_request_stash_for_data(data)
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
+        if reuses_request_slot:
+            stash.parallel_slot_reused_at = self._get_current_time()
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -4254,7 +4271,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     requested_model=requested_model,
                 )
             else:
-                stash.rate_limit_response = response
+                if not reuses_request_slot:
+                    stash.rate_limit_response = response
                 if parallel_slot_id is not None:
                     stash.parallel_slot = ParallelSlotAcquisition(
                         slot_id=parallel_slot_id,
@@ -5325,8 +5343,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
-            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
+            callback_kwargs: Final = _callback_kwargs_mapping(kwargs)
+            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(callback_kwargs))
+            await self._release_stashed_parallel_slot(
+                stash,
+                litellm_parent_otel_span,
+                in_logging_callback=True,
+                round_ended_at=end_time
+                if isinstance(end_time, datetime) and not callback_kwargs.get("stream")
+                else None,
+            )
 
             pipeline_operations: Final = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
