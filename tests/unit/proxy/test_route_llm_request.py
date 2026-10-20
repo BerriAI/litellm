@@ -29,7 +29,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
     user_config_routers,
 )
-from litellm.types.router import RouterGeneralSettings, RouterRateLimitError
+from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
 
 
 @pytest.mark.parametrize(
@@ -2530,6 +2530,41 @@ async def _tpm_for_three_requests() -> int:
     return 2 * probe_usage.total_tokens + litellm.token_counter(messages=messages)
 
 
+async def _request_cost() -> float:
+    probe: Final = await litellm.acompletion(
+        model="openai/gpt-5.5", messages=[{"role": "user", "content": "hi"}], mock_response="ok"
+    )
+    return litellm.completion_cost(completion_response=probe)
+
+
+async def _proxy_router_outcomes(
+    redis_port: int | None,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    requests: int,
+) -> list[str]:
+    router: Final = litellm.Router(
+        **routing_settings,
+        num_retries=0,
+        model_list=[_mock_deployment("proxy-rate-limited", **deployment_limits)],
+        **({"redis_host": "127.0.0.1", "redis_port": redis_port} if redis_port is not None else {}),
+    )
+
+    async def outcome() -> str:
+        try:
+            await router.acompletion(model="proxy-rate-limited", messages=[{"role": "user", "content": "hi"}])
+        except (litellm.RateLimitError, RouterRateLimitError):
+            return "429"
+        finally:
+            await asyncio.sleep(0.3)
+        return "200"
+
+    try:
+        return [await outcome() for _ in range(requests)]
+    finally:
+        router.discard()
+
+
 def _global_router_callbacks() -> tuple[list[object], list[object]]:
     return list(litellm.callbacks), list(litellm.input_callback)
 
@@ -2565,9 +2600,11 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
         for _ in range(6)
     ]
 
-    assert outcomes[0] == "200"
     assert "429" in outcomes, outcomes
     assert _global_router_callbacks() == callbacks_before
+    assert outcomes == await _proxy_router_outcomes(
+        fake_redis_port if with_redis else None, routing_settings, deployment_limits, len(outcomes)
+    )
 
 
 @pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
@@ -2646,6 +2683,85 @@ async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_
 
     assert "429" in alone, alone
     assert beside_proxy_router == alone
+
+
+@pytest.mark.parametrize("user_config_settings", [{}, {"optional_pre_call_checks": ["router_budget_limiting"]}])
+@pytest.mark.asyncio
+async def test_user_config_requests_stay_under_the_proxy_provider_budget(
+    user_config_settings: Mapping[str, object],
+) -> None:
+    proxy_router: Final = litellm.Router(
+        model_list=[_mock_deployment("proxy-model")],
+        provider_budget_config={"openai": {"budget_limit": await _request_cost() / 2, "time_period": "1d"}},
+    )
+    try:
+        await proxy_router.acompletion(model="proxy-model", messages=[{"role": "user", "content": "hi"}])
+        await asyncio.sleep(0.3)
+        with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
+            await _user_config_request_outcome(None, user_config_settings, {}, _proxy_logging_obj())
+    finally:
+        proxy_router.discard()
+
+
+@pytest.mark.asyncio
+async def test_a_user_config_provider_budget_limits_its_own_requests() -> None:
+    budget_limit: Final = await _request_cost() / 2
+
+    def request() -> Coroutine[None, None, str]:
+        budget: Final = {"openai": {"budget_limit": budget_limit, "time_period": "1d"}}
+        return _user_config_request_outcome(None, {"provider_budget_config": budget}, {}, _proxy_logging_obj())
+
+    first: Final = await request()
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
+        await request()
+    assert first == "200"
+
+
+@pytest.mark.asyncio
+async def test_a_request_in_flight_when_its_user_config_router_is_dropped_still_counts_against_its_budget(
+    fake_redis_port: int,
+) -> None:
+    budget_limit: Final = 1.5 * await _request_cost()
+
+    async def request() -> None:
+        await (
+            await route_request(
+                {
+                    "model": "budgeted",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "litellm_logging_obj": _proxy_logging_obj("budgeted"),
+                    "user_config": {
+                        "redis_host": "127.0.0.1",
+                        "redis_port": fake_redis_port,
+                        "provider_budget_config": {"openai": {"budget_limit": budget_limit, "time_period": "1d"}},
+                        "model_list": [
+                            {
+                                "model_name": "budgeted",
+                                "litellm_params": {
+                                    "model": "openai/gpt-5.5",
+                                    "api_key": "sk-test",
+                                    "mock_response": "ok",
+                                    "mock_delay": 0.5,
+                                },
+                            }
+                        ],
+                    },
+                },
+                None,
+                None,
+                "acompletion",
+            )
+        )
+
+    await request()
+    in_flight: Final = asyncio.create_task(request())
+    await asyncio.sleep(0.2)
+    user_config_routers.clear()
+    await in_flight
+    await asyncio.sleep(0.3)
+
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
+        await request()
 
 
 @pytest.mark.asyncio

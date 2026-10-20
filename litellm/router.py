@@ -1566,7 +1566,8 @@ class Router:
         self._init_routing_groups(self._routing_groups_input)
         self._override_selectors: dict[str, RouterStrategySelector | None] = {}
         self._override_selectors_lock = threading.Lock()
-        self._request_scoped_callbacks: tuple[CustomLogger, ...] = ()
+        self._request_scoped_selectors: tuple[CustomLogger, ...] = ()
+        self._request_scoped_policies: tuple[CustomLogger, ...] = ()
         self.access_groups = None
         with _routers_holding_global_callbacks_lock:
             _routers_holding_global_callbacks.add(self)
@@ -1703,12 +1704,28 @@ class Router:
             adaptive_survivor._sync_adaptive_router_hooks()
 
     def serve_through_request_logging(self) -> None:
-        self._request_scoped_callbacks = (*self._global_callback_candidates(), *self._request_adaptive_router_hooks())
+        self._request_scoped_selectors = (*self._callback_selectors(), *self._request_adaptive_router_hooks())
+        self._request_scoped_policies = (*self._optional_loggers(), *self._slack_alerting_loggers())
         self._release_global_callbacks()
 
     def bind_to_request_logging(self, logging_obj: LiteLLMLogging) -> None:
-        for callback in self._request_scoped_callbacks:
-            logging_obj.replace_global_callback(callback)
+        for selector in self._request_scoped_selectors:
+            logging_obj.replace_global_callback(selector)
+        for policy in self._request_policies_not_set_globally():
+            logging_obj.add_dynamic_callback(policy)
+
+    def _request_policies_not_set_globally(self) -> tuple[CustomLogger, ...]:
+        global_keys: Final = frozenset(
+            map(
+                litellm.logging_callback_manager.get_custom_logger_key,
+                (callback for callback in litellm.callbacks if isinstance(callback, CustomLogger)),
+            )
+        )
+        return tuple(
+            policy
+            for policy in self._request_scoped_policies
+            if litellm.logging_callback_manager.get_custom_logger_key(policy) not in global_keys
+        )
 
     def _request_adaptive_router_hooks(self) -> tuple[CustomLogger, ...]:
         from litellm.router_strategy.adaptive_router.hooks import (
@@ -1721,14 +1738,15 @@ class Router:
         )
 
     def _routing_callbacks(self) -> Iterable[object]:
-        if not self._request_scoped_callbacks:
+        if not (self._request_scoped_selectors or self._request_scoped_policies):
             return litellm.callbacks
         replaced_keys: Final = frozenset(
-            map(litellm.logging_callback_manager.get_custom_logger_key, self._request_scoped_callbacks)
+            map(litellm.logging_callback_manager.get_custom_logger_key, self._request_scoped_selectors)
         )
         return chain(
             litellm.logging_callback_manager.without_custom_logger_keys(litellm.callbacks, replaced_keys),
-            self._request_scoped_callbacks,
+            self._request_scoped_selectors,
+            self._request_policies_not_set_globally(),
         )
 
     def retire_routing_state(self) -> None:
@@ -1755,11 +1773,11 @@ class Router:
             if isinstance(hook, AdaptiveRouterPostCallHook) and id(hook.adaptive_router) in own_strategy_ids
         )
 
+    def _optional_loggers(self) -> tuple[CustomLogger, ...]:
+        return tuple(callback for callback in self.optional_callbacks or () if isinstance(callback, CustomLogger))
+
     def _global_callback_candidates(self) -> tuple[CustomLogger, ...]:
-        optional_loggers: Final = (
-            callback for callback in self.optional_callbacks or () if isinstance(callback, CustomLogger)
-        )
-        return (*self._callback_selectors(), *optional_loggers, *self._slack_alerting_loggers())
+        return (*self._callback_selectors(), *self._optional_loggers(), *self._slack_alerting_loggers())
 
     @staticmethod
     def _create_redis_cache(

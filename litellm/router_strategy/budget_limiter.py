@@ -124,6 +124,8 @@ class RouterBudgetLimiting(CustomLogger):
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
         self._sync_task: asyncio.Task[None] = asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        self._retired = False
+        self._flush_after_retire: asyncio.Task[None] | None = None
         self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
         self.deployment_budget_config: GenericBudgetConfigType | None = None
         self.tag_budget_config: GenericBudgetConfigType | None = None
@@ -137,13 +139,25 @@ class RouterBudgetLimiting(CustomLogger):
 
     def retire(self) -> None:
         self._sync_task.cancel()
+        self._retired = True
+        self._schedule_flush_after_retire()
+
+    def _schedule_flush_after_retire(self) -> None:
+        if self._flush_after_retire is not None and not self._flush_after_retire.done():
+            return
         if not self.redis_increment_operation_queue:
             return
         try:
             loop: Final = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self._push_in_memory_increments_to_redis())
+        self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
+
+    async def _drain_increments_after_retire(self) -> None:
+        if not self.redis_increment_operation_queue:
+            return
+        if await self._push_in_memory_increments_to_redis():
+            await self._drain_increments_after_retire()
 
     @with_service_target("router_budgets")
     async def async_filter_deployments(
@@ -432,6 +446,8 @@ class RouterBudgetLimiting(CustomLogger):
             if self.dual_cache.redis_cache is None:
                 return
             self.redis_increment_operation_queue.append(increment_op)
+            if self._retired:
+                self._schedule_flush_after_retire()
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
         return self._redis_increment_queue_lock

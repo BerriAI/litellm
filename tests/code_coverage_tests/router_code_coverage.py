@@ -151,6 +151,8 @@ ignored_function_names = [
     "_request_adaptive_router_hooks",  # Run by serve_through_request_logging, tested through the user_config adaptive test
     "_release_global_callbacks",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
     "_routing_callbacks",  # Read by the pre-call checks, tested through the user_config limit tests in test_route_llm_request.py
+    "_request_policies_not_set_globally",  # Read by bind_to_request_logging, tested through the user_config budget test in test_route_llm_request.py
+    "_optional_loggers",  # Read by discard and serve_through_request_logging, tested through the budget limiter discard test
     "retire_routing_state",  # Run by discard, tested through the budget limiter discard test
     "_slack_alerting_loggers",  # Run by discard, tested through the Slack alerting discard test in test_router_helper_utils.py
     "_adaptive_router_hooks",  # Run by discard, tested through the adaptive router discard tests in test_router_helper_utils.py

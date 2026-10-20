@@ -492,6 +492,8 @@ def _new_router_budget_limiter(
     budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
+    budget_limiter._retired = False
+    budget_limiter._flush_after_retire = None
     return budget_limiter
 
 
