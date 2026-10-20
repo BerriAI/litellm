@@ -1577,7 +1577,6 @@ async def test_mid_stream_error_keeps_credentials_in_the_api_base_out(routed_api
     assert "deployment-secret" not in debug_info
 
 
-
 def _incomplete_openai_chat_chunk() -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-incomplete-eof",
@@ -7686,10 +7685,7 @@ async def test_no_synthetic_finish_reason_logged_when_provider_sent_none(sync_mo
         logging_obj=logging_obj,
     )
     with pytest.raises(MidStreamFallbackError):
-        if sync_mode:
-            list(response)
-        else:
-            [c async for c in response]
+        await _collect(response, sync_mode)
 
     assert response.received_finish_reason is None
     assert all(not (c.choices and c.choices[0].finish_reason) for c in response.chunks)

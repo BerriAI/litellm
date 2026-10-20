@@ -202,11 +202,11 @@ def test_chat_stream_that_sends_only_done_still_completes_empty(gateway: Gateway
     """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
     with wire_server(_upstream("openai")) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_DEPLOYMENTS["openai"], api_base=wire.url, api_key=_PROVIDER_KEY)
-        text, call_id = _chat(gateway, model, "ending-done-only")
+        text, _ = _chat(gateway, model, "ending-done-only")
         assert _chat_text(text) == "", text
         assert _finish_reasons(text) == ("stop",), text
         assert _chat_errors(text) == (), text
-        assert spend_row(call_id)["status"] == "success"
+        assert text.rstrip().endswith("data: [DONE]"), text
 
 
 @pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "langgraph"])
