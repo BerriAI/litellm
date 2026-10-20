@@ -1,16 +1,19 @@
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
+from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -24,12 +27,18 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_stream_stall,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
 )
-from litellm.types.router import LiteLLMParamsTypedDict, reject_server_owned_wif_params
+from litellm.types.router import (
+    FallbackSkipReason,
+    LiteLLMParamsTypedDict,
+    SkippedFallbackTarget,
+    reject_server_owned_wif_params,
+)
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -63,6 +72,13 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: failure originated "
                 "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        if is_stream_stall(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: its stream stalled on a read timeout, "
+                "which stays out of cooldown as it does for the primary deployment."
             )
             return
 
@@ -127,8 +143,8 @@ def _trigger_cooldown_for_failed_deployment(
             if deployment_dict is not None
             else None
         )
-        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
-            original_exception=exception
+        exception_headers: Final[httpx.Headers | None] = (
+            litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(original_exception=exception)
         )
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
@@ -202,12 +218,27 @@ class AttemptedFallbackTargets:
     """
 
     keys: frozenset[str] = frozenset()
+    _skip_reasons: dict[str, FallbackSkipReason] = field(default_factory=dict)  # mutable-ok: O(1) per caller-sized list
 
     def __contains__(self, key: str) -> bool:
         return key in self.keys
 
     def record(self, key: str) -> None:
         self.keys = self.keys | frozenset((key,))
+
+    @property
+    def skipped(self) -> tuple[SkippedFallbackTarget, ...]:
+        return tuple(
+            SkippedFallbackTarget(target=target, reason=reason) for target, reason in self._skip_reasons.items()
+        )
+
+    def record_skip(self, target: str, reason: FallbackSkipReason) -> None:
+        self._skip_reasons.setdefault(target, reason)
+
+
+def attempted_fallback_targets_from(kwargs: Mapping[str, object]) -> AttemptedFallbackTargets:
+    carried_targets: Final[object] = kwargs.get("attempted_targets")
+    return carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
 
 
 def has_unattempted_fallback_target(
@@ -220,6 +251,16 @@ def has_unattempted_fallback_target(
     if not isinstance(attempted, AttemptedFallbackTargets):
         return True
     return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
+
+
+def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupported_params: bool) -> bool:
+    if fallback_on_unsupported_params or not isinstance(exception, litellm.BadRequestError):
+        return False
+    if isinstance(exception, litellm.UnsupportedParamsError):
+        return True
+    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+        return False
+    return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
@@ -514,7 +555,7 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
 
 
 def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
 ) -> bool:
     resolved, generic_idx = result
@@ -524,7 +565,7 @@ def _resolved_a_specific_chain(
 
 
 def get_fallback_model_group_for_lookup_groups(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
@@ -538,7 +579,10 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
-def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
+def get_fallback_model_group(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    model_group: str,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
@@ -580,6 +624,32 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     return fallback_model_group, generic_fallback_idx
 
 
+def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
+    group_entries: Final[Sequence[Mapping[str, list[str]]]] = tuple(  # mutable-ok: mirrors the fallbacks config shape
+        entry for entry in entries if isinstance(entry, Mapping) and entry
+    )
+    chain, _ = get_fallback_model_group_for_lookup_groups(fallbacks=group_entries, lookup_groups=lookup_groups)
+    return chain if isinstance(chain, list) else ()
+
+
+def continuation_fallback_targets(fallbacks: object, lookup_groups: tuple[str, ...]) -> Sequence[object]:
+    entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
+    return (
+        entries
+        if check_non_standard_fallback_format(fallbacks=entries)
+        else _resolved_fallback_chain(entries, lookup_groups)
+    )
+
+
+def fallback_target_overrides_request_params(target: object) -> bool:
+    return isinstance(target, Mapping) and "model" in target and len(target) > 1
+
+
+def fallback_target_name(target: object) -> str | None:
+    name: Final = target.get("model") if isinstance(target, Mapping) else target
+    return name if isinstance(name, str) else None
+
+
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
 PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
     {
@@ -607,6 +677,8 @@ async def _is_fallback_target_authorized(
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
 ) -> bool:
     access_check: Final = litellm_router.fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
@@ -623,6 +695,7 @@ async def _is_fallback_target_authorized(
         "Skipping fallback to model_group = %s: caller is not authorized to call it",
         mask_sensitive_structure(fallback_entry),
     )
+    attempted.record_skip(target, FallbackSkipReason.NOT_AUTHORIZED)
     return False
 
 
@@ -631,6 +704,8 @@ async def _is_fallback_target_within_budget(
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
 ) -> bool:
     budget_check: Final = litellm_router.fallback_budget_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
@@ -642,6 +717,7 @@ async def _is_fallback_target_within_budget(
         "Skipping fallback to model_group = %s: caller is over budget",
         mask_sensitive_structure(fallback_entry),
     )
+    attempted.record_skip(target, FallbackSkipReason.OVER_BUDGET)
     return False
 
 
@@ -730,13 +806,7 @@ async def run_async_fallback(
     same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
         kwargs
     )
-    # Read out of kwargs and narrowed here rather than declared as a parameter: every caller
-    # reaches this function by spreading a loosely-typed kwargs dict, so a declared parameter
-    # would carry an annotation that no call site can actually be checked against.
-    carried_targets: Final = kwargs.get("attempted_targets")
-    attempted: Final = (
-        carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
-    )
+    attempted: Final = attempted_fallback_targets_from(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # keep legacy kwargs untyped
     failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
     attempted.record(failed_model_group)
 
@@ -747,6 +817,7 @@ async def run_async_fallback(
     for target in fallback_model_group:
         if isinstance(target, dict):
             reject_server_owned_wif_params(target)
+            reject_api_key_secret_reference(target)
 
     for mg in fallback_model_group:
         if mg == failed_model_group:
@@ -758,9 +829,13 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
-        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_authorized(
+            litellm_router, mg, original_model_group, kwargs, attempted=attempted
+        ):
             continue
-        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_within_budget(
+            litellm_router, mg, original_model_group, kwargs, attempted=attempted
+        ):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:

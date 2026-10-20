@@ -20,7 +20,8 @@ from botocore.awsrequest import AWSRequest
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
-from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
+from litellm.llms.bedrock.base_aws_llm import run_off_loop_if_aws
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
@@ -40,6 +41,63 @@ def local_cost_map(monkeypatch):
         litellm.bedrock_mantle_models.clear()
         litellm.bedrock_mantle_models.update(original_bedrock_mantle_models)
         litellm.get_model_info.cache_clear()
+
+
+_RESPONSES_API_REPLY: Final = {
+    "id": "resp_test",
+    "object": "response",
+    "created_at": 1733529600,
+    "status": "completed",
+    "model": "openai.gpt-5.6-terra",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_test",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+_CHAT_COMPLETIONS_REPLY: Final = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1733529600,
+    "model": "openai.gpt-5.6-terra",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _use_mantle_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "BEDROCK_MANTLE_REGION"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "test-key")
+
+
+def _reply_by_route(request: httpx.Request) -> httpx.Response:
+    reply: Final = _RESPONSES_API_REPLY if request.url.path.endswith("/responses") else _CHAT_COMPLETIONS_REPLY
+    return httpx.Response(status_code=200, json=reply, request=request)
+
+
+def _recording_client(handler: Mock) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def _mantle_chat_request(drop_params: bool, **params: object) -> dict[str, object]:
+    optional_params: Final = litellm.get_optional_params(
+        model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=drop_params, **params
+    )
+    return BedrockMantleChatConfig().transform_request(
+        model="openai.gpt-5.6-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
 
 
 class TestBedrockMantleProviderRegistration:
@@ -272,6 +330,110 @@ class TestBedrockMantleConfig:
         )
         assert optional_params["max_completion_tokens"] == 50
         assert "max_tokens" not in optional_params
+
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected",
+        [({"effort": "low", "summary": "auto"}, "low"), ("medium", "medium"), ({"summary": "auto"}, None)],
+    )
+    def test_chat_completions_gets_reasoning_effort_as_a_level(self, reasoning_effort, expected) -> None:
+        """Mantle chat answers a Responses-shaped ``{"effort", "summary"}`` with ``invalid_type``."""
+        request = _mantle_chat_request(drop_params=True, reasoning_effort=reasoning_effort)
+        assert request.get("reasoning_effort") == expected
+
+    @pytest.mark.parametrize("params", [{"n": 2}, {"reasoning_effort": {"effort": "low", "summary": "auto"}}])
+    def test_chat_completions_answers_400_for_what_mantle_chat_cannot_serve_without_drop_params(self, params) -> None:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            _mantle_chat_request(drop_params=False, **params)
+
+    @pytest.mark.parametrize("n, drop_params, expected", [(1, False, 1), (2, True, None)])
+    def test_chat_completions_sends_n_only_where_mantle_chat_serves_it(self, n, drop_params, expected) -> None:
+        assert _mantle_chat_request(drop_params=drop_params, n=n).get("n") == expected
+
+    @pytest.mark.parametrize(
+        "params, model_info",
+        [
+            ({"n": 2}, None),
+            ({"reasoning_effort": {"effort": "low", "summary": "auto"}}, {"mode": "chat"}),
+            ({"web_search_options": {"search_context_size": "low"}}, {"mode": "chat"}),
+        ],
+    )
+    def test_what_mantle_chat_cannot_serve_reaches_the_responses_api(
+        self, monkeypatch, local_cost_map, params, model_info
+    ) -> None:
+        _use_mantle_bearer(monkeypatch)
+        handler: Final = Mock(side_effect=_reply_by_route)
+
+        response: Final = litellm.completion(
+            model="bedrock_mantle/openai.gpt-5.6-terra",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-1",
+            model_info=model_info,
+            client=_recording_client(handler),
+            **params,
+        )
+
+        sent: Final = tuple(call.args[0] for call in handler.call_args_list)
+        assert response.choices[0].message.content == "ok"
+        assert [request.url.path.rsplit("/", 1)[-1] for request in sent] == ["responses"]
+        assert json.loads(sent[0].content).get("reasoning", {}).get("summary") == params.get(
+            "reasoning_effort", {}
+        ).get("summary")
+
+    @pytest.mark.parametrize(
+        "extra_body, drop_params, expected",
+        [
+            ({"reasoning_effort": {"effort": "low"}}, False, {"reasoning_effort": "low"}),
+            ({"n": 2}, True, {}),
+            ({"reasoning_effort": {}}, False, {}),
+            ({"reasoning_effort": {"effort": None}}, False, {}),
+            ({"n": 1, "reasoning_effort": "high"}, False, {"n": 1, "reasoning_effort": "high"}),
+        ],
+        ids=[
+            "dict-effort",
+            "n-above-one-dropped",
+            "empty-effort-asks-for-the-default",
+            "null-effort-asks-for-the-default",
+            "servable",
+        ],
+    )
+    def test_a_chat_pin_sends_extra_body_through_the_same_chat_checks(
+        self, monkeypatch, local_cost_map, extra_body, drop_params, expected
+    ) -> None:
+        _use_mantle_bearer(monkeypatch)
+        handler: Final = Mock(side_effect=_reply_by_route)
+
+        litellm.completion(
+            model="bedrock_mantle/openai.gpt-5.6-terra",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-1",
+            model_info={"mode": "chat"},
+            client=_recording_client(handler),
+            extra_body=extra_body,
+            drop_params=drop_params,
+        )
+
+        (sent,) = (call.args[0] for call in handler.call_args_list)
+        body: Final = json.loads(sent.content)
+        assert sent.url.path.endswith("/chat/completions")
+        assert {key: body[key] for key in ("n", "reasoning_effort") if key in body} == expected
+
+    def test_a_chat_pin_answers_400_for_n_above_one_in_extra_body_without_drop_params(
+        self, monkeypatch, local_cost_map
+    ) -> None:
+        _use_mantle_bearer(monkeypatch)
+        handler: Final = Mock(side_effect=_reply_by_route)
+
+        with pytest.raises(litellm.BadRequestError, match="does not support n=2"):
+            litellm.completion(
+                model="bedrock_mantle/openai.gpt-5.6-terra",
+                messages=[{"role": "user", "content": "hello"}],
+                aws_region_name="us-east-1",
+                model_info={"mode": "chat"},
+                client=_recording_client(handler),
+                extra_body={"n": 2},
+            )
+
+        handler.assert_not_called()
 
     def test_non_gpt_reasoning_models_keep_the_openai_compatible_max_tokens(self):
         optional_params = litellm.get_optional_params(
@@ -1072,9 +1234,7 @@ async def test_mantle_signing_runs_off_the_event_loop():
         return dict(request.headers)
 
     release = asyncio.create_task(probe.release_refresh_from_the_loop())
-    signed = await sign_request_off_loop_if_aws(
-        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
-    )
+    signed = await run_off_loop_if_aws(BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"})
     await release
 
     assert "Authorization" in signed

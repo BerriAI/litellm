@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 WORKSPACE_ALIASES: Final = ("workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id")
 
@@ -103,9 +104,12 @@ def _sync_gateway_client(
     return HTTPHandler(client=httpx.Client(transport=_gateway_transport(requests, respond)))
 
 
-def _async_gateway_client(requests: list[dict]) -> AsyncHTTPHandler:
+def _async_gateway_client(
+    requests: list[dict],
+    respond: GatewayResponder = _fake_claude_platform_gateway,
+) -> AsyncHTTPHandler:
     handler: Final = AsyncHTTPHandler()
-    handler.client = httpx.AsyncClient(transport=_gateway_transport(requests, _fake_claude_platform_gateway))
+    handler.client = httpx.AsyncClient(transport=_gateway_transport(requests, respond))
     return handler
 
 
@@ -680,6 +684,32 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
     _assert_gateway_accepted(requests[0], auth_kwargs)
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_leave_the_event_loop_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    monkeypatch.setenv("ANTHROPIC_AWS_WORKSPACE_ID", "wrkspc_test")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "ANTHROPIC_AWS_WORKSPACE_ID", "AWS_REGION_NAME")
+    sigv4_without_region: Final = {key: value for key, value in SIGV4_KWARGS.items() if key != "aws_region_name"}
+    requests: list[dict] = []
+
+    response = await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        client=_async_gateway_client(requests),
+        **sigv4_without_region,
+    )
+
+    assert vault.read.is_set()
+    assert not vault.stalled_the_loop.is_set()
+    assert response["content"][0]["text"] == "ok"
+    _assert_gateway_accepted(requests[0], sigv4_without_region)
+
+
 def test_chat_completion_claude_platform_drops_context_management_and_gateway_accepts():
     import litellm
 
@@ -716,6 +746,112 @@ def test_chat_completion_claude_platform_override_kwarg_is_honoured_and_not_sent
     )
 
     assert requests[0]["body"] == {**EXPECTED_CHAT_BODY, "context_management": context_management}
+
+
+_RISK_ANSWER: Final = {"tier": 2, "summary": "ok"}
+_JSON_SCHEMA_STREAM_KWARGS: Final = {
+    "model": "bedrock/claude_platform/claude-scripted-9",
+    "messages": [{"role": "user", "content": "hello"}],
+    "max_tokens": 10,
+    "workspace_id": "wrkspc_test",
+    "stream": True,
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "Risk",
+            "schema": {
+                "type": "object",
+                "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+                "required": ["tier", "summary"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    **API_KEY_KWARGS,
+}
+
+
+def _wrapped_json_tool_stream(url: str, headers: Mapping[str, str], data: bytes) -> httpx.Response:
+    wrapper: Final = json.dumps({"$PARAMETER_NAME": _RISK_ANSWER})
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-scripted-9",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_test", "name": "json_tool_call", "input": {}},
+        },
+        *(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": wrapper[start : start + 20]},
+            }
+            for start in range(0, len(wrapper), 20)
+        ),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
+        {"type": "message_stop"},
+    )
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode(),
+        request=httpx.Request("POST", url),
+    )
+
+
+def _streamed_answer(chunks: tuple) -> dict:
+    deltas: Final = tuple(chunk.choices[0].delta for chunk in chunks)
+    return {
+        "content": json.loads("".join(delta.content or "" for delta in deltas)),
+        "tool_call_deltas": sum(1 for delta in deltas if delta.tool_calls),
+        "finish_reasons": tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason),
+    }
+
+
+_BARE_STREAMED_ANSWER: Final = {"content": _RISK_ANSWER, "tool_call_deltas": 0, "finish_reasons": ("stop",)}
+
+
+def test_chat_completion_claude_platform_streams_a_wrapped_json_schema_answer_as_the_bare_object():
+    import litellm
+
+    chunks: Final = tuple(
+        litellm.completion(
+            **_JSON_SCHEMA_STREAM_KWARGS,
+            client=_sync_gateway_client([], respond=_wrapped_json_tool_stream),
+        )
+    )
+
+    assert _streamed_answer(chunks) == _BARE_STREAMED_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_async_chat_completion_claude_platform_streams_a_wrapped_json_schema_answer_as_the_bare_object():
+    import litellm
+
+    stream: Final = await litellm.acompletion(
+        **_JSON_SCHEMA_STREAM_KWARGS,
+        client=_async_gateway_client([], respond=_wrapped_json_tool_stream),
+    )
+    chunks: Final = tuple([chunk async for chunk in stream])
+
+    assert _streamed_answer(chunks) == _BARE_STREAMED_ANSWER
 
 
 def test_fake_claude_platform_gateway_rejects_leaked_internal_fields():

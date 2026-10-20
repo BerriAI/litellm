@@ -5,8 +5,8 @@ Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
 import json
-from collections.abc import Sequence
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
 
@@ -31,9 +31,10 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         api_key: str,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, object]] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
-    ) -> dict[str, Any]:
+        text: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
 
@@ -53,8 +54,21 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 input=input,
                 tools=tools,
                 instructions=instructions,
+                text=text,
             )
+        except ValueError as e:
+            verbose_logger.error("Error in CountTokens handler: %s", e)
+            raise OpenAIError(status_code=500, message=f"CountTokens processing error: {e}")
+        return await self.post_count_request(request_body, api_key, api_base, timeout)
 
+    async def post_count_request(
+        self,
+        request_body: Mapping[str, object],
+        api_key: str,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Mapping[str, object]:
+        try:
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
@@ -68,7 +82,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
             response: Final = await async_client.post(
                 endpoint_url,
                 headers=headers,
-                json=request_body,
+                json=dict(request_body),
                 timeout=request_timeout,
             )
 

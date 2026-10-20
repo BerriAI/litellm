@@ -18,6 +18,7 @@ from typing import Final, NamedTuple, Protocol, Union, cast
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
@@ -268,6 +269,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -1181,7 +1183,25 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+
+
+def _has_required_baggage_tag_mapping() -> bool:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.request_tag_mappings import REQUEST_TAG_MAPPINGS_ADAPTER
+
+    raw_mappings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings).get(
+        "request_tag_mappings"
+    )
+    return bool(raw_mappings) and any(
+        rule.required for rule in REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_mappings)
+    )
+
+
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1234,13 +1254,31 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        authorized: Final = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        if _has_required_baggage_tag_mapping():
+            raise HTTPException(
+                403, "Required baggage tag mappings need HTTP inference, WebSocket inference is disabled"
+            )
     except Exception as e:
+        if not close_on_auth_error:
+            raise
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+    else:
+        return authorized
+
+
+async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+    """Re-authorize an already accepted WebSocket for a model it named after the upgrade.
+
+    Runs the same key, team, member, user, project and agent checks, plus budget reservation, as
+    the upgrade does for ``?model=``, but raises auth errors without closing the socket so the
+    caller can reply with an error frame.
+    """
+    return await user_api_key_auth_websocket_for_model(websocket, model, close_on_auth_error=False)
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:
@@ -2253,7 +2291,13 @@ async def user_api_key_auth_builder(
                         proxy_logging_obj=proxy_logging_obj,
                     )
                     if isinstance(resolve_result, UserAPIKeyAuth):
-                        valid_token = resolve_result
+                        mapped_end_user_id: Final = (
+                            jwt_handler.get_end_user_id(  # pyright: ignore[reportUnknownMemberType]  # untyped dict token
+                                token=jwt_claims or {}, default_value=None
+                            )
+                            or None
+                        )
+                        valid_token = resolve_result.model_copy(update={"end_user_id": mapped_end_user_id})
                         api_key = valid_token.token or ""
                         valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
@@ -2485,7 +2529,9 @@ async def user_api_key_auth_builder(
         _end_user_object = None
         end_user_params: Final = {}
 
-        raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, safe_get_request_headers(request))
+        raw_end_user_id: Final = (
+            valid_token.end_user_id if valid_token is not None else None
+        ) or get_end_user_id_from_request_body(request_data, safe_get_request_headers(request))
         end_user_id = await resolve_and_validate_end_user_id(
             raw_end_user_id=raw_end_user_id,
             prisma_client=prisma_client,
@@ -2740,24 +2786,18 @@ async def user_api_key_auth_builder(
                         type(api_key) if api_key is not None else "None"
                     )
                 )
-            abbreviated_api_key: Final = abbreviate_api_key(api_key=api_key)
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
 
-            try:
-                with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
-                    valid_token = IdentityStore.key_from_principal(
-                        await IdentityStore(
-                            prisma_client,
-                            user_api_key_cache,
-                            parent_otel_span=parent_otel_span,
-                            proxy_logging_obj=proxy_logging_obj,
-                        ).resolve(hashed_token=api_key)
-                    )
-            except ProxyException as e:
-                if e.code == 401 or e.code == "401":
-                    e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
-                raise e
+            with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+                valid_token = IdentityStore.key_from_principal(
+                    await IdentityStore(
+                        prisma_client,
+                        user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ).resolve(hashed_token=api_key)
+                )
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")
@@ -3423,6 +3463,7 @@ async def run_centralized_common_checks(
     route: str,
     *,
     force_virtual_key_checks: bool = False,
+    sub_call: bool = False,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
     boundary, regardless of which ``_user_api_key_auth_builder`` path
@@ -3439,6 +3480,11 @@ async def run_centralized_common_checks(
       vector-store / tool-allowlist enforcement applies to admin keys
       too. Admin status is honored where the underlying check exempts it
       (``_is_api_route_allowed``, ``organization_role_based_access_check``).
+    - ``sub_call`` marks a proxy-made call inside an already admitted
+      request. Its model's budgets are checked, the key's own
+      ``max_budget`` included, because the builder checked that only for
+      the parent's model, which may be free. Nothing is reserved, because
+      the sub-call is charged once it runs.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -3641,7 +3687,7 @@ async def run_centralized_common_checks(
             _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
         )
 
-    user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
+    user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3671,12 +3717,23 @@ async def run_centralized_common_checks(
     # may have a non-admin user_role and would otherwise demote the
     # caller. The token is the source of truth for these paths — force
     # the admin user_object whenever the token says PROXY_ADMIN, even
-    # if a DB row was fetched.
+    # if a DB row was fetched. Every admin token except the built-in admin
+    # identity (litellm_proxy_admin_name: the master key and the UI
+    # username/password login) keeps the row's personal budget (max_budget,
+    # and user_email for budget alerts) so common_checks enforces it; every
+    # other field keeps its default.
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
+        budget_row: Final = (
+            user_object
+            if isinstance(user_object, LiteLLM_UserTable) and user_api_key_auth_obj.user_id != litellm_proxy_admin_name
+            else None
+        )
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            max_budget=budget_row.max_budget if budget_row is not None else None,
+            user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
             ),
@@ -3722,20 +3779,17 @@ async def run_centralized_common_checks(
     # later seed in common_checks pushes key tags and the
     # _tag_max_budget_check read into `litellm_metadata`, hiding header
     # tags from per-tag budget enforcement on LITELLM_METADATA_ROUTES.
-    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
-        request_data=request_data,
-        route=route,
-    )
-
     # Merge x-litellm-tags into request_data BEFORE common_checks runs.
     # _tag_max_budget_check inside common_checks only inspects request_data;
     # without this pre-merge, header-supplied tags bypass tag-budget
     # enforcement.
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
-        request=request,
-        request_data=request_data,
-        user_api_key_dict=user_api_key_auth_obj,
-    )
+    for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_data):
+        LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request,
+            request_data=tag_target,
+            user_api_key_dict=user_api_key_auth_obj,
+        )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
     try:
@@ -3791,6 +3845,12 @@ async def run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+            if sub_call and RouteChecks.is_llm_api_route(route=route):
+                await virtual_key_max_budget_check(
+                    valid_token=user_api_key_auth_obj,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_object,
+                )
 
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
@@ -3808,7 +3868,7 @@ async def run_centralized_common_checks(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            skip_budget_checks=skip_budget_checks,
+            skip_budget_checks=skip_budget_checks or sub_call,
             general_settings=general_settings,
         )
     finally:
@@ -3958,7 +4018,7 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
 async def _authorize_authenticated_request(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     api_key: str,
     *,
@@ -4018,6 +4078,19 @@ async def _authorize_authenticated_request(
                 billable=request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
             )
+        if "request_tag_mappings" in general_settings and request.method == "POST":
+            from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route
+            from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+            if is_baggage_mapped_route(route):
+                LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=authorized_data, route=route)
+                await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+                    request=request,
+                    request_data=authorized_data,
+                    general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
         await run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
