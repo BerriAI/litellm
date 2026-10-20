@@ -1110,7 +1110,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         config: Final = VertexGeminiConfig()
         raw_model: Final = openai_request_body.get("model", "")
         model: Final = raw_model if isinstance(raw_model, str) else ""
-        sampling_params: Final = tuple(p for p in ("temperature", "top_p", "top_k") if p in openai_request_body)
+        sampling_params: Final = tuple(
+            p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
+        )
         if sampling_params and not VertexGeminiConfig.supports_sampling_params(model):
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model, param=", ".join(sampling_params), drop_params=False

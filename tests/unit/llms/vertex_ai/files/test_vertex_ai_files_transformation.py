@@ -1995,13 +1995,15 @@ class TestVertexEmbeddingsBatchOutputTranslation:
 _SAMPLING_KNOBS: Final = MappingProxyType({"temperature": 0, "top_p": 0.5, "top_k": 3})
 
 
-def _chat_entry_with_sampling_knobs(model: str) -> dict[str, object]:
-    return {
-        "custom_id": "request-1",
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **_SAMPLING_KNOBS},
-    }
+def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **knobs},
+        }
+    )
 
 
 def _generation_config(row: Mapping[str, object]) -> object:
@@ -2009,25 +2011,37 @@ def _generation_config(row: Mapping[str, object]) -> object:
     return request["generationConfig"]
 
 
+def _flag_model_as_no_sampling(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_sampling_params": False})
+
+
 def test_batch_row_for_a_flagged_gemini_model_raises_a_400_naming_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
     """A batch file row gets the same contract as a real-time call: the knobs Google ignores are refused
     with a 400 that names drop_params instead of silently vanishing from the uploaded row"""
-    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
     monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
-        _wrap_entries([_chat_entry_with_sampling_knobs("gemini-zeta-9")])
+        _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+
+
+def test_batch_row_with_null_knobs_for_a_flagged_gemini_model_is_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null knob means no override, the same as on a real-time call, so it must not fail the upload"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", {"temperature": None, "top_p": None, "top_k": None})])
+    assert _generation_config(row) == {"max_output_tokens": 5}
 
 
 def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
     monkeypatch.setattr(litellm, "drop_params", True)
-    (row,) = _wrap_entries([_chat_entry_with_sampling_knobs("gemini-zeta-9")])
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5}
 
 
 def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    (row,) = _wrap_entries([_chat_entry_with_sampling_knobs("gemini-2.5-flash")])
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
