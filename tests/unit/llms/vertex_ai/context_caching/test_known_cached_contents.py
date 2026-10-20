@@ -322,51 +322,97 @@ def test_registry_is_bounded():
     assert known_cached_contents.get(_SCOPE, "key-4") == "cachedContents/4"
 
 
-async def _complete(sync_mode: bool, stream: bool) -> None:
-    if sync_mode:
-        response = litellm.completion(model="gemini/gemini-3.1-pro", messages=_messages(), stream=stream)
-        for _chunk in response if stream else ():
-            pass
-        return
-    response = await litellm.acompletion(model="gemini/gemini-3.1-pro", messages=_messages(), stream=stream)
+def _generated(stream: bool) -> httpx.Response:
+    body: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1, "totalTokenCount": 11},
+    }
     if stream:
-        async for _chunk in response:
-            pass
+        return httpx.Response(200, text=f"data: {json.dumps(body)}\n\n", headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=body)
+
+
+def _rejected(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code, json={"error": {"code": status_code, "message": "rejected"}})
+
+
+async def _complete(sync_mode: bool, stream: bool, **kwargs) -> str:
+    request: Final = {"model": "gemini/gemini-3.1-pro", "messages": _messages(), "stream": stream, **kwargs}
+    if sync_mode:
+        response = litellm.completion(**request)
+        if stream:
+            return "".join(chunk.choices[0].delta.content or "" for chunk in response)
+        return response.choices[0].message.content
+    response = await litellm.acompletion(**request)
+    if stream:
+        return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+    return response.choices[0].message.content
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize(
-    ("status_code", "relisted"),
+    ("status_code", "replaced"),
     [(400, True), (403, True), (404, True), (429, False), (500, False)],
 )
 @pytest.mark.asyncio
-async def test_cache_rejected_by_generate_content_is_looked_up_again(
+async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_the_same_call(
     respx_mock: respx.MockRouter,
     fake_provider_credentials: None,
     monkeypatch: pytest.MonkeyPatch,
     sync_mode: bool,
     stream: bool,
     status_code: int,
-    relisted: bool,
+    replaced: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
         return_value=httpx.Response(200, json={})
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        return_value=httpx.Response(200, json=_created("cachedContents/deleted", _expire_time(300)))
+        side_effect=[
+            httpx.Response(200, json=_created("cachedContents/deleted", _expire_time(300))),
+            httpx.Response(200, json=_created("cachedContents/fresh", _expire_time(300))),
+        ]
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        return_value=httpx.Response(status_code, json={"error": {"code": status_code, "message": "rejected"}})
+        side_effect=[_generated(stream), _rejected(status_code), _generated(stream)]
     )
 
-    for _ in range(2):
+    assert await _complete(sync_mode, stream) == "ok"
+    if replaced:
+        assert await _complete(sync_mode, stream) == "ok"
+    else:
         with pytest.raises(openai.APIStatusError):
             await _complete(sync_mode, stream)
 
+    sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
+    assert sent == ["cachedContents/deleted", "cachedContents/deleted"] + (["cachedContents/fresh"] if replaced else [])
+    assert list_route.call_count == (2 if replaced else 1)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_rejected_caller_supplied_cached_content_is_not_sent_again(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    stream: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
+        side_effect=[_rejected(404), _generated(stream)]
+    )
+
+    with pytest.raises(openai.APIStatusError):
+        await _complete(sync_mode, stream, cached_content="cachedContents/callers")
+
     assert [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls] == [
-        "cachedContents/deleted",
-        "cachedContents/deleted",
+        "cachedContents/callers"
     ]
-    assert list_route.call_count == (2 if relisted else 1)
+    assert list_route.call_count == 0
