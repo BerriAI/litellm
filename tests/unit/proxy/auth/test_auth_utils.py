@@ -668,18 +668,11 @@ class TestLogOnceIfBudgetReservationDisabled:
     def test_logs_info_only_once_when_enabled(self, caplog):
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
             log_once_if_budget_reservation_disabled(disabled=False)
-            assert not any(
-                "disable_budget_reservation is enabled" in record.message
-                for record in caplog.records
-            )
+            assert not any("disable_budget_reservation is enabled" in record.message for record in caplog.records)
             for _ in range(3):
                 log_once_if_budget_reservation_disabled(disabled=True)
 
-        records = [
-            record
-            for record in caplog.records
-            if "disable_budget_reservation is enabled" in record.message
-        ]
+        records = [record for record in caplog.records if "disable_budget_reservation is enabled" in record.message]
         assert len(records) == 1
         assert records[0].levelno == logging.INFO
 
@@ -1007,19 +1000,28 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
-@pytest.mark.parametrize("provider,model", [
-    ("laya", "english"), ("laya", "multilingual"), ("laya", "typed-decisions"),
-    ("bespoke", "nimble-latest"), ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
-])
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        ("laya", "english"),
+        ("laya", "multilingual"),
+        ("laya", "typed-decisions"),
+        ("bespoke", "nimble-latest"),
+        ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
+    ],
+)
 @pytest.mark.parametrize("suffix", ["", "/"])
 def test_oss_native_model_uses_the_classifier_permission_identity(provider: str, model: str, suffix: str) -> None:
-    assert get_model_from_request(
-        request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}"
-    ) == f"{provider}/{model}"
+    assert (
+        get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}")
+        == f"{provider}/{model}"
+    )
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])
-@pytest.mark.parametrize("model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7])
+@pytest.mark.parametrize(
+    "model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7]
+)
 def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(provider: str, model: object) -> None:
     with pytest.raises(HTTPException) as denied:
         get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone")
@@ -1034,38 +1036,49 @@ def test_laya_model_normalization_does_not_change_other_provider_routes() -> Non
 def _cache_prediction_router():
     from litellm.router import Router
 
-    return Router(model_list=[
-        {
-            "model_name": group,
-            "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-provider-key"},
-            "model_info": {"id": deployment_id, "team_id": team_id},
-        }
-        for group, deployment_id, team_id in (
-            ("current-group", "current-id", None), ("candidate-group", "candidate-id", None),
-            ("own-group", "own-id", "prediction-team"), ("foreign-group", "foreign-id", "foreign-team"),
-        )
-    ])
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-provider-key"},
+                "model_info": {"id": deployment_id, "team_id": team_id},
+            }
+            for group, deployment_id, team_id in (
+                ("current-group", "current-id", None),
+                ("candidate-group", "candidate-id", None),
+                ("own-group", "own-id", "prediction-team"),
+                ("foreign-group", "foreign-id", "foreign-team"),
+            )
+        ]
+    )
 
 
-@pytest.mark.parametrize("candidate,team_id,expected", [
-    ("candidate-id", None, ["current-group", "candidate-group"]),
-    ("current-id", None, "current-group"),
-    ("missing-id", None, None),
-    ("candidate-group", None, None),
-    ("own-id", None, None),
-    ("own-id", "prediction-team", ["current-group", "own-group"]),
-    ("foreign-id", "prediction-team", None),
-])
+@pytest.mark.parametrize(
+    "candidate,team_id,expected",
+    [
+        ("candidate-id", None, ["current-group", "candidate-group"]),
+        ("current-id", None, "current-group"),
+        ("missing-id", None, None),
+        ("candidate-group", None, None),
+        ("own-id", None, None),
+        ("own-id", "prediction-team", ["current-group", "own-group"]),
+        ("foreign-id", "prediction-team", None),
+    ],
+)
 def test_cache_prediction_auth_resolves_only_exact_deployment_ids(candidate, team_id, expected):
-    assert get_model_from_request(
-        request_data={
-            "current_deployment_id": "current-id", "candidate_deployment_id": candidate,
-            "request": {"model": "caller-controlled-provider-model"},
-        },
-        route="/cost/predict-cache",
-        llm_router=_cache_prediction_router(),
-        team_id=team_id,
-    ) == expected
+    assert (
+        get_model_from_request(
+            request_data={
+                "current_deployment_id": "current-id",
+                "candidate_deployment_id": candidate,
+                "request": {"model": "caller-controlled-provider-model"},
+            },
+            route="/cost/predict-cache",
+            llm_router=_cache_prediction_router(),
+            team_id=team_id,
+        )
+        == expected
+    )
 
 
 def _cache_prediction_auth_app(
@@ -1088,18 +1101,29 @@ def _cache_prediction_auth_app(
     router = _cache_prediction_router()
     allowed_models = ["current-group", "candidate-group", "own-group"]
     token = UserAPIKeyAuth(
-        api_key="test-proxy-key-hash", user_id="prediction-user", user_role=LitellmUserRoles.INTERNAL_USER,
-        models=allowed_models if key_models is None else key_models, team_id=team_id,
+        api_key="test-proxy-key-hash",
+        user_id="prediction-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=allowed_models if key_models is None else key_models,
+        team_id=team_id,
         team_models=allowed_models if team_models is None else team_models,
-        allowed_routes=allowed_routes, metadata=metadata or {},
+        allowed_routes=allowed_routes,
+        metadata=metadata or {},
     )
     user = LiteLLM_UserTable(
-        user_id=token.user_id, user_role=LitellmUserRoles.INTERNAL_USER.value, models=user_models,
+        user_id=token.user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=user_models,
     )
+
     async def authenticate(request, request_data, **_headers):
         await auth._enforce_key_and_fallback_model_access(
-            valid_token=token, request_data=request_data, route=request.url.path, request=request,
-            llm_model_list=router.get_model_list(), llm_router=router,
+            valid_token=token,
+            request_data=request_data,
+            route=request.url.path,
+            request=request,
+            llm_model_list=router.get_model_list(),
+            llm_router=router,
         )
         return token
 
@@ -1132,22 +1156,36 @@ def _cache_prediction_auth_app(
 
 def _cache_prediction_payload(candidate="candidate-id", current="current-id"):
     return {
-        "current_deployment_id": current, "candidate_deployment_id": candidate,
-        "request": {"messages": [{"role": "user", "content": [{
-            "type": "text", "text": "Stable cached context",
-            "cache_control": {"type": "ephemeral"},
-        }]}]},
+        "current_deployment_id": current,
+        "candidate_deployment_id": candidate,
+        "request": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Stable cached context",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        },
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("allowed_routes,user_models,candidate,status_code", [
-    (["/chat/completions"], ["current-group", "candidate-group"], "candidate-id", 403),
-    (["/cost/predict-cache"], ["current-group"], "candidate-id", 403),
-    (["/cost/*"], ["current-group", "candidate-group"], "candidate-id", 200),
-    (["/cost/predict-cache"], ["current-group"], "current-id", 200),
-    (["/cost/predict-cache"], ["current-group"], "missing-id", 404),
-])
+@pytest.mark.parametrize(
+    "allowed_routes,user_models,candidate,status_code",
+    [
+        (["/chat/completions"], ["current-group", "candidate-group"], "candidate-id", 403),
+        (["/cost/predict-cache"], ["current-group"], "candidate-id", 403),
+        (["/cost/*"], ["current-group", "candidate-group"], "candidate-id", 200),
+        (["/cost/predict-cache"], ["current-group"], "current-id", 200),
+        (["/cost/predict-cache"], ["current-group"], "missing-id", 404),
+    ],
+)
 async def test_cache_prediction_authorizes_route_and_personal_models_before_provider_counts(
     monkeypatch, allowed_routes, user_models, candidate, status_code
 ):
@@ -1166,20 +1204,27 @@ async def test_cache_prediction_authorizes_route_and_personal_models_before_prov
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
-@pytest.mark.parametrize("team_id,key_models,user_models,team_models", [
-    (None, ["*"], ["*"], None),
-    (None, ["current-group", "candidate-group"], ["*"], None),
-    (None, ["*"], ["current-group", "candidate-group"], None),
-    ("prediction-team", ["*"], ["*"], ["current-group", "candidate-group"]),
-])
+@pytest.mark.parametrize(
+    "team_id,key_models,user_models,team_models",
+    [
+        (None, ["*"], ["*"], None),
+        (None, ["current-group", "candidate-group"], ["*"], None),
+        (None, ["*"], ["current-group", "candidate-group"], None),
+        ("prediction-team", ["*"], ["*"], ["current-group", "candidate-group"]),
+    ],
+)
 async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_authorization(
     monkeypatch, arm, team_id, key_models, user_models, team_models
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], user_models,
-        team_id=team_id, key_models=key_models, team_models=team_models,
+        monkeypatch,
+        ["/cost/predict-cache"],
+        user_models,
+        team_id=team_id,
+        key_models=key_models,
+        team_models=team_models,
     )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         missing = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "missing-id"})
@@ -1192,19 +1237,26 @@ async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_autho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
-@pytest.mark.parametrize("key_models,team_models,status_code", [
-    (["*"], ["*"], 200),
-    (["current-group", "candidate-group"], ["*"], 403),
-    (["*"], ["current-group", "candidate-group"], 403),
-])
+@pytest.mark.parametrize(
+    "key_models,team_models,status_code",
+    [
+        (["*"], ["*"], 200),
+        (["current-group", "candidate-group"], ["*"], 403),
+        (["*"], ["current-group", "candidate-group"], 403),
+    ],
+)
 async def test_cache_prediction_checks_each_visible_team_deployment_model(
     monkeypatch, arm, key_models, team_models, status_code
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], ["*"],
-        team_id="prediction-team", key_models=key_models, team_models=team_models,
+        monkeypatch,
+        ["/cost/predict-cache"],
+        ["*"],
+        team_id="prediction-team",
+        key_models=key_models,
+        team_models=team_models,
     )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "own-id"})
@@ -1230,19 +1282,24 @@ async def test_cache_prediction_checks_each_visible_personal_deployment_model(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("header_tag,key_tags,limit,status_code,provider_calls", [
-    ("limited", [], 1, 429, 1),
-    (None, ["limited"], 1, 429, 1),
-    ("limited", ["limited"], 4, 200, 4),
-    ("unlimited", [], 1, 200, 4),
-])
+@pytest.mark.parametrize(
+    "header_tag,key_tags,limit,status_code,provider_calls",
+    [
+        ("limited", [], 1, 429, 1),
+        (None, ["limited"], 1, 429, 1),
+        ("limited", ["limited"], 4, 200, 4),
+        ("unlimited", [], 1, 200, 4),
+    ],
+)
 async def test_cache_prediction_preserves_authenticated_header_and_key_tag_rpm(
     monkeypatch, header_tag, key_tags, limit, status_code, provider_calls
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], ["current-group", "candidate-group"],
+        monkeypatch,
+        ["/cost/predict-cache"],
+        ["current-group", "candidate-group"],
         metadata={"tag_rpm_limit": {"limited": limit}, "tags": key_tags},
     )
     headers = {"x-litellm-tags": header_tag} if header_tag else {}
@@ -1396,7 +1453,11 @@ def _azure_relay_router():
         model_list=[
             {
                 "model_name": "gpt",
-                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://a.services.ai.azure.com",
+                    "api_key": "k",
+                },
             },
             {
                 "model_name": "other-group",
@@ -1618,8 +1679,14 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         provider="vertex_ai",
         model_id="veo-3.1-generate-001",
     )
-    llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/veo-3.1-generate-001",
+                "litellm_params": {"model": "vertex_ai/veo-3.1-generate-001"},
+            }
+        ]
+    )
 
     assert (
         get_model_from_request(
@@ -1629,7 +1696,148 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+
+
+def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_the_video() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="azure", model_id="sora-2", deployment_id="dep-sora-shared"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-shared"
+    )
+
+
+def test_get_model_from_request_checks_a_video_created_through_a_provider_wildcard_by_its_own_name() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="openai", model_id="sora-2", deployment_id="dep-wildcard"
+    )
+    routed_ids: Final = [
+        deployment["model_info"]["id"] for deployment in llm_router.pattern_router.get_deployments_by_pattern("sora-2")
+    ]
+
+    assert routed_ids == ["dep-wildcard"]
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-2"
+    )
+
+
+def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not_route_by_its_prefixed_name() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="operations/op_1", provider="gemini", model_id="unlisted-video-model", deployment_id="dep-wildcard"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "gemini/unlisted-video-model"
+    )
+
+
+def _sora_fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-pair", "sora-backup", "sora-last", "sora-other")
+        ],
+        fallbacks=[{"sora-pair": ["sora-backup"]}, {"sora-backup": ["sora-last"]}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("general_settings", "requested_model", "creating_group", "expected"),
+    [
+        ({"enforce_fallback_model_access": False}, "sora-pair", "sora-backup", "sora-pair"),
+        ({"enforce_fallback_model_access": False}, "sora-pair", "sora-last", "sora-pair"),
+        ({}, "sora-pair", "sora-backup", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, "sora-other", "sora-backup", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, None, "sora-backup", "sora-backup"),
+    ],
+    ids=[
+        "opt-out-fallback",
+        "opt-out-chained-fallback",
+        "enforced",
+        "opt-out-no-fallback-relation",
+        "opt-out-no-requested-model",
+    ],
+)
+def test_get_model_from_request_checks_a_fallback_served_video_by_the_requested_group_only_under_the_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    requested_model: str | None,
+    creating_group: str,
+    expected: str,
+) -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw",
+        provider="azure",
+        model_id="sora-2",
+        deployment_id=f"dep-{creating_group}",
+        requested_model=requested_model,
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=_sora_fallback_router(),
+        )
+        == expected
+    )
 
 
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
@@ -4717,9 +4925,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
         ),
     ],
 )
-def test_configurable_clientside_parameters(
-    allowed_param, input_value, should_return_true
-):
+def test_configurable_clientside_parameters(allowed_param, input_value, should_return_true):
     router = Router(
         model_list=[
             {
@@ -4753,9 +4959,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixe
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
     result = get_customer_user_header_from_mapping(mappings)
     assert result is None
 
@@ -4783,17 +4987,13 @@ def test_get_internal_user_header_from_mapping_returns_internal_header():
 def test_get_internal_user_header_from_mapping_no_internal_returns_none():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}]
     result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
     assert result is None
 
     # Also support single mapping dict
     single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
-    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
-        single_mapping
-    )
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping)
     assert result is None
 
 
@@ -4815,9 +5015,7 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
 def test_get_model_from_request(request_data, expected_model):
     from litellm.proxy.auth.auth_utils import get_model_from_request
 
-    request_data = {
-        "target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"
-    }
+    request_data = {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}
     route = "/openai/deployments/gpt-3.5-turbo"
     model = get_model_from_request(request_data, "/v1/files")
     assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
@@ -4879,9 +5077,7 @@ def test_get_model_from_request(request_data, expected_model):
         ),
     ],
 )
-def test_get_model_from_request_vertex_ai_passthrough(
-    request_data, route, expected_model
-):
+def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expected_model):
     """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
     from litellm.proxy.auth.auth_utils import get_model_from_request
 

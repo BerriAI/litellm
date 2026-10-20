@@ -34,6 +34,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
@@ -189,10 +190,13 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.batch_utils import (
+    batch_create_routing,
+    deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
+    without_deployments_that_cannot_batch,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
@@ -201,6 +205,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
     format_fallback_outcome_message,
@@ -230,6 +235,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_video_lookup_not_found,
     set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -397,12 +403,15 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES, decode_video_id_with_provider
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
+    ModelInfoLookupMiss,
     ModelResponse,
     Rules,
     TextCompletionResponse,
@@ -413,6 +422,8 @@ from litellm.utils import (
     get_utc_datetime,
     is_generalized_model_info,
     is_region_allowed,
+    lookup_model_info_for_registration,
+    model_info_with_pricing_overrides,
     provider_rejectable_params,
     resolve_api_key_secret_reference,
     set_live_deployment_replay,
@@ -516,6 +527,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _CallbackT = TypeVar("_CallbackT")
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
@@ -527,6 +539,7 @@ CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_b
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
+_video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -5960,17 +5973,19 @@ class Router:
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
+        handler_name: Final[str | None] = getattr(original_generic_function, "__name__", None)
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
-                    model=model,
-                    request_kwargs=kwargs,
-                    messages=kwargs.get("messages", None),
-                    input=kwargs.get("input", None),
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                )
+                with self._video_call_pin(handler_name, kwargs):
+                    deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init
+                        model=model,
+                        request_kwargs=kwargs,
+                        messages=kwargs.get("messages", None),
+                        input=kwargs.get("input", None),
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                    )
             except Exception as e:
                 if passthrough_on_no_deployment:
                     return await original_generic_function(model=model, **kwargs)
@@ -5980,8 +5995,7 @@ class Router:
                 deployment=deployment,
                 kwargs=kwargs,
                 function_name=function_name,
-                splits_stream_timeout=getattr(original_generic_function, "__name__", None)
-                in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -6672,6 +6686,37 @@ class Router:
             )
         return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
+    @staticmethod
+    @contextlib.contextmanager
+    def _video_call_pin(handler_name: str | None, request_kwargs: Mapping[str, object]) -> Generator[None]:
+        """
+        Scopes the deployment a video id names to the routing of one call on that video (status, content, remix,
+        edit, extension). Any other call routes as if no id were sent, whatever its body carries.
+        """
+        video_id: Final = request_kwargs.get("video_id")
+        deployment_id: Final = (
+            decode_video_id_with_provider(video_id).get("deployment_id")
+            if handler_name in VIDEO_ID_CALL_TYPES and isinstance(video_id, str)
+            else None
+        )
+        token: Final = _video_call_deployment_id.set(deployment_id)
+        try:
+            yield
+        finally:
+            _video_call_deployment_id.reset(token)
+
+    @staticmethod
+    def _narrow_to_video_deployment(healthy_deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
+        """
+        A video lives on the provider account of the deployment that created it, so a call on an id naming a
+        deployment that every routing filter kept goes to that deployment, else to whichever one routing picks.
+        """
+        deployment_id: Final = _video_call_deployment_id.get()
+        creating: Final = tuple(
+            deployment for deployment in healthy_deployments if deployment_id in Router._deployment_ids((deployment,))
+        )
+        return creating or healthy_deployments
+
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
         Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
@@ -6693,13 +6738,14 @@ class Router:
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
-            deployment: Final = self.get_available_deployment(
-                model=model,
-                messages=kwargs.get("messages", None),
-                input=kwargs.get("input", None),
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with self._video_call_pin(handler_name, kwargs):
+                deployment: Final = self.get_available_deployment(
+                    model=model,
+                    messages=kwargs.get("messages", None),
+                    input=kwargs.get("input", None),
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._update_kwargs_with_deployment(
                 deployment=deployment,
                 kwargs=kwargs,
@@ -7146,12 +7192,13 @@ class Router:
         try:
             verbose_router_logger.debug("Inside _acreate_batch()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self.async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "files-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with batch_create_routing():
+                deployment: Final = await self.async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "files-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -9184,6 +9231,13 @@ class Router:
                 )
                 return False
 
+            if is_video_lookup_not_found(exception, kwargs):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Provider 404 says the video is not on this deployment's account, not that the deployment is down."
+                )
+                return False
+
             exception_status: Final = getattr(exception, "status_code", "")
 
             if is_caller_timeout_408(kwargs, exception_status):
@@ -9850,6 +9904,20 @@ class Router:
         params_base_model: Final = deployment.litellm_params.get("base_model")
         if isinstance(params_base_model, str) and params_base_model:
             return params_base_model
+        params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
+        invoked_model: Final = params.get("model_id")
+        if (
+            isinstance(invoked_model, str)
+            and invoked_model
+            and (
+                deployment.litellm_params.custom_llm_provider == "bedrock"
+                or deployment.litellm_params.model.startswith("bedrock/")
+            )
+        ):
+            profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
+            profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
+            if not isinstance(profile_info, ModelInfoLookupMiss):
+                return profile_model
         return deployment.litellm_params.model
 
     @staticmethod
@@ -10027,39 +10095,7 @@ class Router:
                     model_info=_model_info,
                 )
             )
-            for field in CustomPricingLiteLLMParams.model_fields:
-                if deployment.litellm_params.get(field) is not None:
-                    _model_info[field] = deployment.litellm_params[field]
-
-            Router._inherit_builtin_base_rates_for_off_peak(
-                model_info=_model_info,
-                backend_model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-            if _model_info.get("input_cost_per_token") is not None:
-                Router._inherit_builtin_cache_pricing(
-                    model_info=_model_info,
-                    backend_model=deployment.litellm_params.model,
-                    custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-                )
-            Router._inherit_builtin_service_tier_pricing(
-                model_info=_model_info,
-                backend_model=Router._cost_map_backend_model(deployment),
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-            Router._inherit_builtin_tiered_output_rate(
-                model_info=_model_info,
-                backend_model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-
-            ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-            Router._register_deployment_in_model_cost(
-                model_id=deployment.model_info.id,
-                model_info=_model_info,
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
+            Router._register_deployment_pricing(deployment)
 
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:
@@ -11089,7 +11125,7 @@ class Router:
         return (backend_key,)
 
     @staticmethod
-    def _deployment_model_cost_payload(deployment: Deployment) -> dict:  # mutable-ok: cost-map entry
+    def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
         Custom pricing lives on ``litellm_params`` rather than ``model_info``, and
@@ -11097,30 +11133,49 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        model_info: Final = dict(
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+        )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 model_info[field] = field_value
+        backend_model: Final = Router._cost_map_backend_model(deployment)
+        params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
+        if (
+            params.get("model_id")
+            and backend_model != deployment.litellm_params.model
+            and (
+                deployment.litellm_params.custom_llm_provider == "bedrock"
+                or deployment.litellm_params.model.startswith("bedrock/")
+            )
+        ):
+            profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+            if not isinstance(profile_info, ModelInfoLookupMiss):
+                explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(model_info)
+                priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)
+                model_info.update(
+                    {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+                )
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
-            backend_model=deployment.litellm_params.model,
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
-                backend_model=deployment.litellm_params.model,
+                backend_model=backend_model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
-            backend_model=Router._cost_map_backend_model(deployment),
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
-            backend_model=deployment.litellm_params.model,
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         return model_info
@@ -12011,7 +12066,9 @@ class Router:
             )
         return model_info
 
-    def _set_model_group_info(self, model_group: str, user_facing_model_group_name: str) -> ModelGroupInfo | None:
+    def _set_model_group_info(
+        self, model_group: str, user_facing_model_group_name: str, team_id: str | None = None
+    ) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
@@ -12142,6 +12199,7 @@ class Router:
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
+                        "supported_endpoints": None,
                     }
                 )
             else:
@@ -12219,6 +12277,23 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            model_group_info.supported_endpoints = (
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *(model_group_info.supported_endpoints or ()),
+                            *(
+                                deployment_supported_endpoints(
+                                    model_info.get("supported_endpoints"), model, llm_provider
+                                )
+                                if team_may_use_deployment(_configured_model_info(model).get("team_id"), team_id)
+                                else ()
+                            ),
+                        )
+                    )
+                )
+                or None
+            )
             model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
                 AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
             )
@@ -12277,7 +12352,9 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(self, model_group: str, *, include_hidden: bool = False) -> ModelGroupInfo | None:
+    def get_model_group_info(
+        self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None
+    ) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
@@ -12301,10 +12378,13 @@ class Router:
             return self._set_model_group_info(
                 model_group=_router_model_group,
                 user_facing_model_group_name=model_group,
+                team_id=team_id,
             )
 
         ## Check if actual model
-        return self._set_model_group_info(model_group=model_group, user_facing_model_group_name=model_group)
+        return self._set_model_group_info(
+            model_group=model_group, user_facing_model_group_name=model_group, team_id=team_id
+        )
 
     async def get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """
@@ -12721,7 +12801,8 @@ class Router:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
         3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard
-           whose deployment serves `custom_llm_provider`)
+           whose deployment serves `custom_llm_provider`), else name it `custom_llm_provider/model_id` when only that
+           form routes to such a wildcard
         4. Return the model_name if found, None otherwise
 
         Args:
@@ -12769,8 +12850,15 @@ class Router:
 
         if self.is_recognized_model(model_id):
             return model_id
-        if custom_llm_provider is not None and self.pattern_router.routes_to_provider(model_id, custom_llm_provider):
+        if custom_llm_provider is None:
+            return None
+        if self.pattern_router.routes_to_provider(model_id, custom_llm_provider):
             return model_id
+        provider_prefixed: Final = f"{custom_llm_provider}/{model_id}"
+        if not model_id.startswith(f"{custom_llm_provider}/") and self.pattern_router.routes_to_provider(
+            provider_prefixed, custom_llm_provider
+        ):
+            return provider_prefixed
         return None
 
     def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
@@ -14347,10 +14435,10 @@ class Router:
     def _filter_deployments_by_model_access_groups(
         self,
         model: str,
-        healthy_deployments: list,
+        healthy_deployments: list[DeploymentTypedDict],
         request_kwargs: Mapping[str, object] | None,
         request_team_id: str | None,
-    ) -> list:
+    ) -> list[DeploymentTypedDict]:
         """
         Restrict candidate deployments to caller-authorized model access groups.
 
@@ -14532,8 +14620,16 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
+            list[dict[str, object]], healthy_deployments
+        )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
+            list(
+                self._narrow_to_video_deployment(
+                    without_deployments_that_cannot_batch(batch_candidates, caller_deployments=lambda: batch_candidates)
+                )
+            ),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15734,8 +15830,19 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
+            list[dict[str, object]], healthy_deployments
+        )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            healthy_deployments, target_order=_target_order
+            list(
+                self._narrow_to_video_deployment(
+                    without_deployments_that_cannot_batch(
+                        batch_candidates,
+                        caller_deployments=lambda: deployments_the_caller_may_use(batch_candidates, routing_kwargs),
+                    )
+                )
+            ),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in

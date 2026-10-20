@@ -4805,7 +4805,11 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+@pytest.mark.parametrize("rate", (0.0, 0.000123))
+@pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
+def test_reapply_runtime_registrations_replays_register_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
+) -> None:
     """
     register_model is the documented way to override pricing for a model. A
     price-data reload swaps litellm.model_cost for a freshly fetched catalog,
@@ -4836,10 +4840,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
                 "openai/gpt-4o": {
                     "litellm_provider": "openai",
                     "mode": "chat",
-                    "input_cost_per_token": 0.000123,
+                    "input_cost_per_token": rate,
                 }
             }
         )
+
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": True, "input_cost_per_token": None}})
+        litellm.register_model(
+            {"openai/gpt-4o": {"input_cost_per_token": str(updated_rate) if updated_rate is not None else None}}
+        )
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
         litellm.model_cost = {
             "openai/gpt-4o": {
@@ -4852,7 +4862,9 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         _invalidate_model_cost_lowercase_map()
         reapply_runtime_model_cost_registrations()
 
-        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        expected_rate: Final = rate if updated_rate is None else updated_rate
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
+        assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
         litellm.model_cost = saved_model_cost
@@ -10655,6 +10667,27 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    alias: Final = "openai.test-converse-alias"
+    entry: Final = AliasedCostEntry({"litellm_provider": "bedrock_converse", "mode": "chat"}, (key, alias))
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert dict(model_utils.runtime_model_cost_registrations(alias, "bedrock"))[alias] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
 
 
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
