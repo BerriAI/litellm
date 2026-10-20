@@ -17,12 +17,14 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,6 +49,8 @@ from litellm.proxy.proxy_server import (
     run_ollama_serve,
     save_worker_config,
 )
+
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -224,6 +228,46 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_before_disconnecting(monkeypatch):
+    """
+    A management call returns before its audit row is written, so shutdown waits
+    for that write while prisma is still connected. It waits beside the gateway
+    flush rather than before it, so the two waits overlap inside the teardown budget.
+    """
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    gateway_flush_started: Final = asyncio.Event()
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        gateway_flush_started.set()
+        calls.append("flush")
+
+    async def _audit_write_that_finishes_after_the_flush_starts() -> None:
+        await gateway_flush_started.wait()
+        calls.append("audit")
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    track_audit_task(asyncio.create_task(_audit_write_that_finishes_after_the_flush_starts()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["flush", "audit", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
     """No prisma client means nothing to drain to, and no attempt is made."""
     flush = AsyncMock()
@@ -243,6 +287,34 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
     await proxy_shutdown_event()
 
     assert flush.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_the_rest_of_teardown(monkeypatch):
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(
+        ps, "drain_post_call_redis_batches", AsyncMock(side_effect=lambda: calls.append("redis")), raising=False
+    )
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    async def _audit_callback_still_sending() -> None:
+        await asyncio.sleep(0.05)
+        calls.append("audit")
+
+    track_audit_task(asyncio.create_task(_audit_callback_still_sending()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["audit", "redis"]
 
 
 @pytest.mark.asyncio
@@ -898,6 +970,54 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     assert (job is not None) is job_scheduled, (
         f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_task_and_again_after_it() -> None:
+    """A worker killed while shutdown waits on a slow logging task keeps the spend it had already counted,
+    and a worker that finishes the wait also commits the spend that task adds."""
+    from litellm.responses import streaming_iterator as streaming_module
+
+    task_may_finish: Final = asyncio.Event()
+    task_finished: Final = asyncio.Event()
+    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+
+    async def slow_logging_task() -> None:
+        await task_may_finish.wait()
+        task_finished.set()
+
+    def recording_flush(name: str) -> Callable[[], Awaitable[None]]:
+        async def flush() -> None:
+            flushes.append((name, task_finished.is_set()))
+            task_may_finish.set()
+
+        return flush
+
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "flush_spend_counters_on_shutdown", recording_flush("spend counters")),
+        patch.object(ps, "_flush_spend_logs_queue_on_shutdown", recording_flush("spend logs")),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                streaming_module.spawn_logging_task(
+                    asyncio.get_running_loop(), slow_logging_task(), task_name="slow spend row"
+                )
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert flushes == [
+        ("spend counters", False),
+        ("spend logs", False),
+        ("spend counters", True),
+        ("spend logs", True),
+    ]
 
 
 def test_otel_global_provider_published_after_callback_init():
