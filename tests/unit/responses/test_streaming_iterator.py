@@ -2673,14 +2673,12 @@ class _UnreferencedWaitLogger(CustomLogger):
 
 
 async def _shutdown_drain_held_for(logger: _GatedLogger) -> bool:
-    async with asyncio.timeout(5):
-        await logger.entered.wait()
+    await asyncio.wait_for(logger.entered.wait(), timeout=5)
     return await _drain_held_until_released(logger.release)
 
 
 async def _logging_tasks_left_after_garbage_collection(logger: _UnreferencedWaitLogger) -> int:
-    async with asyncio.timeout(5):
-        await logger.parked.wait()
+    await asyncio.wait_for(logger.parked.wait(), timeout=5)
     gc.collect()
     survivors: Final = tuple(logger.waiting_tasks)
     for task in survivors:
