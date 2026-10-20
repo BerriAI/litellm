@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -50,7 +51,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
 
     async def handle_count_tokens_request(
         self,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, object],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
@@ -67,7 +68,9 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 tools=request.get("tools"),
                 system=request.get("system"),
                 optional_params=_COUNT_OPTIONS.validate_python(
-                    {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
+                    MappingProxyType(
+                        {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
+                    )
                 ),
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
@@ -75,7 +78,10 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",
-                headers={"Content-Type": "application/json", "anthropic-version": MANTLE_ANTHROPIC_VERSION},
+                headers={  # mutable-ok: [LIT002] bearer signing may add the Authorization header
+                    "Content-Type": "application/json",
+                    "anthropic-version": MANTLE_ANTHROPIC_VERSION,
+                },
                 optional_params=litellm_params,
                 request_data=body,
                 api_base=endpoint_url,

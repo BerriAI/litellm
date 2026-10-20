@@ -4,9 +4,10 @@ Bedrock Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -21,6 +22,7 @@ from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCo
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
+_COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -76,7 +78,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         self,
         handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
         tokenizer_type: str,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, object],
         resolved_model: str,
     ) -> CountTokensOutcome:
@@ -114,12 +116,13 @@ class BedrockTokenCounter(BaseTokenCounter):
             return None
 
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        request_data: Final[dict[str, object]] = {
-            "model": model_to_use,
-            "messages": messages,
-            **({"tools": tools} if tools else {}),
-            **({"system": system} if system else {}),
-        }
+        request_data: Final = MappingProxyType(
+            {
+                "model": model_to_use,
+                "messages": messages,
+                **MappingProxyType({name: value for name, value in (("tools", tools), ("system", system)) if value}),
+            }
+        )
         resolved_model: Final = get_bedrock_base_model(model_to_use)
 
         runtime: Final = await self._count_with(
@@ -139,7 +142,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     request_model=request_model,
                     model_used=model_to_use,
                     tokenizer_type=outcome.tokenizer_type,
-                    original_response=dict(outcome.original_response),
+                    original_response=_COUNT_RESPONSE.validate_python(outcome.original_response),
                 )
             case CountTokensFailure():
                 verbose_logger.warning(

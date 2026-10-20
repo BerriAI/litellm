@@ -3,8 +3,10 @@ import json
 import re
 import signal
 import socket
+import struct
 import threading
 import uuid
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
@@ -22,7 +24,6 @@ import yaml
 from anthropic.types import MessageCountTokensToolParam, MessageParam
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -92,6 +93,38 @@ def target_of(request: Request) -> str:
 
 def answer(marker: str) -> str:
     return f"answer marker-{marker}"
+
+
+def _aws_string_header(name: str, value: str) -> bytes:
+    name_bytes: Final = name.encode()
+    value_bytes: Final = value.encode()
+    return len(name_bytes).to_bytes(1, "big") + name_bytes + b"\x07" + len(value_bytes).to_bytes(2, "big") + value_bytes
+
+
+def _aws_event_frame(
+    event_type: str,
+    payload: Mapping[str, JsonValue],
+    scenario_id: str,
+    unique_id: str,
+) -> bytes:
+    payload_bytes: Final = (
+        json.dumps(payload, separators=(",", ":"))
+        .replace("$REQUEST_ID", scenario_id)
+        .replace("$UNIQUE_ID", unique_id)
+        .encode()
+    )
+    headers_bytes: Final = b"".join(
+        (
+            _aws_string_header(":event-type", event_type),
+            _aws_string_header(":content-type", "application/json"),
+            _aws_string_header(":message-type", "event"),
+        )
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
 
 
 def _runtime_generation(request: Request) -> Reply:

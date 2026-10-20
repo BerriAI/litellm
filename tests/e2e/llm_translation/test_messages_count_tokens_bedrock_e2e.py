@@ -16,7 +16,6 @@ from typing import Final
 import pytest
 from anthropic.types import MessageParam
 from e2e_config import unique_marker
-from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -44,14 +43,6 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> t
 
 
 class TestBedrockMessagesCountTokens:
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.COUNT_TOKENS,
-            providers=(Provider.BEDROCK,),
-            models=(CROSS_REGION_ONLY_CLAUDE_BACKEND,),
-        )
-    )
     def test_count_matches_billed_input_tokens_for_a_model_bedrock_runtime_cannot_count(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

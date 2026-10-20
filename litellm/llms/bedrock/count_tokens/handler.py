@@ -4,6 +4,7 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -25,7 +26,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
     async def handle_count_tokens_request(
         self,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, Any],
         litellm_params: dict[str, Any],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
