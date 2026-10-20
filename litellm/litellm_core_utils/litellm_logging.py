@@ -498,7 +498,7 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
         return None
 
 
-def _resolve_vertex_location_for_cost(
+def resolve_vertex_location_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
     optional_params: Mapping[str, object] | None,
@@ -1981,7 +1981,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
-                "vertex_location": _resolve_vertex_location_for_cost(
+                "vertex_location": resolve_vertex_location_for_cost(
                     custom_llm_provider=cost_custom_llm_provider,
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
                     optional_params=self.optional_params,
@@ -3477,6 +3477,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
                     model_info=self.get_router_deployment_model_info(),
+                    vertex_location=resolve_vertex_location_for_cost(
+                        custom_llm_provider=self.custom_llm_provider,
+                        litellm_params=_LITELLM_PARAMS.validate_python(
+                            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+                        ),
+                        optional_params=None,
+                        model=self.get_deployment_model_for_cost() or self.model,
+                    ),
                 )
 
                 set_hidden_param(result, "response_cost", batch_result.cost)
