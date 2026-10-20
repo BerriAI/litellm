@@ -8103,5 +8103,5 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
