@@ -1351,7 +1351,7 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
 
 @pytest.mark.parametrize(
     ("content_encoding", "undecodable_body"),
-    (("gzip", gzip.compress(b"{}")[:-8]), ("zstd", zstd.compress(b"{}") + b"trailing")),
+    (("gzip", gzip.compress(b"{}", mtime=0)[:-8]), ("zstd", zstd.compress(b"{}") + b"trailing")),
 )
 def test_a_browser_can_read_the_error_for_a_compressed_body_the_proxy_cannot_decode(
     client: TestClient,

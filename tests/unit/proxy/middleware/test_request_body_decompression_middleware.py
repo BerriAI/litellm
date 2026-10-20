@@ -108,11 +108,11 @@ def _zstd_bomb(decoded_mib: int) -> bytes:
 @pytest.mark.parametrize(
     ("compressed", "content_encoding"),
     [
-        (gzip.compress(REQUEST_JSON), "gzip"),
+        (gzip.compress(REQUEST_JSON, mtime=0), "gzip"),
         (zstd.compress(REQUEST_JSON), "zstd"),
-        (gzip.compress(REQUEST_JSON), " GZip "),
+        (gzip.compress(REQUEST_JSON, mtime=0), " GZip "),
         (zstd.compress(REQUEST_JSON), "ZSTD"),
-        (gzip.compress(REQUEST_JSON), "x-gzip"),
+        (gzip.compress(REQUEST_JSON, mtime=0), "x-gzip"),
     ],
 )
 def test_supported_encoding_reaches_the_app_decoded(compressed: bytes, content_encoding: str):
@@ -129,13 +129,13 @@ def test_supported_encoding_reaches_the_app_decoded(compressed: bytes, content_e
 @pytest.mark.parametrize(
     ("body", "content_encodings"),
     [
-        (gzip.compress(REQUEST_JSON), ()),
-        (gzip.compress(REQUEST_JSON), ("identity",)),
+        (gzip.compress(REQUEST_JSON, mtime=0), ()),
+        (gzip.compress(REQUEST_JSON, mtime=0), ("identity",)),
         (b"\x1b\x00brotli-ish", ("br",)),
         (REQUEST_JSON, ("compress",)),
         (zlib.compress(REQUEST_JSON), ("deflate",)),
-        (gzip.compress(REQUEST_JSON), ("gzip, zstd",)),
-        (gzip.compress(REQUEST_JSON), ("gzip", "gzip")),
+        (gzip.compress(REQUEST_JSON, mtime=0), ("gzip, zstd",)),
+        (gzip.compress(REQUEST_JSON, mtime=0), ("gzip", "gzip")),
     ],
 )
 def test_other_encodings_reach_the_app_untouched(body: bytes, content_encodings: tuple[str, ...]):
@@ -154,7 +154,7 @@ def test_other_encodings_reach_the_app_untouched(body: bytes, content_encodings:
     [
         (REQUEST_JSON, "gzip"),
         (REQUEST_JSON, "zstd"),
-        (gzip.compress(REQUEST_JSON), "zstd"),
+        (gzip.compress(REQUEST_JSON, mtime=0), "zstd"),
         (zstd.compress(REQUEST_JSON), "gzip"),
         (_low_entropy_text(2 * int(CAP_MB * MIB)), "gzip"),
         (_low_entropy_text(2 * int(CAP_MB * MIB)), "zstd"),
@@ -264,7 +264,7 @@ def _zstd_skippable_frame(content: bytes) -> bytes:
 
 
 def _gzip_declaring_a_smaller_size(content: bytes) -> bytes:
-    return gzip.compress(content)[:-4] + (len(content) // 2).to_bytes(4, "little")
+    return gzip.compress(content, mtime=0)[:-4] + (len(content) // 2).to_bytes(4, "little")
 
 
 @pytest.mark.parametrize(
@@ -272,9 +272,13 @@ def _gzip_declaring_a_smaller_size(content: bytes) -> bytes:
     [
         (GZIP_MAGIC + b"not gzip at all", "gzip", "Request body is not valid gzip data: "),
         (ZSTD_FRAME_MAGIC + b"not zstd at all", "zstd", "Request body is not valid zstd data: "),
-        (gzip.compress(REQUEST_JSON)[:-8], "gzip", "Request body ends before the end of its gzip stream"),
+        (gzip.compress(REQUEST_JSON, mtime=0)[:-8], "gzip", "Request body ends before the end of its gzip stream"),
         (zstd.compress(REQUEST_JSON)[:-8], "zstd", "Request body ends before the end of its zstd stream"),
-        (gzip.compress(REQUEST_JSON) + b"{}", "gzip", "Request body has data after the end of its gzip stream"),
+        (
+            gzip.compress(REQUEST_JSON, mtime=0) + b"{}",
+            "gzip",
+            "Request body has data after the end of its gzip stream",
+        ),
         (zstd.compress(REQUEST_JSON) + b"{}", "zstd", "Request body has data after the end of its zstd stream"),
         (_zstd_frame_needing_a_window_over_the_rfc_9659_limit(), "zstd", "Request body is not valid zstd data: "),
         (
@@ -306,7 +310,7 @@ def test_zstd_body_gets_a_415_naming_gzip_when_this_python_cannot_decode_zstd():
     client: Final = _client(codecs=MappingProxyType({"gzip": GZIP}))
 
     zstd_response: Final = _post(client, zstd.compress(REQUEST_JSON), ("zstd",))
-    gzip_response: Final = _post(client, gzip.compress(REQUEST_JSON), ("gzip",))
+    gzip_response: Final = _post(client, gzip.compress(REQUEST_JSON, mtime=0), ("gzip",))
     plain_labeled_zstd_response: Final = _post(client, REQUEST_JSON, ("zstd",))
 
     assert zstd_response.status_code == 415
@@ -328,7 +332,7 @@ def test_zstd_is_unavailable_without_failing_the_import_on_a_python_without_zstd
 @pytest.mark.parametrize(
     ("body", "content_encoding"),
     [
-        (gzip.compress(REQUEST_JSON), "gzip"),
+        (gzip.compress(REQUEST_JSON, mtime=0), "gzip"),
         (zstd.compress(REQUEST_JSON), "zstd"),
         (zstd.compress(_low_entropy_text(int(CAP_MB * MIB) * 2)), "zstd"),
     ],
@@ -498,7 +502,7 @@ async def test_chunked_plain_body_labeled_gzip_reaches_the_app_in_the_chunks_sen
 
 @pytest.mark.asyncio
 async def test_client_disconnect_mid_body_ends_the_request_without_a_response():
-    compressed: Final = gzip.compress(REQUEST_JSON)
+    compressed: Final = gzip.compress(REQUEST_JSON, mtime=0)
     client_messages: Final[list[Message]] = [
         {"type": "http.request", "body": compressed[:10], "more_body": True},
         {"type": "http.disconnect"},
