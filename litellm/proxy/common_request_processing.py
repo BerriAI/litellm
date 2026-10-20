@@ -254,6 +254,7 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
 )
 from litellm.proxy.litellm_pre_call_utils import (
     ROUTER_SCHEDULED_ROUTE_TYPES,
+    SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     get_metadata_variable_name,
@@ -2266,7 +2267,6 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
-            router_schedules_request=llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES,
         )
         if logging_auth is not None:
             metadata_variable_name: Final = get_metadata_variable_name(request)
@@ -2378,14 +2378,20 @@ class ProxyBaseLLMRequestProcessing:
                     self.data["model"] = alias_target
 
         aliased_model: Final = self.data.get("model")
+        if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):
+            self.data.update(
+                llm_router.priority_header_update(
+                    model=aliased_model, kwargs=self.data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+                )
+            )
 
         litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         self.data["litellm_call_id"] = litellm_call_id
         bind_telemetry_call_id(litellm_call_id)
-        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_call_id(litellm_call_id)
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
-            requested_model=self.data.get("model"),
+            requested_model=aliased_model,
         )
 
         ### AUTO STREAM USAGE TRACKING ###

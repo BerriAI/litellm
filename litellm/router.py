@@ -344,6 +344,7 @@ from litellm.router_utils.request_priority import (
     InvalidPriority,
     parse_default_priority,
     priority_error,
+    priority_header_fields,
     request_drops_params,
     resolve_request_priority,
     unqueueable_priority_message,
@@ -5117,13 +5118,19 @@ class Router:
         request_priority: Final = resolve_request_priority(
             requested=kwargs.get("priority"),
             default_priority=self.default_priority,
-            drops_params=lambda: request_drops_params(
-                kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
-            ),
+            drops_params=lambda: self._drops_params(model=model, kwargs=kwargs),
         )
         if isinstance(request_priority, InvalidPriority):
             raise priority_error(model=model, message=request_priority.message)
         return request_priority, {key: value for key, value in kwargs.items() if key != "priority"}
+
+    def priority_header_update(self, model: str, kwargs: Mapping[str, object], header: str | None) -> Mapping[str, str]:
+        return priority_header_fields(header, drops_params=lambda: self._drops_params(model=model, kwargs=kwargs))
+
+    def _drops_params(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return request_drops_params(
+            kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
+        )
 
     async def _schedule_factory(
         self,

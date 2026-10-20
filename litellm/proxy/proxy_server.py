@@ -18271,8 +18271,11 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
-        header_priority: Final = request.headers.get(SCHEDULER_PRIORITY_HEADER)
-        data.update({} if header_priority is None else {"priority": header_priority})
+        data.update(
+            router.priority_header_update(
+                model=data["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+            )
+        )
         queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 

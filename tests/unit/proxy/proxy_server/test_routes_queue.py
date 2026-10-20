@@ -170,23 +170,29 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
 
 
 @pytest.mark.parametrize(
-    ("priority_fields", "expected_priority"),
-    [({"priority": 5}, 0), ({}, 0)],
-    ids=("header-beats-body", "header-only"),
+    ("default_priority", "priority_header", "priority_fields", "expected_priority"),
+    [
+        (5, "0", {"priority": 5}, 0),
+        (5, "0", {}, 0),
+        (None, "high", {"priority": 1, "drop_params": True}, 1),
+    ],
+    ids=("header-beats-body", "header-only", "drop-params-keeps-body"),
 )
 def test_queue_chat_completions_queues_at_the_priority_header(
     client,
     auth_as,
     monkeypatch: pytest.MonkeyPatch,
+    default_priority: int | None,
+    priority_header: str,
     priority_fields: dict[str, object],
     expected_priority: int,
 ) -> None:
-    router: Final = _queue_router(monkeypatch, default_priority=5)
+    router: Final = _queue_router(monkeypatch, default_priority=default_priority)
     payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
     with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
         with auth_as():
             response: Final = client.post(
-                "/queue/chat/completions", json=payload, headers={"x-litellm-priority": "0"}
+                "/queue/chat/completions", json=payload, headers={"x-litellm-priority": priority_header}
             )
     assert response.status_code == 200, response.text
     assert [call.kwargs["request"].priority for call in add_request.await_args_list] == [expected_priority]

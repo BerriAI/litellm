@@ -2366,7 +2366,6 @@ async def add_litellm_data_to_request(
     proxy_config: ProxyConfig,
     general_settings: dict[str, Any] | None = None,
     version: str | None = None,
-    router_schedules_request: bool = False,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -2500,10 +2499,6 @@ async def add_litellm_data_to_request(
             general_settings=general_settings,
         )
     )
-
-    header_priority: Final = _headers.get(SCHEDULER_PRIORITY_HEADER) if router_schedules_request else None
-    if header_priority is not None:
-        data["priority"] = header_priority  # rebind-ok: data is an out-param
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
