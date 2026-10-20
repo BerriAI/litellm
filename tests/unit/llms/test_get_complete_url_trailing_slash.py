@@ -151,6 +151,16 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+HOST_NAMED_LIKE_A_STRIPPED_SUFFIX_IS_NOT_KEPT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "deepinfra.rerank.transformation.DeepinfraRerankConfig": "removes-every-openai-substring-on-main-too",
+        "minimax.videos.transformation.MinimaxVideoConfig": "strips-surface-suffixes-to-the-scheme-on-main-too",
+        "volcengine.videos.transformation.VolcEngineVideoConfig": "strips-surface-suffixes-to-the-scheme-on-main-too",
+        "vertex_ai.audio_transcription.realtime_transformation.VertexChirpRealtimeConfig": "returns-a-grpc-host",
+    }
+)
+
+
 def _builder_id(cls: type) -> str:
     return f"{cls.__module__.removeprefix('litellm.llms.')}.{cls.__qualname__}"
 
@@ -238,3 +248,19 @@ def test_get_complete_url_sends_the_same_url_with_or_without_a_trailing_slash(bu
         assert _without_one_trailing_path_slash(with_slash) == _without_one_trailing_path_slash(without_slash)
     else:
         assert with_slash == without_slash
+
+
+
+def _host_preserving_builder_param(cls: type) -> ParameterSet:
+    reason: Final = HOST_NAMED_LIKE_A_STRIPPED_SUFFIX_IS_NOT_KEPT.get(_builder_id(cls))
+    if reason is None:
+        return _builder_param(cls)
+    return pytest.param(cls, id=f"{_builder_id(cls)}-skipped-{reason}", marks=pytest.mark.skip(reason=reason))
+
+
+@pytest.mark.parametrize("api_base", ["https://v1", "https://api/v1", "https://openai/v1/", "https://anthropic/v1"])
+@pytest.mark.parametrize("builder_class", [_host_preserving_builder_param(cls) for cls in _all_builders()])
+def test_get_complete_url_keeps_a_host_named_like_the_suffix_it_strips(builder_class: type, api_base: str) -> None:
+    url: Final = _built_url(builder_class, api_base)
+
+    assert urlsplit(url).netloc, url

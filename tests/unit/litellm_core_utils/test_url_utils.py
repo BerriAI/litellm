@@ -586,6 +586,8 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
         ("https://gw.test/p/v1/messages", "v1/messages", "https://gw.test/p/v1/messages/v1/messages"),
         ("https://api.test/v1/evals/cancel", "cancel", "https://api.test/v1/evals/cancel/cancel"),
         ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
+        ("http:/", "v1/files", "http://v1/files"),
+        ("https://", "v1/files", "https://v1/files"),
     ],
     ids=(
         "trailing-slash-base",
@@ -596,6 +598,8 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
         "base-already-ends-in-route",
         "id-equal-to-the-route",
         "host-named-like-the-route",
+        "host-stripped-as-a-suffix-leaves-only-the-scheme",
+        "bare-scheme-base",
     ),
 )
 def test_join_api_base_always_appends_the_route_after_exactly_one_slash(
@@ -615,6 +619,7 @@ def test_join_api_base_always_appends_the_route_after_exactly_one_slash(
         ("https://gw.test/research", "search", "https://gw.test/research/search"),
         ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
         ("http://embeddings:8080/", "embeddings", "http://embeddings:8080/embeddings"),
+        ("http:/", "anthropic/v1/messages", "http://anthropic/v1/messages"),
     ],
     ids=(
         "path-already-ends-in-route",
@@ -625,6 +630,7 @@ def test_join_api_base_always_appends_the_route_after_exactly_one_slash(
         "path-ends-in-lookalike-suffix",
         "host-named-like-the-route",
         "host-with-port-named-like-the-route",
+        "host-stripped-as-a-suffix-leaves-only-the-scheme",
     ),
 )
 def test_ensure_api_route_appends_the_route_only_when_the_url_path_lacks_it(

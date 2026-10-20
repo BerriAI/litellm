@@ -129,12 +129,20 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
     return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
 
 
+def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
+    stripped: Final = api_base.rstrip("/")
+    parts: Final = urlsplit(stripped)
+    if parts.scheme and not (parts.netloc or parts.path or parts.query or parts.fragment):
+        return f"{stripped}/"
+    return stripped
+
+
 def join_api_base(api_base: str, route: str) -> str:
-    return f"{api_base.rstrip('/')}/{route.lstrip('/')}"
+    return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
 
 
 def ensure_api_route(api_base: str, route: str) -> str:
-    base: Final = api_base.rstrip("/")
+    base: Final = _strip_trailing_slashes_keeping_the_scheme(api_base)
     if urlsplit(base).path.endswith(f"/{route.lstrip('/')}"):
         return base
     return join_api_base(base, route)
