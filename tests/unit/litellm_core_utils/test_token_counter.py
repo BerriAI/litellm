@@ -2226,7 +2226,8 @@ def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200
     assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == expected
 
 
-def test_token_counter_keeps_cl100k_for_models_that_are_not_openai():
-    assert litellm.token_counter(model="groq/qwen3-32b", text=_MULTILINGUAL_SAMPLE) == len(
+@pytest.mark.parametrize("model", ["groq/qwen3-32b", "text-embedding-ada-002-v2"])
+def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
         tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
     )

@@ -12,6 +12,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -744,15 +745,21 @@ def openai_tokenizer_encoding(model: str) -> "Encoding":
 def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding.
 
-    A listed OpenAI or Azure model that tiktoken does not know yet is a newer release than tiktoken's table, so it
-    gets o200k_base, the encoding every OpenAI model since gpt-4o uses."""
+    A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
+    know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
+    OpenAI model since gpt-4o uses."""
     model_to_use: Final = _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        return "o200k_base"
+        return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
+
+
+def _suffixed_variant_encoding_name(model: str) -> str | None:
+    known: Final = [name for name in MODEL_TO_ENCODING if model.startswith(f"{name}-")]
+    return MODEL_TO_ENCODING[max(known, key=len)] if known else None
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
