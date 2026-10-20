@@ -37,7 +37,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.tool_fields import first_validation_error
+from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -1605,7 +1605,7 @@ async def responses_input_tokens(
         )
 
     counted_fields: Final = {
-        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+        name: data[name] for name in ("model", "drop_params", "additional_drop_params", *TOOL_FIELDS) if name in data
     }
     token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
     if isinstance(token_fields, ProxyException):

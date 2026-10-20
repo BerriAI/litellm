@@ -4334,6 +4334,34 @@ class TestResponsesInputTokens:
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
         assert counter.await_args.kwargs["responses_request"]["tools"] == [{"type": "web_search"}]
 
+    @pytest.mark.parametrize(
+        ("tools", "expected"),
+        [
+            ([5], {}),
+            (
+                [5, {"type": "web_search"}],
+                {"tools": [{"type": "web_search"}], "tool_choice": "required", "parallel_tool_calls": False},
+            ),
+        ],
+    )
+    def test_tool_choice_leaves_the_count_with_the_tools_drop_params_drops(
+        self, tools: list[object], expected: dict[str, object]
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": "hi",
+                "tools": tools,
+                "tool_choice": "required",
+                "parallel_tool_calls": False,
+                "drop_params": True,
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        sent = counter.await_args.kwargs["responses_request"]
+        assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+
     def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
         from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
