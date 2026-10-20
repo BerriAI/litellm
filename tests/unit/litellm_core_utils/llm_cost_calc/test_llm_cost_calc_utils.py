@@ -99,6 +99,31 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
     assert completion_cost == pytest.approx(380 * 9.7e-7)
 
 
+@pytest.mark.parametrize(
+    ("model_info", "expected_prompt_cost"),
+    [
+        ({"input_cost_per_token": 1e-7, "input_cost_per_character": 2.5e-8, "output_cost_per_token": 0.0}, 35 * 2.5e-8),
+        ({"input_cost_per_token": 1.5e-7, "output_cost_per_token": 0.0}, 11 * 1.5e-7),
+    ],
+    ids=["character_priced_model_bills_characters_instead_of_tokens", "token_priced_model_ignores_the_character_count"],
+)
+def test_generic_cost_per_token_bills_a_character_counted_prompt_under_one_unit(
+    model_info: ModelInfo, expected_prompt_cost: float
+) -> None:
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=0,
+        total_tokens=11,
+        prompt_tokens_details=PromptTokensDetailsWrapper(character_count=35),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="embedding-fixture", usage=usage, custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    assert (prompt_cost, completion_cost) == (pytest.approx(expected_prompt_cost), 0.0)
+
+
 def test_apply_provider_cache_read_default_only_derives_a_rate_for_fireworks() -> None:
     openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
     fireworks_info: ModelInfo = {"input_cost_per_token": 2e-6}
