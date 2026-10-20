@@ -1332,6 +1332,18 @@ class ConsumedRequestTagsStamp:
     tags: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class BaggageMappedTagsStamp:
+    """Request tags added by baggage mappings, which classify spend and budgets but never select deployments.
+
+    The serving deployment's own tags are kept beside them, so a mapped tag that the deployment also carries
+    still picks that deployment's guardrail mode.
+    """
+
+    tags: tuple[str, ...]
+    serving_deployment_tags: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class PreRoutingStrategy(Protocol):
     """Structural interface shared by the auto / complexity / adaptive / quality routers."""
