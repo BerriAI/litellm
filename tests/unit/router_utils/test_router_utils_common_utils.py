@@ -1,3 +1,4 @@
+import contextlib
 import logging
 from itertools import chain
 from typing import Dict, Final, List, Optional, Union
@@ -17,13 +18,21 @@ from litellm.router_utils.common_utils import (
     filter_web_search_deployments,
     format_fallback_outcome_message,
     provider_for_generic_call,
+    refuse_litellm_model_spanning_model_groups,
     resolve_model_group_alias,
     resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
-from litellm.types.router import Deployment, FallbackSkipReason, LiteLLM_Params, ModelInfo, SkippedFallbackTarget
+from litellm.types.router import (
+    Deployment,
+    DeploymentTypedDict,
+    FallbackSkipReason,
+    LiteLLM_Params,
+    ModelInfo,
+    SkippedFallbackTarget,
+)
 from litellm.types.utils import ProviderSpecificModelInfo
 
 
@@ -957,3 +966,45 @@ def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_d
     assert len(capability_warnings) == 1, capability_warnings
     assert "db-model" in capability_warnings[0]
     assert "supports_max_reasoning_effort" not in router.get_model_list()[0]["litellm_params"]
+
+
+def _group_member(model_name: str, team: tuple[str, str] | None = None) -> DeploymentTypedDict:
+    model_info: Final[dict[str, str]] = {} if team is None else {"team_id": team[0], "team_public_model_name": team[1]}
+    return {"model_name": model_name, "litellm_params": {"model": "openai/shared-backend"}, "model_info": model_info}
+
+
+@pytest.mark.parametrize(
+    ("deployments", "refused"),
+    (
+        pytest.param((_group_member("chain-a"), _group_member("chain-b")), True, id="two-groups"),
+        pytest.param((_group_member("chain-a"), _group_member("chain-a")), False, id="one-group"),
+        pytest.param((_group_member("chain-a"),), False, id="one-deployment"),
+        pytest.param((), False, id="no-deployments"),
+        pytest.param(
+            (
+                _group_member("model_name_t1_a", ("t1", "gpt-team")),
+                _group_member("model_name_t1_b", ("t1", "gpt-team")),
+            ),
+            False,
+            id="one-team-model",
+        ),
+        pytest.param(
+            (
+                _group_member("model_name_t1_a", ("t1", "gpt-team")),
+                _group_member("model_name_t2_a", ("t2", "gpt-team")),
+            ),
+            True,
+            id="two-teams-same-public-name",
+        ),
+        pytest.param(
+            (_group_member("model_name_t1_a", ("t1", "gpt-team")), _group_member("gpt-team")),
+            True,
+            id="team-model-and-proxy-group",
+        ),
+    ),
+)
+def test_refuse_litellm_model_spanning_model_groups_decides_on_distinct_model_groups(
+    deployments: tuple[DeploymentTypedDict, ...], refused: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError) if refused else contextlib.nullcontext():
+        refuse_litellm_model_spanning_model_groups("openai/shared-backend", deployments)

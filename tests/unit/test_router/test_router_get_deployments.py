@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.types.router import RoutingStrategyName
 
 
 @pytest.mark.asyncio
@@ -425,3 +426,193 @@ def test_get_routable_deployments_returns_every_deployment_routing_can_pick(
     }
 
     assert routable_ids == expected_ids
+
+
+_SHARED_LITELLM_MODEL: Final = "openai/shared-backend"
+_COLLIDING_MODEL_LIST: Final = [
+    {
+        "model_name": "chain-a",
+        "litellm_params": {"model": _SHARED_LITELLM_MODEL, "api_key": "test-key"},
+        "model_info": {"id": "chain-a-1"},
+    },
+    {
+        "model_name": "chain-a",
+        "litellm_params": {"model": _SHARED_LITELLM_MODEL, "api_key": "test-key"},
+        "model_info": {"id": "chain-a-2"},
+    },
+    {
+        "model_name": "chain-b",
+        "litellm_params": {"model": _SHARED_LITELLM_MODEL, "api_key": "test-key"},
+        "model_info": {"id": "chain-b-1"},
+    },
+    {
+        "model_name": "solo",
+        "litellm_params": {"model": "openai/solo-backend", "api_key": "test-key"},
+        "model_info": {"id": "solo-1"},
+    },
+]
+
+
+def _pick_sync(router: Router, model: str, specific_deployment: bool) -> str:
+    return router.get_available_deployment(model=model, specific_deployment=specific_deployment)["model_info"]["id"]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the router returns an untyped deployment dict
+
+
+def _pick_async(router: Router, model: str, specific_deployment: bool) -> str:
+    async def pick() -> str:
+        deployment: Final = await router.async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the router returns an untyped deployment dict
+            model=model, request_kwargs={}, specific_deployment=specific_deployment
+        )
+        return deployment["model_info"]["id"]  # pyright: ignore[reportUnknownVariableType]  # the router returns an untyped deployment dict
+
+    return asyncio.run(pick())
+
+
+_PICKS: Final = (
+    pytest.param(_pick_sync, False, id="sync"),
+    pytest.param(_pick_sync, True, id="sync-specific-deployment"),
+    pytest.param(_pick_async, False, id="async"),
+    pytest.param(_pick_async, True, id="async-specific-deployment"),
+)
+
+
+@pytest.mark.parametrize(("pick", "specific_deployment"), _PICKS)
+def test_collision_check_refuses_a_litellm_model_shared_by_two_model_groups(
+    pick: Callable[[Router, str, bool], str], specific_deployment: bool
+) -> None:
+    router: Final = Router(model_list=_COLLIDING_MODEL_LIST, enable_cross_model_group_collision_check=True)
+
+    with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+        pick(router, _SHARED_LITELLM_MODEL, specific_deployment)
+
+
+@pytest.mark.parametrize(("pick", "specific_deployment"), _PICKS)
+def test_collision_check_off_keeps_pooling_a_shared_litellm_model_across_groups(
+    pick: Callable[[Router, str, bool], str], specific_deployment: bool
+) -> None:
+    router: Final = Router(model_list=_COLLIDING_MODEL_LIST)
+
+    picked: Final = {pick(router, _SHARED_LITELLM_MODEL, specific_deployment) for _ in range(60)}
+
+    assert picked == {"chain-a-1", "chain-a-2", "chain-b-1"}
+
+
+@pytest.mark.parametrize(("pick", "specific_deployment"), _PICKS)
+def test_collision_check_still_serves_a_litellm_model_used_by_a_single_group(
+    pick: Callable[[Router, str, bool], str], specific_deployment: bool
+) -> None:
+    router: Final = Router(model_list=_COLLIDING_MODEL_LIST, enable_cross_model_group_collision_check=True)
+
+    assert pick(router, "openai/solo-backend", specific_deployment) == "solo-1"
+
+
+def test_collision_check_leaves_model_group_names_routing_inside_their_group() -> None:
+    router: Final = Router(model_list=_COLLIDING_MODEL_LIST, enable_cross_model_group_collision_check=True)
+
+    picked: Final = {_pick_sync(router, "chain-a", False) for _ in range(40)}
+
+    assert picked == {"chain-a-1", "chain-a-2"}
+
+
+@pytest.mark.parametrize("enabled", (True, False))
+def test_collision_check_applies_to_an_alias_that_points_at_a_shared_litellm_model(enabled: bool) -> None:
+    router: Final = Router(
+        model_list=_COLLIDING_MODEL_LIST,
+        model_group_alias={"alias": _SHARED_LITELLM_MODEL},
+        enable_cross_model_group_collision_check=enabled,
+    )
+
+    if enabled:
+        with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+            _pick_sync(router, "alias", False)
+    else:
+        assert {_pick_sync(router, "alias", False) for _ in range(60)} == {"chain-a-1", "chain-a-2", "chain-b-1"}
+
+
+def _team_deployment(deployment_id: str, team_id: str) -> dict[str, object]:
+    return {
+        "model_name": f"model_name_{team_id}_{deployment_id}",
+        "litellm_params": {"model": _SHARED_LITELLM_MODEL, "api_key": "test-key"},
+        "model_info": {"id": deployment_id, "team_id": team_id, "team_public_model_name": "team-model"},
+    }
+
+
+@pytest.mark.parametrize("specific_deployment", (True, False))
+def test_collision_check_treats_the_deployments_of_one_team_model_as_one_model_group(
+    specific_deployment: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[_team_deployment("team-1-a", "team-1"), _team_deployment("team-1-b", "team-1")],
+        enable_cross_model_group_collision_check=True,
+    )
+
+    picked: Final = {_pick_sync(router, _SHARED_LITELLM_MODEL, specific_deployment) for _ in range(40)}
+
+    assert picked == {"team-1-a", "team-1-b"}
+
+
+def _pick_for_team(router: Router, team_id: str, specific_deployment: bool) -> str:
+    async def pick() -> str:
+        deployment: Final = await router.async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the router returns an untyped deployment dict
+            model=_SHARED_LITELLM_MODEL,
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+            specific_deployment=specific_deployment,
+        )
+        return deployment["model_info"]["id"]  # pyright: ignore[reportUnknownVariableType]  # the router returns an untyped deployment dict
+
+    return asyncio.run(pick())
+
+
+@pytest.mark.parametrize("specific_deployment", (True, False))
+def test_collision_check_serves_each_team_its_own_model_when_another_team_shares_the_litellm_model(
+    specific_deployment: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[_team_deployment("team-1-a", "team-1"), _team_deployment("team-2-a", "team-2")],
+        enable_cross_model_group_collision_check=True,
+    )
+
+    assert _pick_for_team(router, "team-1", specific_deployment) == "team-1-a"
+    assert _pick_for_team(router, "team-2", specific_deployment) == "team-2-a"
+
+
+@pytest.mark.parametrize("specific_deployment", (True, False))
+def test_collision_check_refuses_a_team_whose_model_shares_the_litellm_model_with_a_proxy_group(
+    specific_deployment: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[_team_deployment("team-1-a", "team-1"), _COLLIDING_MODEL_LIST[2]],
+        enable_cross_model_group_collision_check=True,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+        _pick_for_team(router, "team-1", specific_deployment)
+    assert _pick_for_team(router, "team-2", specific_deployment) == "chain-b-1"
+
+
+@pytest.mark.parametrize(
+    ("setting", "enabled"),
+    ((True, True), ("true", True), (False, False), ("false", False)),
+)
+def test_collision_check_can_be_toggled_through_update_settings(setting: bool | str, enabled: bool) -> None:
+    router: Final = Router(model_list=_COLLIDING_MODEL_LIST, enable_cross_model_group_collision_check=not enabled)
+
+    router.update_settings(enable_cross_model_group_collision_check=setting)  # pyright: ignore[reportUnknownMemberType]  # update_settings takes untyped **kwargs
+
+    assert len(router.get_routable_deployments(_SHARED_LITELLM_MODEL)) == (0 if enabled else 3)
+    assert router.get_settings()["enable_cross_model_group_collision_check"] is enabled
+
+
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ("simple-shuffle", "least-busy", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing"),
+)
+def test_collision_check_refuses_under_every_routing_strategy(routing_strategy: RoutingStrategyName) -> None:
+    router: Final = Router(
+        model_list=_COLLIDING_MODEL_LIST,
+        routing_strategy=routing_strategy,
+        enable_cross_model_group_collision_check=True,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+        _pick_async(router, _SHARED_LITELLM_MODEL, False)
+    assert _pick_async(router, "chain-a", False) in {"chain-a-1", "chain-a-2"}

@@ -330,6 +330,27 @@ def filter_team_based_models(
     ]
 
 
+def _model_group_of(deployment: Mapping[str, object]) -> tuple[object, object]:
+    """A team deployment's model group is its team and public name; any other deployment's is its `model_name`."""
+    model_info: Final = _OBJECT_MAPPING_ADAPTER.validate_python(deployment.get("model_info") or {})
+    public_name: Final = model_info.get("team_public_model_name")
+    if isinstance(public_name, str) and public_name:
+        return model_info.get("team_id"), public_name
+    return None, deployment["model_name"]
+
+
+def refuse_litellm_model_spanning_model_groups(model: str, deployments: Sequence[Mapping[str, object]]) -> None:
+    """Raise a 400 when the deployments matched by a raw `litellm_params.model` belong to more than one model group."""
+    if len(frozenset(_model_group_of(deployment) for deployment in deployments)) < 2:
+        return
+    raise BadRequestError(
+        message=f"LiteLLM Router: model={model} is the litellm_params.model of more than one model group. "
+        "Send one of the model group names instead",
+        model=model,
+        llm_provider="",
+    )
+
+
 def deployments_the_caller_may_use(
     deployments: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object] | None
 ) -> tuple[Mapping[str, object], ...]:

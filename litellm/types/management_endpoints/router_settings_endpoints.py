@@ -272,4 +272,13 @@ ROUTER_SETTINGS_FIELDS: Final[list[RouterSettingsField]] = [
         field_default=None,
         ui_field_name="Disable Cooldowns",
     ),
+    RouterSettingsField(
+        field_name="enable_cross_model_group_collision_check",
+        field_type="Boolean",
+        field_value=None,
+        field_description="Refuse a request for a litellm_params.model that deployments in more than one model "
+        "group share, instead of load balancing it across all of those groups",
+        field_default=False,
+        ui_field_name="Refuse Raw Models Shared Across Groups",
+    ),
 ]

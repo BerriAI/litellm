@@ -213,6 +213,7 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     is_proxy_admin_request,
     provider_for_generic_call,
+    refuse_litellm_model_spanning_model_groups,
     request_user_api_key_auth,
     resolve_model_group_alias,
     team_may_use_deployment,
@@ -1209,6 +1210,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         enable_mid_stream_fallback_continuation: bool = False,
+        enable_cross_model_group_collision_check: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
         fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
@@ -1251,6 +1253,7 @@ class Router:
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
+            enable_cross_model_group_collision_check (bool): When True, a request whose model matches no model group but is the `litellm_params.model` of deployments in more than one model group is refused with a 400 instead of being load balanced across all of those groups. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
             fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         Returns:
@@ -1459,6 +1462,7 @@ class Router:
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.enable_mid_stream_fallback_continuation = self._is_flag_enabled(enable_mid_stream_fallback_continuation)
+        self.enable_cross_model_group_collision_check = self._is_flag_enabled(enable_cross_model_group_collision_check)
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         self.background_health_check_model_groups: frozenset[str] | None = (
             frozenset(background_health_check_model_groups)
@@ -13655,6 +13659,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_mid_stream_fallback_continuation",
+            "enable_cross_model_group_collision_check",
             "enable_tag_filtering",
             "tag_routing_prefix",
             "fallback_on_unsupported_params",
@@ -13712,9 +13717,13 @@ class Router:
                 elif var == "optional_pre_call_checks":
                     self.set_optional_pre_call_checks(kwargs[var])
                 elif var == "enable_mid_stream_fallback_continuation":
-                    self._set_mid_stream_fallback_continuation(kwargs[var])
+                    self._set_mid_stream_fallback_continuation(cast(object, kwargs[var]))  # cast-ok: untyped **kwargs
+                elif var == "enable_cross_model_group_collision_check":
+                    self.enable_cross_model_group_collision_check = self._is_flag_enabled(
+                        cast(object, kwargs[var])  # cast-ok: untyped **kwargs
+                    )
                 elif var == "retry_policy":
-                    self._set_retry_policy(kwargs[var])
+                    self._set_retry_policy(cast(object, kwargs[var]))  # cast-ok: untyped **kwargs
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
@@ -14296,7 +14305,7 @@ class Router:
         request_team_id: Final = get_request_team_id(request_kwargs)
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
-            return model, self._drop_strategy_markers(
+            specific_deployments: Final = self._drop_strategy_markers(
                 model,
                 self._filter_reserved_deployments(
                     model=model,
@@ -14304,6 +14313,11 @@ class Router:
                     request_team_id=request_team_id,
                 ),
             )
+            if self.enable_cross_model_group_collision_check:
+                refuse_litellm_model_spanning_model_groups(
+                    model, deployments_the_caller_may_use(specific_deployments, request_kwargs)
+                )
+            return model, specific_deployments
         elif model not in self.model_names and self.has_model_id(model):
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
@@ -14396,6 +14410,10 @@ class Router:
                     ),
                     request_team_id=request_team_id,
                 )
+                if self.enable_cross_model_group_collision_check:
+                    refuse_litellm_model_spanning_model_groups(
+                        model, deployments_the_caller_may_use(healthy_deployments, request_kwargs)
+                    )
                 # If the litellm-model lookup produced candidates that access-group
                 # filtering then removed, treat this the same as the by-name path
                 # being emptied: prevent default-model fallback from bypassing the
