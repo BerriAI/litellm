@@ -76120,9 +76120,9 @@
         "source": "https://api.openinfer.ai/v1/models"
     },
     "superbot-gg/superbot": {
-        "max_tokens": 65536,
+        "max_tokens": 131072,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 5e-06,
         "cache_read_input_token_cost": 5e-08,
@@ -76134,9 +76134,9 @@
         "source": "https://superbot.gg/pricing"
     },
     "superbot-gg/superbot-fast": {
-        "max_tokens": 65536,
+        "max_tokens": 131072,
         "max_input_tokens": 500000,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 5e-06,
         "cache_read_input_token_cost": 5e-08,
