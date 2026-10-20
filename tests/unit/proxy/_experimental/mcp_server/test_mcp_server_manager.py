@@ -16575,6 +16575,7 @@ async def test_per_user_authorization_server_lists_without_static_credential() -
     (
         (MCPAuth.authorization, "Bearer", None),
         (MCPAuth.authorization, "Bearer", "X-Token"),
+        (MCPAuth.authorization, "   ", None),
         (MCPAuth.bearer_token, None, None),
     ),
 )
