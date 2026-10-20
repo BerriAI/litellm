@@ -11,7 +11,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import cast
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -211,14 +211,21 @@ _UNREACHABLE_IMAGE_INPUT: list[dict[str, object]] = [
 ]
 
 
+_TOOL_ARGUMENT_DELTAS = ('{"city": ', '"Lisbon", ', '"unit": "celsius"}')
+
+
 class _UpstreamThatTimesOutAfterThreeDeltas:
     headers: dict[str, str] = {}
 
+    def __init__(self, event_type: str = "response.output_text.delta", deltas: tuple[str, ...] = _SEA_DELTAS) -> None:
+        self.event_type = event_type
+        self.deltas = deltas
+
     async def aiter_bytes(self) -> AsyncIterator[bytes]:
-        for sequence_number, delta in enumerate(_SEA_DELTAS):
+        for sequence_number, delta in enumerate(self.deltas):
             event = {
-                "type": "response.output_text.delta",
-                "item_id": "msg_1",
+                "type": self.event_type,
+                "item_id": "item_1",
                 "output_index": 0,
                 "content_index": 0,
                 "delta": delta,
@@ -260,8 +267,11 @@ class _UpstreamThatFailsWithUsageAfterThreeDeltas:
 
 
 async def _failure_payload_after_mid_stream_timeout(
-    monkeypatch: pytest.MonkeyPatch, request_input: str | list[dict[str, object]]
+    monkeypatch: pytest.MonkeyPatch,
+    request_input: str | list[dict[str, object]],
+    upstream: _UpstreamThatTimesOutAfterThreeDeltas | None = None,
 ) -> tuple[FailureRecorder, StandardLoggingPayload]:
+    upstream_response: Final = upstream or _UpstreamThatTimesOutAfterThreeDeltas()
     recorder = FailureRecorder()
     monkeypatch.setattr(litellm, "failure_callback", [recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
@@ -274,7 +284,7 @@ async def _failure_payload_after_mid_stream_timeout(
         litellm_params={"custom_llm_provider": "openai", "aresponses": True},
     )
     iterator = ResponsesAPIStreamingIterator(
-        response=cast(httpx.Response, _UpstreamThatTimesOutAfterThreeDeltas()),
+        response=cast(httpx.Response, upstream_response),
         model="gpt-5.4-nano",
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
@@ -285,7 +295,7 @@ async def _failure_payload_after_mid_stream_timeout(
 
     with pytest.raises(litellm.Timeout, match="Timeout on reading data from socket"):
         await received.drain(iterator)
-    assert [getattr(chunk, "delta", None) for chunk in received.chunks] == list(_SEA_DELTAS)
+    assert [getattr(chunk, "delta", None) for chunk in received.chunks] == list(upstream_response.deltas)
 
     await iterator._await_pending_logging()
     (payload,) = recorder.failure_payloads
@@ -307,6 +317,22 @@ async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_su
     )
     assert payload["response_cost"] > 0
     assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_bills_the_tool_call_arguments_already_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatTimesOutAfterThreeDeltas(
+        event_type="response.function_call_arguments.delta", deltas=_TOOL_ARGUMENT_DELTAS
+    )
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, upstream)
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", text="".join(_TOOL_ARGUMENT_DELTAS), count_response_tokens=True
+    )
+    assert payload["response_cost"] > 0
 
 
 @pytest.mark.asyncio
