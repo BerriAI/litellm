@@ -387,6 +387,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations = None
+        self._retired = False
+        self._flush_after_retire = None
         self.deployment_budget_config = None
 
     @with_service_target("model_budgets")
