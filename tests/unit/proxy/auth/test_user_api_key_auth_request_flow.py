@@ -328,7 +328,8 @@ async def test_budget_reservation_runs_when_not_disabled():
     "general_settings,expected_flag",
     [
         ({"fail_closed_budget_enforcement": True}, True),
-        ({}, False),
+        ({}, True),
+        ({"fail_closed_rate_limit_enforcement": False}, False),
     ],
 )
 async def test_fail_closed_budget_enforcement_reaches_reservation(general_settings, expected_flag):

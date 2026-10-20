@@ -236,9 +236,27 @@ class ModelRateLimitingCheck(CustomLogger):
             if io_reservation_made:
                 self._refund_io_token_reservation_if_any()
             raise
+        except (ValueError, TypeError):
+            raise
         except Exception as e:
-            verbose_router_logger.debug("Error in ModelRateLimitingCheck.pre_call_check: %s", e)
-            # Don't fail the request if rate limit check fails
+            from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+                RateLimitUnverifiableError,
+                fail_closed_rate_limit_enforcement_from_general_settings,
+            )
+            from litellm.proxy.hooks.rate_limit_failure_metrics import (
+                increment_rate_limiter_failure_counter,
+            )
+
+            increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
+                verbose_router_logger.warning(
+                    "ModelRateLimitingCheck.pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
+                    e,
+                )
+                raise RateLimitUnverifiableError() from e
+            verbose_router_logger.debug(
+                "Error in ModelRateLimitingCheck.pre_call_check, fail-open — allowing request: %s", e
+            )
             return deployment
 
     @with_service_target(ROUTER_USAGE_TARGET)
@@ -324,9 +342,27 @@ class ModelRateLimitingCheck(CustomLogger):
             if io_reservation_made:
                 await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
             raise
+        except (ValueError, TypeError):
+            raise
         except Exception as e:
-            verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_pre_call_check: %s", e)
-            # Don't fail the request if rate limit check fails
+            from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+                RateLimitUnverifiableError,
+                fail_closed_rate_limit_enforcement_from_general_settings,
+            )
+            from litellm.proxy.hooks.rate_limit_failure_metrics import (
+                increment_rate_limiter_failure_counter,
+            )
+
+            increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
+                verbose_router_logger.warning(
+                    "ModelRateLimitingCheck.async_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
+                    e,
+                )
+                raise RateLimitUnverifiableError() from e
+            verbose_router_logger.debug(
+                "Error in ModelRateLimitingCheck.async_pre_call_check, fail-open — allowing request: %s", e
+            )
             return deployment
 
     @with_service_target(ROUTER_USAGE_TARGET)

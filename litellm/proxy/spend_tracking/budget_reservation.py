@@ -300,6 +300,11 @@ async def reserve_budget_for_request(
                 fail_closed_budget_enforcement=fail_closed_budget_enforcement,
             )
     except Exception:
+        from litellm.proxy.hooks.rate_limit_failure_metrics import (
+            increment_rate_limiter_failure_counter,
+        )
+
+        increment_rate_limiter_failure_counter(limiter_type="budget_reservation", error_type="reservation_failure")
         await _release_applied_entries_best_effort(
             entries=applied_entries,
             default_reserved_cost=reservation_cost,

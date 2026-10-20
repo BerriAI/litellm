@@ -10,7 +10,8 @@ import itertools
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -95,7 +96,6 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.types.agents import AgentResponse
-    from litellm.types.caching import RedisPipelineIncrementOperation
 
     Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
@@ -182,17 +182,17 @@ _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
 def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
     raw_value: Final = general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING)
     try:
-        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is True
+        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is not False
     except ValidationError:
         verbose_proxy_logger.warning(
-            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            "general_settings.%s=%r is not a boolean, treating it as fail-closed (default safety posture)",
             FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING,
             raw_value,
         )
-        return False
+        return True
 
 
-def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
+def fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return fail_closed_rate_limit_enforcement_enabled(general_settings)
@@ -846,7 +846,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
-        fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
+        fail_closed_resolver: Callable[[], bool] = fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
@@ -1551,6 +1551,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
 
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
+        from litellm.proxy.hooks.rate_limit_failure_metrics import (
+            increment_rate_limiter_failure_counter,
+        )
+
+        increment_rate_limiter_failure_counter(limiter_type="parallel_v3", error_type=type(error).__name__)
         if not self._fail_closed_resolver():
             return
         log_redis_failure(
@@ -4539,7 +4544,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         operation_keys: Final = [op["key"] for op in pipeline_operations]
         key_groups: Final = self._group_keys_by_hash_tag(operation_keys)
 
-        for _hash_tag, group_keys in key_groups.items():
+        for group_keys in key_groups.values():
             # Get operations for this hash tag group
             group_operations = [op for op in pipeline_operations if op["key"] in group_keys]
 
@@ -4951,14 +4956,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if otpm_reserved > 0
             else ()
         )
-        return tuple((*itpm_ops, *otpm_ops))
+        return (*itpm_ops, *otpm_ops)
 
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
         kwargs: object,
         model_group: str | None,
-        tpm_limited_tags: Set[str] = frozenset(),
+        tpm_limited_tags: AbstractSet[str] = frozenset(),
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -5020,7 +5025,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_reservation_aware_tpm_ops(
         self,
         targets: Sequence[tuple[str, str]],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
     ) -> list[RedisPipelineIncrementOperation]:
@@ -5056,7 +5061,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_project_reservation_op(
         self,
         scope: tuple[str, str],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
         reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
@@ -5093,7 +5098,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_project_reservation_ops(
         self,
         targets: Sequence[tuple[str, str]],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
         reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
@@ -5237,7 +5242,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         standard_logging_metadata: Mapping[str, object],
         usage_source: object,
         reconcile_model: RateLimitedModel | None,
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         reserved_ceiling: PTUTeamCeiling | None,
         reserved_tokens: int,
         reserved_windows: frozenset[ReservationWindowIdentity],
