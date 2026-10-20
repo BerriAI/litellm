@@ -15554,34 +15554,3 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=None),
     ]
 
-
-@pytest.mark.asyncio
-async def test_update_cache_adds_the_global_spend_scalar_in_redis_as_spend_counters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    monkeypatch.setattr(litellm, "max_budget", 100.0)
-    seen_target: Final = MagicMock()
-
-    async def _increment_if_present(key: str, value: float) -> float:
-        seen_target(key, value, current_service_target())
-        return 12.0
-
-    shared: Final = MagicMock(spec=RedisCache, async_increment_if_present=AsyncMock(side_effect=_increment_if_present))
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=shared)
-
-    await litellm.proxy.proxy_server.update_cache(
-        token=None,
-        user_id="u1",
-        end_user_id=None,
-        team_id=None,
-        response_cost=2.0,
-        parent_otel_span=None,
-        cache=cache,
-    )
-
-    assert seen_target.call_args_list == [call(GLOBAL_PROXY_SPEND_CACHE_KEY, 2.0, "spend_counters")]
-    assert current_service_target() is None

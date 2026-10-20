@@ -680,7 +680,7 @@ class RedisCache(BaseCache):
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
-        self.redis_batch_writing_buffer: list = []
+        self.redis_batch_writing_buffer: list[tuple[str, object]] = []
         if redis_flush_size is None:
             self.redis_flush_size: int = 100
         else:
@@ -1574,11 +1574,44 @@ class RedisCache(BaseCache):
         return _LUA_COUNT.validate_python(count)
 
     @_redis_circuit_breaker_guard
-    async def async_increment_if_present(self, key: str, value: float) -> float | None:
+    async def async_increment_if_present(
+        self, key: str, value: float, parent_otel_span: Span | None = None
+    ) -> float | None:
         _redis_client: Final = self._async_commands()
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        total: Final = await _redis_client.eval(_INCREMENT_IF_PRESENT_LUA, 1, namespaced_key, value)
-        return _LUA_OPTIONAL_TOTAL.validate_python(total)
+        start_time: Final = time.time()
+        try:
+            total: Final = _LUA_OPTIONAL_TOTAL.validate_python(
+                await _redis_client.eval(_INCREMENT_IF_PRESENT_LUA, 1, namespaced_key, value)
+            )
+        except Exception as e:
+            failed_at: Final = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=failed_at - start_time,
+                    error=e,
+                    call_type="async_increment_if_present",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=failed_at,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            raise
+        end_time: Final = time.time()
+        asyncio.create_task(
+            self.service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=end_time - start_time,
+                call_type="async_increment_if_present",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+        return total
 
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
