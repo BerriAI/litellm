@@ -1,5 +1,3 @@
-"""Validate the number of inputs in a single embeddings request."""
-
 import traceback
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -31,7 +29,6 @@ def _is_embedding_input(
 
 
 def count_embedding_inputs(input: str | Sequence[object]) -> int:
-    """Return the number of embeddings requested without tokenizing the input."""
     if isinstance(input, str):
         return 1
     if input and isinstance(input[0], int):
@@ -181,7 +178,6 @@ def embedding_batch_too_large_error(
     request_kwargs: object,
     model: str,
 ) -> litellm.BadRequestError | None:
-    """Return the 400 for an embeddings request that exceeds its deployment's input limit, else None."""
     if not _is_str_keyed_mapping(deployment):
         return None
     limit: Final = _embedding_batch_limit(deployment)
