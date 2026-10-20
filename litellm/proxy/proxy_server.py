@@ -202,7 +202,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -302,7 +302,11 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
@@ -397,6 +401,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
+    MAX_REQUEST_SIZE_MB_SETTING,
     check_response_size_is_safe,
     is_request_body_safe,
     log_model_access_denial,
@@ -836,6 +841,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -1350,6 +1356,7 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -1990,6 +1997,9 @@ vertex_live_passthrough_vertex_base: Final = VertexBase()
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 from fastapi.routing import APIWebSocketRoute
+from starlette.routing import BaseRoute
+
+from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
@@ -2036,10 +2046,19 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
     return openapi_schema
 
 
-def get_openapi_schema():
-    if app.openapi_schema:
-        return app.openapi_schema
+@dataclass(frozen=True, slots=True)
+class _OpenAPIInputs:
+    routes: tuple[BaseRoute, ...]
+    loaded_lazy_modules: frozenset[str]
 
+
+def _openapi_inputs() -> _OpenAPIInputs:
+    from litellm.proxy._lazy_features import loaded_lazy_modules
+
+    return _OpenAPIInputs(routes=tuple(app.routes), loaded_lazy_modules=loaded_lazy_modules(app))
+
+
+def _build_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
     # Use compatibility wrapper for FastAPI 0.120+ schema generation
     from litellm.proxy.common_utils.openapi_schema_compat import (
         get_openapi_schema_with_compat,
@@ -2050,11 +2069,11 @@ def get_openapi_schema():
         title=app.title,
         version=app.version,
         description=app.description,
-        routes=app.routes,
+        routes=list(inputs.routes),
     )
 
     # Find all WebSocket routes
-    websocket_routes: Final = [route for route in app.routes if isinstance(route, APIWebSocketRoute)]
+    websocket_routes: Final = [route for route in inputs.routes if isinstance(route, APIWebSocketRoute)]
 
     # Add a synthetic GET stub for each so they render in Swagger UI,
     # without clobbering existing HTTP operations on the same path.
@@ -2066,31 +2085,34 @@ def get_openapi_schema():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def get_openapi_schema():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi_schema()
+def _build_docs_filtered_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
+    openapi_schema = _build_openapi_schema(inputs)
 
-    # Filter routes to include only specific ones
-    openai_routes: Final = LiteLLMRoutes.openai_routes.value
-    paths_to_include: Final[dict] = {}
-    for route in openai_routes:
-        if route in openapi_schema["paths"]:
-            paths_to_include[route] = openapi_schema["paths"][route]
-    openapi_schema["paths"] = paths_to_include
+    all_paths: Final = openapi_schema.get("paths")
+    openapi_schema["paths"] = (
+        {route: all_paths[route] for route in LiteLLMRoutes.openai_routes.value if route in all_paths}
+        if isinstance(all_paths, dict)
+        else {}
+    )
 
     # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
@@ -2098,24 +2120,32 @@ def custom_openapi():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_docs_filtered_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_docs_filtered_openapi_schema)
 else:
     # For regular users, use get_openapi_schema to include LLM API schemas
     app.openapi = get_openapi_schema
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_openapi_schema)
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
@@ -2722,6 +2752,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+def configured_max_request_size_mb() -> int | float | None:
+    return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
+
+
+app.add_middleware(
+    RequestBodyDecompressionMiddleware,
+    get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -4194,7 +4232,6 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
 def update_cache_read_keys(
     user_id: str | None,
     end_user_id: str | None,
-    team_id: str | None,
     tags: Sequence[object] | None,
     response_cost: float | None,
 ) -> tuple[str, ...]:
@@ -4202,9 +4239,8 @@ def update_cache_read_keys(
         return ()
     user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
     end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
     tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + team_keys + tag_keys
+    return user_keys + end_user_keys + tag_keys
 
 
 _UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
@@ -4281,7 +4317,7 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         cached_values: Final = await _read_update_cache_values(
             keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
             ),
             parent_otel_span=parent_otel_span,
         )
@@ -4431,35 +4467,28 @@ async def update_cache(
             )
 
     ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
+    def _update_team_cache():
         if team_id is None or response_cost is None:
             return
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = cached_values.get(_id)
-            if cached_team is None:
-                # do nothing if team not in api key cache
-                return
-            existing_spend_obj: Final[LiteLLM_TeamTableCachedObj | None] = CacheCodec.deserialize(
-                cached_team, LiteLLM_TeamTableCachedObj
+            current_team: Final = CacheCodec.deserialize(
+                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
             )
-            if existing_spend_obj is None:
+            if current_team is None:
                 return
             verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
+                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
             )
-
-            existing_spend: Final[float] = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj),
-                )
+            user_api_key_cache.set_cache(
+                key=_id,
+                value=CacheCodec.serialize(
+                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
+                    model_type=LiteLLM_TeamTableCachedObj,
+                ),
+                local_only=True,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -4536,7 +4565,7 @@ async def update_cache(
             await _update_end_user_cache()
 
         if team_id is not None:
-            await _update_team_cache()
+            _update_team_cache()
 
         if tags is not None:
             await _update_tag_cache()
@@ -14721,6 +14750,20 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
+    call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
+    try:
+        load_credentials_from_list(call_params)
+    except litellm.AuthenticationError as e:
+        raise ProxyException(
+            message=e.message,
+            type="auth_error",
+            param="model",
+            code=401,
+        ) from e
+    return call_params
+
+
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -14780,7 +14823,12 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=deployment_in_region,
+            deployment=None
+            if deployment_in_region is None
+            else {
+                **deployment_in_region,
+                "litellm_params": _with_resolved_api_key(deployment_in_region.get("litellm_params", {})),
+            },
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14813,9 +14861,14 @@ async def _provider_token_count(
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
-    counted: Final = await (
-        count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
+    counting_model: Final = (
+        model_to_use
+        if count_model is None
+        else count_model.model
+        if count_model.litellm_provider is None
+        else f"{count_model.litellm_provider}/{count_model.model.removeprefix('bedrock/').removeprefix('bedrock_mantle/')}"
     )
+    counted: Final = await count_with(counting_model, None if count_model is None else count_model.region)
     if counted is None:
         return None
     if isinstance(counted, TokenCountResponse):
@@ -15216,7 +15269,12 @@ async def count_request_tokens(
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})
-        load_credentials_from_list(deployment.get("litellm_params", {}))
+        deployment = {  # rebind-ok: merge the named credential into a copy
+            **deployment,
+            "litellm_params": with_named_credential(
+                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            ),
+        }
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
@@ -17576,7 +17634,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models)
+    all_models = expand_wildcard_deployments_for_model_info(all_models, llm_router)
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -20032,9 +20090,9 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
     "personal_key_model_access_from_teams": {
         "type": "Boolean",
         "description": (
-            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
-            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
-            "can call any model one of those teams can call. Team keys are unaffected."
+            "Caps each personal key (a key with no team) to the models, MCP servers, MCP tools and agents its "
+            "owner's current teams can reach, re-evaluated on every request. A user in no team gets none of them. "
+            "A user in several teams gets the union of what those teams grant. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
@@ -21459,7 +21517,7 @@ attach_lazy_features(app)
 app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 app.add_middleware(

@@ -44,6 +44,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
 )
@@ -508,7 +509,7 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
         return None
 
 
-def _resolve_vertex_location_for_cost(
+def resolve_vertex_location_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
     optional_params: Mapping[str, object] | None,
@@ -1542,15 +1543,20 @@ class Logging(LiteLLMLoggingBaseClass):
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
 
-            self.model_call_details["api_call_start_time"] = datetime.datetime.now()
-            # Set-once first provider-handoff instant. api_call_start_time
-            # is overwritten on every retry, so it can't measure one-time
-            # preprocessing; pinning the first attempt excludes retry loops
-            # + backoff. Logging object only — must NOT go into
-            # litellm_params["metadata"] (caller request metadata, typed
-            # Dict[str, str], echoed downstream; a datetime breaks it).
-            if self.model_call_details.get("first_api_call_start_time") is None:
-                self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
+            # A proxy-gate failure (auth, rate limit, client disconnect) fires pre_call for its callbacks
+            # without any provider handoff, so it must not stamp the handoff instants.
+            if LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL not in self.model_call_details:
+                self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+                # Set-once first provider-handoff instant. api_call_start_time
+                # is overwritten on every retry, so it can't measure one-time
+                # preprocessing; pinning the first attempt excludes retry loops
+                # + backoff. Logging object only — must NOT go into
+                # litellm_params["metadata"] (caller request metadata, typed
+                # Dict[str, str], echoed downstream; a datetime breaks it).
+                if self.model_call_details.get("first_api_call_start_time") is None:
+                    self.model_call_details["first_api_call_start_time"] = self.model_call_details[
+                        "api_call_start_time"
+                    ]
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -2029,7 +2035,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
-                "vertex_location": _resolve_vertex_location_for_cost(
+                "vertex_location": resolve_vertex_location_for_cost(
                     custom_llm_provider=cost_custom_llm_provider,
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
                     optional_params=self.optional_params,
@@ -3637,6 +3643,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
                     model_info=self.get_router_deployment_model_info(),
+                    vertex_location=resolve_vertex_location_for_cost(
+                        custom_llm_provider=self.custom_llm_provider,
+                        litellm_params=_LITELLM_PARAMS.validate_python(
+                            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+                        ),
+                        optional_params=None,
+                        model=self.get_deployment_model_for_cost() or self.model,
+                    ),
                 )
 
                 set_hidden_param(result, "response_cost", batch_result.cost)
