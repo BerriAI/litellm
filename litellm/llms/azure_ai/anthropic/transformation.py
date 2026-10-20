@@ -39,6 +39,10 @@ class AzureAnthropicConfig(AnthropicConfig):
     def custom_llm_provider(self) -> str | None:
         return "azure_ai"
 
+    @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return type(self) is AzureAnthropicConfig
+
     def should_strip_billing_metadata(self) -> bool:
         return True
 

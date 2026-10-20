@@ -108,7 +108,6 @@ _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
-THINKING_BLOCK_BINDING_PROVIDERS: Final = frozenset({"anthropic", "azure_ai"})
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")

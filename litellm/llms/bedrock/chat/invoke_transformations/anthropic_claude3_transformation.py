@@ -69,7 +69,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return True
+        return type(self) is AmazonAnthropicClaudeConfig
 
     def should_strip_billing_metadata(self) -> bool:
         return True
@@ -131,7 +131,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and translated_thinking.get("type") == "adaptive"
         ):
             optional_params["thinking"] = {
-                **thinking_block_binding(translated_thinking),
+                **(thinking_block_binding(translated_thinking) if self._carries_thinking_block_binding else {}),
                 "type": "adaptive",
                 "display": "updates",
             }

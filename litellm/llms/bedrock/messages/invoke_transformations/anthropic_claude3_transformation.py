@@ -87,7 +87,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return True
+        return type(self) is AmazonAnthropicClaudeMessagesConfig
 
     @property
     def beta_headers_provider(self) -> str:
@@ -360,7 +360,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         display: Final = thinking.get("display") if thinking is not None else None
         anthropic_messages_request["output_config"] = output_config
         anthropic_messages_request["thinking"] = {
-            **thinking_block_binding(thinking),
+            **(thinking_block_binding(thinking) if self._carries_thinking_block_binding else {}),
             "type": "adaptive",
             **({} if display is None else {"display": display}),
         }
@@ -705,7 +705,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             and translated_thinking.get("type") == "adaptive"
         ):
             anthropic_messages_request["thinking"] = {
-                **thinking_block_binding(translated_thinking),
+                **(thinking_block_binding(translated_thinking) if self._carries_thinking_block_binding else {}),
                 "type": "adaptive",
                 "display": "updates",
             }

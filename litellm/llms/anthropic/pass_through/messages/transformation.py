@@ -23,7 +23,6 @@ from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
 from ...common_utils import (
-    THINKING_BLOCK_BINDING_PROVIDERS,
     AnthropicError,
     AnthropicModelInfo,
     merge_anthropic_beta_headers,
@@ -83,7 +82,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return self._resolved_provider in THINKING_BLOCK_BINDING_PROVIDERS
+        return type(self) is AnthropicMessagesConfig
 
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [

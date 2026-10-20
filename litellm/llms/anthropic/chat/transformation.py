@@ -97,7 +97,6 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
-    THINKING_BLOCK_BINDING_PROVIDERS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
@@ -332,7 +331,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @property
     def _carries_thinking_block_binding(self) -> bool:
-        return self._resolved_provider in THINKING_BLOCK_BINDING_PROVIDERS
+        return type(self) is AnthropicConfig
 
     @classmethod
     def get_config(cls, *, model: str | None = None):

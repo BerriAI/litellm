@@ -25,6 +25,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+from litellm.llms.base_llm.anthropic_messages.transformation import (  # noqa: E402  # sys.path must be patched before importing litellm
+    BaseAnthropicMessagesConfig,
+)
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
@@ -4193,10 +4196,21 @@ ADAPTIVE_THINKING_WITH_BLOCK_BINDING: Final = MappingProxyType(
         ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
         ("invoke/us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
         ("converse/us.anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("mantle/anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("claude_platform/claude-opus-4-8", "bedrock", {"type": "adaptive"}),
         ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
         ("databricks-claude-opus-4-8", "databricks", {"type": "adaptive"}),
     ),
-    ids=("anthropic", "azure_ai", "bedrock_invoke", "bedrock_converse", "vertex_ai", "databricks"),
+    ids=(
+        "anthropic",
+        "azure_ai",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "bedrock_mantle",
+        "bedrock_claude_platform",
+        "vertex_ai",
+        "databricks",
+    ),
 )
 def test_chat_legacy_thinking_translation_carries_only_block_binding_where_supported(
     model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
@@ -4219,14 +4233,24 @@ def test_chat_legacy_thinking_translation_carries_only_block_binding_where_suppo
         ("claude-opus-4-8", "anthropic", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
         ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
         ("us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("mantle/anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("anthropic.claude-opus-4-8", "bedrock_mantle", {"type": "adaptive"}),
+        ("claude_platform/claude-opus-4-8", "bedrock", {"type": "adaptive"}),
         ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
     ),
-    ids=("anthropic", "azure_ai", "bedrock_invoke", "vertex_ai"),
+    ids=(
+        "anthropic",
+        "azure_ai",
+        "bedrock_invoke",
+        "bedrock_mantle",
+        "bedrock_mantle_provider",
+        "bedrock_claude_platform",
+        "vertex_ai",
+    ),
 )
 def test_messages_legacy_thinking_translation_carries_only_block_binding_where_supported(
     model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
 ) -> None:
-    from litellm.types.router import GenericLiteLLMParams
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
@@ -4235,7 +4259,22 @@ def test_messages_legacy_thinking_translation_carries_only_block_binding_where_s
     )
     assert config is not None
 
-    result: Final = config.transform_anthropic_messages_request(
+    assert _thinking_sent_for_legacy_messages_request(config, model) == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+def test_openai_compatible_messages_passthrough_keeps_legacy_thinking_without_block_binding() -> None:
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+
+    assert _thinking_sent_for_legacy_messages_request(OpenAILikeAnthropicMessagesConfig(), "claude-opus-4-8") == {
+        "type": "adaptive"
+    }
+
+
+def _thinking_sent_for_legacy_messages_request(config: BaseAnthropicMessagesConfig, model: str) -> object:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return config.transform_anthropic_messages_request(
         model=model,
         messages=[{"role": "user", "content": "Reply with OK"}],
         anthropic_messages_optional_request_params={
@@ -4244,9 +4283,7 @@ def test_messages_legacy_thinking_translation_carries_only_block_binding_where_s
         },
         litellm_params=GenericLiteLLMParams(),
         headers={},
-    )
-
-    assert result.get("thinking") == expected_thinking
+    ).get("thinking")
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
