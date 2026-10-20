@@ -8,9 +8,11 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from typing import Optional, TypedDict, Union
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -19,6 +21,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _FastCRWSearchRequestRequired(TypedDict):
@@ -48,8 +53,8 @@ class FastCRWSearchConfig(BaseSearchConfig):
     def validate_environment(
         self,
         headers: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
     ) -> dict:
         """
@@ -70,25 +75,23 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[dict, list[dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("CRW_API_BASE") or self.FASTCRW_API_BASE
-
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        resolved_api_base: Final = api_base or get_secret_str("CRW_API_BASE") or self.FASTCRW_API_BASE
+        clean_api_base: Final = resolved_api_base.rstrip("/")
+        if clean_api_base.endswith("/search"):
+            return clean_api_base
+        return f"{clean_api_base}/search"
 
     def transform_search_request(
         self,
-        query: Union[str, list[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
     ) -> dict:
@@ -112,7 +115,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             # fastCRW only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: FastCRWSearchRequest = {
+        request_data: Final[FastCRWSearchRequest] = {
             "query": query,
         }
 
@@ -121,7 +124,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             request_data["limit"] = optional_params["max_results"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -157,21 +160,24 @@ class FastCRWSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        results = []
+        results: Final = []
 
-        data = response_json.get("data", [])
+        data: Final = response_json.get("data", [])
 
         if isinstance(data, list):
-            for result in data:
+            for raw_result in _JSON_VALUES.validate_python(data):
+                result = _JSON_OBJECT.validate_python(raw_result)
                 snippet = result.get("markdown") or result.get("description", "")
-                search_result = SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=snippet,
-                    date=None,
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": snippet,
+                        "date": None,
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
 

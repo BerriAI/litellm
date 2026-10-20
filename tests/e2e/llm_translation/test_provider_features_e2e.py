@@ -1,94 +1,78 @@
-"""Live e2e for model-specific request features: service_tier and prompt caching.
+"""Live e2e for model-specific request features: service_tier and prompt_cache_retention.
 
 Each case asserts the feature took effect, not just a 200.
 
 service_tier is an OpenAI concept. The proxy forwards it and the provider echoes
-the tier back on the response, so sending a non-default tier ("flex") and reading
-it back off ``service_tier`` proves the param was honored end to end; litellm's own
-default injection would report "default", so a "flex" echo can only come from the
-request being forwarded. Bedrock and Vertex do not accept service_tier, so that
-cell is OpenAI-only by design.
+the tier back on the response, so sending a non-default tier ("priority") and
+reading it back off ``service_tier`` proves the param was honored end to end;
+litellm's own default injection (and service_tier="auto") both report "default",
+so a "priority" echo can only come from the request being forwarded. "flex" is
+avoided here because it is capacity-constrained and returns a transient 429 when
+flex resources are unavailable. Bedrock and Vertex do not accept service_tier, so
+that cell is OpenAI-only by design.
 
-Prompt caching is asserted through provider prompt-cache usage tokens. The
-deterministic path is explicit ``cache_control`` on an Anthropic-family model
-(here Bedrock's Claude): a large cacheable prefix is sent twice and the second
-call must report ``cache_read_input_tokens > 0``. OpenAI and Gemini only offer
-implicit automatic caching, which does not deterministically produce a cache read
-within a test window (verified: repeated >3k-token prompts kept
-``prompt_tokens_details.cached_tokens`` at 0), so those caching cells are out of
-scope here and covered only by the explicit-cache-control Bedrock case.
+prompt_cache_retention is judged on the body OpenAI receives, captured by a live
+provider edge, not on the reply: OpenAI echoes "24h" on gpt-5.5 even when the
+request never carried the param, so an echo would pass with the param dropped.
+
+Prompt caching hits and misses live in test_cache_control.py.
 """
 
 from __future__ import annotations
 
+import queue
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Final
+
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import unique_marker
+from e2e_config import PROVIDER_EDGE_ADVERTISE_HOST, PROVIDER_EDGE_BIND_HOST, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
+from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
+from provider_edge import LiveEdge, start_provider_edge
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
-SERVICE_TIER = "flex"
-CACHE_MIN_READ_TOKENS = 1
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class CacheTextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[CacheTextBlock]
-
-
-class CacheChatBody(BaseModel):
-    model: str
-    messages: list[RichMessage]
-    max_tokens: int
-
-
-def cacheable_prefix() -> str:
-    return (
-        "You are a policy compliance auditor. The following corpus is the immutable "
-        "reference the assistant must consult on every turn. "
-    ) + ("Clause: obey all safety, formatting, and citation rules exactly. " * 400)
-
-
-def post_chat(client: PassthroughClient, key: str, body: BaseModel) -> ChatResponse:
-    return unwrap(
-        client.gateway.transport.post(
-            "/chat/completions",
-            headers=client.gateway.transport.bearer(key),
-            json=body,
-            response_type=ChatResponse,
-        )
-    )
+SERVICE_TIER = "priority"
+OPENAI_BACKEND: Final = "openai/gpt-5.5"
+OPENAI_RESPONSES_BRIDGE_BACKEND: Final = "openai/responses/gpt-5.5"
+PROMPT_CACHE_RETENTION: Final = "24h"
 
 
 class TestServiceTier:
-    @pytest.mark.covers("llm.chat_completions.openai.service_tier.works", exercised_on=[])
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_service_tier_is_echoed(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-service-tier-{unique_marker()}"
-        model_id = client.gateway.create_model(
-            model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"
+            ),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -104,45 +88,151 @@ class TestServiceTier:
         )
 
 
-class TestPromptCaching:
-    @pytest.mark.covers(
-        "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.cache_hit", exercised_on=[]
+class _OutboundRetention(BaseModel, frozen=True):
+    prompt_cache_retention: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenAIBodyCapture:
+    """The raw bodies sent to one OpenAI path, seen by a live edge in front of
+    api.openai.com. Pass ``observe`` as the edge's ``observe_request``."""
+
+    path: str
+    _bodies: queue.SimpleQueue[bytes] = field(default_factory=queue.SimpleQueue)
+
+    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
+        if body is not None and url.split("?")[0].endswith(self.path):
+            self._bodies.put(body)
+
+    def retentions(self) -> tuple[str | None, ...]:
+        bodies: Final = tuple(self._bodies.get_nowait() for _ in range(self._bodies.qsize()))
+        return tuple(_OutboundRetention.model_validate_json(body).prompt_cache_retention for body in bodies)
+
+
+def _openai_edge_api_base(resources: ResourceManager, capture: _OpenAIBodyCapture, *, reachable_from_proxy: bool) -> str:
+    """The proxy may run in a container, so its edge binds where the proxy can
+    reach it; an in-process SDK call reaches the edge on loopback."""
+    edge: Final = (
+        start_provider_edge(
+            LiveEdge(observe_request=capture.observe),
+            bind_host=PROVIDER_EDGE_BIND_HOST,
+            advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        )
+        if reachable_from_proxy
+        else start_provider_edge(LiveEdge(observe_request=capture.observe))
     )
-    def test_bedrock_cache_control_produces_cache_read(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
-        model = f"e2e-bedrock-cache-{unique_marker()}"
-        model_id = client.gateway.create_model(
-            model,
-            LiteLLMParamsBody(
-                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                aws_region_name="us-east-1",
+    resources.defer(edge.shutdown)
+    return f"{edge.edge.api_base('openai')}/v1"
+
+
+def _retention_backends() -> tuple[object, ...]:
+    """gpt-5.5 straight to /v1/chat/completions, and the openai/responses/ bridge
+    (chat completions in, Responses out) to /v1/responses."""
+    return (
+        pytest.param(
+            OPENAI_BACKEND,
+            "/chat/completions",
+            marks=(
+                pytest.mark.covers("llm.chat_completions.openai.prompt_cache_24h.nonstream.forwards_retention"),
+                meta(
+                    Subject(
+                        domain=Domain.LLM_TRANSLATION,
+                        route=Route.CHAT_COMPLETIONS,
+                        providers=(Provider.OPENAI,),
+                        models=(OPENAI_BACKEND,),
+                        mode=Mode.NONSTREAM,
+                    )
+                ),
             ),
+            id="chat_completions",
+        ),
+        pytest.param(
+            OPENAI_RESPONSES_BRIDGE_BACKEND,
+            "/responses",
+            marks=(
+                pytest.mark.covers("llm.chat_completions.openai.prompt_cache_24h.nonstream.bridge_forwards_retention"),
+                meta(
+                    Subject(
+                        domain=Domain.LLM_TRANSLATION,
+                        route=Route.CHAT_COMPLETIONS,
+                        providers=(Provider.OPENAI,),
+                        models=(OPENAI_RESPONSES_BRIDGE_BACKEND,),
+                        mode=Mode.NONSTREAM,
+                    )
+                ),
+            ),
+            id="responses_bridge",
+        ),
+    )
+
+
+class TestPromptCacheRetention:
+    @pytest.mark.provider_edge_host
+    @pytest.mark.parametrize(("backend", "openai_path"), _retention_backends())
+    def test_proxy_chat_completions_forwards_prompt_cache_retention_to_openai(
+        self, proxy: ProxyClient, resources: ResourceManager, backend: str, openai_path: str
+    ) -> None:
+        capture: Final = _OpenAIBodyCapture(openai_path)
+        api_base: Final = _openai_edge_api_base(resources, capture, reachable_from_proxy=True)
+        model: Final = f"e2e-cache-retention-{unique_marker()}"
+        model_id: Final = proxy.create_model(
+            model, LiteLLMParamsBody(model=backend, api_key="os.environ/OPENAI_API_KEY", api_base=api_base)
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
-        key = resources.key()
+        resources.defer(lambda: proxy.delete_model(model_id))
 
-        body = CacheChatBody(
-            model=model,
-            max_tokens=32,
-            messages=[
-                RichMessage(
-                    role="user",
-                    content=[
-                        CacheTextBlock(text=cacheable_prefix(), cache_control=CacheControl()),
-                        CacheTextBlock(text="Answer in one word: acknowledged?"),
-                    ],
-                )
-            ],
+        unwrap(
+            proxy.chat(
+                resources.key(),
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content="reply with one word")],
+                    prompt_cache_retention=PROMPT_CACHE_RETENTION,
+                ),
+            )
         )
 
-        first = post_chat(client, key, body)
-        assert first.usage is not None, f"first call reported no usage: {first}"
+        assert capture.retentions() == (PROMPT_CACHE_RETENTION,), (
+            f"one {openai_path} call to OpenAI must carry prompt_cache_retention={PROMPT_CACHE_RETENTION!r}"
+        )
 
-        second = post_chat(client, key, body)
-        assert second.usage is not None, f"second call reported no usage: {second}"
-        cache_read = second.usage.cache_read_input_tokens
-        assert cache_read is not None and cache_read >= CACHE_MIN_READ_TOKENS, (
-            "second identical request did not read the prompt cache: "
-            f"cache_read_input_tokens={cache_read!r} (usage={second.usage})"
+    @pytest.mark.parametrize(("backend", "openai_path"), _retention_backends())
+    def test_sdk_completion_forwards_prompt_cache_retention_to_openai(
+        self, resources: ResourceManager, backend: str, openai_path: str
+    ) -> None:
+        import litellm
+
+        capture: Final = _OpenAIBodyCapture(openai_path)
+        api_base: Final = _openai_edge_api_base(resources, capture, reachable_from_proxy=False)
+
+        litellm.completion(
+            model=backend,
+            messages=[{"role": "user", "content": "reply with one word"}],
+            api_base=api_base,
+            prompt_cache_retention=PROMPT_CACHE_RETENTION,
+        )
+
+        assert capture.retentions() == (PROMPT_CACHE_RETENTION,), (
+            f"one {openai_path} call to OpenAI must carry prompt_cache_retention={PROMPT_CACHE_RETENTION!r}"
+        )
+
+    @pytest.mark.parametrize(("backend", "openai_path"), _retention_backends())
+    def test_router_completion_forwards_prompt_cache_retention_to_openai(
+        self, resources: ResourceManager, backend: str, openai_path: str
+    ) -> None:
+        import litellm
+
+        capture: Final = _OpenAIBodyCapture(openai_path)
+        api_base: Final = _openai_edge_api_base(resources, capture, reachable_from_proxy=False)
+        router: Final = litellm.Router(
+            model_list=[{"model_name": "cache-retention", "litellm_params": {"model": backend, "api_base": api_base}}]
+        )
+
+        router.completion(  # pyright: ignore[reportUnknownMemberType]  # Router.completion forwards an untyped **kwargs to litellm.completion
+            model="cache-retention",
+            messages=[{"role": "user", "content": "reply with one word"}],
+            prompt_cache_retention=PROMPT_CACHE_RETENTION,
+        )
+
+        assert capture.retentions() == (PROMPT_CACHE_RETENTION,), (
+            f"one {openai_path} call to OpenAI must carry prompt_cache_retention={PROMPT_CACHE_RETENTION!r}"
         )

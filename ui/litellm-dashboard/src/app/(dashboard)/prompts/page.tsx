@@ -1,15 +1,9 @@
 "use client";
 
-import PromptsPanel from "./components";
-import { DeprecationBanner } from "@/components/DeprecationBanner";
+import PromptsPanel from "./_components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Prompts() {
   const { accessToken, userRole } = useAuthorized();
-  return (
-    <>
-      <DeprecationBanner featureName="Prompt Management" />
-      <PromptsPanel accessToken={accessToken} userRole={userRole} />
-    </>
-  );
+  return <PromptsPanel accessToken={accessToken} userRole={userRole} />;
 }

@@ -2,12 +2,12 @@
 
 import os
 import subprocess
-from typing import List, Optional, Tuple
+from typing import Final
 
 from litellm._logging import verbose_logger
 
 
-def extract_sql_commands(diff_output: str) -> List[str]:
+def extract_sql_commands(diff_output: str) -> list[str]:
     """
     Extract SQL commands from the Prisma migrate diff output.
     Args:
@@ -16,9 +16,9 @@ def extract_sql_commands(diff_output: str) -> List[str]:
         List[str]: A list of SQL commands extracted from the diff output.
     """
     # Split the output into lines and remove empty lines
-    lines = [line.strip() for line in diff_output.split("\n") if line.strip()]
+    lines: Final = [line.strip() for line in diff_output.split("\n") if line.strip()]
 
-    sql_commands = []
+    sql_commands: Final = []
     current_command = ""
     in_sql_block = False
 
@@ -44,19 +44,34 @@ def extract_sql_commands(diff_output: str) -> List[str]:
     return sql_commands
 
 
-def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
+def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
+
+    Never raises: a diff that cannot be produced, because the runner is missing,
+    because the command failed, or because it outlived its budget, is reported as
+    "no diff" so boot continues.
+
     Returns:
         A tuple containing:
         - A boolean indicating if differences were found (True) or not (False).
-        - A string with the diff output or error message.
-    Raises:
-        subprocess.CalledProcessError: If the Prisma command fails.
-        Exception: For any other errors during execution.
+        - The SQL commands that would close the diff, empty when there is none.
     """
-    verbose_logger.debug("Checking for Prisma schema diff...")
     try:
-        result = subprocess.run(
+        from litellm_proxy_extras.prisma_toolchain import (
+            PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+            prisma_command_timeout,
+            run_prisma,
+        )
+    except ImportError as e:
+        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
+            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}"
+        )
+        return False, []
+
+    verbose_logger.debug("Checking for Prisma schema diff...")
+    timeout: Final = prisma_command_timeout()
+    try:
+        result: Final = run_prisma(
             [
                 "prisma",
                 "migrate",
@@ -67,13 +82,11 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
                 "./schema.prisma",
                 "--script",
             ],
-            capture_output=True,
-            text=True,
-            check=True,
+            timeout=timeout,
+            env=os.environ.copy(),
         )
 
-        # return True, "Migration diff generated successfully."
-        sql_commands = extract_sql_commands(result.stdout)
+        sql_commands: Final = extract_sql_commands(result.stdout)
 
         if sql_commands:
             print("Changes to DB Schema detected")  # noqa: T201
@@ -83,13 +96,19 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
             return True, sql_commands
         else:
             return False, []
+    except subprocess.TimeoutExpired:
+        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
+            f"Timed out after {timeout}s generating the migration diff. "
+            f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer."
+        )
+        return False, []
     except subprocess.CalledProcessError as e:
-        error_message = f"Failed to generate migration diff. Error: {e.stderr}"
+        error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
         print(error_message)  # noqa: T201
         return False, []
 
 
-def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
+def check_prisma_schema_diff(db_url: str | None = None) -> None:
     """Main function to run the Prisma schema diff check."""
     if db_url is None:
         db_url = os.getenv("DATABASE_URL")
@@ -98,7 +117,6 @@ def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
     has_diff, message = check_prisma_schema_diff_helper(db_url)
     if has_diff:
         verbose_logger.exception(
-            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {}".format(
-                message
-            )
+            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - %s",
+            message,
         )

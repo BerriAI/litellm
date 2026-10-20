@@ -9,9 +9,13 @@ Run with:
     uvicorn gateway.main:app --host 0.0.0.0 --port 4000
 """
 
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from typing import Final
 
-from fastapi.routing import Mount
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.types import Lifespan
 
 # Assemble DATABASE_URL (+ DATABASE_URL_READ_REPLICA) from the discrete
 # DATABASE_* env vars before proxy_server imports spin up Prisma. Handles
@@ -25,17 +29,25 @@ DatabaseURLSettings.from_env().apply_to_env()
 
 from litellm.proxy.proxy_server import app
 
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from gateway.routes.allowlist import (
+    GATEWAY_EXACT_PATHS,
+    GATEWAY_MOUNT_PATHS,
+    GATEWAY_PATH_PREFIXES,
+)
 
 
 def _is_gateway_route(route) -> bool:
-    """Keep the route on the gateway if its path is in the LLM data-plane surface."""
+    """Keep the route on the gateway if its path is in the LLM data-plane surface.
+
+    Prometheus registers /metrics as a Mount (``app.mount("/metrics", make_asgi_app())``),
+    so Mounts are matched against GATEWAY_MOUNT_PATHS instead of being dropped with
+    the UI static mounts.
+    """
     path = getattr(route, "path", None)
     if path is None:
         return False
     if isinstance(route, Mount):
-        # Gateway never serves the static UI or its asset bundles.
-        return False
+        return path in GATEWAY_MOUNT_PATHS
     if path in GATEWAY_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)
@@ -46,14 +58,16 @@ def _is_gateway_route(route) -> bool:
 # register routes. A module-load filter would miss routes added during
 # startup; running inside the lifespan, after the inner __aenter__, catches
 # them while still completing before uvicorn opens the listener.
-_proxy_lifespan = app.router.lifespan_context
+_proxy_lifespan: Final = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def _gateway_lifespan(app_):
-    async with _proxy_lifespan(app_):
+async def _gateway_lifespan(
+    app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
+) -> AsyncGenerator[Mapping[str, object], None]:
+    async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
-        yield
+        yield state if state is not None else {}
 
 
 app.router.lifespan_context = _gateway_lifespan

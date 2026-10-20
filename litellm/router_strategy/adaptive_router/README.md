@@ -56,11 +56,10 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
 - **Per-request decision.** Sample once per eligible model, score with
   `quality_weight·sample + cost_weight·normalized_cost`, pick the argmax.
   Routing is stateless per-turn — no sticky lookup. Each call resamples.
-- **Owner-cache attribution.** Post-call, the conversation's first picked
-  model claims an "owner slot" for `OWNER_CACHE_TTL_SECONDS` (24h). Later
-  turns of the same conversation only fire bandit/state updates if the
-  same model handled them — mismatches are dropped (no attribution) and
-  counted in `skipped_updates_total`. Conversation identity is the
+- **Previous-response attribution.** Post-call, feedback from the current user
+  message is attributed to the model that produced the previous response, while
+  response signals are attributed to the current model. Contexts expire after
+  24 hours and the in-memory cache is capped at 1,024 sessions. Conversation identity is the
   client-supplied `litellm_session_id` if present, otherwise a sha256 over
   caller identity (api key hash, team, user, end-user) + the first message.
 - **Per-turn updates.** `satisfaction → +α`. `misalignment, stagnation,
@@ -76,12 +75,6 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
   model can still be picked.
 - **Hard sample cap at 200.** Once `α + β > 200`, deltas are silently dropped.
   No rescaling — drift is a v1 concern.
-- **24h owner-cache TTL.** No explicit eviction below TTL. The in-memory map
-  can grow if traffic patterns produce many one-shot sessions.
-- **Owner-recovery skew.** If model A "owns" a conversation but is then
-  dethroned in the bandit, later turns served by model B are dropped — so
-  bandit updates for that conversation flatline until A's TTL expires.
-  Tracked via `skipped_updates_total`.
 - **Signals are regex + tool-call only.** No LLM-judge, no embedding similarity,
   no exemplar storage. Signals are best-effort and biased toward English.
 - **One AdaptiveRouter per `Router`.** Multiple `adaptive_router/*` deployments

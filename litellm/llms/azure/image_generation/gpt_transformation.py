@@ -5,5 +5,3 @@ class AzureGPTImageGenerationConfig(GPTImageGenerationConfig):
     """
     Azure gpt-image image generation config
     """
-
-    pass

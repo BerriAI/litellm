@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChatMessage, Conversation } from "./types";
+import { AssistantMessageUpdate, ChatMessage, Conversation } from "./types";
 
 const STORAGE_KEY_PREFIX = "litellm_chat_history_v1";
 const MAX_CONVERSATIONS = 100;
@@ -52,14 +52,12 @@ export function useChatHistory(
 ): {
   conversations: Conversation[];
   activeConversation: Conversation | null;
+  currentActiveId: string | null;
   storageUnavailable: boolean;
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (
-    conversationId: string,
-    updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
-  ) => void;
+  updateLastAssistantMessage: (conversationId: string, updates: AssistantMessageUpdate) => void;
   /** Remove the message with `messageId` and all subsequent messages from the conversation. */
   truncateFromMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
@@ -149,25 +147,22 @@ export function useChatHistory(
     });
   }, []);
 
-  const updateLastAssistantMessage = useCallback(
-    (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>) => {
-      setConversations((prev) => {
-        const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) return conv;
-          const messages = [...conv.messages];
-          const lastAssistantIndex = messages.reduceRight((found, msg, idx) => {
-            if (found !== -1) return found;
-            return msg.role === "assistant" ? idx : -1;
-          }, -1);
-          if (lastAssistantIndex === -1) return conv;
-          messages[lastAssistantIndex] = { ...messages[lastAssistantIndex], ...updates };
-          return { ...conv, messages, updatedAt: Date.now() };
-        });
-        return trimConversations(updated);
+  const updateLastAssistantMessage = useCallback((conversationId: string, updates: AssistantMessageUpdate) => {
+    setConversations((prev) => {
+      const updated = prev.map((conv) => {
+        if (conv.id !== conversationId) return conv;
+        const messages = [...conv.messages];
+        const lastAssistantIndex = messages.reduceRight((found, msg, idx) => {
+          if (found !== -1) return found;
+          return msg.role === "assistant" ? idx : -1;
+        }, -1);
+        if (lastAssistantIndex === -1) return conv;
+        messages[lastAssistantIndex] = { ...messages[lastAssistantIndex], ...updates };
+        return { ...conv, messages, updatedAt: Date.now() };
       });
-    },
-    [],
-  );
+      return trimConversations(updated);
+    });
+  }, []);
 
   const truncateFromMessage = useCallback((conversationId: string, messageId: string) => {
     setConversations((prev) => {
@@ -208,6 +203,7 @@ export function useChatHistory(
   return {
     conversations,
     activeConversation,
+    currentActiveId,
     storageUnavailable,
     staleId,
     createConversation,

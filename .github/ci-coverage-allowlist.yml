@@ -1,0 +1,75 @@
+description: >-
+  Paths deliberately outside CI coverage, each with the reason it is exempt.
+  assert_ci_coverage.py fails when a test file or Dockerfile is neither invoked
+  by a job nor listed here, so every entry below is a decision on the record.
+
+test_paths:
+  - reason: >-
+      litellm.agent() end-to-end suite. It drives the real claude, codex, opencode and pi CLIs and
+      deepagents against a live LiteLLM AI Gateway, so it needs those binaries on PATH plus
+      LITELLM_PROXY_API_BASE / LITELLM_PROXY_API_KEY, and skips without them. Run manually
+      before changing litellm/harness; the mocked coverage runs in tests/unit/harness and
+      tests/unit/llms/*/harness
+    paths:
+      - tests/harness_e2e
+  - reason: >-
+      The Rust/Python parity harness is run manually through its local CLI. Recorded replay,
+      fixture generation, and harness checks are intentionally outside pull request CI
+    paths:
+      - tests/rust-python-harness
+  - reason: >-
+      Owned by the open pull request that moves the Rust/Python parity checks (#45135). It ran in
+      the CircleCI build_and_test job that globbed tests/test_*.py, which this migration deletes,
+      and that pull request gives it a new home
+    paths:
+      - tests/test_rust_python_harness.py
+  - reason: >-
+      The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
+      from a pull request; it needs a live gateway and provider credentials no PR job holds
+    paths:
+      - tests/e2e
+  - reason: >-
+      The documentation and code-quality workflows execute four files in this directory by name as
+      scripts and pytest never collects the directory, so these six run nowhere; listed individually
+      so a seventh cannot inherit the exemption
+    paths:
+      - tests/documentation_tests/test_exception_types.py
+      - tests/documentation_tests/test_general_setting_keys.py
+      - tests/documentation_tests/test_optional_params.py
+      - tests/documentation_tests/test_readme_providers.py
+      - tests/documentation_tests/test_requests_lib_usage.py
+      - tests/documentation_tests/test_standard_logging_payload.py
+  - reason: >-
+      Named like a test but shaped like a benchmark: it fetches live image URLs, times aiohttp
+      against httpx, prints the ratio, and asserts nothing, so pytest cannot collect it (its
+      functions take arguments, not fixtures) and running it beside its siblings in the
+      code-quality workflow would add a network dependency for a number nothing reads. Exempt
+      as a script rather than as an unresolved gap; revisit by deleting it once the aiohttp
+      choice it informed is settled
+    paths:
+      - tests/code_coverage_tests/test_aio_http_image_conversion.py
+  - reason: >-
+      Third-party integration tests that skip themselves without OCI configuration or sandbox
+      credentials, neither of which a pull request job holds
+    paths:
+      - tests/integration/sandbox/test_e2b_sandbox.py
+      - tests/integration/test_oci_integration.py
+      - tests/integration/test_oci_proxy_integration.py
+
+dockerfiles:
+  - reason: >-
+      The dashboard container is a static Next.js export served by nginx, and the dashboard build
+      and lint workflows already exercise that output, so building the image adds no signal about it
+    paths:
+      - ui/Dockerfile
+  - reason: >-
+      An example image under cookbook/ that is documentation rather than a shipped artifact
+    paths:
+      - cookbook/litellm-ollama-docker-image/Dockerfile
+  - reason: >-
+      The Rust gateway image compiles the whole workspace in release mode, which is too slow for
+      a per-pull-request job while the gateway binary is still being assembled; the Rust lint,
+      clippy, and compile jobs already cover the code it packages. Revisit when the gateway is
+      published
+    paths:
+      - litellm-rust/crates/gateway/Dockerfile

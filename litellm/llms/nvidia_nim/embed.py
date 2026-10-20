@@ -9,7 +9,7 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 import types
-from typing import Optional
+from typing import Final
 
 
 class NvidiaNimEmbeddingConfig:
@@ -18,21 +18,21 @@ class NvidiaNimEmbeddingConfig:
     """
 
     # OpenAI params
-    encoding_format: Optional[str] = None
-    user: Optional[str] = None
+    encoding_format: str | None = None
+    user: str | None = None
 
     # Nvidia NIM params
-    input_type: Optional[str] = None
-    truncate: Optional[str] = None
+    input_type: str | None = None
+    truncate: str | None = None
 
     def __init__(
         self,
-        encoding_format: Optional[str] = None,
-        user: Optional[str] = None,
-        input_type: Optional[str] = None,
-        truncate: Optional[str] = None,
+        encoding_format: str | None = None,
+        user: str | None = None,
+        input_type: str | None = None,
+        truncate: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -64,7 +64,7 @@ class NvidiaNimEmbeddingConfig:
         self,
         non_default_params: dict,
         optional_params: dict,
-        kwargs: Optional[dict] = None,
+        kwargs: dict | None = None,
     ):
         if "extra_body" not in optional_params:
             optional_params["extra_body"] = {}

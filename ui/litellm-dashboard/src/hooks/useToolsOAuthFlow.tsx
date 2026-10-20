@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, registerMcpOAuthClient } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -31,6 +31,13 @@ interface UseToolsOAuthFlowOptions {
   userId?: string | null;
   scopes?: string[];
   clientId?: string | null;
+  /**
+   * True for the client-forwarded token modes (true_passthrough / oauth_delegate): the gateway
+   * mints the OAuth client itself during /authorize and carries it in the sealed state/code, so
+   * the browser must not register a client of its own (each browser-side registration creates an
+   * extra client at the IdP that the gateway's minted one then supersedes).
+   */
+  gatewayMintsClient?: boolean;
   onSuccess: (accessToken: string) => void;
 }
 
@@ -61,6 +68,7 @@ export const useToolsOAuthFlow = ({
   userId,
   scopes,
   clientId: preClientId,
+  gatewayMintsClient,
   onSuccess,
 }: UseToolsOAuthFlowOptions): UseToolsOAuthFlowResult => {
   const [status, setStatus] = useState<ToolsOAuthStatus>("idle");
@@ -77,14 +85,19 @@ export const useToolsOAuthFlow = ({
 
       let clientId: string | undefined = preClientId ?? undefined;
       let clientSecret: string | undefined;
+      const redirectUri = buildCallbackUrl();
 
-      if (!clientId) {
+      if (!clientId && !gatewayMintsClient) {
         try {
           const reg = await registerMcpOAuthClient(accessToken, serverId, {
             client_name: serverAlias || serverId,
             grant_types: ["authorization_code", "refresh_token"],
             response_types: ["code"],
             token_endpoint_auth_method: "none",
+            // dcr_bridge servers relay this registration upstream and bind the
+            // minted client to the browser's own callback; without it the relay
+            // rejects the registration and the flow dead-ends clientless.
+            redirect_uris: [redirectUri],
           });
           clientId = reg?.client_id;
           clientSecret = reg?.client_secret;
@@ -96,7 +109,6 @@ export const useToolsOAuthFlow = ({
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       const state = crypto.randomUUID();
-      const redirectUri = buildCallbackUrl();
       const scopeString = scopes?.filter((s) => s.trim()).join(" ");
 
       const authorizeUrl = buildMcpOAuthAuthorizeUrl({
@@ -127,9 +139,9 @@ export const useToolsOAuthFlow = ({
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     }
-  }, [accessToken, serverId, serverAlias, scopes, preClientId]);
+  }, [accessToken, serverId, serverAlias, scopes, preClientId, gatewayMintsClient]);
 
   const resumeOAuthFlow = useCallback(async () => {
     if (typeof window === "undefined" || processingRef.current) return;
@@ -199,7 +211,6 @@ export const useToolsOAuthFlow = ({
         {
           access_token: token.access_token,
           expires_in: token.expires_in,
-          refresh_token: token.refresh_token,
           token_type: token.token_type,
         },
         userId,
@@ -207,13 +218,13 @@ export const useToolsOAuthFlow = ({
 
       setStatus("success");
       setError(null);
-      NotificationsManager.success("Connected successfully");
+      toast.success("Connected successfully");
       onSuccessRef.current(token.access_token);
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => {

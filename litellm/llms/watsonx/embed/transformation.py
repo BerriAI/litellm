@@ -2,9 +2,12 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional
+from collections.abc import Iterable, Mapping
+from typing import Final, Protocol
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -14,7 +17,24 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import IBMWatsonXMixin, _get_api_params
+from ..common_utils import IBMWatsonXMixin, get_api_params
+
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_TOKEN_COUNT: Final = TypeAdapter(int)
+
+
+class _WatsonXEmbeddingBody(TypedDict, total=False):
+    model_id: ReadOnly[str | None]
+    results: ReadOnly[object]
+    input_token_count: ReadOnly[object]
+
+
+class _WatsonXEmbeddingHTTPResponse(Protocol):
+    def json(self) -> _WatsonXEmbeddingBody: ...
+
+
+def _embedding_body(response: _WatsonXEmbeddingHTTPResponse) -> _WatsonXEmbeddingBody:
+    return response.json()
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
@@ -37,8 +57,8 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        watsonx_api_params = _get_api_params(params=optional_params, model=model)
-        watsonx_auth_payload = self._prepare_payload(
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
+        watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
         )
@@ -60,17 +80,17 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.EMBEDDINGS.value
         if model.startswith("deployment/"):
-            deployment_id = "/".join(model.split("/")[1:])
+            deployment_id: Final = "/".join(model.split("/")[1:])
             endpoint = endpoint.format(deployment_id=deployment_id)
         url = url.rstrip("/") + endpoint
 
@@ -84,7 +104,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -92,11 +112,11 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         logging_obj.post_call(
             original_response=raw_response.text,
         )
-        json_resp = raw_response.json()
+        json_resp: Final = _embedding_body(raw_response)
         if model_response is None:
             model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
-        results = json_resp.get("results", [])
-        embedding_response = []
+        results: Final = _JSON_OBJECTS.validate_python(json_resp.get("results", []))
+        embedding_response: Final = []
         for idx, result in enumerate(results):
             embedding_response.append(
                 {
@@ -107,7 +127,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             )
         model_response.object = "list"
         model_response.data = embedding_response
-        input_tokens = json_resp.get("input_token_count", 0)
+        input_tokens: Final = _TOKEN_COUNT.validate_python(json_resp.get("input_token_count", 0) or 0)
         setattr(
             model_response,
             "usage",

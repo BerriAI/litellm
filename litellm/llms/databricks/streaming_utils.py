@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Final
 
 import litellm
 from litellm import verbose_logger
@@ -11,62 +11,61 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import GenericStreamingChunk, Usage
 
 
+def _usage_block(usage: Usage) -> ChatCompletionUsageBlock:
+    return ChatCompletionUsageBlock(
+        prompt_tokens=usage.prompt_tokens or 0,
+        completion_tokens=usage.completion_tokens or 0,
+        total_tokens=usage.total_tokens or 0,
+        prompt_tokens_details=usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None,
+        completion_tokens_details=(
+            usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
+        ),
+    )
+
+
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            processed_chunk = litellm.ModelResponseStream(**chunk)
+            processed_chunk: Final = litellm.ModelResponseStream(**chunk)
 
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
 
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
             if len(processed_chunk.choices) == 0:
-                final_usage = getattr(processed_chunk, "usage", None)
+                final_usage: Final[Usage | None] = getattr(processed_chunk, "usage", None)
                 return GenericStreamingChunk(
                     text="",
                     tool_use=None,
                     is_finished=False,
                     finish_reason="",
-                    usage=(
-                        ChatCompletionUsageBlock(
-                            prompt_tokens=final_usage.prompt_tokens or 0,
-                            completion_tokens=final_usage.completion_tokens or 0,
-                            total_tokens=final_usage.total_tokens or 0,
-                        )
-                        if final_usage is not None
-                        else None
-                    ),
+                    usage=_usage_block(final_usage) if final_usage is not None else None,
                     index=0,
                 )
 
-            if processed_chunk.choices[0].delta.content is not None:  # type: ignore
-                text = processed_chunk.choices[0].delta.content  # type: ignore
+            if processed_chunk.choices[0].delta.content is not None:
+                text = processed_chunk.choices[0].delta.content
 
             if (
-                processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
-                and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments  # type: ignore
-                is not None
+                processed_chunk.choices[0].delta.tool_calls is not None
+                and len(processed_chunk.choices[0].delta.tool_calls) > 0
+                and processed_chunk.choices[0].delta.tool_calls[0].function is not None
+                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments is not None
             ):
                 tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,  # type: ignore
+                    id=processed_chunk.choices[0].delta.tool_calls[0].id,
                     type="function",
                     function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.name,
-                        arguments=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.arguments,
+                        name=processed_chunk.choices[0].delta.tool_calls[0].function.name,
+                        arguments=processed_chunk.choices[0].delta.tool_calls[0].function.arguments,
                     ),
                     index=processed_chunk.choices[0].delta.tool_calls[0].index,
                 )
@@ -75,13 +74,9 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
+            usage_chunk: Final[Usage | None] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=usage_chunk.prompt_tokens,
-                    completion_tokens=usage_chunk.completion_tokens,
-                    total_tokens=usage_chunk.total_tokens,
-                )
+                usage = _usage_block(usage_chunk)
 
             return GenericStreamingChunk(
                 text=text,
@@ -102,40 +97,24 @@ class ModelResponseIterator:
     def __next__(self):
         if not hasattr(self, "response_iterator"):
             self.response_iterator = self.streaming_response
+        chunk: Final = self._next_sse_data()
         try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
+            json_chunk: Final = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
+        except ValueError as e:
+            verbose_logger.debug(
+                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
+            )
+            return _empty_generic_chunk()
+
+    def _next_sse_data(self) -> str:
+        try:
+            for raw_chunk in self.response_iterator:
+                if sse_data := _sse_data(raw_chunk):
+                    return sse_data
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+        raise StopIteration
 
     # Async iterator
     def __aiter__(self):
@@ -143,41 +122,38 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
+        chunk: Final = await self._anext_sse_data()
+        if chunk == "[DONE]":
             raise StopAsyncIteration
+        try:
+            json_chunk: Final = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+            verbose_logger.debug(
+                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
+            )
+            return _empty_generic_chunk()
+
+    async def _anext_sse_data(self) -> str:
+        try:
+            async for raw_chunk in self.async_response_iterator:
+                if sse_data := _sse_data(raw_chunk):
+                    return sse_data
         except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        raise StopAsyncIteration
 
-        try:
-            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-            chunk = chunk.strip()
-            if chunk == "[DONE]":
-                raise StopAsyncIteration
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+
+def _sse_data(raw_chunk: str) -> str:
+    return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
+
+
+def _empty_generic_chunk() -> GenericStreamingChunk:
+    return GenericStreamingChunk(
+        text="",
+        is_finished=False,
+        finish_reason="",
+        usage=None,
+        index=0,
+        tool_use=None,
+    )

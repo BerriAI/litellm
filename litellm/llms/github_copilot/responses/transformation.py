@@ -8,9 +8,13 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
-
 import os
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,17 +24,20 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import _cached_get_model_info_helper
+from litellm.utils import cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -53,7 +60,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     register_model, which also clears the cache used here).
     """
     try:
-        info = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+        info: Final = cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
         verbose_logger.debug(
             "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
@@ -62,7 +69,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
         )
         return False
 
-    mode = info.get("mode")
+    mode: Final = info.get("mode")
     if mode == "responses":
         return True
     if mode == "chat":
@@ -70,9 +77,9 @@ def github_copilot_supports_responses_api(model: str) -> bool:
 
     # supported_endpoints is dropped by ModelInfoBase; read it from the raw
     # model_cost entry via the resolved key.
-    key = info.get("key")
-    raw_info = litellm.model_cost.get(key) if isinstance(key, str) else None
-    endpoints = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
+    key: Final = info.get("key")
+    raw_info: Final = litellm.model_cost.get(key) if isinstance(key, str) else None
+    endpoints: Final = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
     return isinstance(endpoints, list) and "/v1/responses" in endpoints
 
 
@@ -96,7 +103,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self) -> None:
         super().__init__()
         self.authenticator = Authenticator()
-        self._stream_item_ids_by_output_index: Dict[int, str] = {}
+        self._stream_item_ids_by_output_index: dict[int, str] = {}
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -116,7 +123,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map parameters for GitHub Copilot Responses API.
 
@@ -130,7 +137,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Any:
+    ) -> ResponsesAPIStreamingResponse:
         parsed_chunk = self._normalize_stream_item_id(parsed_chunk)
         return super().transform_streaming_response(
             model=model,
@@ -155,7 +162,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         State is keyed by output_index on this config, which
         ProviderConfigManager builds fresh per request, so it is stream-scoped.
         """
-        output_index = parsed_chunk.get("output_index")
+        output_index: Final = parsed_chunk.get("output_index")
         if not isinstance(output_index, int):
             return parsed_chunk
 
@@ -165,7 +172,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 self._stream_item_ids_by_output_index[output_index] = item["id"]
             return parsed_chunk
 
-        stable_id = self._stream_item_ids_by_output_index.get(output_index)
+        stable_id: Final = self._stream_item_ids_by_output_index.get(output_index)
         if stable_id is None:
             return parsed_chunk
 
@@ -184,7 +191,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         """
         Validate environment and set up headers for GitHub Copilot API.
@@ -199,11 +206,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
-
-            if not api_key:
+            api_key: Final = self.authenticator.get_api_key() if default_headers is None else ""
+            if default_headers is None and not api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
@@ -211,26 +221,30 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
             # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers = {**default_headers, **headers}
+            merged_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**copilot_headers, **headers}
+            )
+            if user_session is not None:
+                pin_session_authorization(merged_headers, user_session.token)
 
             # Analyze input to determine additional headers
-            input_param = self._get_input_from_params(litellm_params)
+            input_param: Final = self._get_input_from_params(litellm_params)
 
             # Add X-Initiator header based on input analysis
             if input_param is not None:
-                initiator = self._get_initiator(input_param)
+                initiator: Final = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(f"GitHub Copilot Responses API: Set X-Initiator={initiator}")
+                verbose_logger.debug("GitHub Copilot Responses API: Set X-Initiator=%s", initiator)
 
                 # Add vision header if input contains images
                 if self._has_vision_input(input_param):
                     merged_headers["copilot-vision-request"] = "true"
                     verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
-            verbose_logger.debug(f"GitHub Copilot Responses API: Successfully configured headers for model {model}")
+            verbose_logger.debug("GitHub Copilot Responses API: Successfully configured headers for model %s", model)
 
             return merged_headers
 
@@ -243,15 +257,18 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         effective_api_base = (
-            api_base
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
@@ -263,7 +280,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Return the responses endpoint
         return f"{effective_api_base}/responses"
 
-    def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """
         Handle reasoning items for GitHub Copilot, preserving encrypted_content.
 
@@ -277,11 +294,11 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if item.get("type") == "reasoning":
             # Preserve encrypted_content before parent processing
-            encrypted_content = item.get("encrypted_content")
+            encrypted_content: Final = item.get("encrypted_content")
 
             # Filter out None values for known problematic fields,
             # but preserve encrypted_content even if it exists
-            filtered_item: Dict[str, Any] = {}
+            filtered_item: Final[dict[str, object]] = {}
             for k, v in item.items():
                 # Always include encrypted_content if present (even if None)
                 if k == "encrypted_content":
@@ -296,16 +313,15 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_item[k] = v
 
             verbose_logger.debug(
-                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+                "GitHub Copilot reasoning item processed, encrypted_content preserved: %s",
+                encrypted_content is not None,
             )
             return filtered_item
         return item
 
     # ==================== Helper Methods ====================
 
-    def _get_input_from_params(
-        self, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> Optional[Union[str, ResponseInputParam]]:
+    def _get_input_from_params(self, litellm_params: GenericLiteLLMParams | None) -> str | ResponseInputParam | None:
         """
         Extract input parameter from litellm_params.
 
@@ -323,7 +339,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If not found, return None and let the API handle it
         return None
 
-    def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
+    def _get_initiator(self, input_param: str | ResponseInputParam) -> str:
         """
         Determine X-Initiator header value based on input analysis.
 
@@ -342,9 +358,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return "user"
 
         # If input is a list, analyze items
-        if isinstance(input_param, list):
+        if isinstance(input_param, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
             for item in input_param:
-                if not isinstance(item, dict):
+                if not isinstance(item, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
                     continue
 
                 # Check if item has no role (agent-initiated)
@@ -353,13 +369,13 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                 # Check if role is assistant (agent-initiated)
                 role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
+                if isinstance(role, str) and role.lower() == "assistant":  # pyright: ignore[reportUnnecessaryIsInstance]  # role arrives from untyped request params
                     return "agent"
 
         # Default to user-initiated
         return "user"
 
-    def _has_vision_input(self, input_param: Union[str, ResponseInputParam]) -> bool:
+    def _has_vision_input(self, input_param: str | ResponseInputParam) -> bool:
         """
         Check if input contains vision content (images).
 
@@ -382,7 +398,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if depth > max_depth:
             verbose_logger.warning(
-                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+                "[GitHub Copilot] Max recursion depth %s reached while checking for vision content", max_depth
             )
             return False
 
@@ -398,7 +414,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return False
 
         # Check if this item is an input_image
-        item_type = value.get("type")
+        item_type: Final = value.get("type")
         if isinstance(item_type, str) and item_type.lower() == "input_image":
             return True
 

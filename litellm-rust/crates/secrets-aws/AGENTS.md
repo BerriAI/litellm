@@ -1,0 +1,1 @@
+- https://docs.aws.amazon.com/secretsmanager/latest/apireference/Welcome.html

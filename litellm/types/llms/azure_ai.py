@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -12,6 +12,6 @@ EncodingFormat = Literal["base64", "binary", "float", "int8", "ubinary", "uint8"
 
 
 class ImageEmbeddingRequest(TypedDict, total=False):
-    input: Required[List[ImageEmbeddingInput]]
+    input: Required[list[ImageEmbeddingInput]]
     dimensions: int
     encoding_format: EncodingFormat

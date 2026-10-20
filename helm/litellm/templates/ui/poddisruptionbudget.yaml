@@ -1,0 +1,6 @@
+{{- include "litellm.pdb" (dict
+  "root" $
+  "component" .Values.ui
+  "componentName" "ui"
+  "fullname" (include "litellm.ui.fullname" .)
+  "selectorLabels" (include "litellm.ui.selectorLabels" .)) }}

@@ -1,14 +1,18 @@
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, Final
+
+from pydantic import TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
+_DECODED_RESPONSE: Final = TypeAdapter(object)
+
 
 def normalize_json_schema_types(
-    schema: Union[Dict[str, Any], List[Any], Any],
+    schema: object,
     depth: int = 0,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
-) -> Union[Dict[str, Any], List[Any], Any]:
+) -> object:
     """
     Normalize JSON schema types from uppercase to lowercase format.
 
@@ -33,7 +37,7 @@ def normalize_json_schema_types(
         return schema
 
     # Type mapping from uppercase to lowercase
-    type_mapping = {
+    type_mapping: Final = {
         "BOOLEAN": "boolean",
         "STRING": "string",
         "ARRAY": "array",
@@ -47,7 +51,7 @@ def normalize_json_schema_types(
         return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
 
     if isinstance(schema, dict):
-        normalized_schema: Dict[str, Any] = {}
+        normalized_schema: Final[dict[str, object]] = {}
 
         for key, value in schema.items():
             if key == "type" and isinstance(value, str) and value in type_mapping:
@@ -72,7 +76,7 @@ def normalize_json_schema_types(
     return schema
 
 
-def normalize_tool_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize a tool's parameter schema to use standard JSON Schema lowercase types.
 
@@ -85,7 +89,7 @@ def normalize_tool_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(tool, dict):
         return tool
 
-    normalized_tool = tool.copy()
+    normalized_tool: Final = tool.copy()
 
     # Normalize function parameters if present
     if "function" in tool and isinstance(tool["function"], dict):
@@ -109,7 +113,7 @@ def validate_schema(schema: dict, response: str):
     from litellm import JSONSchemaValidationError
 
     try:
-        response_dict = json.loads(response)
+        response_dict: Final = _DECODED_RESPONSE.validate_python(json.loads(response))
     except json.JSONDecodeError:
         raise JSONSchemaValidationError(model="", llm_provider="", raw_response=response, schema=json.dumps(schema))
 

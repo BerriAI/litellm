@@ -1,7 +1,10 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -9,10 +12,13 @@ from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIStableDiffusionConfig(FalAIBaseConfig):
@@ -32,12 +38,12 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request.
@@ -63,7 +69,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         complete_url = f"{complete_url}/{endpoint}"
         return complete_url
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Stable Diffusion models.
         """
@@ -88,17 +94,17 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - response_format -> output_format (jpeg or png)
         - size -> image_size (can be preset or custom width/height)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI params to Stable Diffusion params
-        param_mapping = {
+        param_mapping: Final = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
@@ -123,7 +129,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: str) -> Any:
+    def _map_image_size(self, size: str) -> str | Mapping[str, int]:
         """
         Map OpenAI size format to Stable Diffusion image_size format.
 
@@ -139,7 +145,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - landscape_16_9
         """
         # Map common OpenAI sizes to Stable Diffusion presets
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": "square_hd",
             "512x512": "square",
             "768x1024": "portrait_4_3",
@@ -190,7 +196,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - negative_prompt: Negative prompt string (default: "")
         - enable_safety_checker: Enable safety checker (default: true)
         """
-        stable_diffusion_request_body = {
+        stable_diffusion_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
@@ -206,9 +212,9 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Stable Diffusion response to litellm ImageResponse format.
@@ -230,7 +236,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -242,7 +248,8 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Stable Diffusion response format
-        images = response_data.get("images", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):
@@ -262,12 +269,15 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                     )
 
         # Add additional metadata from Stable Diffusion response
-        if hasattr(model_response, "_hidden_params"):
-            if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
-            if "timings" in response_data:
-                model_response._hidden_params["timings"] = response_data["timings"]
-            if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
+            if "seed" in response_object:
+                hidden_params["seed"] = response_object["seed"]
+            if "timings" in response_object:
+                hidden_params["timings"] = response_object["timings"]
+            if "has_nsfw_concepts" in response_object:
+                hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response
