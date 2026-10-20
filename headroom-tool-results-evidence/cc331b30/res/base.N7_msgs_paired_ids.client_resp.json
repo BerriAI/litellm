@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgDAeue2qnMkYd72Ngkn4",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQSvgYKEAgTGAI4AUIIdGhpbmtpbmcSDCRBVJsMJV5GDGvYHRoM7uP4FAA3Pl472RgUIjA8H3rg++Ol4yp+eZ6kbOvBemmat9GXnf93AR+jLcbrScGtQF4FVaO5tZSJ8YlKHBcq2wXCZv+hw9gZ+YPrn50CD4dRu7QKkseCF2Aj0z9XCKSljg04qN1qgm/gAQ0A/Df/QYTw1+oCFTePV50OIAYNm6NQ6olZkNXUsW6FkFxlnS1+cIOUt+eIBExZU3sFhIFKr6Do9LCLVazY7/iOxBjFnHr02rWZ7QloP9vyGFudY/MeSX4uXa0NyoKZjDuvJTCoftGlV0tAUlsDcZtuRuGxhEb28ouISmyrekqv2DsAblbnnoltfYCn/BeLlpQIk/55JhQfundArKAVjJ9mWAfU5S6vCvlKWbrhQOC1t0VAaAMYoEmWS7pD3PL8nsJDrNvcnJMwj+vGSFmRdrBhmkOqJJVzCG/K2k4/94RdAch7A7mtGjx5EzxfiaDaFG56P6ULaeXUSyhqnHcsgt5/XmPjh52miAhkau+Z84AzW6fHuW90Zy15K7UMWh/0G7+x/rXI6Ys29rltDFR6m5C1VgFX8kLNdHo37WOAYYaHJcYUK7IGo16lia+MIGdqanCjTsJyOtomIJhTlFq38KRezaE5BK3SdM/Y7nLH3M29b2SjDfol/GQ6dUON0YL9y5oxFsrQR4iprHo1hZq21vjAvvH+Ds7LKaary9PGuZHnMLUB9/aiXrz3a/ZbA2C8DZ9YD4rABJZOZb6g8oEaye99VyDO7UVBTfBeM6R7RXUmSuowHVFELdH7lfjhLc3larvhm0sGhD3SywlSioX3Zzc/tUuW4p86XGiv+KQkXfmlNUOBakrAq8narw3Z07SV0N463s1Th5S2h4b4ZpysAOdySX033B+F4DDFrw5rNp+9wSsAVIqixdSzBBo5KHrYVNMXDG3QJ4RLHNo1ZJHz9sGg2tm8qXv7EH2ivX0m/HDYBDrmb+gVc7a5bp19XR8XWv5Y/JTvSqVI4bhz4du6mZlVNd8g+di+0hobw3V1AG7Vmrq9Mxh+ZEGGgfZnE4iMkKsVUWvA00kJr/VuP8T8K08DTxgB"
+   },
+   {
+    "type": "text",
+    "text": "The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes** in size."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 30748,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 162,
+   "output_tokens_details": {
+    "thinking_tokens": 108
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

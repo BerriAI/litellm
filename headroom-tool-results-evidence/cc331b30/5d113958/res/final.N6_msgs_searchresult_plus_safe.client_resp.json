@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD9YL5tsmcm1o7dnykpg",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS5goKEAgTGAI4AUIIdGhpbmtpbmcSDHPrmCJKDQAdgoKxtBoMAN7029DOtD3P8Fx/IjB6ladMxsCTkQf5dszcPiZTLvvy1J0LrurxYvnVxoFIyHy/5lcRWx/MCuMEGcSfQ0Eqgwpr6ZkGb20LjnpuKWNIWaHHg/yoIUDPCYBy8EuAE6QxsKwqPsGs5FdGojR9t6RT0iPtuhMULoEyZrT+PeuHIZYnsRMVPb+E2z1ZKxoRjOkUrKoXUz9Olb2XdmWhIgYVSIeQdjISCSAXnnFNhAKggslRbz2ruM+utSOjxq2H74I7gOqtCr1bJTE1oB/tuAfi5D1fv60OAINBdFPffYGy/uHfjSDCiBvAZkPo06UQdNQUIRjnO2xwJpFKFIwD9NfvGo5eVjy7/REKPosF1cZmiIMOxmw/MMJVbOf6k3zDdu5CWl1DpYYbIv5CJVQugj5+nHkpyqFeNQ1a9dYCq6S2+97DuyuwSCJWWBJyaWfTxafzRjvdw8wJLvCXJHPEz5Lrmw1JXAuyaoHtIc1cLlweCml1V1CpEzQz23ko4Rs0Kn8f5gBbAD/dYPI1lii8LS1UTAcqMLrMObT4S9SgZjYvChGNdEvPLdTyEduY9drfAWBwNk5wfuYIgrR4QVMdDRVzRl0Qon4/HMp8c9/lP7kHPsWSvKXFMUUlbwjPwKYiFlIDdrCrWR120lEcZIGinKU5kEqBOEioQh+nKgcik+h2SH83kYdHsKIf7NB2+3VwgOU+5RjIBOU4Bw83hQkB3mi6vgAgUrMbFpNIqXR83EudjpG5mnilsUGMmE+k2gcpOlq+xnLDNHpOKi5Phkg3xpyZ0ssgRwCYhWmOQFLRRZud4Y5noy4EQzxQU3hA+rXxn9oDy3Utlkl5IxOWWqu91IAmKo/NICHZ5EEiSM/+UaaMSjJt2UX7EVnvbZ0oFjo+bl2PjtRiso033uJh/R+2/YLqvN7dOgk14TZ+xHcihKQUFN1C8R3aGgqYr0GPsAjzxF2Ge+t58V/HME0u+s8avnPXF7/Ap+597TSffuQJ1ZpPr2uP2Ip+1lkdqDSujvNFupaYIxGjaEywbnoBpe9gB9XbtvPl2rIQN3bfafgApK0E41cb32CvyAGrgIIDwVB+EAKey1y5Ndc100aBUfqvgXmrMzEUcKcHRN+EF4mNDezWl/LKMOF0mdsqN0AZi8LKAL2Re529te5+9IWQad6bxOvca+26+BSG1/cmfYHln6lyFhYqNuAJT4cgBW/3BiSfTKA3RCkOBayQR6WDNJxMycyV3rjEEXvRM2Af+fCVzbJMywF2e03ab0pDWAmcwm/ZILBd8SeLDCI9Xk6eotQUukkSgf4K0Mn4tutVc7M+o9LG+0MiYNf7TkdbUGE2bjhtv85klBW5LRAEmnujy/qhLKzh8S8ZzJzS/VIq5ti+VwwPf17lvHzJgU2ImxvGvYIwDktuZtArRlPaRozzdCqifkzvKO9MJrW6Ir+8RiFIvLBzXmcJdyFzJrZhcuDs1vai/I0KHk5MDs4kclEEHnskbQfNj77kUBlZLWiWH3EuwlXLqSjA3y/9/V276AVFNF0nlh2sg1AaXPJ2naoY3inFm3Vk1VT3gv6VIjfxEtQ6UVigPx+X6bss/4vW/COc5VsRQ2Pn+Dl3qDGheauWLhhJ3V7KrMpp+mSNWeHiDrEsvJD+/p7XxWbPOZbfj0dIVla0C3Cspb6lOXY4DRs4gMnP6xCJ3yQ/rz/Tmin1acgoBSremooMEbTqK1d7V4iigGAICeWcr7xIFXQjZOAZkihwWwyiFiuTpyAh8JUuKugQJbTm4l+jFdAr1+Nkgh6RXtVpqydb6DK5fhgB"
+   },
+   {
+    "type": "text",
+    "text": "The only file in /srv/app"
+   }
+  ],
+  "container": null,
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 50597,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 300,
+   "output_tokens_details": {
+    "thinking_tokens": 291
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

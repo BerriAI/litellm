@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgDAdXQ3TkFVwJ1HPTiAF",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS6QYKEAgTGAI4AUIIdGhpbmtpbmcSDDQTD7QkUHN39EuE0BoMUjcEK+FrYdxlP7/bIjBh6O0CjXA5dDNKnNFgDg0IGvJioJG2r7bz9aI2+90lumf7bSfxf+9VUodjF3Q53dUqhgYrQcdHBIToIxcFxtfanGmBSQ0SEEDm5mcJHWcC6KiqO8S8W4WI1TPp65N+knlL8L0+uXpjxpmI1myiINo8iOP6B85knN24bWiTLG6rykWyUCBYtmJWzcGdHWIIrPtwo+VAETg5LWT7YJP7v8+Tci77qGrdfSPiCcG0rk4sdb4jG3X7D9o/928dZXUfxqHnW4/PPSl4mlMO2fu/mdgaMuUQGSO7n6CKB0VNQsaWWtW5qDphook3k+0y1E83T62BUPMrxEa0/MMZBPU8IytK8N/6qsA+ajfLHSwcpvy9WWAK3dzqqeMCoFc+dHhPkWudGJMxPTWkTxHiUwatt10ZjCKi4I8tBEi0ZWAn/NhLzcwlTax7zcNGjF7ykIanZh5DN2gUaQGCVzKU3eS6SHbmkfEH8Or68VV0fGWnCtASjohd/AK4g+Le20lfKkk4yqLqmwrXJ/iIDx/Plu7X8h2+GCcWDk07u9jArF1cT8MV+qomlJpJqn8dDZv7aQ29XYgcLizKIZnzlZgU3dboQZubBUP6CZEn+USkKr6gzltTX+c9Grh6MaB4gbyT1Aq9GMLEioOv0nX5Rut+fFfFCu1/fltIv3s5JtCZ6FJZTity7+lHy/cx7UNC1VlMvN4zcLtq8FV63NGUxSrdqGFFzDxrDbIPP/Jt2UbNuucPemw/PUuLKjSOQ8kR0HWJW6U44fF3biRtjyzis4E6+wLKaRKBFlS6NouO0g1SZtTbxIcUyOKZqjlf7DUn83owOfZQC+tLkoR7Z5QTmRfbc097Vjg6HtDwcPveQM5PxMj9QDuKnEbhxd4dTa9rGL2ssBVOQCTlWz2MA86C/NzDTnTNU+3D16lmLQtoRizdhtovycwAiIMDkyf2yzsjqwg7VzaDzhOSXuMcgpgp5bD5BaUs54zyFn/BnzfDdJq1IIMeRJXGb0behXhyv38pXc8IR3B3/149gAEpqMEezNrsm7CI/xqPvF00s8k7MaqB5L3jB9BcA6XcWOVPB1sMIkOaMeo2BiaTt8tpELuFZZkYAQ=="
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only entry in the listing with that owner."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 18781,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 18781,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 201,
+   "output_tokens_details": {
+    "thinking_tokens": 135
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

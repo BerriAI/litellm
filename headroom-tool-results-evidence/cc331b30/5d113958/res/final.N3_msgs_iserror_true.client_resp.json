@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD9S74tku7HVDynqzgkB",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS0wcKEAgTGAI4AUIIdGhpbmtpbmcSDDdtY0B7c0/frx+PyxoMPM83L7qohxe4S8wvIjC9/D+3D0NqM4JQDClx/QqKr0YyZr1DAev8gp6tvId/Up8gAwjm0b7nRP7oBhRTf6Mq8AbGkjVsEQPkcnJJ2c/RRUFqty1YT+0ngKhf+w/AjuHxvnMGrwKyoOADMYcaZ1Kqly95EhE/OlH9+Aeh2dIK5UCi6/7po62YTkWjcr8wnxqOxJq23BhvQMpoalVYvlZCuHhKWtANxBhp8lw0r3qg5FMpLuyzcS6qJB7h9ZkVXc2Z5mW9JWKbIYNqKQn0l4ZJ+V27uMRpGz5ZTv5zGWBIcUIvme25iVZ3pzbqlI5lTHoxf2JwaR1fC5pb6arDIHmTzRhKmcnPJd4Tz2/zu3cuv8c5z/yHx27Xo60vYioFGatP/LrZAoailq6DE5GJdxB2pH0t3L87dBJIq83mTLP5Ug4Q99/GyA0brn9ITIQyMb+Q5uTfM/UbBgY9NM1paonjv2EBz243wYbgN7W+D7boFg2wENWLg9P7onL5crf9SG4xoP/YR312dL5BFImSMvRhqTNc9A+jILztYJS2DBwVyHnUh9rNVmffPmAopV8Y6B4yMrnOggslAuNUa4U5pcwe/Oq44pfGZRAVmaiehx9P7Hc+49vCbGJK1TvAlFAeeTQABfRg3bzI9274iCVpGR4FIDO84+fZzxGWWdtt0r/M5TOk2oX+uGnu4GSltEmBalcjfRNbIIZrGVsRst9eGgdu84y+ahC13I8eEwYaz7aj7Dgbhs1MN1jgwFfBZspDkMhcfYOI9OaQbIF1Txpe6lWkFmPUyVNC7/B0YGMOPQL9U56Bf6t/oPCwaXQU9gyFft/9aNVOffeaobLJG6jalGyg8wQJC9nKffRi/qWxYOvCDnEqykYSY26GsqZB0efDo2exx/mNN6vODacBnp211H6fpyR/0vjcNgDAo2IR8BvbvsJ7BnfNf4JTCUcopNPSg/nl0AZZFDSRAAYwxwXXlP3oNQnFGL/hw537oLB/bRf3TOjcMjUkImvI/LnYNveYqPQJRf/MJUsrCc7ctGCnm1/b1kK6LplOFrGnUtscV30wTeuBs8lBUm4huEi89xeE3zWGFpQKdiiNehTFWl6ONYn2iGGu6etd1T+RMeYwyPZi4xqtplie5trZStxg0OAZoxkUBfCyel1pCtFRNIJ6/kQ50ois/hbW+1BvU5hIprYAOfNn+Fn6jTOEmBGVQAYmM4DgTCV8AcA8K6mqOLxZTR7A/TcG5DPtpB+shbFwEOowCxERGAE="
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.\n\nIt's the only entry in the listing with that owner. The listing also reported \"permission denied\" on /srv/app/pkg9, but entries under pkg9 still appeared in the output, so I can't tell whether that directory was fully listed."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 18419,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 274,
+   "output_tokens_details": {
+    "thinking_tokens": 149
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

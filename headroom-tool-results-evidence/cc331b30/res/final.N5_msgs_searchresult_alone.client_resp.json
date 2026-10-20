@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgDAdnacETj5c2ADeLEVk",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQSsAkKEAgTGAI4AUIIdGhpbmtpbmcSDMPd6ZUnHo5YYAz8BBoMevs/8NkSFfo7ybkMIjDFCW06EIDeSLtV4zl48zuZfOEp9tEwB/xX0LWNrhHcHz5zD9DqnBJRPe/YJjezD8QqzQgN53Qp6Vb1EdIizPEZ0QeD0Uxb6gdMQSEkZd7+qKcnrn2HatgXo+QKfuqTndYxKcJrQHUGNmHfasD9EOnQ0QlBSq8AOA6RtiaFve9SCGz2aCIdv5IDi2auY29GrYJ+S5rby8vYSXCHcZ+F9yoJKmM742w5w66fn78YR1/FXam0wpS563AkxRxzlAkV2178a8/vBk5oRUhu6UT8vP+UPMMkHOHIM5+G3C0Dp8VAq38uoiLrf8HiAHrJSBY1k80Zb1qjeAtnTrUW09KjrJ49u84nKmIe4IznSWXOXqVygvKMokuU6mafegWSp9l44fDiAklynhMQdIKU3K/puXoSnLfHK8oJAfalURgVKKyMXAU0UtfX/XWTFcqtcRnzFNMko9jagperseew6cIMi9JZdTXgPwnHbwrR1mpNjks78MO2s/qNuL2/da7Kt10CIjF8XRXMMHXvwKWHKZ2t8PyVuGVtJxNDnm07Ax5NbN/D2oJJTAFmz/+9wR24ahcEkLUoiXAo1irXmyC4DVFi7VYW25mecXOHehLU5Y+k2GoBVSmvjKQNL3cUVLTNjA3O1t1Lw6Jm5N9wgsQ/1j8C4ssGKAPzXeMQRDZjlQud1kNzt1CQ75nbOCK3QWPvpN6dzZ18SJh06XTA43hUguUdf/vHHUnsQqgy6LTy1Ngcdkd1QHN3E0TGzaspRz5tKawcckwP3Lr3E/ndzgmVjikgJV0Uu+ByUWVs09RTWgVSldv8nMoJhz7TMCfFodvXQ48iE6q81WG6WkXKqhYVy7RKqQlgUj7r2uKU+g0pAyycN5vefqVTuPhzC4phM2S8bgGcMV6xBHkV6ZbCVZNSv4+i79lST+Kb95GPTJuhCrb1UFy/VLYIHcq8uMpd8MNgAcJjwWyQNuc/rxVS3+MrI0fucigx0tDmTCPqcrsUwuqStGJspaJxVBwXSttbpHi3EMJcNS6WsyDyj3Dv24u/sgrYZbkKGxIgjpTsMzmn4snR6HxWDSrMCKVz3WmgovI7DAWqLUbN3Hfa3YaycacbgyFv/uthsQNk2uYlWzNP0jFksiOtUFPy4aqLmsUITN31oyWK243aI7mPcGslyr4w0p7bs/GC3M9T3cEmzwKD2YL4JdPdbBfgKOnWGEyxjsCIIRyhF0kdM52B8aD8e8qOj1Bt6D6cU82HMImXsUAmR90QwleVOk8bgq+Zekp0fYHFBL30m+lv0Ki+wggxHoGxVQJItCRWKLmD6eaOwIN/sRj7A3nHJjIFyq9/+BPOjc8uhcm5W3pChEjgrrKiaBXZzndTCFam1GZNPGrBxNjz6ePzPPkocK6ww9wvU/2CkhpmoDdbYdwWDuoJizysWImFNNgmgjkv6kWk1UynBrjnZ/VAvCE67vwIIWlk1XRPQS0j4PCJBTERju46eP1XLkWq+y8HoQ0FrTStCsJBhU68LCLZsIFg/LMdlSGNSZmipfPLdhej3yIYAQ=="
+   },
+   {
+    "type": "text",
+    "text": "The file is **/srv/app/pkg6/mod_263.lock**, and it is 77777 bytes. The directory listing is the only source I checked, and it has a single entry under that owner. "
+   }
+  ],
+  "container": null,
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 31796,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 300,
+   "output_tokens_details": {
+    "thinking_tokens": 232
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

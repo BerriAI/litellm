@@ -1,0 +1,4 @@
+Copied request body. Source: run812/res/base.K1_chat.client_req.json
+SHA-256 source: b151e5bca25328e705e8079b09fd92cb717f3496abfcf246817708449d2646e2
+SHA-256 retained 572e5f6 final copy: b151e5bca25328e705e8079b09fd92cb717f3496abfcf246817708449d2646e2
+SHA-256 copied file: b151e5bca25328e705e8079b09fd92cb717f3496abfcf246817708449d2646e2

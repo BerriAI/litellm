@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD9WMWQsTUdKAyQFm2gG",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQSswYKEAgTGAI4AUIIdGhpbmtpbmcSDC4nedXnyyWtt/gTPhoMmwX4HZMaur+yH7XJIjCmS39qOkdsvqaI13/bbACvmlKqGVruRHSehmXOJGJLeVMPlZgc6/2QBl3FNOy5/zgq0AUgYO3lxgt5w1GxNHY+jtDjNV4cLNd3UpBTG9mdWdVuFe6+Uil1TPWNU/Qn5bt6p5E1dI1y4HvYxTrObdV8lZhjgetGINQPzv524KerM+mGS9sSBJ+uYqJgICJW094phtG5U8FvVoTGLZFkUP1r6FFHUNV5lLY6QVWTykzsaogm/vJfUwM+aLrLB0y+NyZT4isos1l8KzvhFpL6WFv4dt0isRSlug3MLP/nuL6GUmct4wtL2kCd6Lh190LmdNTVhiTaWcVXWm/cZwSxoGX/uq/SxhWJj8r5MDuFTTRdw71oM1lEto8KOsCAhi69QQ8NDsunHIKIu2yRhNoNES968wXzAjgoG1LcADLgtDnes6JMOU8DMuyfWgNQuZnq95CoMgww0FQ5SofYvXZN5mrnqB0rzMD3MFDU3FWZ4Yv3BYuSS3O+KvjM0KBnsfJuX+JY1hVYlV7mZesE/ziiW0qCDkU/wwVjJOTgMqH/y9y8gExNM+/P3dpAIJ3THsUNinCvDE3Cr0J6V3auSgIdjW2/VNWx9q7Z6wvcuWnTN+n0PwNlpq8OXcEOVsT56ov7Objcvd1TwO5OLLHlSVelmnIaKJe0wTvKiqNrEh1/2l9MO1MUZkmz0mrxGvnnqrnQCXnGem/nclfACcX6aj/j/hKTJL1toUbRSPkfKkSNgfmvG1s3drqUuT/vrbl3I3gQji6DTEJAIck22ac1lueFibqMHrddHaiZ20fvD5ofDPwhtIwVSWOyIVC7xDlVNBu9haJdvWMNmKWlJsxPij2Yp7uw9e9qJWcgG1DZWSldY1E2DMQkaBnbxVSimUj2/5aBsfj+f8LZ+IbDi9N9E50gncwvWD9/LVyGIAgF0bTetO+woUfPVK3b1culaZi+h9wCB3gMAswlV899ZHZORmintLRD4kyH7lttClrZ/xOFy3Bl9dAUsW7d0AXz7QvNBuzsE1IPGkwYAQ=="
+   },
+   {
+    "type": "text",
+    "text": "The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only entry in the listing with that owner."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 18783,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 187,
+   "output_tokens_details": {
+    "thinking_tokens": 120
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

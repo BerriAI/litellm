@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgDAdCwHQDeo3EAkK3RgS",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS1QcKEAgTGAI4AUIIdGhpbmtpbmcSDAdoH2hEPxD5MXAPxBoMJ8WQPbVyPZS72Ye6IjCZrU8CZ5YuIj2pj1LpOZ0pkjFsafYaL+xos30PHP20AneyUuBLz3RZjtq53zNsvxEq8gZP0mZsQ2X/QAJ4tKlb2Bmf4TzjZmQcnwflU0RiCILekPMjbwy7Q3YAaAIERYeF01T5Zdu5yFjONKuavKXISoQaY4c1gwobPmNKT/h6DSzuwEeMNy31OTifMPJ2az+J+H3l33fknAhBO8PT9dtOLJGnAjtE9X/IwUPz/GNkYXq+LdescuMQfisY7OAKjJSGCo1AuWszsjALRd/RQkWmIRDSead5DwYf6uPVQJf/SIEktrQRQAxw3qv8O1QRCEXwM0KXUqT0ayBD63NrRtNufwu7ZiVqsu/MTo7V1RHTMqSSJ2j+lJMeSO7756hSPzTsOzfzX/VlVQferPEoowxSapOfcI3bSDl/7B2yDmpb1WzyQhcv/wHZ4UCd3LfCrFqakg/qp2zsxAoG6nK59O6/qe33LORjz41dPKcCfox570nvNOaMtycZpEz6HDEk4xUx0K+z6i92iOheMGyjDrhiIdomCyxCd3nfl4uZ8Im/SE8KOOa96LtxG5Ti0UTJNVUlzGdcsJeS1cKeLWsuasAh5Pq85OTIkk6mV/QiiAozd1TpKWYI9efeSt6m2FTYaNuYxGpS1sHtHtNXvbPBjL5uQjLVNyQLxAcz1WanFaWopfcidIr8tIJ+UTTLmFrCFkOrdP+bfXtaqZze4G4uaiwWj6GbFgMTj9KHXU9xYPCNql0R6x5oDXY6790dY2DOe5EuHj7DHjjo1OTLnp0KzlvXXCbE4mdO7phnY1Dru0cUX//kn8GUyt/51ae0R0w19GEzPrJIBh+uCAhL/I5M+H3OwrYOFeqN+wbs2qM7kPVwmAWtuTyeq5bp4QowiCYCNxw8OQ3L45azJ/WiBLH7JU8ugyYTss9UCfvUSC5ioWDTylVjLNN5jzCoI3A3/oh6XWsfOW5t/6on/KMWJMqSGJ7Avv4TIyInE6lEfwtACEa5CfOVzxs0c8+vxVVYzPq9f1JveJdg4A4dlWjurBZTx3wpbipt3lBNvtIc3/DPcsCxfYDSTb3Xr0CPouW87N9ac1VM1YQmjoIXnwBLnen7dL/TKJbJVdc00A8dDDWp8EQGj7yjA5dYg6Ad6wCmpVG+Rns0PFRQAK7aElx3riEyz4cjVArVIHI9tahVJfUPwAbkX2+urf643b6YM9thEwRjFg624kXtyrHPm16kwsFIKClPMLOtqZUYAQ=="
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.\n\nThe listing reported a permission-denied error on /srv/app/pkg9, but it still returned entries for that directory. None of them is owned by zeta-canary-7731, so this match is unaffected."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 18419,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 261,
+   "output_tokens_details": {
+    "thinking_tokens": 147
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

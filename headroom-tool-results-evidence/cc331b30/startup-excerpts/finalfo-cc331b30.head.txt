@@ -1,0 +1,30 @@
+2026-10-20 08:20:57,262 - litellm_proxy_extras - INFO - Preparing the Prisma CLI toolchain (timeout 600.0s)
+2026-10-20 08:21:02,505 - litellm_proxy_extras - INFO - Prisma CLI toolchain ready
+2026-10-20 08:21:02,505 - litellm_proxy_extras - INFO - Using v2 migration resolver (--use_v2_migration_resolver)
+2026-10-20 08:21:02,567 - litellm_proxy_extras - INFO - Found 222 migrations at <repo>/litellm-proxy-extras/litellm_proxy_extras
+2026-10-20 08:21:02,604 - litellm_proxy_extras - INFO - Waiting for the Prisma migration lock (up to 600.0s)
+2026-10-20 08:21:02,604 - litellm_proxy_extras - INFO - Acquired the Prisma migration lock
+2026-10-20 08:21:09,642 - litellm_proxy_extras - INFO - prisma migrate deploy stdout: Prisma schema loaded from schema.prisma
+Datasource "client": PostgreSQL database "litellm", schema "public" at "localhost:5432"
+
+222 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+INFO:     Started server process [274587]
+INFO:     Waiting for application startup.
+LiteLLM Proxy: Postgres connection budget per pod = 1 worker(s) x writer connection_limit 10 = up to 10 connections; keep pods x that figure under max_connections minus superuser_reserved_connections
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+08:21:09 - LiteLLM Proxy:WARNING: login_throttle.py:126 - trusted_proxy_ranges is not set or not a valid list of ranges, so failed Admin UI sign-in attempts are limited per source address and username only. Set it to the address ranges of the proxies in front of LiteLLM, or to an empty list when clients connect directly, to also limit each source address across usernames.
+2026-10-20 08:21:09,725 - litellm_proxy_extras - INFO - Request-log indexes are all in place
+query-engine ac9d7041ed77bcc8a8dbd2ab6616b39013829574
+08:21:10 - LiteLLM Proxy:WARNING: proxy_server.py:1810 - gc.freeze pinned 1673496 startup objects
+INFO:     Application startup complete.

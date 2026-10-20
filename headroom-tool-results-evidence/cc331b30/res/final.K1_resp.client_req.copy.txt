@@ -1,0 +1,4 @@
+Copied request body. Source: run812/res/base.K1_resp.client_req.json
+SHA-256 source: 6cb9ea68a4a77bb8c90d71313e0802cb70de5030cf379dc3efc24de921ac9b0f
+SHA-256 retained 572e5f6 final copy: 6cb9ea68a4a77bb8c90d71313e0802cb70de5030cf379dc3efc24de921ac9b0f
+SHA-256 copied file: 6cb9ea68a4a77bb8c90d71313e0802cb70de5030cf379dc3efc24de921ac9b0f

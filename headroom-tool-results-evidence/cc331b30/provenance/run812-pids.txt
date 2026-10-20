@@ -1,0 +1,154 @@
+recorded_at=2026-10-20T07:56:35+00:00
+W=<scratch>/run812
+mapping_check=passed
+wheel_sha256=f4db5e5119a73af3ed952b1c10caff2430831d899eb17d995a27574ae6e6b306
+
+[headroom]
+port=8787
+listener_pid=260281
+process=260281 Tue Oct 20 07:53:53 2026 <scratch>/hrvenv/bin/python3 <scratch>/hrvenv/bin/headroom proxy --host 127.0.0.1 --port 8787
+cwd=~
+PYTHONPATH=
+start_command=headroom proxy --host 127.0.0.1 --port 8787
+ANTHROPIC_API_KEY_present=False
+OPENAI_API_KEY_present=False
+HR_MASTER_KEY_present=False
+
+[recorder]
+port=8791
+listener_pid=260356
+process=260356 Tue Oct 20 07:53:59 2026 ~/.pyenv/versions/3.12.13/bin/python3 <scratch>/rec.py 8791
+cwd=<scratch>/run812
+PYTHONPATH=
+start_command=python3 rec.py 8791
+ANTHROPIC_API_KEY_present=False
+OPENAI_API_KEY_present=False
+HR_MASTER_KEY_present=False
+
+[base]
+port=4021
+listener_pid=260358
+process=260358 Tue Oct 20 07:53:59 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4021
+cwd=<scratch>/wt-base
+PYTHONPATH=<scratch>/wt-base
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4021
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+worktree_sha=f43f2d8c1598e640daa7345d1d46925fe61b9783
+porcelain_count=0
+litellm.__file__=<scratch>/wt-base/litellm/__init__.py
+
+[basefo]
+port=4022
+listener_pid=260359
+process=260359 Tue Oct 20 07:53:59 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/basefo.yaml --port 4022
+cwd=<scratch>/wt-base
+PYTHONPATH=<scratch>/wt-base
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/basefo.yaml --port 4022
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+worktree_sha=f43f2d8c1598e640daa7345d1d46925fe61b9783
+porcelain_count=0
+litellm.__file__=<scratch>/wt-base/litellm/__init__.py
+
+[final]
+port=4034
+listener_pid=260360
+process=260360 Tue Oct 20 07:53:59 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4034
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4034
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+worktree_sha=812b5d116617eb5d9fb438be49c1f008e1012aba
+porcelain_count=0
+litellm.__file__=<scratch>/wt-final/litellm/__init__.py
+
+[finalfo]
+port=4035
+listener_pid=260363
+process=260363 Tue Oct 20 07:53:59 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/finalfo.yaml --port 4035
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/finalfo.yaml --port 4035
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+worktree_sha=812b5d116617eb5d9fb438be49c1f008e1012aba
+porcelain_count=0
+litellm.__file__=<scratch>/wt-final/litellm/__init__.py
+
+[headroom_health_json]
+{"checks": {"cache": {"enabled": true, "ready": true, "status": "healthy"}, "http_client": {"enabled": true, "ready": true, "status": "healthy"}, "kompress": {"backend": "onnx", "enabled": true, "optional": true, "ready": true, "status": "healthy"}, "memory": {"backend": null, "bridge_enabled": false, "enabled": false, "initialized": false, "native_tool": false, "ready": true, "status": "disabled"}, "rate_limiter": {"enabled": true, "ready": true, "status": "healthy"}, "startup": {"enabled": true, "error": null, "ready": true, "status": "healthy"}, "upstream": {"enabled": true, "error": null, "ready": true, "status": "healthy", "url": "https://api.anthropic.com"}}, "config": {"accuracy_guard": null, "anthropic_api_url": null, "backend": "anthropic", "cache": true, "cloudcode_api_url": null, "code_graph": false, "compress_system_messages": false, "compress_user_messages": true, "disable_kompress": false, "disable_kompress_anthropic": null, "disable_kompress_fallback": false, "disable_kompress_openai": null, "exclude_tools": ["Edit", "Glob", "Grep", "Read", "Skill", "WebFetch", "WebSearch", "Write", "caveman_retrieve", "edit", "glob", "grep", "headroom_retrieve", "read", "read_file", "skill", "view", "web_fetch", "web_search", "write"], "force_kompress": false, "gemini_api_url": null, "learn": false, "max_items_after_crush": 15, "memory": false, "min_tokens_to_crush": 10, "mode": "cache", "openai_api_url": null, "optimize": true, "pid": 260281, "protect_analysis_context": true, "protect_recent": 0, "proxy_extensions": [], "rate_limit": true, "runtime_env": {"HEADROOM_INTERCEPT_READ_MIN_CHARS": null, "HEADROOM_OUTPUT_HOLDOUT": null, "HEADROOM_OUTPUT_SHAPER": null, "HEADROOM_VERBOSITY_AUTOTUNE": null, "HEADROOM_VERBOSITY_LEVEL": null, "HEADROOM_VERIFY_TRUNCATION_MAX_BYTES": null, "HEADROOM_VERIFY_TRUNCATION_ON_DISK": null}, "savings_profile": "coding", "smart_crusher_with_compaction": true, "target_ratio": null, "target_savings_percent": null, "tls": {"additive_bundles": [], "cert_store": ["bundled", "system"], "process_injected": true, "replacement_bundle": null, "system_store_active": true, "system_store_available": true, "tls_strict_disabled": false}, "vertex_api_url": null}, "ready": true, "runtime": {"anthropic_pre_upstream": {"acquire_timeout_seconds": 15.0, "codex_ws_gated": false, "compression_timeout_seconds": 30.0, "enabled": true, "memory_context_timeout_seconds": 2.0, "resolved_concurrency": 8, "source": "auto"}, "compression_executor": {"in_flight": 0, "in_flight_max": 0, "leaked_threads_total": 0, "max_workers": 8, "quarantine_activations_total": 0, "quarantine_active": false, "quarantine_skips_total": 0, "queue_timeouts_total": 0, "queue_wait_seconds_max": 0.0, "queue_wait_seconds_total": 0.0, "queued": 0, "queued_max": 0, "run_seconds_max": 0.0, "run_seconds_total": 0.0, "running": 0, "source": "auto", "timed_out_workers": 0, "timed_out_workers_max": 0}, "websocket_sessions": {"active_relay_tasks": 0, "active_sessions": 0}}, "rust_core": "loaded", "service": "headroom-proxy", "status": "healthy", "timestamp": "2026-10-20T07:56:35.151662Z", "uptime_seconds": 156.984, "version": "0.41.0"}
+
+[headroom_package]
+Name: headroom-ai
+Version: 0.41.0
+Summary: The Context Optimization Layer for LLM Applications - Cut costs by 50-90%
+Home-page: https://docs.headroomlabs.ai
+Author: Headroom Contributors
+Author-email:
+License-Expression: Apache-2.0
+Location: <scratch>/hrvenv/lib/python3.12/site-packages
+Requires: ast-grep-cli, click, litellm, opentelemetry-api, pydantic, pyyaml, rich, tiktoken, tomlkit, truststore
+Required-by:
+
+--- 5d113958 final proxy provenance ---
+head_sha=5d1139587fe0e5eb52bf3d35e21455ecc084217c
+head_porcelain_count=0
+head_litellm.__file__=<scratch>/wt-final/litellm/__init__.py
+[final_5d113958]
+port=4034
+listener_pid=265974
+process=265974 Tue Oct 20 08:04:41 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4034
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4034
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+log=<scratch>/run812/final-5d113958.log
+[finalfo_5d113958]
+port=4035
+listener_pid=265975
+process=265975 Tue Oct 20 08:04:41 2026 <repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/finalfo.yaml --port 4035
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/finalfo.yaml --port 4035
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+log=<scratch>/run812/finalfo-5d113958.log
+
+[final_cc331b30]
+head_sha=cc331b300c0ecc370640549afac9b8561f29b733
+porcelain_count=0
+litellm.__file__=<scratch>/wt-final/litellm/__init__.py
+port=4034
+listener_pid=274586
+lstart=Tue Oct 20 08:20:35 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/base.yaml --port 4034
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+log=<scratch>/run-cc33/logs/final-cc331b30.log
+[finalfo_cc331b30]
+port=4035
+listener_pid=274587
+lstart=Tue Oct 20 08:20:35 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+start_command=<repo>/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run812/finalfo.yaml --port 4035
+ANTHROPIC_API_KEY_present=True
+OPENAI_API_KEY_present=True
+HR_MASTER_KEY_present=True
+log=<scratch>/run-cc33/logs/finalfo-cc331b30.log
+[cc331b30_health]
+headroom={"ready": true, "service": "headroom-proxy", "status": "healthy", "version": "0.41.0"}
+final={"db": "connected", "status": "healthy"}
+finalfo={"db": "connected", "status": "healthy"}

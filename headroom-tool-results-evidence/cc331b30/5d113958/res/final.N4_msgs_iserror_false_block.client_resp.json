@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD9SPyt51isQqZab87uQ",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS0wYKEAgTGAI4AUIIdGhpbmtpbmcSDKfs/o6JVOBneQk/exoM6avxQBCc7lKiJ6H+IjBk8dx/KteJMv93xQ2UAgKv95RZsxHjRtMuKkUdS8a9Uf7+oV5eHbNEe58uoWfS8Ecq8AXCuLoREWvITC0Qip2aIQUC9GTqDgTy+bBXCp+laryiEYpBeb4sD/EYqrJmrnWy72AU6uTLeDV0mcFUUTQ/qzo8aNkoIEYG4HfyFYIUaZzyx0rpTD0lcx3/L+WWqLYI3ggcN+DY9BLrVUzcFRJVCiYOXBmqN5ahERxSoNYxo+N5tiBQYNWYaCIf1DnrKrYAxU63XM8+X9q2L5vszlWAsnSG4L7puK20lAiB/Z8QSXfc1AxN/o9iD1sDyuwT67InO4cboBjLiipunuW0Rie3b8wEKuDeZv7apDcWuwySXHsbqEKE9JO04oArNprXsWi4I0im0VpKch4Y5cNJjoIOk0Tvr5ytmGNXkPJTbNxVBKQ2ap0DxvDu0GyuXg787W7Oq3rUPLcnceQzbAl16ENLfn7GW7npnVGndlfMb3QDUONAfB5heRCNeJqUK3KzZC76n5ObegJPMPPzd2Uf45ecLFe5fxwfVrDOTHgiF/gy+uDYPbxe9gJEVBapTeZrNlbkD7o36BD4yaWVyi6aiDuDUYAYh5YMcRb4euTAC/A27DIGI0rxLnaaQP7ujskWsyJXcDAV0eGqKVEf6/OW4h0zPvADI+Lx5/0HT8PDhUsQlDrEufWdZET0HL6Yr1ERx2WoKyv4M/O+9xXNUd1HSxMbxxP5dPi8R7MzYv6RBLSZr1k+lEwXKkHsbnmSlQoGwqhyumSHHJMI/Z6M57KdNAexCnoVS61+HQUSK/Mapr31t0kV269W/0swVr++t1BMzTkIJjCBFEuffkUtYsw2qytU9dYW6ASwTEf0aheWndbTyEcU6Dm4VBrMLLyIAklYk2cch6LJYplL6xxlFABXoRCd6N1NuX+kUXVCMmVIFqm+iZ7NnHNn1y/t8wVOGnM7AGMv7foxJ3598LZiv0ZLsbqUQWR5i33AOTJmzCTmZcT757FI9Szix3lb34v+1jnQ7o86fNJ63u/zZfqPhZeNmUKOuEdJHYTg5fxYokbCzfO9gNH8sRgB"
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only entry in the listing with that owner."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 18781,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 18781,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 198,
+   "output_tokens_details": {
+    "thinking_tokens": 132
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

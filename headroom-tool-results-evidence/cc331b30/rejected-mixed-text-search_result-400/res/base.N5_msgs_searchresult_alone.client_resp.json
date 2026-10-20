@@ -1,0 +1,4 @@
+{
+ "status": 400,
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"litellm.BadRequestError: AnthropicException - {\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"invalid_request_error\\\",\\\"message\\\":\\\"messages.2.content.0.tool_result: if any blocks in a tool result are of type `search_result`, all blocks must be of that type\\\"},\\\"request_id\\\":\\\"req_011CgD914XecR2QUuDstaFzK\\\"}\\n\\nLiteLLM: model group 'claude-haiku-5-5' failed with the error above. No fallback was attempted.\"}}"
+}
