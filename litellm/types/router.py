@@ -43,6 +43,16 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    API_KEY_SECRET_REFERENCE_REJECTION as _API_KEY_SECRET_REFERENCE_REJECTION,
+)
+from .utils import (
+    OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
+)
+from .utils import (
+    AdminApiKeySecretReference as _AdminApiKeySecretReference,
+)
+from .utils import (
     CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
@@ -50,7 +60,6 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
-    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
@@ -362,7 +371,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
 
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
 
-    api_key: str | None = None
+    api_key: _AdminApiKeySecretReference | str | None = None
     api_base: str | None = None
     api_version: str | None = None
     ## AZURE OAUTH ##
@@ -451,15 +460,29 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_audience: str | None = None
 
 
+def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """The call path reads an ``oidc/`` api_key reference from the proxy's own filesystem or environment
+    and sends the result upstream, so it is server-owned the same way a federation field is."""
+    api_key: Final = fields.get("api_key")
+    return ("api_key",) if isinstance(api_key, str) and api_key.startswith(_OIDC_SECRET_REFERENCE_PREFIX) else ()
+
+
+def holds_api_key_secret_reference(fields: Mapping[str, object]) -> bool:
+    return bool(_api_key_secret_reference(fields))
+
+
 def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
-    """Server-owned federation or OAuth token-exchange field names set in ``fields``.
+    """Server-owned federation or OAuth token-exchange field names set in ``fields``, plus ``api_key``
+    when it holds an ``oidc/`` secret reference.
 
     ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
     which feeds the same resolution when referenced by name). Derived from
     ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
     this stays correct when a server-owned field is added there.
     """
-    return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
+    return tuple(
+        name for name in _server_owned_wif_litellm_params if fields.get(name) is not None
+    ) + _api_key_secret_reference(fields)
 
 
 def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
@@ -473,6 +496,10 @@ def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
     names.
     """
     return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
+
+
+def server_owned_wif_fields_written(values: Mapping[str, object]) -> tuple[str, ...]:
+    return server_owned_wif_fields_named(values) + _api_key_secret_reference(values)
 
 
 _WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
@@ -505,6 +532,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -709,6 +739,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
@@ -1399,7 +1431,8 @@ class AdaptiveRouterPreferences(LiteLLMBaseModel):
 
 def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
-    server-owned workload identity federation or OAuth token-exchange field.
+    server-owned workload identity federation or OAuth token-exchange field, or an ``api_key``
+    holding an ``oidc/`` secret reference.
 
     These are never settable inline on a client surface, with or without a client-side credential
     opt-in. Naming a stored credential that already holds them is the other way in and has its own
@@ -1408,6 +1441,14 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    reject_server_owned_wif_fields(body)
+    if holds_api_key_secret_reference(body):
+        raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)
+
+
+def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
+    """``reject_server_owned_wif_params`` without the ``oidc/`` api_key check, for the deployment writes whose
+    role gate already refuses a non-admin setting one."""
     submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:

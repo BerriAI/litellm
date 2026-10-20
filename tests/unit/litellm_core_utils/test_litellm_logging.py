@@ -32,6 +32,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
     REDACTED_BY_LITELLM,
     SENTRY_PII_DENYLIST,
@@ -406,6 +407,20 @@ def test_get_masked_api_base(logging_obj):
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
     assert type(masked_api_base) == str
+
+
+@pytest.mark.parametrize("no_upstream_call", [False, True])
+def test_pre_call_stamps_the_provider_handoff_only_when_a_provider_call_is_made(logging_obj, no_upstream_call):
+    """The proxy fires pre_call for a failure it raised itself (auth, rate limit, client disconnect)
+    so callbacks see it; that call never reached a provider, so neither handoff instant may be set."""
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    if no_upstream_call:
+        logging_obj.model_call_details[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+
+    logging_obj.pre_call(input="", api_key="")
+
+    assert ("api_call_start_time" in logging_obj.model_call_details) is not no_upstream_call
+    assert (logging_obj.model_call_details.get("first_api_call_start_time") is not None) is not no_upstream_call
 
 
 def test_pre_call_tolerates_missing_api_base(logging_obj):
@@ -1402,6 +1417,56 @@ class TestRetrieveBatchCostPassesModelIdentity:
         assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_forwards_vertex_location_of_the_deployment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        captured: dict[str, object] = {}
+
+        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.types.utils import LiteLLMBatch, Usage
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
+            captured.update(kwargs)
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["gemini-3.5-flash"],
+                successful_requests=1,
+                failed_requests=0,
+            )
+
+        monkeypatch.setattr(logging_module, "handle_completed_batch", fake_handle_completed_batch)
+
+        obj = LitellmLogging(
+            model="vertex_ai/gemini-3.5-flash",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-2",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "vertex_ai"
+        obj.litellm_params = {"vertex_project": "proj-1", "vertex_location": "us-central1"}
+
+        batch = LiteLLMBatch(
+            id="batch_vertex",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+        )
+
+        with contextlib.suppress(Exception):
+            await obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        assert captured, "handle_completed_batch was never called"
+        assert captured["vertex_location"] == "us-central1"
 
 
 class TestRetrieveBatchPricesOnlyFinalBatches:
@@ -8300,10 +8365,10 @@ async def test_supabase_logs_the_request_messages_and_response_for_async_request
 
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
-    return _resolve_vertex_location_for_cost(
+    return resolve_vertex_location_for_cost(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         optional_params=optional_params,
@@ -10714,6 +10779,89 @@ def test_uncached_price_leaves_no_pricing_state_on_the_call():
 
         assert cost is not None and cost > 0.0
         assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token"),
+    [(1e-06, 2e-06), (0.0, 0.0)],
+    ids=["custom_price", "explicit_zero_price"],
+)
+def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_billed_from(
+    input_cost_per_token: float, output_cost_per_token: float
+):
+    """A deployment with its own price keeps the catalog model as model_map_key but is logged at its own rates."""
+    deployment_id: Final = "lit9660-priced-deployment"
+    deployment_model_info: Final = {
+        "id": deployment_id,
+        "input_cost_per_token": input_cost_per_token,
+        "output_cost_per_token": output_cost_per_token,
+    }
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = LitellmLogging(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9660",
+            function_id="fn",
+        )
+        litellm_params: Final = {
+            "metadata": {
+                "model_group": "lit9660-group",
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": deployment_model_info,
+            }
+        }
+        logging_obj.update_environment_variables(
+            model="gpt-5.4-nano", user="", optional_params={}, litellm_params=litellm_params, custom_llm_provider="openai"
+        )
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+        )
+
+        response_cost: Final = logging_obj.response_cost_calculator(result=response)
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "custom_llm_provider": "openai",
+                "litellm_params": litellm_params,
+                "response_cost": response_cost,
+            },
+            init_response_obj=response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
+        assert payload is not None
+        assert payload["model_map_information"] == {
+            "model_map_key": "openai/gpt-5.4-nano",
+            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
+        }
+        model_map_value: Final = payload["model_map_information"]["model_map_value"]
+        assert model_map_value is not None
+        assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (
+            input_cost_per_token,
+            output_cost_per_token,
+        )
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
