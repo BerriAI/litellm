@@ -719,3 +719,26 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(path: Path):
+    """Volcengine Ark lists doubao-seed-2-1-pro-260915 at 6 / 30 CNY per million input / output tokens with
+    cache hits at 1.2 (ark.volcengine.com model detail and docs.volcengine.com/docs/82379/1544106, read
+    2026-10-20), a 1024k context window and a 256k output cap. USD rows use the 6.9565 CNY/USD rate of the
+    sibling 260628 row."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    entry = rows.get("volcengine/doubao-seed-2-1-pro-260915")
+    assert isinstance(entry, dict)
+    assert entry["litellm_provider"] == "volcengine"
+    assert entry["mode"] == "chat"
+    assert entry["max_input_tokens"] == 1024000
+    assert entry["max_output_tokens"] == 256000
+    assert entry["max_tokens"] == 256000
+    # Volcengine Ark pricing https://www.volcengine.com/docs/82379/1544106 checked 2026-10-20
+    assert entry["input_cost_per_token"] == pytest.approx(6.0 / 6.9565 / 1_000_000, rel=1e-4)
+    assert entry["output_cost_per_token"] == pytest.approx(30.0 / 6.9565 / 1_000_000, rel=1e-4)
+    assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
+    sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
+    assert isinstance(sibling, dict)
+    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
