@@ -242,6 +242,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.router_utils.embedding_batch_size_check import (
     async_log_rejection_before_provider_call,
     clear_rejected_before_provider_call,
@@ -479,6 +480,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
+        ResponseIncompleteEvent,
         ResponseInputParam,
         ResponsesAPIResponse,
     )
@@ -983,6 +985,11 @@ class FallbackAwareAnthropicMessagesStream:
     def adopt_fallback_source(self, fallback_response: object) -> None:
         self._source_iterator = fallback_response
         self.fallback_headers_adopted = True
+
+    def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+        from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+
+        return partial_responses_incomplete_event_on_disconnect(self._source_iterator)
 
     def follow_source_attribution(self) -> None:
         """
@@ -3912,6 +3919,7 @@ class Router:
                 from datetime import datetime
 
                 self._async_generator = async_generator
+                self._billing_source: object = source_iterator
                 # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
                 # would have set. The wrapper bypasses super().__init__ (it has no
                 # httpx.Response of its own and no provider config to drive), so
@@ -3960,9 +3968,28 @@ class Router:
 
             def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
                 prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+                self._billing_source = fallback_response
                 self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
                 self.fallback_headers_adopted = True
                 return prepared
+
+            def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+                """
+                The event to bill on a client disconnect. After a mid-stream hop the primary
+                stream's relayed tokens are folded into the fallback's event, the way
+                _combine_responses_fallback_usage does for a natural end of stream.
+                """
+                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+
+                current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
+                if self._billing_source is source_iterator:
+                    return current
+                primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
+                if current is None or primary is None:
+                    return current or primary
+                if primary.response.usage is not None:
+                    Router._combine_responses_fallback_usage(current, primary.response.usage)
+                return current
 
             def __aiter__(self):
                 return self
@@ -11237,6 +11264,9 @@ class Router:
             if field_value is not None:
                 model_info[field] = field_value
         backend_model: Final = Router._cost_map_backend_model(deployment)
+        pricing_provider: Final = (
+            deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
+        )
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
         if (
             params.get("model_id")
@@ -11256,23 +11286,23 @@ class Router:
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=pricing_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
                 backend_model=backend_model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+                custom_llm_provider=pricing_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=pricing_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=pricing_provider,
         )
         return model_info
 
@@ -11289,6 +11319,7 @@ class Router:
             model_info=Router._deployment_model_cost_payload(deployment),
             model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            pricing_provider=deployment.model_info.pricing_provider,
         )
 
     @staticmethod
@@ -11298,6 +11329,7 @@ class Router:
         model_info: dict,  # mutable-ok: cost-map entry
         model: str,
         custom_llm_provider: str | None,
+        pricing_provider: str | None = None,
     ) -> None:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
@@ -11321,7 +11353,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=pricing_provider or custom_llm_provider,
                 add_to_provider_model_sets=False,
             )
 
@@ -11363,6 +11395,7 @@ class Router:
                 model_info=Router._deployment_model_cost_payload(deployment),
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+                pricing_provider=deployment.model_info.pricing_provider,
             )
         self._invalidate_model_group_info_cache()
 
@@ -11657,19 +11690,9 @@ class Router:
             )
             for deployment in deployments
         )
-        params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
-        # base_model resolution mirrors get_router_model_info: unset or blank means the
-        # deployment's own model name is the cost-map key.
-        cost_map_keys: Final = tuple(
-            dict.fromkeys(  # deduplicates while preserving config order
-                key
-                for key in (
-                    model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
-                    for model_info, litellm_params in zip(model_infos, params)
-                )
-                if isinstance(key, str) and key
-            )
-        )
+        raw_deployments: Final[tuple[object, ...]] = deployments
+        pricing_keys: Final = (deployment_pricing_models(deployment) for deployment in raw_deployments)
+        cost_map_keys: Final = tuple(dict.fromkeys(keys[0] for keys in pricing_keys if keys))
         return DeploymentModelListingInfo(
             cost_map_keys=cost_map_keys,
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),

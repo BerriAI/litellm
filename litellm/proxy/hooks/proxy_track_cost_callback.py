@@ -1,6 +1,8 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
@@ -67,6 +69,37 @@ from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
+
+
+class BatchAccountingOutcome:
+    def __init__(self, call_id: str) -> None:
+        self.call_id: Final = call_id
+        self.write_started = False
+        self.failed = False
+
+    @property
+    def retryable_failure(self) -> bool:
+        return self.failed and not self.write_started
+
+
+_BATCH_ACCOUNTING: Final[ContextVar[BatchAccountingOutcome | None]] = ContextVar("batch_accounting", default=None)
+_BATCH_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+@contextmanager
+def track_batch_accounting(call_id: str) -> Generator[BatchAccountingOutcome, None, None]:
+    outcome: Final = BatchAccountingOutcome(call_id)
+    token: Final = _BATCH_ACCOUNTING.set(outcome)
+    try:
+        yield outcome
+    finally:
+        _BATCH_ACCOUNTING.reset(token)
+
+
+def _batch_accounting_for(call_id: object) -> BatchAccountingOutcome | None:
+    outcome: Final = _BATCH_ACCOUNTING.get()
+    return outcome if outcome is not None and call_id == outcome.call_id else None
+
 
 _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -445,6 +478,11 @@ class _ProxyDBLogger(CustomLogger):
             update_cache,
         )
 
+        accounting: Final = (
+            _batch_accounting_for(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get("litellm_call_id"))
+            if _BATCH_ACCOUNTING.get() is not None
+            else None
+        )
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
             verbose_proxy_logger.debug(
@@ -465,6 +503,8 @@ class _ProxyDBLogger(CustomLogger):
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
+                accounting.write_started = True
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -617,6 +657,8 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
         except Exception as e:
+            if accounting is not None:
+                accounting.failed = True
             failing_model: Final = kwargs.get("model", "")
             failing_call_type: Final = kwargs.get("call_type", "")
             error_msg: Final = (
@@ -936,7 +978,15 @@ async def _update_database_and_spend_counters_in_batch(
     project_id: str | None,
 ) -> bool:
     try:
-        charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
+        writer: Final = proxy_logging_obj.db_spend_update_writer
+        accounting: Final = (
+            _batch_accounting_for(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get("litellm_call_id"))
+            if _BATCH_ACCOUNTING.get() is not None
+            else None
+        )
+        if accounting is not None:
+            accounting.write_started = True
+        charged: Final = await writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,

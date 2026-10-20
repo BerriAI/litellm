@@ -105,10 +105,19 @@ def _count(row: tuple[object, ...] | None) -> int:
     return TypeAdapter(int).validate_python(row[0])
 
 
+def _released_schema(connection: psycopg.Connection) -> bool:
+    """A released tag's migrations image upgrades the restore (schema and request-log indexes) before the
+    stack starts, so there is no upgrade worker state to wait on."""
+    row: Final = connection.execute("""SELECT to_regclass('public."_LiteLLMPerfUpgrade"') IS NULL""").fetchone()
+    return row is None or TypeAdapter(bool).validate_python(row[0])
+
+
 def _finish_upgrade() -> None:
     if os.environ.get("E2E_DATABASE_UPGRADE") != "1":
         return
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, connect_timeout=10) as connection:
+        if _released_schema(connection):
+            return
         release_indexes(connection)
         deadline: Final = time.monotonic() + 6 * 3600
         while time.monotonic() < deadline:

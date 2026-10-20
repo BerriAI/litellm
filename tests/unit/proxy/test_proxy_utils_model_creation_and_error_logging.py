@@ -839,6 +839,125 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert request_data["response_cost"] == pytest.approx(expected_input_cost)
 
     @pytest.mark.asyncio
+    async def test_upstream_499_error_is_a_plain_failure_not_a_priced_disconnect(self):
+        """A provider answering HTTP 499 surfaces as litellm.APIError with status_code 499. Only the
+        proxy's own disconnect HTTPException means the caller hung up mid-generation, so the upstream
+        error keeps the estimated usage at zero cost like any other post-dispatch provider error."""
+        from datetime import datetime
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime(2026, 1, 1, 12, 0, 0),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data,
+            original_exception=litellm.APIError(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+                message="client closed request",
+                llm_provider="openai",
+                model="gpt-3.5-turbo",
+            ),
+        )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_after_the_call_already_completed_is_not_priced_again(self):
+        """The LLM task finished and claimed its success log (which carries the real usage and cost)
+        while a during_call guardrail task was still pending, then the caller hung up. The 499 raised
+        for that disconnect must not price the prompt a second time."""
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "count these input tokens please"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            litellm_call_id="completed-before-disconnect",
+            function_id="fn",
+        )
+        logging_obj.model_call_details.update(
+            {
+                "first_api_call_start_time": datetime(2026, 1, 1, 12, 0, 1),
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "count these input tokens please"}],
+                "call_type": "acompletion",
+            }
+        )
+        assert logging_obj.claim_async_success_log()
+        logging_obj.mark_async_success_log_enqueued()
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        assert request_data.get("response_cost", 0.0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_with_a_claimed_but_deferred_success_log_is_still_priced(self):
+        """With a post_call guardrail registered the success log is claimed but parked in the deferred slot,
+        and a 499 raised before the flush means it never runs. Nothing else bills that request, so the
+        failure row keeps the estimated input cost."""
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "count these input tokens please"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            litellm_call_id="deferred-success-never-flushed",
+            function_id="fn",
+        )
+        logging_obj.model_call_details.update(
+            {
+                "first_api_call_start_time": datetime(2026, 1, 1, 12, 0, 1),
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "count these input tokens please"}],
+                "call_type": "acompletion",
+            }
+        )
+        logging_obj.defer_async_logging = True
+        assert logging_obj.claim_async_success_log()
+        logging_obj.enqueue_deferred_logging = lambda: None
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        assert request_data["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
     async def test_client_disconnect_before_provider_handoff_is_not_priced(self):
         """A caller that hung up while the request was still in pre-call hooks never reached the
         provider, so there is no handoff instant on the logging object and the 499 row is not priced."""
@@ -2094,6 +2213,31 @@ def test_usage_the_stream_already_recovered_beats_an_estimate():
     assert lifted == (recovered, 0.25)
 
 
+def test_a_failed_request_counts_its_instructions_even_after_logging_redacted_them():
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    instructions: Final = "Review every changed line and explain each risk you find. " * 40
+    call: Final[dict[str, object]] = {
+        "call_type": "aresponses",
+        "model": FAILURE_USAGE_MODEL,
+        "messages": ONE_USER_MESSAGE,
+    }
+
+    def estimated_prompt_tokens(dispatched_instructions: str) -> int:
+        lifted: Final = _failure_usage_to_lift(
+            model_call_details={**call, "optional_params": {"instructions": dispatched_instructions}},
+            request_body={"instructions": instructions},
+            dispatched=True,
+        )
+        assert lifted is not None
+        usage: Final = lifted[0]
+        assert isinstance(usage, Usage)
+        return usage.prompt_tokens
+
+    assert estimated_prompt_tokens(REDACTED_BY_LITELLM) == estimated_prompt_tokens(instructions)
+
+
 def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
     from litellm.proxy.utils import _failure_usage_to_lift
 
@@ -2143,6 +2287,35 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
     usage, response_cost = lifted
     assert usage.prompt_tokens > 0
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+
+@pytest.mark.parametrize(("prompt_tokens", "expected_rate"), [(1_000, 1e-7), (250_000, 5e-7)])
+def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monkeypatch, prompt_tokens, expected_rate):
+    """A deployment that declares ``input_cost_per_token_above_200k_tokens`` next to its standard rate
+    bills a 250k-token prompt at the tier on the success path; the failure row must not flatten it to
+    the standard rate."""
+    from litellm.proxy.utils import _estimated_input_cost
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit-f9-tiered",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-7,
+            "input_cost_per_token_above_200k_tokens": 5e-7,
+            "output_cost_per_token": 4e-7,
+        },
+    )
+
+    response_cost = _estimated_input_cost(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        prompt_tokens=prompt_tokens,
+        deployment_id="dep-lit-f9-tiered",
+        base_model=None,
+    )
+
+    assert response_cost == pytest.approx(prompt_tokens * expected_rate)
 
 
 def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
