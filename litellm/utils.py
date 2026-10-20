@@ -1580,6 +1580,22 @@ def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
     return kwargs.get("timeout") if stream_timeout is None else stream_timeout
 
 
+def _runs_as_async_success_callback(callback: str | Callable[..., object] | CustomLogger) -> bool:
+    get_coroutine_checker: Final = litellm_utils.get_coroutine_checker
+    return get_coroutine_checker().is_async_callable(callback) or callback in ("dynamodb", "s3")
+
+
+def split_dynamic_success_callbacks(
+    callbacks: Sequence[str | Callable[..., object] | CustomLogger],
+) -> tuple[
+    tuple[str | Callable[..., object] | CustomLogger, ...], tuple[str | Callable[..., object] | CustomLogger, ...]
+]:
+    return (
+        tuple(callback for callback in callbacks if not _runs_as_async_success_callback(callback)),
+        tuple(callback for callback in callbacks if _runs_as_async_success_callback(callback)),
+    )
+
+
 def check_coroutine(value) -> bool:
     get_coroutine_checker: Final = litellm_utils.get_coroutine_checker
     return get_coroutine_checker().is_async_callable(value)

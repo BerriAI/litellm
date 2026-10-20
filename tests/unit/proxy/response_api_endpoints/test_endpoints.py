@@ -1079,6 +1079,9 @@ def _managed_files_over(table: _UniqueManagedObjectTable) -> tuple[MagicMock, Ma
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
     proxy_logging: Final = MagicMock()
     proxy_logging.get_proxy_hook = MagicMock(
         return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
