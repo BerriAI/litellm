@@ -1003,13 +1003,13 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if not litellm_params:
             return None
-        for key in ("litellm_metadata", "metadata"):
-            meta: Final = _METADATA_MAPPING.validate_python(litellm_params.get(key) or {})
-            info: Final = _METADATA_MAPPING.validate_python(meta.get("model_info") or {})
-            pricing_provider: Final = info.get("pricing_provider")
-            if isinstance(pricing_provider, str) and pricing_provider:
-                return pricing_provider
-        return None
+        candidates: Final = (
+            _METADATA_MAPPING.validate_python(
+                _METADATA_MAPPING.validate_python(litellm_params.get(key) or {}).get("model_info") or {}
+            ).get("pricing_provider")
+            for key in ("litellm_metadata", "metadata")
+        )
+        return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
     def _routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
