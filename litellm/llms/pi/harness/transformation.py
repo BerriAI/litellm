@@ -51,6 +51,7 @@ from litellm.llms.base_llm.harness.utils import (
     stderr_tail_text,
     turn_prompt,
 )
+from litellm.types.utils import ModelInfo
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
@@ -136,6 +137,8 @@ PI_THINKING_LEVEL_MAP: Final[Mapping[str, str]] = MappingProxyType({"xhigh": "xh
 
 # pi adds `store: false` to every call otherwise, which LiteLLM rejects for providers that have no `store`.
 PI_PROVIDER_COMPAT: Final[Mapping[str, object]] = MappingProxyType({"supportsStore": False})
+
+PI_CACHE_CONTROL_COMPAT: Final[Mapping[str, str]] = MappingProxyType({"cacheControlFormat": "anthropic"})
 
 PI_BUILTIN_TOOLS: Final = frozenset({*NATIVE_TO_NORMALIZED, "codemode", "tool_search"})
 FAILED_STOP_REASONS: Final[Mapping[str, str]] = MappingProxyType(
@@ -303,17 +306,30 @@ def session_model(ctx: SessionContext) -> str:
     return model
 
 
-def model_limits(model: str) -> Mapping[str, int]:
-    """contextWindow and maxTokens from LiteLLM's model map, since pi assumes 128000 and 16384 otherwise."""
+def mapped_model_info(model: str, through_gateway: bool) -> ModelInfo | None:
+    """LiteLLM's model map entry. A gateway model group is looked up as litellm_proxy, the way the SDK prices it,
+    which also keeps an unmapped group from printing get_llm_provider's provider-list banner on stdout."""
     try:
-        info: Final = get_model_info(model)
+        return get_model_info(model, custom_llm_provider="litellm_proxy" if through_gateway else None)
     except ModelNotMappedError:
+        return None
+
+
+def model_limits(info: ModelInfo | None) -> Mapping[str, int]:
+    """contextWindow and maxTokens from LiteLLM's model map, since pi assumes 128000 and 16384 otherwise."""
+    if info is None:
         return MappingProxyType({})
     limits: Final = (("contextWindow", info.get("max_input_tokens")), ("maxTokens", info.get("max_output_tokens")))
     return MappingProxyType({key: value for key, value in limits if isinstance(value, int)})
 
 
-def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | None) -> str:
+def model_compat(info: ModelInfo | None) -> Mapping[str, object]:
+    """Anthropic cache_control marks, which LiteLLM translates per provider, for models that support prompt caching."""
+    caches: Final = info is not None and info.get("supports_prompt_caching") is True
+    return MappingProxyType({"compat": PI_CACHE_CONTROL_COMPAT} if caches else {})
+
+
+def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | None, info: ModelInfo | None) -> str:
     # pi clamps --thinking to "off" unless the model declares reasoning, and offers xhigh/max only when
     # thinkingLevelMap names them. Declaring reasoning without a requested level would make pi send its
     # default reasoning_effort on every call, so it is declared only when a level is asked for
@@ -328,7 +344,7 @@ def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | Non
             "api": "openai-completions",
             "apiKey": f"${PI_TOKEN_ENV}",
             "compat": PI_PROVIDER_COMPAT,
-            "models": (MappingProxyType({"id": model, **model_limits(model), **reasoning}),),
+            "models": (MappingProxyType({"id": model, **model_limits(info), **model_compat(info), **reasoning}),),
         }
     )
     return json.dumps({"providers": {PI_PROVIDER_ID: provider}}, default=_plain_json)
@@ -399,7 +415,11 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         model: Final = session_model(ctx)
         options: Final = self.get_options(ctx)
         base_url: Final = ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1"
-        models_file: Final = (MODELS_FILENAME, build_models_json(model, base_url, options.thinking).encode("utf-8"))
+        info: Final = mapped_model_info(model, through_gateway=ctx.gateway is not None)
+        models_file: Final = (
+            MODELS_FILENAME,
+            build_models_json(model, base_url, options.thinking, info).encode("utf-8"),
+        )
         instructions: Final = build_instructions(ctx)
         instructions_file: Final = (
             ((INSTRUCTIONS_FILENAME, instructions.encode("utf-8")),) if instructions is not None else ()

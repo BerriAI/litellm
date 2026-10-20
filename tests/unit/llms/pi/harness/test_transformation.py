@@ -16,7 +16,7 @@ from typing import Final
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from litellm.harness.context import SessionContext
+from litellm.harness.context import GatewayTarget, SessionContext
 from litellm.harness.errors import (
     CapabilityUnsupported,
     HarnessError,
@@ -203,6 +203,7 @@ def make_ctx(
     sandbox: FakeSandbox | None = None,
     *,
     model: str | None = MODEL,
+    gateway: GatewayTarget | None = None,
     endpoint: FakeEndpoint | None = DEFAULT_ENDPOINT,
     options: HarnessOptions | None = None,
     permissions: PermissionMode = "full",
@@ -216,6 +217,7 @@ def make_ctx(
         sandbox=sandbox or FakeSandbox(),
         session_id="s1",
         model=model,
+        gateway=gateway,
         endpoint=endpoint,
         options=options,
         permissions=permissions,
@@ -493,7 +495,7 @@ def test_options_config_cannot_load_code_or_reroute_model():
 
 
 def test_build_models_json():
-    models: Final = json.loads(build_models_json("m1", "http://h:1/v1", None))
+    models: Final = json.loads(build_models_json("m1", "http://h:1/v1", None, None))
     assert models == {
         "providers": {
             "litellm": {
@@ -504,7 +506,10 @@ def test_build_models_json():
                 "models": [{"id": "m1"}],
             }
         }
-    }, "an unmapped model keeps pi's own limits, and pi must not send `store`, which non-OpenAI providers reject"
+    }, (
+        "an unmapped model keeps pi's own limits and no cache_control marks, "
+        "and pi must not send `store`, which non-OpenAI providers reject"
+    )
 
 
 def test_mapped_model_declares_litellm_context_and_output_limits() -> None:
@@ -514,10 +519,40 @@ def test_mapped_model_declares_litellm_context_and_output_limits() -> None:
     assert (declared["contextWindow"], declared["maxTokens"]) == (info["max_input_tokens"], info["max_output_tokens"])
 
 
+def test_model_that_supports_prompt_caching_asks_pi_for_cache_control_marks() -> None:
+    assert get_model_info(MODEL).get("supports_prompt_caching") is True
+    declared: Final = setup_models(setup_for(make_ctx()))["providers"]["litellm"]["models"][0]
+    assert declared["compat"] == {"cacheControlFormat": "anthropic"}, (
+        "pi only marks cache_control for OpenRouter Anthropic models by itself, so every Claude call missed the cache"
+    )
+
+
+GATEWAY: Final = GatewayTarget(api_base="http://gateway:4000", api_key="sk-gateway")
+
+
+@pytest.mark.parametrize(
+    ("group", "declared_limits"),
+    [
+        (MODEL, {"contextWindow": get_model_info(MODEL)["max_input_tokens"]}),
+        ("team-default-model", {}),
+    ],
+)
+def test_gateway_group_is_looked_up_without_printing_to_stdout(
+    group: str, declared_limits: Mapping[str, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    declared: Final = setup_models(setup_for(make_ctx(model=group, gateway=GATEWAY)))["providers"]["litellm"]["models"][
+        0
+    ]
+    assert {key: declared[key] for key in declared_limits} == declared_limits
+    assert ("maxTokens" in declared) == bool(declared_limits)
+    assert capsys.readouterr().out == "", "an unmapped gateway group printed LiteLLM's provider-list banner on stdout"
+
+
 MAPPED_MODEL: Final = {
     "id": MODEL,
     "contextWindow": get_model_info(MODEL)["max_input_tokens"],
     "maxTokens": get_model_info(MODEL)["max_output_tokens"],
+    "compat": {"cacheControlFormat": "anthropic"},
 }
 REASONING_MODEL: Final = {**MAPPED_MODEL, "reasoning": True, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}}
 
