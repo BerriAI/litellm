@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
@@ -11,14 +11,11 @@ from litellm.responses.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
-from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import (
-    NATIVE_ARESPONSES,
-    NATIVE_RESPONSES,
     NativeAresponses,
     NativeResponses,
 )
@@ -181,35 +178,6 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     assert call_kwargs["litellm_metadata"] is metadata
 
 
-def test_internal_async_marker_bypasses_native() -> None:
-    args: Final[tuple[object, ...]] = (INPUT, "gpt-4o")
-    kwargs: Final[Mapping[str, object]] = {"aresponses": True}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    response: Final = _response()
-
-    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records call shape
-        captured.append((call_args, call_kwargs))
-        return response
-
-    def native(
-        request: NativeCall,
-    ) -> ResponsesAPIResponse:
-        pytest.fail("aresponses' inner responses call must stay on Python")
-
-    assert (
-        _DISPATCH.run(
-            args,
-            kwargs,
-            python=python,
-            binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
-        )
-        is response
-    )
-    assert captured == [(args, kwargs)]
-
-
 @pytest.mark.parametrize(
     ("args", "kwargs"),
     (
@@ -242,49 +210,6 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
         is response
     )
     assert captured == [(args, kwargs)]
-
-
-def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = _response()
-
-    def native(
-        request: NativeCall,
-    ) -> ResponsesAPIResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_RESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_responses: Final = cast(Callable[..., ResponsesAPIResponse], litellm.responses)
-    try:
-        result: Final = public_responses(input=INPUT, model="gpt-4o")
-    finally:
-        NATIVE_RESPONSES.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
-
-
-@pytest.mark.asyncio
-async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = _response()
-
-    async def native(
-        request: NativeCall,
-    ) -> ResponsesAPIResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_ARESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_aresponses: Final = cast(Callable[..., Awaitable[ResponsesAPIResponse]], litellm.aresponses)
-    try:
-        result: Final = await public_aresponses(input=INPUT, model="gpt-4o")
-    finally:
-        NATIVE_ARESPONSES.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:

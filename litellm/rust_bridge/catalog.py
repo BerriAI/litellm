@@ -25,11 +25,23 @@ class Route(str, Enum):
     TOKENIZER = "tokenizer"
 
 
+class Target(str, Enum):
+    CHAT_COMPLETIONS = "chat_completions"
+    MESSAGES = "messages"
+    RESPONSES = "responses"
+
+
+class Feature(str, Enum):
+    SAFEGUARDS_CLASSIFIER = "safeguards_classifier"
+
+
 @dataclass(frozen=True, slots=True)
 class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
+    target: Target | None = None
+    features: frozenset[Feature] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,12 +50,19 @@ class RouteRule:
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
+    targets: frozenset[Target] | None = None
+    features: frozenset[Feature] | None = None
+
+    def unconstrained(self) -> bool:
+        return self.providers is None and self.models is None and self.targets is None and self.features is None
 
     def matches(self, context: RouteContext) -> bool:
         return (
             context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
+            and (self.targets is None or context.target in self.targets)
+            and (self.features is None or not self.features.isdisjoint(context.features))
         )
 
 
@@ -53,7 +72,9 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic", "deepseek", "vertex_ai"})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
@@ -69,3 +90,9 @@ def rollout(context: RouteContext, rules: Rules | None = None) -> Rollout:
 
 def decision(context: RouteContext, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))
+
+
+def rust_might_handle(route: Route, rules: Rules) -> bool:
+    own: Final = tuple(rule for rule in rules if rule.route is route)
+    last: Final = next((i for i, rule in enumerate(own) if rule.unconstrained()), len(own))
+    return any(_decision(rule.rollout) is not Decision.PYTHON for rule in own[: last + 1])
