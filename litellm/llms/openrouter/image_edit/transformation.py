@@ -78,7 +78,7 @@ else:
 # request body into the upstream /chat/completions call. Forwarding them would let
 # a caller of an allowed image-edit model redirect the request to other models or
 # providers, escaping LiteLLM's model-authorization and budget enforcement.
-OPENROUTER_ROUTING_CONTROL_PARAMS = frozenset({"models", "route", "provider", "transforms"})
+OPENROUTER_ROUTING_CONTROL_PARAMS: Final = frozenset({"models", "route", "provider", "transforms"})
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))

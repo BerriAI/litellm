@@ -878,7 +878,7 @@ def image_edit(
 
         # Multipart OpenAI-compatible routes merge the caller's params here, flattened
         # and with extra_body taking precedence; the default path below must not redo it.
-        merged_provider_params = image_edit_provider_config.use_multipart_form_data() and (
+        merged_provider_params: Final = image_edit_provider_config.use_multipart_form_data() and (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
