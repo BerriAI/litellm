@@ -29,9 +29,10 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-from litellm.caching.dual_cache import DualCache
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -43,6 +44,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -6404,14 +6406,10 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     cache TTL. Sharing this scalar is safe because it carries no limits or
     permissions, so it cannot resurrect an invalidated auth blob.
     """
-    from litellm.caching.caching import DualCache
-
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
     global_key = "{}:spend".format(admin_name)
 
     def fake_get(key):
-        if key == "user-lit":
-            return {"user_id": "user-lit", "spend": 1.0}
         if key == global_key:
             return 10.0
         return None
@@ -6420,7 +6418,8 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
         return [fake_get(key) for key in keys]
 
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = DualCache(default_in_memory_ttl=300)
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key="user-lit", value=LiteLLM_UserTable(user_id="user-lit", spend=1.0), local_only=True)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     try:
         with patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=fake_batch_get)):
@@ -6443,9 +6442,11 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
                 shared_keys = [
                     k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
                 ]
-                assert "user-lit" in local_keys
-                assert global_key not in local_keys
+                assert local_keys == []
                 assert shared_keys == [global_key]
+                current_user: Final = cache.get_cache(key="user-lit", model_type=LiteLLM_UserTable)
+                assert current_user is not None
+                assert current_user.spend == 6.0
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
 
