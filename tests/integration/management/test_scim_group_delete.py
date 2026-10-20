@@ -1,9 +1,10 @@
 """DELETE /scim/v2/Groups/{id} deletes the group's team the way /team/delete does.
 
-The members' group entries, their membership rows and every key on the team go in one locked pass whatever the
-roster size, the configured admin group's members are demoted, and a member a concurrent group write added while
-the delete waited on the team lock, or while it was demoting the roster it had read, is demoted with the rest. The
-group is 404 after, on every worker and on the peer proxy, and an unrelated key keeps serving.
+The members' group entries, their membership rows and the keys the members hold on the team go in one locked
+pass whatever the roster size, the configured admin group's members are demoted, and a member a concurrent group
+write added while the delete waited on the team lock, or while it was demoting the roster it had read, is demoted
+with the rest. The group is 404 after, on every worker and on the peer proxy, and an unrelated key keeps serving.
+A service-account key and a model on the team stay, so re-creating the group with the same id brings them back.
 """
 
 import os
@@ -20,10 +21,11 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import GATEWAY_LIMITS, JSON_OBJECT, Gateway, eventually, object_value
+from integration._support.client import GATEWAY_LIMITS, JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.scim import (
+    GROUP_SCHEMA,
     add_to_group,
     assert_gone,
     assert_landed,
@@ -39,6 +41,7 @@ from integration._support.scim import (
     membership_user_ids,
     replace_group,
     seed_users,
+    service_account_key,
     team_key,
     user_role,
     waiters_on_lock_held_by,
@@ -56,6 +59,8 @@ MASTER_KEY_USER: Final = "default_user_id"
 BURST_GROUPS: Final = 20
 OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
 DELETED_TEAM_RECORDS_SQL: Final = 'SELECT team_id FROM "LiteLLM_DeletedTeamTable" WHERE team_id = %s'
+DELETED_KEY_RECORDS_SQL: Final = 'SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s'
+TEAM_MODEL_IDS_SQL: Final = """SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_info->>'team_id' = %s"""
 DELETED_AUDIT_ROWS_SQL: Final = """
 SELECT table_name, action, object_id, changed_by, changed_by_api_key
 FROM "LiteLLM_AuditLog"
@@ -86,6 +91,10 @@ def _models_status(candidate: Gateway, key: str) -> int:
     return candidate.request("GET", "/v1/models", key=key).status_code
 
 
+def _team_model_ids(team: str) -> frozenset[str]:
+    return frozenset(string_value(row["model_id"]) for row in read_rows(TEAM_MODEL_IDS_SQL, (team,)))
+
+
 def _assert_revoked_everywhere(proxies: tuple[Gateway, ...], key: str) -> None:
     for candidate in proxies:
         eventually(partial(_models_status, candidate, key), lambda code: code == 401, seconds=30)
@@ -113,7 +122,7 @@ def test_deleting_one_group_leaves_the_members_other_group_intact(gateway: Gatew
         users: Final = seed_users(scenario, 3)
         doomed: Final = created_team(scenario, create_group(gateway, users))
         kept: Final = created_team(scenario, create_group(gateway, users))
-        kept_key: Final = team_key(gateway, kept)
+        kept_key: Final = team_key(gateway, kept, users[0])
 
         deleted: Final = delete_group(gateway, doomed)
         assert deleted.status_code == 204, deleted.text
@@ -145,7 +154,7 @@ def test_deleting_the_admin_group_demotes_its_members_and_writes_an_audit_row_na
         users: Final = seed_users(scenario, 3)
         team: Final = created_team(scenario, create_group(candidate, users, display_name=admin_alias))
         assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
-        key: Final = team_key(candidate, team)
+        key: Final = team_key(candidate, team, users[0])
 
         deleted: Final = delete_group(candidate, team)
         assert deleted.status_code == 204, deleted.text
@@ -183,7 +192,7 @@ def test_a_member_added_while_the_admin_group_delete_waits_on_the_team_lock_is_d
         (late,) = seed_users(scenario, 1)
         team: Final = created_team(scenario, create_group(candidate, users, display_name=admin_alias))
         assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
-        key: Final = team_key(candidate, team)
+        key: Final = team_key(candidate, team, users[0])
 
         with held_team_lock(team) as holder:
             put: Final = pool.submit(replace_group, candidate, team, (*users, late), display_name=admin_alias)
@@ -223,7 +232,7 @@ def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_
         (late,) = seed_users(scenario, 1)
         team: Final = created_team(scenario, create_group(candidate, users, display_name=admin_alias))
         assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
-        key: Final = team_key(candidate, team)
+        key: Final = team_key(candidate, team, users[0])
 
         with held_user_row(users[0]) as holder:
             delete: Final = pool.submit(delete_group, candidate, team)
@@ -237,6 +246,38 @@ def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_
         assert deleted.status_code == 204, deleted.text
         assert_gone(candidate, team, (*users, late), key)
         assert _roles_of(candidate, (*users, late)) == frozenset({DEMOTED_ROLE})
+
+
+def test_a_group_delete_revokes_member_keys_and_a_re_created_group_gets_its_service_account_key_and_model_back(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        users: Final = seed_users(scenario, 2)
+        team: Final = created_team(scenario, create_group(gateway, users))
+        member_key: Final = team_key(gateway, team, users[0])
+        service_key: Final = service_account_key(gateway, scenario, team)
+        scenario.model(model_info={"team_id": team})
+        team_models: Final = _team_model_ids(team)
+        assert team_models != frozenset()
+
+        deleted: Final = delete_group(gateway, team)
+        assert deleted.status_code == 204, deleted.text
+
+        assert gateway.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
+        assert membership_user_ids(team) == frozenset()
+        assert keys_of(team) == frozenset({_hashed(service_key)})
+        assert _team_model_ids(team) == team_models
+        _assert_revoked_everywhere((gateway,), member_key)
+
+        recreated: Final = gateway.request(
+            "POST",
+            "/scim/v2/Groups",
+            {"schemas": [GROUP_SCHEMA], "externalId": team, "displayName": f"integration-{uuid.uuid4().hex}"},
+        )
+        assert recreated.status_code == 201, recreated.text
+        assert string_value(body(recreated)["id"]) == team
+        eventually(partial(_models_status, gateway, service_key), lambda code: code == 200, seconds=90)
+        assert _models_status(gateway, member_key) == 401
 
 
 def test_deleting_an_unknown_group_is_404(gateway: Gateway) -> None:
@@ -264,6 +305,7 @@ def test_two_deletes_racing_on_one_group_answer_204_then_404_and_record_the_team
     with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
         users: Final = seed_users(scenario, 2)
         team: Final = created_team(scenario, create_group(gateway, users))
+        key: Final = team_key(gateway, team, users[0])
 
         with held_team_lock(team) as holder:
             deletes: Final = (pool.submit(delete_group, gateway, team), pool.submit(delete_group, gateway, team))
@@ -271,6 +313,7 @@ def test_two_deletes_racing_on_one_group_answer_204_then_404_and_record_the_team
 
         assert sorted(delete.result().status_code for delete in deletes) == [204, 404]
         assert len(read_rows(DELETED_TEAM_RECORDS_SQL, (team,))) == 1
+        assert len(read_rows(DELETED_KEY_RECORDS_SQL, (_hashed(key),))) == 1
         assert gateway.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
 
 
@@ -309,7 +352,7 @@ def test_group_delete_on_one_proxy_revokes_the_team_key_and_the_group_on_the_pee
     with gateway.scenario() as scenario:
         users: Final = seed_users(scenario, 3)
         team: Final = created_team(scenario, create_group(gateway, users))
-        key: Final = team_key(gateway, team)
+        key: Final = team_key(gateway, team, users[0])
         assert _models_status(peer, key) == 200
         assert member_ids(peer.get(f"/scim/v2/Groups/{team}")) == frozenset(users)
 
@@ -327,7 +370,7 @@ def test_twenty_group_deletes_split_across_two_proxies_all_land(gateway: Gateway
         bystander: Final = scenario.key()
         rosters: Final = tuple(seed_users(scenario, 3) for _ in range(BURST_GROUPS))
         teams: Final = tuple(created_team(scenario, create_group(gateway, users)) for users in rosters)
-        keys: Final = tuple(team_key(gateway, team) for team in teams)
+        keys: Final = tuple(team_key(gateway, team, users[0]) for team, users in zip(teams, rosters))
 
         assigned: Final = tuple(proxies[index % 2] for index in range(BURST_GROUPS))
         responses: Final = tuple(pool.map(delete_group, assigned, teams))
@@ -358,8 +401,8 @@ def test_group_delete_after_a_worker_was_killed_still_completes(gateway: Gateway
         second_users: Final = seed_users(scenario, 3)
         first: Final = created_team(scenario, create_group(candidate, first_users))
         second: Final = created_team(scenario, create_group(candidate, second_users))
-        first_key: Final = team_key(candidate, first)
-        second_key: Final = team_key(candidate, second)
+        first_key: Final = team_key(candidate, first, first_users[0])
+        second_key: Final = team_key(candidate, second, second_users[0])
 
         with _fresh_connection(candidate) as survivor:
             with owned.replacing_worker(workers[0]) as kill:

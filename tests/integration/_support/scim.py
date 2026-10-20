@@ -9,7 +9,14 @@ from typing import Final
 
 import httpx
 import psycopg
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    delete_key_if_present,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows, write_rows
 from pydantic import JsonValue
 
@@ -115,9 +122,18 @@ def created_team(scenario: Scenario, created: httpx.Response) -> str:
     return team
 
 
-def team_key(candidate: Gateway, team: str) -> str:
-    created: Final = candidate.post("/key/generate", {"team_id": team, "key_alias": f"integration-{uuid.uuid4().hex}"})
+def team_key(candidate: Gateway, team: str, user: str) -> str:
+    created: Final = candidate.post(
+        "/key/generate", {"team_id": team, "user_id": user, "key_alias": f"integration-{uuid.uuid4().hex}"}
+    )
     return string_value(created["key"])
+
+
+def service_account_key(candidate: Gateway, scenario: Scenario, team: str) -> str:
+    created: Final = candidate.post("/key/generate", {"team_id": team, "key_alias": f"integration-{uuid.uuid4().hex}"})
+    key: Final = string_value(created["key"])
+    scenario.cleanups.callback(delete_key_if_present, candidate, key)
+    return key
 
 
 def membership_user_ids(team: str) -> frozenset[str]:

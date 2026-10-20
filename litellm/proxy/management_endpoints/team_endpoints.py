@@ -113,6 +113,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
@@ -428,6 +429,16 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_deletedteamtable(self) -> "TableActions[prisma_models.LiteLLM_DeletedTeamTable]": ...
 
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+    @property
+    def litellm_jwtkeymapping(self) -> "TableActions[prisma_models.LiteLLM_JWTKeyMapping]": ...
+
+
+def _team_delete_tx(tx: "Prisma") -> _TeamDeleteTx:
+    return tx  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
 
 _LOCK_DELETED_TEAM_MEMBERS_SQL: Final = """
 SELECT user_id, teams FROM "LiteLLM_UserTable" WHERE teams && $1::text[] ORDER BY user_id COLLATE "C" FOR UPDATE
@@ -459,7 +470,7 @@ _DetachedMembers: Final = TypeAdapter(tuple[_DetachedMember, ...])
 @dataclass(frozen=True, slots=True)
 class DeletedTeams:
     team_ids: tuple[str, ...]
-    member_user_ids: tuple[str, ...]
+    roster_user_ids: tuple[str, ...]
 
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
@@ -4605,61 +4616,15 @@ async def delete_validated_teams(
     litellm_changed_by: str | None,
 ) -> DeletedTeams:
     """
-    What ``/team/delete`` does once the teams exist and the caller may delete them: the
-    audit rows, the teams' keys and BYOK models, then under every team's advisory lock the
-    deleted-team records and rows of the teams still there with their membership rows and
-    user references, then the cache evictions. ``team_ids`` names the teams this call
-    deleted, so one a concurrent delete removed first is left out and recorded only once.
-    ``member_user_ids`` names every user the deletion touched:
-    the rosters as the caller read them plus the users the locked sweep detached, which
-    includes a member a concurrent roster write added after that read.
+    What ``/team/delete`` does once the teams exist and the caller may delete them: every key
+    and BYOK model of the teams, then ``delete_validated_team_rows``.
     """
-    from litellm.proxy.management_helpers.audit_logs import (
-        get_audit_log_changed_by,
-        is_audit_logging_enabled,
-    )
     from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
     team_ids: Final = [team.team_id for team in teams]
-
-    if is_audit_logging_enabled():
-        # make an audit log for each team deleted
-        for team_id in team_ids:
-            team_row: LiteLLM_TeamTable | None = await prisma_client.get_data(
-                team_id=team_id, table_name="team", query_type="find_unique"
-            )
-
-            if team_row is None:
-                continue
-
-            _team_row = team_row.json(exclude_none=True)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                        object_id=team_id,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_team_row,
-                    )
-                )
-            )
-
-    # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
     # Fetch keys before deletion to persist them
@@ -4711,10 +4676,36 @@ async def delete_validated_teams(
         llm_router=llm_router,
     )
 
-    rostered_per_team: Final = await _resolve_deleted_team_member_user_ids(
+    return await delete_validated_team_rows(
         teams=teams,
         prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
     )
+
+
+async def delete_validated_team_rows(
+    teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> DeletedTeams:
+    """
+    Under every team's advisory lock, read the teams still there and delete the keys their
+    rostered members hold on them, their deleted-team records and rows, and their membership
+    rows and user references; then the cache evictions and audit rows. Keys of users off the
+    roster and the teams' models stay, the way a SCIM member removal leaves them.
+    ``team_ids`` names the teams this call deleted, so one a concurrent delete removed first is
+    left out and recorded only once. ``roster_user_ids`` names the members on the rosters the
+    lock read, which includes a member a concurrent roster write added after the caller read
+    the team.
+    """
+    from litellm.proxy.proxy_server import (
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    team_ids: Final = [team.team_id for team in teams]
 
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
@@ -4727,11 +4718,21 @@ async def delete_validated_teams(
     async with prisma_client.tx(timeout=timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
         for team_id in sorted(team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        present: Final = await _delete_present_teams_tx(
-            teams=teams, tx=tx, user_api_key_dict=user_api_key_dict, litellm_changed_by=litellm_changed_by
+        team_tx: Final = _team_delete_tx(tx)
+        locked: Final = await _locked_teams_tx(team_ids=team_ids, tx=team_tx)
+        member_keys, jwt_mapping_cache_keys = await _delete_roster_member_keys_tx(
+            locked=locked,
+            tx=tx,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
         )
-        detached_per_team: Final = await _sweep_deleted_team_references_tx(team_ids=team_ids, tx=tx)
+        await _delete_locked_teams_tx(
+            locked=locked, tx=team_tx, user_api_key_dict=user_api_key_dict, litellm_changed_by=litellm_changed_by
+        )
+        detached_per_team: Final = await _sweep_deleted_team_references_tx(team_ids=team_ids, tx=team_tx)
 
+    rostered_per_team: Final = await _resolve_deleted_team_member_user_ids(teams=locked, prisma_client=prisma_client)
     member_ids_per_team: Final = _members_per_deleted_team(rostered_per_team, detached_per_team)
 
     # Evict AFTER the rows are gone. Both writers of these keys (`_cache_team_object` and
@@ -4740,7 +4741,7 @@ async def delete_validated_teams(
     # invalidated anything. Nothing fallible runs between the delete and this, or a failure there
     # would strand the deleted team in cache.
     await _invalidate_deleted_team_cache(
-        teams=teams,
+        teams=locked,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -4748,14 +4749,30 @@ async def delete_validated_teams(
         member_ids_per_team=member_ids_per_team,
         user_api_key_cache=user_api_key_cache,
     )
+    await _invalidate_deleted_key_cache(
+        keys=member_keys,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
-    for deleted_team in teams:
+    _schedule_deleted_team_audit_rows(
+        teams=locked, user_api_key_dict=user_api_key_dict, litellm_changed_by=litellm_changed_by
+    )
+    if member_keys:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=member_keys,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+
+    for deleted_team in locked:
         _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return DeletedTeams(
-        team_ids=tuple(team_id for team_id in team_ids if team_id in present),
-        member_user_ids=tuple(dict.fromkeys(chain.from_iterable(user_ids for _, user_ids in member_ids_per_team))),
+        team_ids=tuple(team.team_id for team in locked),
+        roster_user_ids=tuple(dict.fromkeys(chain.from_iterable(_roster_user_ids(team) for team in locked))),
     )
 
 
@@ -4768,16 +4785,62 @@ def _members_per_deleted_team(
     )
 
 
-async def _delete_present_teams_tx(
-    teams: Sequence[LiteLLM_TeamTable],
+def _roster_user_ids(team: LiteLLM_TeamTable) -> tuple[str, ...]:
+    return tuple(member.user_id for member in team.members_with_roles if member.user_id is not None)
+
+
+def _is_roster_member_key(
+    key: "prisma_models.LiteLLM_VerificationToken", roster_by_team: Mapping[str, frozenset[str]]
+) -> bool:
+    return key.team_id is not None and key.user_id in roster_by_team.get(key.team_id, frozenset())
+
+
+async def _locked_teams_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> tuple[LiteLLM_TeamTable, ...]:
+    rows: Final = await find_many_in(tx.litellm_teamtable, "team_id", team_ids)
+    return tuple(LiteLLM_TeamTable.model_validate(row.model_dump()) for row in rows)
+
+
+async def _delete_roster_member_keys_tx(
+    locked: Sequence[LiteLLM_TeamTable],
+    tx: "Prisma",
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> tuple[tuple["prisma_models.LiteLLM_VerificationToken", ...], tuple[str, ...]]:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        persist_deleted_verification_tokens,
+    )
+
+    team_tx: Final = _team_delete_tx(tx)
+    roster_by_team: Final = MappingProxyType({team.team_id: frozenset(_roster_user_ids(team)) for team in locked})
+    team_keys: Final = await find_many_in(team_tx.litellm_verificationtoken, "team_id", tuple(roster_by_team))
+    member_keys: Final = tuple(key for key in team_keys if _is_roster_member_key(key, roster_by_team))
+    if not member_keys:
+        return (), ()
+    tokens: Final = tuple(key.token for key in member_keys)
+    jwt_mappings: Final = await find_many_in(team_tx.litellm_jwtkeymapping, "token", tokens)
+    await persist_deleted_verification_tokens(
+        keys=member_keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+        tx=tx,
+    )
+    await delete_many_in(team_tx.litellm_verificationtoken, "token", tokens, atomicity="caller_transaction")
+    return member_keys, tuple(
+        jwt_key_mapping_cache_key(mapping.jwt_claim_name, mapping.jwt_claim_value, mapping.jwt_issuer)
+        for mapping in jwt_mappings
+    )
+
+
+async def _delete_locked_teams_tx(
+    locked: Sequence[LiteLLM_TeamTable],
     tx: _TeamDeleteTx,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
-) -> frozenset[str]:
-    requested: Final = tuple(team.team_id for team in teams)
-    present: Final = frozenset(team.team_id for team in await find_many_in(tx.litellm_teamtable, "team_id", requested))
+) -> None:
     await _persist_deleted_team_records(
-        teams=tuple(team for team in teams if team.team_id in present),
+        teams=locked,
         deleted_teams=tx.litellm_deletedteamtable,
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
@@ -4785,10 +4848,47 @@ async def _delete_present_teams_tx(
     await delete_many_in(
         tx.litellm_teamtable,
         "team_id",
-        tuple(team_id for team_id in requested if team_id in present),
+        tuple(team.team_id for team in locked),
         atomicity="caller_transaction",
     )
-    return present
+
+
+def _schedule_deleted_team_audit_rows(
+    teams: Sequence[LiteLLM_TeamTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> None:
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+        is_audit_logging_enabled,
+    )
+    from litellm.proxy.proxy_server import (
+        create_audit_log_for_update,
+        litellm_proxy_admin_name,
+    )
+
+    if not is_audit_logging_enabled():
+        return
+    for team in teams:
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team.team_id,
+                    action="deleted",
+                    updated_values="{}",
+                    before_value=team.model_dump_json(exclude_none=True),
+                )
+            )
+        )
 
 
 async def _sweep_deleted_team_references_tx(

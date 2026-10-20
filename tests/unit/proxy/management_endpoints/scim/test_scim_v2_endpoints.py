@@ -3089,7 +3089,7 @@ def _group_delete_mocks(
 ) -> tuple[MagicMock, MagicMock, AsyncMock]:
     """Prisma and its transaction, whose one user is admin only through the configured
     admin group and whose group lookup answers ``team``, plus the patched team delete,
-    which reports member-1 and every teammate as the users it detached."""
+    which reports member-1 and every teammate on the roster it read under the lock."""
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
@@ -3104,14 +3104,14 @@ def _group_delete_mocks(
         AsyncMock(return_value=prisma),
     )
     delete_team_mock: Final = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.delete_validated_teams",
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_validated_team_rows",
         AsyncMock(return_value=_deleted_admin_group(*(user_id for user_id, _ in teammates))),
     )
     return prisma, tx, delete_team_mock
 
 
-def _deleted_admin_group(*detached_teammates: str) -> DeletedTeams:
-    return DeletedTeams(team_ids=(_ADMIN_GROUP,), member_user_ids=("member-1", *detached_teammates))
+def _deleted_admin_group(*locked_teammates: str) -> DeletedTeams:
+    return DeletedTeams(team_ids=(_ADMIN_GROUP,), roster_user_ids=("member-1", *locked_teammates))
 
 
 def _admin_group_team() -> LiteLLM_TeamTable:
@@ -3158,8 +3158,8 @@ async def test_delete_group_demotes_a_member_a_concurrent_group_write_added_afte
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
     """A member a concurrent PUT added to the admin group after this delete read the
-    roster is absent from the first recompute, so the second one runs over the users the
-    team delete reports as detached, which includes that late member."""
+    roster is absent from the first recompute, so the second one runs over the roster the
+    team delete read under the lock, which includes that late member."""
     _, tx, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team(), teammates=(("member-2", ()),))
 
     response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
@@ -3212,7 +3212,7 @@ async def test_delete_group_answers_404_when_a_concurrent_delete_removed_the_tea
     leaves the team delete nothing to delete or report, so this request answers 404, the
     same as a group that never existed."""
     _, _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-    delete_team_mock.return_value = DeletedTeams(team_ids=(), member_user_ids=())
+    delete_team_mock.return_value = DeletedTeams(team_ids=(), roster_user_ids=())
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)

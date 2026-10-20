@@ -69,7 +69,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
-    delete_validated_teams,
+    delete_validated_team_rows,
     new_team,
     team_member_add,
     team_member_delete,
@@ -3091,7 +3091,7 @@ async def delete_group(
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 
         await _recompute_scim_member_roles(prisma_client, member_ids, without_team_id=group_id)
-        deleted: Final = await delete_validated_teams(
+        deleted: Final = await delete_validated_team_rows(
             teams=(LiteLLM_TeamTable.model_validate(existing_team.model_dump()),),
             prisma_client=prisma_client,
             user_api_key_dict=UserAPIKeyAuth(
@@ -3101,7 +3101,7 @@ async def delete_group(
             ),
             litellm_changed_by=None,
         )
-        await _recompute_scim_member_roles(prisma_client, deleted.member_user_ids, without_team_id=group_id)
+        await _recompute_scim_member_roles(prisma_client, deleted.roster_user_ids, without_team_id=group_id)
         if group_id not in deleted.team_ids:
             raise _group_not_found(group_id)
 

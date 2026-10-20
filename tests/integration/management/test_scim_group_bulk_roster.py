@@ -4,8 +4,8 @@ POST /scim/v2/Groups, PUT and PATCH /scim/v2/Groups/{id} used to run /team/membe
 500-member push was thousands of statements and outlasted the edge in front of the proxy. One locked
 transaction now resolves every member, writes the roster and the membership rows and tags the users, so a
 push of 500 members runs as many statements as a push of 5. DELETE /scim/v2/Groups/{id} used to detach the
-members one at a time and leave their membership rows and the team's keys behind; it now goes through
-/team/delete's bulk path, so deleting 500 members costs as many statements as deleting 5 and leaves nothing.
+members one at a time and leave their membership rows and keys behind; it now detaches them in one locked pass,
+so deleting 500 members costs as many statements as deleting 5 and leaves no membership rows or member keys.
 """
 
 import os
@@ -33,7 +33,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, write_rows
 from integration._support.database_relay import StatementCountingRelay, statement_counting_relay
-from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.scim import (
     GROUP_SCHEMA,
     PATCH_OP_SCHEMA,
@@ -158,8 +158,8 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         assert_landed(candidate, small_team, [*small_a, *small_b])
         assert_landed(candidate, large_team, [*small_a, *large])
 
-        small_key: Final = team_key(candidate, small_team)
-        large_key: Final = team_key(candidate, large_team)
+        small_key: Final = team_key(candidate, small_team, small_a[0])
+        large_key: Final = team_key(candidate, large_team, small_a[0])
         deleted_small: Final = _measured(relay, lambda: delete_group(candidate, small_team))
         deleted_large: Final = _measured(relay, lambda: delete_group(candidate, large_team))
         assert deleted_small.response.status_code == 204, deleted_small.response.text
