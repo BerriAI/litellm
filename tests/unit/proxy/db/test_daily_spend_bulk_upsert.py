@@ -88,8 +88,6 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 26 bound columns per row (team_id included) plus the inlined updated_at, so the row
-    # count is what separates one multi-row statement from a hundred single-row ones.
     assert len(params) == 100 * 26
     assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
@@ -153,8 +151,6 @@ def test_one_tag_from_two_teams_stays_two_rows():
 
 
 def test_an_entry_without_team_id_folds_into_the_unattributed_row():
-    """Entries queued by an older pod, or replayed from Redis across the upgrade, carry no
-    team_id key. They arbitrate to the same row as an explicit "" rather than a second one."""
     legacy = tag_txn(spend=0.25)
     unattributed = tag_txn(team_id="", spend=0.75)
 
@@ -168,8 +164,6 @@ def test_an_entry_without_team_id_folds_into_the_unattributed_row():
 
 @pytest.mark.parametrize("entity", ["user", "team", "org", "end_user", "agent"])
 def test_only_the_tag_table_is_keyed_by_team(entity):
-    """Only LiteLLM_DailyTagSpend has the extra team_id column; adding it to any other
-    table's conflict target names a column that table does not have."""
     table = DAILY_SPEND_TABLES[entity]
     row = {**tag_txn(), table.entity_id_column: "id-1"}
 
