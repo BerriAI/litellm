@@ -269,6 +269,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1245,9 +1246,9 @@ def _estimated_input_cost(
     deployment_pricing: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
     if deployment_pricing is not None:
         return _deployment_priced_input_cost(model, custom_llm_provider, prompt_tokens, deployment_pricing)
-    pricing_models: Final = (base_model, model) if base_model is not None else (model,)
+    pricing_models_to_try: Final = pricing_models(base_model, model)
     candidate_costs: Final = (
-        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens) for pricing_model in pricing_models
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens) for pricing_model in pricing_models_to_try
     )
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
