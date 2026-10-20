@@ -5,8 +5,10 @@ completion_start_time = end_time."""
 
 import asyncio, importlib
 import functools
+import gc
 import json
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, Optional
@@ -14,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import websockets.exceptions
 from pydantic_core import PydanticSerializationError
 
 import litellm
@@ -509,16 +512,22 @@ class _OrderRecordingSyncLogger(CustomLogger):
 
 
 def _real_logging_obj(
-    *, call_type: str = "aresponses", litellm_params: dict[str, object] | None = None
+    *,
+    call_type: str = "aresponses",
+    litellm_params: dict[str, object] | None = None,
+    callbacks: tuple[CustomLogger, ...] | None = None,
+    stream: bool = True,
 ) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
-        stream=True,
+        stream=stream,
         call_type=call_type,
         start_time=datetime.now(),
         litellm_call_id="lit-8678-test",
         function_id="lit-8678-test",
+        dynamic_async_success_callbacks=None if callbacks is None else list(callbacks),
+        dynamic_async_failure_callbacks=None if callbacks is None else list(callbacks),
     )
     logging_obj.model_call_details["litellm_params"] = (
         dict(litellm_params) if litellm_params is not None else {"aresponses": True}
@@ -2598,24 +2607,156 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_waits_for_a_pending_logging_task():
-    row_written = asyncio.Event()
+    release: Final = asyncio.Event()
+    row: Final = streaming_module.spawn_logging_task(asyncio.get_running_loop(), release.wait(), task_name="row")
 
-    async def write_row():
-        await asyncio.sleep(0.05)
-        row_written.set()
+    drain_held: Final = await _drain_held_until_released(release)
 
-    streaming_module.spawn_logging_task(asyncio.get_running_loop(), write_row(), task_name="row")
-
-    await streaming_module.drain_logging_tasks(timeout=1)
-
-    assert row_written.is_set()
+    assert drain_held
+    assert row.done()
 
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
+    stuck: Final = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
 
     await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
 
     assert not stuck.done()
     stuck.cancel()
+
+
+async def _drain_held_until_released(release: asyncio.Event) -> bool:
+    drain: Final = asyncio.create_task(streaming_module.drain_logging_tasks(timeout=5))
+    await asyncio.sleep(0)
+    held: Final = not drain.done()
+    release.set()
+    await drain
+    return held
+
+
+class _GatedLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+        self.logged = False
+
+    async def _log(self) -> None:
+        self.entered.set()
+        await self.release.wait()
+        self.logged = True
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        await self._log()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await self._log()
+
+
+class _UnreferencedWaitLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parked: Final = asyncio.Event()
+        self.waiting_tasks: Final = weakref.WeakSet[asyncio.Task[object]]()
+
+    async def _wait_forever(self) -> None:
+        self.waiting_tasks.add(asyncio.current_task())
+        self.parked.set()
+        await asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        await self._wait_forever()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await self._wait_forever()
+
+
+async def _shutdown_drain_held_for(logger: _GatedLogger) -> bool:
+    await asyncio.wait_for(logger.entered.wait(), timeout=5)
+    return await _drain_held_until_released(logger.release)
+
+
+async def _logging_tasks_left_after_garbage_collection(logger: _UnreferencedWaitLogger) -> int:
+    await asyncio.wait_for(logger.parked.wait(), timeout=5)
+    gc.collect()
+    survivors: Final = tuple(logger.waiting_tasks)
+    for task in survivors:
+        task.cancel()
+    await asyncio.gather(*survivors, return_exceptions=True)
+    return len(survivors)
+
+
+async def _stream_to_completion(logger: CustomLogger) -> None:
+    iterator: Final = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=_real_logging_obj(callbacks=(logger,))
+    )
+    async for _ in iterator:
+        pass
+
+
+_WS_TERMINAL_EVENTS: Final = [
+    pytest.param({"type": "response.completed", "response": {}}, id="success"),
+    pytest.param(
+        {"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}},
+        id="failure",
+    ),
+]
+
+
+async def _run_websocket_turn(logger: CustomLogger, terminal_event: dict[str, object]) -> None:
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps(terminal_event), websockets.exceptions.ConnectionClosedOK(None, None)]
+    )
+    streaming: Final = streaming_module.ResponsesWebSocketStreaming(
+        websocket=MagicMock(send_text=AsyncMock()),
+        backend_ws=backend_ws,
+        logging_obj=_real_logging_obj(
+            call_type=CallTypes.aresponses_websocket.value,
+            litellm_params={CallTypes.aresponses_websocket.value: True},
+            callbacks=(logger,),
+            stream=False,
+        ),
+    )
+    await streaming.backend_to_client()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_a_completed_streams_success_logging():
+    logger: Final = _GatedLogger()
+    await _stream_to_completion(logger)
+
+    drain_held: Final = await _shutdown_drain_held_for(logger)
+
+    assert drain_held
+    assert logger.logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_event", _WS_TERMINAL_EVENTS)
+async def test_shutdown_drain_waits_for_a_websocket_turns_logging(terminal_event: dict[str, object]):
+    logger: Final = _GatedLogger()
+    await _run_websocket_turn(logger, terminal_event)
+
+    drain_held: Final = await _shutdown_drain_held_for(logger)
+
+    assert drain_held
+    assert logger.logged
+
+
+@pytest.mark.asyncio
+async def test_completed_streams_success_logging_survives_garbage_collection():
+    logger: Final = _UnreferencedWaitLogger()
+    await _stream_to_completion(logger)
+
+    assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_event", _WS_TERMINAL_EVENTS)
+async def test_websocket_turns_logging_survives_garbage_collection(terminal_event: dict[str, object]):
+    logger: Final = _UnreferencedWaitLogger()
+    await _run_websocket_turn(logger, terminal_event)
+
+    assert await _logging_tasks_left_after_garbage_collection(logger) == 1
