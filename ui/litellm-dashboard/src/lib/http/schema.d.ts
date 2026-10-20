@@ -35167,6 +35167,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -38264,6 +38266,8 @@ export interface components {
             providers: string[];
             /** Rpm */
             rpm?: number | null;
+            /** Supported Endpoints */
+            supported_endpoints?: string[] | null;
             /**
              * Supported Openai Params
              * @default []
@@ -50093,6 +50097,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */
@@ -50447,6 +50453,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
