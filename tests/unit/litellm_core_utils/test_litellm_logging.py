@@ -13162,3 +13162,94 @@ async def test_invalid_accounting_after_a_hook_timeout_never_exports_unmasked_da
         assert "Cannot prepare body-free spend accounting after a logging hook timeout" in caplog.text
     finally:
         await worker.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("no_log", [False, True])
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_masking_timeout_preserves_opt_outs_and_redacts_hidden_provider_content(
+    monkeypatch: pytest.MonkeyPatch,
+    no_log: bool,
+    metadata_field: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
+
+    recorded: Final[asyncio.Queue[str]] = asyncio.Queue()
+    exported: Final[asyncio.Queue[str]] = asyncio.Queue()
+    never: Final = asyncio.Event()
+
+    async def store_event(line: bytes) -> None:
+        recorded.put_nowait(line.decode())
+
+    producer: Final = SpendEventProducer(
+        address=UnixAddress("/unused"),
+        on_unavailable="fallback",
+        buffer_size=1,
+        connect_timeout=1,
+        fallback=store_event,
+    )
+    await producer.close(drain_timeout=1)
+
+    class MaskingLogger(CustomLogger):
+        async def async_logging_hook(
+            self,
+            kwargs: dict[str, object],
+            result: object,
+            call_type: str,
+        ) -> tuple[dict[str, object], object]:
+            await never.wait()
+            return kwargs, result
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            exported.put_nowait(json.dumps(kwargs, default=str) + str(response_obj))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    monkeypatch.setattr(litellm, "allow_dynamic_callback_disabling", True)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    logging_obj: Final = _async_request_logging_obj(
+        "private-provider-content", [MaskingLogger(), _ProxyDBLogger(producer)]
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "acompletion": True,
+            "no-log": no_log,
+            metadata_field: {
+                "hidden_params": {
+                    "provider_specific_fields": {
+                        "reasoning_content": "private-thinking-canary",
+                        "thinking_blocks": [{"type": "thinking", "thinking": "private-thinking-canary"}],
+                        "citations": [{"cited_text": "private-citation-canary"}],
+                    }
+                }
+            },
+            "proxy_server_request": {"headers": {"x-litellm-disable-callbacks": "dynamodb"}},
+        },
+        optional_params={},
+    )
+    worker: Final = LoggingWorker(timeout=0.5)
+    worker.ensure_initialized_and_enqueue(logging_obj.async_success_handler(result=ModelResponse()))
+    try:
+        await worker.flush()
+        assert recorded.qsize() == int(not no_log)
+        assert exported.qsize() == int(not no_log)
+        payloads: Final = tuple(recorded.get_nowait() for _ in range(recorded.qsize())) + tuple(
+            exported.get_nowait() for _ in range(exported.qsize())
+        )
+        assert all(
+            "private-thinking-canary" not in payload and "private-citation-canary" not in payload
+            for payload in payloads
+        )
+        assert not logging_obj.should_run_callback(
+            "dynamodb", logging_obj.model_call_details["litellm_params"], "async_success"
+        )
+    finally:
+        await worker.stop()

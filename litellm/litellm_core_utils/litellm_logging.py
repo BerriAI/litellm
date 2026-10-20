@@ -116,6 +116,7 @@ from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    perform_redaction,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
@@ -3585,6 +3586,7 @@ class Logging(LiteLLMLoggingBaseClass):
             with fail_after(optional_callback_budget(LOGGING_WORKER_MAX_TIME_PER_COROUTINE, fraction=0.5)):
                 return await self._run_async_success_hooks(callbacks, result)
         except TimeoutError:
+            from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
             from litellm.proxy.spend_tracking.spend_event import (
                 SpendEventBuildError,
                 build_spend_event_payload,
@@ -3592,6 +3594,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             self.shadow_eval_request_snapshot = None
+            self.model_call_details = redact_streaming_responses_for_custom_logger(
+                self.model_call_details, CustomLogger(message_logging=False)
+            )
+            perform_redaction(self.model_call_details, None)
             assembled_stream: Final = "async_complete_streaming_response" in self.model_call_details
             accounting_response: Final[object] = (
                 self.model_call_details["async_complete_streaming_response"] if assembled_stream else result
@@ -3603,8 +3609,24 @@ class Logging(LiteLLMLoggingBaseClass):
                 verbose_logger.error("Cannot prepare body-free spend accounting after a logging hook timeout")
                 return event
             args: Final = spend_event_callback_args(event)
+            mapping_adapter: Final = TypeAdapter(Mapping[str, object])
+            empty_headers: Final = MappingProxyType[str, object]({})
+            params: Final = mapping_adapter.validate_python(self.model_call_details["litellm_params"])
+            request_data: Final = params.get("proxy_server_request")
+            request: Final = (
+                mapping_adapter.validate_python(request_data) if request_data is not None else empty_headers
+            )
+            header_data: Final = request.get("headers")
+            headers: Final = mapping_adapter.validate_python(header_data) if header_data is not None else empty_headers
             self.model_call_details = {
                 **args.kwargs,
+                "litellm_params": {
+                    **args.kwargs["litellm_params"],
+                    "no-log": params.get("no-log", False),
+                    "proxy_server_request": {
+                        "headers": {X_LITELLM_DISABLE_CALLBACKS: headers.get(X_LITELLM_DISABLE_CALLBACKS)}
+                    },
+                },
                 **({"async_complete_streaming_response": args.response_obj} if assembled_stream else {}),
             }
             verbose_logger.warning("Logging hooks timed out, recording spend without request or response bodies")
