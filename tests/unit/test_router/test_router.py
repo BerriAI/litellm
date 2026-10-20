@@ -13103,7 +13103,7 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     (chat) deployment, so a group mixing chat and batch deployments must send every batch
     create to the deployment that /model_group/info names as the one listing /v1/batch."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             build_chat_row(),
             _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
@@ -13113,13 +13113,13 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(
                 400,
                 json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
             )
         )
-        batch_route = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         await _create_batches(router, "gpt-mixed", attempts=20)
@@ -13148,19 +13148,19 @@ async def test_acreate_batch_on_a_mixed_wildcard_group_only_reaches_batch_deploy
     """A wildcard group resolves its deployments before the named-group path does, and its batch
     creates must still only reach the deployments declared with model_info.mode batch."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[_azure_wildcard_deployment("chat-sku", "chat"), _azure_wildcard_deployment("batch-sku", "batch")],
         num_retries=0,
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(
                 400,
                 json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
             )
         )
-        batch_route = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         await _create_batches(router, "mixed-wild/gpt-5.4-mini", attempts=20)
@@ -13176,7 +13176,7 @@ async def test_chat_calls_after_a_batch_create_still_use_every_deployment_in_the
     """Only the batch create itself is narrowed to mode batch deployments. Chat calls the same task makes
     afterwards keep load balancing across the whole group."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"),
             _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"),
@@ -13209,7 +13209,7 @@ async def test_acreate_batch_on_a_group_without_batch_deployments_still_uses_eve
     """Bedrock and OpenAI batch through the same deployment that serves chat, so a group with
     no mode batch deployment keeps load balancing batch creates across all of them."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _azure_sku_deployment("gpt-chat-only", "first-chat-sku", "chat"),
             _azure_sku_deployment("gpt-chat-only", "second-chat-sku", "chat"),
@@ -13218,10 +13218,10 @@ async def test_acreate_batch_on_a_group_without_batch_deployments_still_uses_eve
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        first_route = respx_mock.post(host="first-chat-sku.openai.azure.com").mock(
+        first_route: Final = respx_mock.post(host="first-chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
-        second_route = respx_mock.post(host="second-chat-sku.openai.azure.com").mock(
+        second_route: Final = respx_mock.post(host="second-chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         await _create_batches(router, "gpt-chat-only", attempts=40)
@@ -13239,7 +13239,7 @@ async def test_acreate_batch_prefers_only_the_batch_deployments_the_caller_may_u
     """A batch deployment owned by one team must not take a mixed group's batch creates away from callers
     outside that team, who still reach the group's shared deployments."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
             _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
@@ -13274,7 +13274,7 @@ async def test_acreate_batch_on_a_legacy_routing_strategy_keeps_shared_deploymen
     """usage-based-routing picks through the sync path, which keeps every team's deployments, so a batch deployment
     owned by one team must not pull the creates of callers outside that team onto its credentials."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
             _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
@@ -13284,7 +13284,7 @@ async def test_acreate_batch_on_a_legacy_routing_strategy_keeps_shared_deploymen
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         respx_mock.post(host="batch-sku.openai.azure.com").mock(
@@ -13336,7 +13336,7 @@ async def test_acreate_batch_on_a_mixed_group_reaches_chat_as_on_main_while_its_
     """While the batch deployment cools down, a create goes where main sends it, so the caller keeps getting
     Azure's 400 instead of a router 429 that main never returned for this request."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
             _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
@@ -13346,7 +13346,7 @@ async def test_acreate_batch_on_a_mixed_group_reaches_chat_as_on_main_while_its_
     _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
         with pytest.raises(openai.BadRequestError):
             await _create_batches(router, "gpt-mixed", attempts=1)
 
@@ -13362,7 +13362,7 @@ async def test_acreate_batch_with_tags_that_match_only_the_chat_deployment_reach
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     chat: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
     batch: Final = _azure_sku_deployment("gpt-mixed", "batch-sku", "batch")
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {**chat, "litellm_params": {**chat["litellm_params"], "tags": ["chat-pin"]}},
             {**batch, "litellm_params": {**batch["litellm_params"], "tags": ["batch-pin"]}},
@@ -13372,8 +13372,8 @@ async def test_acreate_batch_with_tags_that_match_only_the_chat_deployment_reach
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
-        batch_route = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         with pytest.raises(openai.BadRequestError):
@@ -13410,7 +13410,7 @@ async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_bat
     """OpenAI runs batches on the deployment that serves chat, so only Azure groups skip chat deployments for
     batch creates and an OpenAI group keeps serving them while its batch deployment cools down."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             _openai_deployment("gpt-mixed", "chat.openai.test", "chat"),
             _openai_deployment("gpt-mixed", "batch.openai.test", "batch"),
@@ -13420,7 +13420,7 @@ async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_bat
     _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat.openai.test").mock(
+        chat_route: Final = respx_mock.post(host="chat.openai.test").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
         await _create_batches(router, "gpt-mixed", attempts=5)

@@ -906,7 +906,7 @@ def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deplo
     )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN, team_id=team_id):
-        response = client.get("/model_group/info")
+        response: Final = client.get("/model_group/info")
 
     assert response.status_code == 200
     groups: Final = {group["model_group"]: group for group in response.json()["data"]}
