@@ -3750,12 +3750,13 @@ def _gemini_request_body(
     custom_llm_provider: Literal["vertex_ai", "gemini"],
     optional_params: dict[str, object],
     litellm_params: dict[str, object],
+    model: str = "gemini-zeta-9",
 ) -> RequestBody:
     from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 
     return transform_request_body(
         messages=[{"role": "user", "content": "hi"}],
-        model="gemini-zeta-9",
+        model=model,
         optional_params=optional_params,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
@@ -3900,6 +3901,65 @@ def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_un
     assert "temperature" not in optional_params
     assert "top_p" not in optional_params
     assert optional_params["max_output_tokens"] == 10
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [
+        ("gemini-3.6-flash-zeta", False),
+        ("gemini-3.5-flash-lite-zeta", False),
+        ("gemini-3.7-pro-zeta", False),
+        ("gemini-4-zeta", False),
+        ("gemini-4.1-flash-zeta", False),
+        ("gemini-10-zeta", False),
+        ("gemini-3.5-flash-zeta", True),
+        ("gemini-3.5-pro-zeta", True),
+        ("gemini-3.1-pro-zeta", True),
+        ("gemini-2.5-flash-zeta", True),
+        ("gemini-zeta-9", True),
+    ],
+)
+def test_gemini_model_unknown_to_the_map_is_judged_by_the_version_in_its_name(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], model: str, forwarded: bool
+) -> None:
+    """Google ignores the knobs on Gemini 3.6 Flash, 3.5 Flash-Lite and everything later, so a model newer
+    than the map gets the same drop-or-400 contract instead of silently forwarding (#47015 follow-up)"""
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, max_tokens=10, drop_params=True, **_SAMPLING_PARAMS
+    )
+    body: Final = _gemini_request_body(custom_llm_provider, dict(optional_params), {"drop_params": True}, model=model)
+
+    knobs: Final = _SAMPLING_PARAMS if forwarded else {}
+    assert body["generationConfig"] == {**knobs, "max_output_tokens": 10}, model
+
+
+@pytest.mark.parametrize(
+    ("row", "forwarded"),
+    [
+        ({"mode": "chat"}, False),
+        ({}, False),
+        ({"mode": "audio_speech"}, True),
+        ({"mode": "chat", "supports_sampling_params": True}, True),
+    ],
+    ids=["chat_row_without_flag", "row_without_mode", "non_chat_row_without_flag", "explicit_true"],
+)
+def test_map_row_for_a_gemini_4_model_decides_before_the_version_rule(
+    row: dict[str, object], forwarded: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit flag always wins, a row silent on it is judged by the version, and a row for another
+    mode keeps forwarding because Google's notice covers the text models"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-4-zeta", row)
+
+    optional_params: Final = get_optional_params(
+        model="gemini-4-zeta", custom_llm_provider="gemini", temperature=0.3, drop_params=True
+    )
+
+    assert ("temperature" in optional_params) is forwarded
 
 
 def test_media_resolution_from_detail_parameter():
@@ -6928,7 +6988,7 @@ def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(capl
 def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_models(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    unmapped: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(100))
+    unmapped: Final = tuple(f"gemini-3.5-flash-{uuid.uuid4().hex}" for _ in range(100))
     mapped: Final = _mapped_gemini_3_models()[0]
     config: Final = VertexGeminiConfig()
 
@@ -6971,7 +7031,7 @@ def test_gemini_3_sampling_deprecation_names_models_cataloged_only_under_vertex_
 def test_gemini_3_sampling_deprecation_for_names_priced_at_runtime_shares_one_notice(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    priced: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(20))
+    priced: Final = tuple(f"gemini-3.5-flash-{uuid.uuid4().hex}" for _ in range(20))
     for name in priced:
         monkeypatch.setitem(
             litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed

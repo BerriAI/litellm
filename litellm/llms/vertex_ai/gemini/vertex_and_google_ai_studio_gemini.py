@@ -430,22 +430,40 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return True
 
     @staticmethod
+    def _google_ignores_sampling_params_by_version(model_name: str) -> bool:
+        """Google's announced cut: Gemini 3.6 Flash, 3.5 Flash-Lite and every later model ignore the
+        sampling knobs, so a name with such a version is judged by the version when the map has no answer."""
+        match: Final = re.match(r"^gemini-(\d+)(?:\.(\d+))?(?:-|$)", model_name.lower())
+        if match is None:
+            return False
+        version: Final = (int(match.group(1)), int(match.group(2) or 0))
+        if version >= (3, 6):
+            return True
+        return version == (3, 5) and "flash-lite" in model_name.lower()
+
+    @staticmethod
     def supports_sampling_params(model: str) -> bool:
         """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
 
         Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
         and later accept the fields but ignore them, and a later generation will 400 on them.
-        A model the map says nothing about keeps forwarding them. ``temperature`` and ``top_p``
-        leave ``get_supported_openai_params`` when the flag is off, so the shared unsupported-param
-        check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
-        ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
-        request body is built."""
+        A chat model the map says nothing about is judged by the version in its name, so a model
+        newer than the map keeps the same contract; a non-chat row without the flag keeps forwarding.
+        ``temperature`` and ``top_p`` leave ``get_supported_openai_params`` when the flag is off, so
+        the shared unsupported-param check raises or drops them and ``allowed_openai_params`` still
+        forwards them verbatim; ``top_k`` is a provider-specific kwarg that bypasses that check and
+        is gated while the request body is built."""
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         bare: Final = model.split("/")[-1]
-        for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
-            if isinstance(flag := rows.get(candidate, {}).get("supports_sampling_params"), bool):
+        matched: Final = tuple(
+            row for key in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}") if (row := rows.get(key)) is not None
+        )
+        for row in matched:
+            if isinstance(flag := row.get("supports_sampling_params"), bool):
                 return flag
-        return True
+        if any(row.get("mode") not in (None, "chat") for row in matched):
+            return True
+        return not VertexGeminiConfig._google_ignores_sampling_params_by_version(bare)
 
     @staticmethod
     def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
