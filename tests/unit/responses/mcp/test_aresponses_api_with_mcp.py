@@ -2327,8 +2327,8 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
 _FIXED_MARGIN: Final = 0.001
 
 
-def _streamed(body: Mapping[str, object]) -> httpx.Response:
-    completed: Final = json.loads(json.dumps(body, default=dict))
+def _streamed(body: Mapping[str, object], **terminal: object) -> httpx.Response:
+    completed: Final = json.loads(json.dumps({**body, **terminal}, default=dict))
     opened: Final = {**completed, "status": "in_progress", "output": [], "usage": None}
     items: Final = tuple(enumerate(completed["output"]))
     events: Final = (
@@ -2336,7 +2336,7 @@ def _streamed(body: Mapping[str, object]) -> httpx.Response:
         {"type": "response.in_progress", "response": opened},
         *({"type": "response.output_item.added", "output_index": index, "item": item} for index, item in items),
         *({"type": "response.output_item.done", "output_index": index, "item": item} for index, item in items),
-        {"type": "response.completed", "response": completed},
+        {"type": f"response.{completed['status']}", "response": completed},
     )
     return httpx.Response(
         200,
@@ -2373,8 +2373,10 @@ async def _stream_auto_execute(logging_obj: Logging) -> tuple[ResponsesAPIStream
         return await _drain(await _open_stream_auto_execute(logging_obj))
 
 
-def _final_response(events: Sequence[ResponsesAPIStreamingResponse]) -> ResponsesAPIResponse:
-    assert _event_type(events[-1]) == "response.completed"
+def _final_response(
+    events: Sequence[ResponsesAPIStreamingResponse], terminal: str = "response.completed"
+) -> ResponsesAPIResponse:
+    assert _event_type(events[-1]) == terminal
     response: Final = getattr(events[-1], "response", None)
     assert isinstance(response, ResponsesAPIResponse)
     return response
@@ -2567,3 +2569,65 @@ async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_rou
 
     assert _output_types(_final_response(events).output) == ("message",)
     _assert_one_row_bills(recorder.logged, _ROUND_TWO_BODY)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_when_the_final_round_is_incomplete(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    truncated: Final = _streamed(
+        _ROUND_TWO_BODY, status="incomplete", incomplete_details={"reason": "max_output_tokens"}
+    )
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), truncated))
+    recorder: Final = _RoundRecorder()
+
+    events: Final = await _stream_auto_execute(_rounds_logging_obj(recorder, "mcp-stream-final-round-incomplete"))
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, _final_response(events, "response.incomplete"))
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_bills_both_rounds_on_the_failure_row_when_the_follow_up_response_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    server_error: Final = {"code": "server_error", "message": "The server had an error processing your request."}
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY, status="failed", error=server_error)),
+    )
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await _stream_auto_execute(_rounds_logging_obj(recorder, "mcp-stream-follow-up-failed"))
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY)
+    )
+
+
+async def _stop_reading_once_the_follow_up_answers(logging_obj: Logging) -> None:
+    stream: Final = await _open_stream_auto_execute(logging_obj)
+    async for event in cast(Any, stream):
+        if _event_type(event) == "response.output_item.added" and _output_types((event.item,)) == ("message",):
+            return
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_bills_the_finished_first_round_when_the_caller_stops_reading_the_follow_up(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY)))
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        await _stop_reading_once_the_follow_up_answers(_rounds_logging_obj(recorder, "mcp-stream-caller-stops"))
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)

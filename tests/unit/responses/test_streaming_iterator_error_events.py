@@ -523,6 +523,27 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     iterator.logging_obj.response_cost_calculator.assert_called_once_with(result=chunk.response)
 
 
+def test_handle_logging_failed_response_bills_only_its_own_usage_over_an_earlier_attempts_stash():
+    iterator = _make_iterator()
+    iterator.logging_obj.model_call_details["combined_usage_object"] = litellm.Usage(
+        prompt_tokens=100, completion_tokens=50, total_tokens=150
+    )
+    iterator.logging_obj.model_call_details["response_cost"] = 0.5
+    iterator.completed_response = _make_failed_chunk(
+        {"type": "server_error", "code": "server_error", "message": "boom"},
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+    )
+    iterator.logging_obj.response_cost_calculator.return_value = 0.0042
+    with (
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
+    ):
+        iterator._handle_logging_failed_response()
+    combined_usage = iterator.logging_obj.model_call_details["combined_usage_object"]
+    assert (combined_usage.prompt_tokens, combined_usage.completion_tokens) == (10, 5)
+    assert iterator.logging_obj.model_call_details["response_cost"] == 0.0042
+
+
 def test_handle_logging_failed_response_without_usage_skips_recording():
     iterator = _make_iterator()
     iterator.completed_response = _make_failed_chunk(
