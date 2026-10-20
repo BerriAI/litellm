@@ -75,7 +75,7 @@ def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
             content=(
                 'data: {"type":"transcript.text.delta","delta":"hello "}\n\n'
                 'data: {"type":"transcript.text.done","text":"hello world",'
-                '"usage":{"type":"duration","seconds":2.5}}\n\n'
+                '"usage":{"type":"duration","seconds":2.5},"languages":[{"code":"en"}]}\n\n'
             ),
         )
 
@@ -97,6 +97,7 @@ def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
     logged_response: Final = logging_obj.success_handler.call_args.args[0]
     assert logged_response.text == "hello world"
     assert logged_response.usage.model_dump(exclude_none=True) == {"type": "duration", "seconds": 2.5}
+    assert logged_response.model_dump()["languages"] == [{"code": "en"}]
     logging_obj.failure_handler.assert_not_called()
 
 

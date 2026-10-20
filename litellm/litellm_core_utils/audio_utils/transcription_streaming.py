@@ -11,8 +11,11 @@ from openai.types.audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
+from pydantic import TypeAdapter
 
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import TranscriptionDetectedLanguage, TranscriptionResponse
+
+_DETECTED_LANGUAGES: Final = TypeAdapter(list[TranscriptionDetectedLanguage])
 
 
 class TranscriptionStreamLogging(Protocol):
@@ -72,7 +75,11 @@ class _TranscriptionEventCollector:
         response: Final = TranscriptionResponse(
             text=done_event.text if done_event is not None else "".join(self.text_deltas),
             usage=done_event.usage.model_dump() if done_event is not None and done_event.usage is not None else None,
-            languages=([language.model_dump() for language in done_languages] if done_languages is not None else None),
+            languages=(
+                _DETECTED_LANGUAGES.validate_python(done_languages, from_attributes=True)
+                if done_languages is not None
+                else None
+            ),
         )
         if self.duration is not None:
             response.set_audio_transcription_duration(self.duration)
