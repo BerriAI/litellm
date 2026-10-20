@@ -69,9 +69,12 @@ def redact_streaming_responses_for_custom_logger(model_call_details: dict, custo
 
 
 def _redacted_streaming_response_copy(streaming_response):
-    redacted_response: Final = copy.deepcopy(streaming_response)
-    _redact_streaming_response(redacted_response)
-    return redacted_response
+    redacted_response: Final = (
+        streaming_response
+        if isinstance(streaming_response, litellm.ResponsesAPIResponse)
+        else copy.deepcopy(streaming_response)
+    )
+    return _redact_streaming_response(redacted_response)
 
 
 def _redact_streaming_response(streaming_response):
@@ -79,10 +82,13 @@ def _redact_streaming_response(streaming_response):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
+    elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
+        return perform_redaction({}, streaming_response, redact_streaming_responses=False)
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
+    return streaming_response
 
 
 def _redact_tool_calls(tool_calls) -> None:
@@ -405,8 +411,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
 
     # Redact streaming response
     if redact_streaming_responses and model_call_details.get("stream", False) is True:
-        for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-            _redact_streaming_response(model_call_details.get(_streaming_key))
+        model_call_details.update(
+            {
+                streaming_key: _redact_streaming_response(model_call_details[streaming_key])
+                for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+                if model_call_details.get(streaming_key) is not None
+            }
+        )
 
     # Redact result
     if result is not None:

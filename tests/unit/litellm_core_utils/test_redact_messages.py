@@ -217,6 +217,29 @@ def test_responses_redaction_removes_instructions_without_changing_the_response(
     assert payload["response"] == original
 
 
+@pytest.mark.parametrize("key", ("complete_streaming_response", "async_complete_streaming_response"))
+@pytest.mark.parametrize("redaction", ("global", "custom_logger"))
+def test_streaming_responses_redact_instructions_without_changing_the_client_response(
+    key: str, redaction: str
+) -> None:
+    response: Final = mock_responses_api_response("private answer").model_copy(
+        update={"instructions": "private system instructions"}
+    )
+    original: Final = response.model_dump()
+    details: Final = {"stream": True, key: response}
+    if redaction == "global":
+        perform_redaction(details, result=None)
+    redacted_details: Final = (
+        redact_streaming_responses_for_custom_logger(details, CustomLogger(message_logging=False))
+        if redaction == "custom_logger"
+        else details
+    )
+
+    assert redacted_details[key].instructions == "redacted-by-litellm"
+    assert "private" not in json.dumps(redacted_details[key].model_dump())
+    assert response.model_dump() == original
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_redaction():
     """Ensure the global setting is off for every test."""
