@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import Final
 
 import pytest
 
@@ -83,13 +84,13 @@ def test_prepare_completion_kwargs_keeps_prompt_cache_key_through_responses_rero
 )
 def test_prepare_completion_kwargs_derives_prompt_cache_key_only_for_a_mistral_hosted_endpoint(
     monkeypatch: pytest.MonkeyPatch, api_base: str | None, azure_api_base_env: str | None, derives_key: bool
-):
+) -> None:
     if azure_api_base_env is None:
         monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
     else:
         monkeypatch.setenv("MISTRAL_AZURE_API_BASE", azure_api_base_env)
 
-    completion_kwargs = _prepare(
+    completion_kwargs: Final = _prepare(
         "mistral/mistral-small-latest", {"custom_llm_provider": "mistral", "api_base": api_base}
     )
 
@@ -103,13 +104,13 @@ def test_prepare_completion_kwargs_derives_prompt_cache_key_only_for_a_mistral_h
 )
 def test_prepare_completion_kwargs_derives_prompt_cache_key_for_codestral_only_on_its_mistral_host(
     monkeypatch: pytest.MonkeyPatch, codestral_api_base_env: str | None, derives_key: bool
-):
+) -> None:
     monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
     if codestral_api_base_env is None:
         monkeypatch.delenv("CODESTRAL_API_BASE", raising=False)
     else:
         monkeypatch.setenv("CODESTRAL_API_BASE", codestral_api_base_env)
 
-    completion_kwargs = _prepare("codestral/codestral-latest", {"custom_llm_provider": "codestral"})
+    completion_kwargs: Final = _prepare("codestral/codestral-latest", {"custom_llm_provider": "codestral"})
 
     assert ("prompt_cache_key" in completion_kwargs) is derives_key
