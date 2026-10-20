@@ -273,7 +273,7 @@ def _thinking_block_renders(block: object) -> bool:
 def _assistant_part_renders(part: object) -> bool:
     """A text part always renders: the converter pads empty text with a placeholder."""
     part_type: Final = message_field(part, "type")
-    if part_type == "thinking":
+    if part_type in _THINKING_BLOCK_TYPES:
         return _thinking_block_renders(part)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")

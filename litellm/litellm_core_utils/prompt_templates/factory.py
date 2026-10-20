@@ -2558,6 +2558,18 @@ def _replayable_thinking_blocks(
     ]
 
 
+def _is_thinking_item(item: object) -> bool:
+    match item:
+        case {"type": "thinking" | "redacted_thinking"}:
+            return True
+        case _:
+            return False
+
+
+def _content_has_thinking(content: str | Iterable[object] | None) -> bool:
+    return isinstance(content, list) and any(_is_thinking_item(item) for item in content)
+
+
 def _without_stream_index(
     block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
@@ -2960,18 +2972,9 @@ def anthropic_messages_pt(
                     assistant_content_block["content"], list
                 )
                 _content_list = assistant_content_block.get("content") if _content_is_list else None
-                _list_has_thinking = False
-                if _content_is_list and _content_list is not None:
-                    for _item in _content_list:
-                        if isinstance(_item, dict) and _item.get("type") in (
-                            "thinking",
-                            "redacted_thinking",
-                        ):
-                            _list_has_thinking = True
-                            break
 
-                if (
-                    thinking_blocks is not None and not _list_has_thinking
+                if thinking_blocks is not None and not _content_has_thinking(
+                    _content_list
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
@@ -2979,14 +2982,15 @@ def anthropic_messages_pt(
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
+                        match m:
+                            case {"type": "thinking" | "redacted_thinking"}:
+                                assistant_content.extend(_replayable_thinking_blocks([m]))
+                                continue
+                            case _:
+                                pass
                         text_block = cast(str, m.get("text", ""))
-                        if m.get("type", "") == "thinking" and not is_unsignable_thinking_block(m):
-                            anthropic_message: ChatCompletionThinkingBlock | AnthropicMessagesTextParam = cast(
-                                ChatCompletionThinkingBlock, m
-                            )
-                            assistant_content.append(anthropic_message)
                         # handle text
-                        elif (
+                        if (
                             m.get("type", "") == "text" and len(text_block) > 0
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message = AnthropicMessagesTextParam(type="text", text=text_block)
@@ -4827,7 +4831,7 @@ class BedrockConverseMessagesProcessor:
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = assistant_message_block.get("thinking_blocks")
 
-                if thinking_blocks is not None:
+                if thinking_blocks is not None and not _content_has_thinking(_assistant_content):
                     converted_thinking_blocks = (
                         BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
                             thinking_blocks, to_claude=to_claude
@@ -5245,7 +5249,7 @@ def _bedrock_converse_messages_pt(
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = assistant_message_block.get("thinking_blocks")
 
-            if thinking_blocks is not None:
+            if thinking_blocks is not None and not _content_has_thinking(_assistant_content):
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
                         thinking_blocks, to_claude=to_claude
