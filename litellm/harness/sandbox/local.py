@@ -180,14 +180,15 @@ class LocalSandbox:
         self._check_open()
         if not cmd:
             raise SandboxError("exec() needs a non-empty command")
+        work_dir: Final = self._resolve_cwd(cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=self._resolve_cwd(cwd),
-                env=self.child_env(env),
+                cwd=work_dir,
+                env=self.child_env(MappingProxyType({**(env or {}), "PWD": work_dir})),
                 start_new_session=True,
             )
         except (FileNotFoundError, PermissionError) as exc:

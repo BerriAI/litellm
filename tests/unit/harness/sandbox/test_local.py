@@ -54,6 +54,27 @@ async def test_run_cwd_inside_workdir(sbx):
         await sbx.run([PY, "-c", "pass"], cwd="/")
 
 
+async def test_child_trusting_pwd_writes_inside_its_cwd(
+    sbx, monkeypatch, tmp_path_factory
+):
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    monkeypatch.setenv("PWD", str(elsewhere))
+    os.mkdir(os.path.join(sbx.workdir, "sub"))
+    write_at_pwd = (
+        "import os;open(os.path.join(os.environ['PWD'],'hello.txt'),'w').write('hi')"
+    )
+
+    top = await sbx.run([PY, "-c", write_at_pwd])
+    nested = await sbx.run(
+        [PY, "-c", write_at_pwd], cwd="sub", env={"PWD": str(elsewhere)}
+    )
+
+    assert (top.exit_code, nested.exit_code) == (0, 0)
+    assert os.listdir(elsewhere) == []
+    assert await sbx.read("hello.txt") == b"hi"
+    assert await sbx.read("sub/hello.txt") == b"hi"
+
+
 async def test_exec_streams_stdin(sbx):
     proc = await sbx.exec([PY, "-c", "import sys;print(sys.stdin.read().upper())"])
     assert isinstance(proc, Process)
