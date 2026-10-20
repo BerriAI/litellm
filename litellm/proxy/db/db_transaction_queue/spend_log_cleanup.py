@@ -1261,13 +1261,14 @@ class SpendLogCleanup:
             key_columns=("request_id", "guardrail_id"),
             time_column="start_time",
             deadline=deadline,
-            batch_cap=step_cap,
+            batch_cap=state.batches_left,
         )
+        guardrail_batches: Final = math.ceil(guardrail_index_result.rows_deleted / self.batch_size)
         advanced: Final = _SizeStepState(
             logs_deleted=state.logs_deleted + logs_result.rows_deleted,
             index_deleted=state.index_deleted + index_result.rows_deleted,
             guardrail_index_deleted=state.guardrail_index_deleted + guardrail_index_result.rows_deleted,
-            batches_left=state.batches_left - step_cap,
+            batches_left=state.batches_left - max(step_cap, guardrail_batches),
             stop_reason=None,
         )
         if rows_still_needed(advanced.rows_deleted) <= 0:

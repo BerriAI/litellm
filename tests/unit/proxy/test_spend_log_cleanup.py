@@ -1606,7 +1606,7 @@ async def test_a_size_pass_that_fires_while_an_age_pass_is_running_in_the_same_p
 
     age_cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     age_cleaner.pod_lock_manager = None
-    size_cleaner = _size_cleaner({})
+    size_cleaner = _size_cleaner({"maximum_spend_logs_cleanup_max_batches": 3})
 
     slow_run = asyncio.ensure_future(age_cleaner.cleanup_old_spend_logs(slow_client))
     await asyncio.wait_for(first_batch_done.wait(), timeout=5)
@@ -1883,6 +1883,25 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
     assert "estimated_live_after=0" in summary
     assert "target_reached=true above_target=0" in summary
     assert "VACUUM FULL or pg_repack" in summary
+
+
+@pytest.mark.asyncio
+async def test_size_pass_deletes_every_guardrail_row_under_the_step_cutoff_not_one_per_spend_log(caplog):
+    db = MagicMock()
+    _wire_tx(db)
+    # one step of 3 SpendLogs batches, but two guardrails per request leave twice as many guardrail rows under it
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0, 1000, 1000, 1000, 1000, 1000, 1000, 0])
+    _wire_size_probes(db, [_storage(3 * 1024**3, live=3000, dead=0)], cutoff=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    client = MagicMock()
+    client.db = db
+    cleaner = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "512MB"})
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_spend_logs_by_size(client)
+
+    summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
+    assert "LiteLLM_SpendLogs (size rule): deleted=3000" in summary, summary
+    assert "LiteLLM_SpendLogGuardrailIndex (size rule): deleted=6000" in summary, summary
 
 
 @pytest.mark.asyncio
