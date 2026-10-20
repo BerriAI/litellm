@@ -4,7 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Copy, KeyRound, Layers, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdentityCell, SpendBudgetCell } from "@/components/shared/table_cells";
+import { DateCell, IdentityCell } from "@/components/shared/table_cells";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,6 +20,7 @@ import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
 import { Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { TeamMemberSpendBudgetCell } from "./TeamMemberSpendBudgetCell";
 
 interface ResourceTone {
   icon: typeof Users;
@@ -215,11 +216,10 @@ export const getTeamTableColumns = ({
       size: 200,
       enableSorting: false,
       cell: ({ row }) => (
-        <SpendBudgetCell
-          spend={row.original.spend}
-          maxBudget={row.original.max_budget}
-          spendDecimals={2}
-          budgetDecimals={2}
+        <TeamMemberSpendBudgetCell
+          teamSpend={row.original.spend}
+          teamMaxBudget={row.original.max_budget}
+          callerMembership={row.original.caller_membership}
         />
       ),
     },
