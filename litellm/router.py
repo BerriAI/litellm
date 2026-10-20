@@ -3799,25 +3799,8 @@ class Router:
         input_val: Union[str, "ResponseInputParam"] | None,
         generated_content: str,
     ) -> "ResponseInputParam":
-        """
-        Convert Responses-API input + partial assistant output into a
-        continuation input that asks the fallback model to pick up where the
-        prior assistant message stopped.
-
-        Best effort across providers. The chat-completions path uses
-        Anthropic's `prefix: True` prefill trick on the assistant message;
-        the Responses-API input schema has no direct equivalent, so we
-        append an instruction (developer role) plus a prior assistant
-        message containing the partial output. Providers without prefill
-        semantics (OpenAI, Vertex) treat this as conversational context
-        and may regenerate — same trade-off as the chat-completions path
-        for non-Anthropic fallbacks.
-        """
-        # base/continuation are List[Any] because ResponseInputParam items
-        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
-        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
-        # rejects the list() spread of input_val. We cast the combined list to
-        # ResponseInputParam at the return.
+        """Request a best-effort continuation using assistant history followed by a user turn, so the fallback
+        does not need to support assistant prefill."""
         base: list[object]
         if isinstance(input_val, str):
             base = [
@@ -3834,7 +3817,12 @@ class Router:
         continuation: Final[list[object]] = [
             {
                 "type": "message",
-                "role": "developer",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": generated_content}],
+            },
+            {
+                "type": "message",
+                "role": "user",
                 "content": [
                     {
                         "type": "input_text",
@@ -3846,11 +3834,6 @@ class Router:
                         ),
                     }
                 ],
-            },
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": generated_content}],
             },
         ]
         return cast("ResponseInputParam", base + continuation)

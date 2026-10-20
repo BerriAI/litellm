@@ -1,9 +1,11 @@
 """The shared Responses API config contract."""
 
 import asyncio, importlib, json
+from collections.abc import Mapping
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -885,9 +887,9 @@ def test_build_responses_continuation_input_from_string():
     assert len(out) == 3
     assert out[0]["role"] == "user"
     assert out[0]["content"][0]["text"] == "Hello world"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
-    assert out[2]["content"][0]["text"] == "partial assistant text"
+    assert out[1]["role"] == "assistant"
+    assert out[1]["content"][0]["text"] == "partial assistant text"
+    assert out[2]["role"] == "user"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_build_responses_continuation_input_from_list_preserves_items():
@@ -901,15 +903,16 @@ def test_build_responses_continuation_input_from_list_preserves_items():
     out = Router._build_responses_continuation_input(existing, "partial")
     assert len(out) == 3
     assert out[0]["content"][0]["text"] == "msg1"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
+    assert out[1]["role"] == "assistant"
+    assert out[2]["role"] == "user"
+    assert existing == out[:1]
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_build_responses_continuation_input_from_none():
     out = Router._build_responses_continuation_input(None, "partial")
     assert len(out) == 2
-    assert out[0]["role"] == "developer"
-    assert out[1]["role"] == "assistant"
+    assert out[0]["role"] == "assistant"
+    assert out[1]["role"] == "user"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1355,9 +1358,92 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
     continuation = mock_fallback.await_args.kwargs["kwargs"]["input"]
     assert isinstance(continuation, list)
     assert continuation[0]["content"][0]["text"] == "original question"
-    assert continuation[-2]["role"] == "developer"
-    assert continuation[-1]["role"] == "assistant"
-    assert continuation[-1]["content"][0]["text"] == "partial answer"
+    assert continuation[-2]["role"] == "assistant"
+    assert continuation[-2]["content"][0]["text"] == "partial answer"
+    assert continuation[-1]["role"] == "user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", ["", "1, 2, "])
+async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
+    partial: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    prompt: Final = "Print the integers 1 through 5, separated by commas."
+
+    def sse(*events: Mapping[str, object]) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    primary: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=sse(
+            *(
+                ({
+                    "type": "response.output_text.delta", "sequence_number": 0,
+                    "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
+                },)
+                if partial else ()
+            ),
+            {
+                "type": "error", "sequence_number": 1,
+                "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+            },
+        )
+    )
+
+    def no_prefill_provider(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        if body["messages"][-1]["role"] != "user":
+            return httpx.Response(
+                400,
+                json={"type": "error", "error": {
+                    "type": "invalid_request_error", "message": "The conversation must end with a user message",
+                }},
+            )
+        return sse(
+            {"type": "message_start", "message": {
+                "id": "msg_fallback", "type": "message", "role": "assistant",
+                "model": "claude-opus-5-5", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+            }},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {
+                "type": "text_delta", "text": "3, 4, 5" if partial else "1, 2, 3, 4, 5",
+            }},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+            {"type": "message_stop"},
+        )
+
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=no_prefill_provider)
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(model="primary", input=prompt, stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert "".join(
+            event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        ) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        assert primary.call_count == fallback.call_count == 1
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert messages[0] == {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        if partial:
+            assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+            assert messages[-2] == {"role": "assistant", "content": [{"type": "text", "text": partial}]}
+        else:
+            assert len(messages) == 1
+    finally:
+        router.discard()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio

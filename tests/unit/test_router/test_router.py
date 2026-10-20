@@ -6895,8 +6895,7 @@ async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
-    """Mid-stream error: input is rewritten to include user prompt +
-    developer instruction + prior assistant message with partial output."""
+    """Mid-stream error: preserve partial assistant output and request continuation in a user turn."""
     from litellm.exceptions import MidStreamFallbackError
 
     router = _make_router_with_fallback()
@@ -6932,11 +6931,11 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
     assert isinstance(new_input, list)
     assert new_input[0]["role"] == "user"
     assert new_input[0]["content"][0]["text"] == "What's the capital of France?"
-    assert new_input[1]["role"] == "developer"
-    assert "do not repeat" in new_input[1]["content"][0]["text"].lower()
-    assert new_input[2]["role"] == "assistant"
-    assert new_input[2]["content"][0]["type"] == "output_text"
-    assert new_input[2]["content"][0]["text"] == "The capital of France is"
+    assert new_input[1]["role"] == "assistant"
+    assert new_input[1]["content"][0]["type"] == "output_text"
+    assert new_input[1]["content"][0]["text"] == "The capital of France is"
+    assert new_input[2]["role"] == "user"
+    assert "do not repeat" in new_input[2]["content"][0]["text"].lower()
 
 
 @pytest.mark.asyncio
