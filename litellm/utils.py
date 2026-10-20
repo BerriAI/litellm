@@ -999,10 +999,6 @@ def _ocr_document_summary(document: object) -> str:
 
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 
-_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
-    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
-)
-
 
 def function_setup(
     original_function: str,
@@ -1250,9 +1246,6 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in _DECISION_CALL_TYPES:
-            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
-            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -5349,6 +5342,9 @@ def get_optional_params(
 EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 
 
+LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -5372,7 +5368,7 @@ def add_provider_specific_params_to_optional_params(
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
             for k in passed_params:
-                if k not in openai_params and passed_params[k] is not None:
+                if k not in openai_params and k not in LITELLM_ONLY_PARAMS and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}
@@ -8319,8 +8315,8 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
     litellm_params: Final = cast(Mapping[str, object], model_call_details.get("litellm_params", {}))
     if litellm_params is not None:
         base_model: Final = litellm_params.get("base_model", None)
-        if base_model is not None:
-            return cast(str | None, base_model)
+        if isinstance(base_model, str):
+            return base_model
         metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
         base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
             litellm_utils.get_base_model_from_litellm_call_metadata
@@ -9717,6 +9713,8 @@ class ProviderConfigManager:
     ) -> BaseLLMModelInfo | None:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
@@ -10308,6 +10306,7 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.deepseek.search.transformation import DeepSeekSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
@@ -10347,6 +10346,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

@@ -8500,14 +8500,8 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
             api_base=api_base_hint,
         )
 
-        # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
-        if asyncio.iscoroutine(init_response):
-            response = await init_response
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
-        return response
+        return await init_response if asyncio.iscoroutine(init_response) else init_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(

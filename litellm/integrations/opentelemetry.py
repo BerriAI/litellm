@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -50,6 +51,7 @@ from litellm.types.utils import (
     Function,
     LLMResponseTypes,
     StandardCallbackDynamicParams,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
 )
 
@@ -2420,9 +2422,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = cast(  # cast-ok: payload metadata follows the standard logging contract
+                StandardLoggingMetadata, standard_logging_payload["metadata"]
+            )
             for key, value in metadata.items():
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"metadata.{key}",
+                    value=safe_dumps(value) if key == KUBERNETES_POD_ROUTING_KEY and value is not None else value,
+                )
             decision: Final = metadata.get("routing_decision")
             span.set_attributes(routing_decision_attributes(decision))
 
