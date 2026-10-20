@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from httpx import Response
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -150,6 +150,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
+    model_info_with_pricing_overrides,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -741,22 +742,14 @@ def cost_per_token(
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "bedrock":
-        if bedrock_model_info is not None:
+        resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
+        if resolved_bedrock_info is not None:
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider="bedrock",
                 service_tier=service_tier,
-                model_info=bedrock_model_info,
-            )
-        registered_pricing_model: Final = _bedrock_registered_pricing_model(model)
-        if registered_pricing_model is not None:
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider="bedrock",
-                service_tier=service_tier,
-                model_info=_cost_map_model_info(registered_pricing_model, None),
+                model_info=resolved_bedrock_info,
             )
         return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "openai":
@@ -887,52 +880,28 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
-def _bedrock_registered_pricing_model(model: str) -> str | None:
-    return next(
-        (
-            key
-            for key, entry in runtime_model_cost_registrations(model, "bedrock")
-            if _bedrock_registration_has_prices(entry)
-        ),
-        None,
-    )
-
-
-@with_config(ConfigDict(extra="allow"))
-class _BedrockPricingInfo(ModelInfo):
-    pass
-
-
-_BEDROCK_PRICING_INFO: Final = TypeAdapter(_BedrockPricingInfo)
-
-
-def _bedrock_cache_overlay(
+def _bedrock_pricing_info(
     model: str | None,
     invoked_model_id: str | None,
     custom_llm_provider: str | None,
     explicit_pricing: bool,
 ) -> ModelInfo | None:
-    if explicit_pricing or custom_llm_provider != "bedrock" or not model or not invoked_model_id:
+    if explicit_pricing or custom_llm_provider != "bedrock" or not model:
         return None
     registration: Final = next(
         (
-            entry
-            for _, entry in runtime_model_cost_registrations(model, "bedrock")
+            (key, entry)
+            for key, entry in runtime_model_cost_registrations(model, "bedrock")
             if _bedrock_registration_has_prices(entry)
         ),
         None,
     )
-    if registration is None or _cost_map_entry_prices_anything(registration):
-        return None
-    profile: Final = _cost_map_model_info(invoked_model_id, "bedrock", prefer_registration=False)
+    profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
-        return None
-    overrides: Final = {
-        field: value
-        for field, value in registration.items()
-        if value is not None and field.startswith("cache_") and is_server_derived_pricing_key(field)
-    }
-    return _BEDROCK_PRICING_INFO.validate_python({**profile, **overrides})
+        return _cost_map_model_info(registration[0], None) if registration is not None else None
+    if registration is None or registration[0] == profile["key"]:
+        return profile
+    return model_info_with_pricing_overrides(profile, registration[1])
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
@@ -1000,25 +969,13 @@ def select_model_name_for_cost_calc(
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
     explicit_pricing: Final = custom_pricing is True or base_model is not None
-    invoked_model_info: Final = (
-        _cost_map_model_info(invoked_model_id, "bedrock", prefer_registration=False)
-        if invoked_model_id and custom_llm_provider == "bedrock" and not explicit_pricing
-        else None
-    )
     configured_model: Final = model or (
         completion_response_model if isinstance(completion_response_model, str) else None
     )
-    registered_pricing_model: Final = (
-        _bedrock_registered_pricing_model(configured_model)
-        if invoked_model_info is not None and isinstance(configured_model, str)
-        else None
-    )
-    cache_overlay: Final = _bedrock_cache_overlay(
+    bedrock_model_info: Final = _bedrock_pricing_info(
         configured_model, invoked_model_id, custom_llm_provider, explicit_pricing
     )
-    bedrock_pricing_model: Final = (
-        cache_overlay["key"] if cache_overlay is not None else registered_pricing_model
-    ) or (invoked_model_info["key"] if invoked_model_info is not None and _declares_rates(invoked_model_info) else None)
+    bedrock_pricing_model: Final = bedrock_model_info["key"] if bedrock_model_info is not None else None
     priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
     priced_region: Final = (
         _get_hidden_str_for_cost_calc(hidden_params, "region_name") or region_name
@@ -1666,18 +1623,11 @@ def completion_cost(
             invoked_model_id=invoked_model_id,
         )
 
-        bedrock_model_info: Final = _bedrock_cache_overlay(
+        bedrock_model_info: Final = _bedrock_pricing_info(
             model or _get_response_model(completion_response),
             invoked_model_id,
             _get_provider_for_cost_calc(model, custom_llm_provider),
             explicit_pricing,
-        ) or (
-            _cost_map_model_info(selected_model, "bedrock")
-            if selected_model is not None
-            and not explicit_pricing
-            and _get_provider_for_cost_calc(model, custom_llm_provider) == "bedrock"
-            and _bedrock_registered_pricing_model(selected_model) is not None
-            else None
         )
         requested_model: Final = model
         request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -2409,17 +2359,8 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
     )
 
 
-def _cost_map_model_info(
-    model: str, custom_llm_provider: str | None, *, prefer_registration: bool = True
-) -> ModelInfo | None:
+def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
-        registered_pricing_model: Final = (
-            _bedrock_registered_pricing_model(model)
-            if custom_llm_provider == "bedrock" and prefer_registration
-            else None
-        )
-        if registered_pricing_model is not None:
-            return litellm.get_model_info(model=registered_pricing_model)
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
@@ -2473,14 +2414,14 @@ def pricing_entry_for_cost_calc(
         region_name=region_name,
         invoked_model_id=_invoked_model_id_for_cost(None, litellm_logging_obj),
     )
-    cache_overlay: Final = _bedrock_cache_overlay(
+    bedrock_model_info: Final = _bedrock_pricing_info(
         model or _get_response_model(completion_response),
         _invoked_model_id_for_cost(None, litellm_logging_obj),
         _get_provider_for_cost_calc(model, custom_llm_provider),
         custom_pricing is True or base_model is not None,
     )
-    if cache_overlay is not None:
-        return cache_overlay["key"], cache_overlay
+    if bedrock_model_info is not None:
+        return bedrock_model_info["key"], bedrock_model_info
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),

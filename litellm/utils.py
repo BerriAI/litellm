@@ -3399,6 +3399,25 @@ def _without_overridden_price_variants(
     )
 
 
+@with_config(ConfigDict(extra="allow"))
+class _PricingModelInfo(ModelInfo):
+    pass
+
+
+_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
+
+
+def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+    from litellm.types.utils import is_server_derived_pricing_key
+
+    overrides: Final = {
+        name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
+    }
+    return _PRICING_MODEL_INFO.validate_python(
+        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _BuiltinCostMatch:
     key: str
@@ -3407,7 +3426,7 @@ class _BuiltinCostMatch:
 
 
 @dataclass(frozen=True, slots=True)
-class _LookupMiss:
+class ModelInfoLookupMiss:
     tripped: bool
 
 
@@ -3494,17 +3513,19 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 _REGISTRATION_ATTEMPTS: Final = 3
 
 
-def _lookup_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
     try:
         info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except ModelNotMappedError:
-        return _LookupMiss(tripped=False)
+        return ModelInfoLookupMiss(tripped=False)
     except Exception:
-        return _LookupMiss(tripped=True)
-    return _LookupMiss(tripped=False) if is_generalized_model_info(info) else info
+        return ModelInfoLookupMiss(tripped=True)
+    return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
 
 
-def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+def _get_builtin_model_info_for_registration(
+    model: str, custom_llm_provider: str | None
+) -> ModelInfo | ModelInfoLookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Misses when the lookup cannot map the model or resolved it via a
@@ -3513,10 +3534,12 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     changing the map mid-walk, is retried, so a transient failure registers exactly
     where the untripped lookup would.
     """
-    lookups: Final = (_lookup_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
+    lookups: Final = (
+        lookup_model_info_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
+    )
     return next(
-        (lookup for lookup in lookups if not (isinstance(lookup, _LookupMiss) and lookup.tripped)),
-        _LookupMiss(tripped=True),
+        (lookup for lookup in lookups if not (isinstance(lookup, ModelInfoLookupMiss) and lookup.tripped)),
+        ModelInfoLookupMiss(tripped=True),
     )
 
 
@@ -3551,7 +3574,7 @@ def _registration_base(
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
     )
-    if not isinstance(builtin_model_info, _LookupMiss):
+    if not isinstance(builtin_model_info, ModelInfoLookupMiss):
         return _RegistrationWrite(
             key=builtin_model_info["key"],
             entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),

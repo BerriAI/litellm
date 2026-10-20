@@ -2523,6 +2523,33 @@ def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
     assert get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
 
 
+@pytest.mark.parametrize(
+    "field", ("output_cost_per_token", "cache_read_input_token_cost", "cache_creation_input_token_cost")
+)
+def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            f"{field}_above_300k_tokens": 0.005,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=300_001, completion_tokens=3, total_tokens=300_004),
+    )
+    assert rates[0] == 0.001
+    assert rates[1] == (0.005 if field == "output_cost_per_token" else 0.002)
+    assert rates[2] == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
+    assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+
+
 def test_threshold_keys_exclude_service_tier_variants():
     from typing import cast
 

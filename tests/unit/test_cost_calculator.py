@@ -10129,10 +10129,73 @@ def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates
     ) == pytest.approx(10 * 0.01 + 3 * 0.02 + 5 * 0.001)
 
 
+@pytest.mark.parametrize("direction", ("input", "output"))
+@pytest.mark.parametrize("rate", (0.0, 0.004))
+@pytest.mark.parametrize("prompt_tokens", (100, 300_001))
+def test_bedrock_partial_registration_overrides_only_its_profile_direction(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    rate: float,
+    prompt_tokens: int,
+) -> None:
+    from litellm.cost_calculator import pricing_entry_for_cost_calc
+
+    model: Final = "openai.partial-pricing-test"
+    profile: Final = f"us.{model}"
+    profile_entry: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "input_cost_per_token_above_300k_tokens": 0.03,
+        "output_cost_per_token_above_300k_tokens": 0.06,
+        "cache_read_input_token_cost": 0.001,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, profile: dict(profile_entry)})
+    litellm.register_model({model: {f"{direction}_cost_per_token": rate}}, persist_across_reloads=False)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=3,
+            total_tokens=prompt_tokens + 3,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        ),
+    )
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="partial-pricing",
+        function_id="partial-pricing",
+    )
+    logging_obj.model_call_details["model_id"] = profile
+    input_rate: Final = rate if direction == "input" else (0.03 if prompt_tokens > 300_000 else 0.01)
+    output_rate: Final = rate if direction == "output" else (0.06 if prompt_tokens > 300_000 else 0.02)
+    assert completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        litellm_logging_obj=logging_obj,
+    ) == pytest.approx((prompt_tokens - 5) * input_rate + 3 * output_rate + 5 * 0.001)
+    assert logging_obj.billed_token_rates is not None
+    assert logging_obj.billed_token_rates.input_cost_per_token == input_rate
+    assert logging_obj.billed_token_rates.output_cost_per_token == output_rate
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(5 * 0.001)
+    entry: Final = pricing_entry_for_cost_calc(model, response, "bedrock", False, None, None, None, logging_obj)
+    assert entry is not None
+    assert entry[1][f"{direction}_cost_per_token"] == rate
+    assert litellm.model_cost[profile] == profile_entry
+
+
 @pytest.mark.parametrize("prompt_tokens", (299_999, 300_000, 300_001))
 @pytest.mark.parametrize("cache_field", ("cache_read_input_token_cost", "cache_creation_input_token_cost"))
 @pytest.mark.parametrize("tier_override", (None, 0.0, 0.003))
-def test_bedrock_cache_overlay_preserves_dynamic_threshold_rates(
+def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     _local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,
     prompt_tokens: int,

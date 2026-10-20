@@ -285,7 +285,7 @@ def _parse_token_threshold(threshold: str) -> float:
 
 
 def _parse_above_token_threshold(key: str) -> float:
-    return _parse_token_threshold(key.split("_above_")[1].split("_tokens")[0])
+    return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
 
 
 def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
@@ -683,10 +683,12 @@ def _get_token_base_cost(
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
     # Standard thresholds and thresholds suffixed for this request's service tier both count.
     tier_key_suffix: Final = get_service_tier_cost_key("", service_tier)
+    threshold_prefixes: Final = tuple(f"{prefix}_above_" for prefix in _BATCH_RATE_PREFIXES)
     threshold_keys: Final = [
         k
         for k in model_info
-        if k.startswith("input_cost_per_token_above_")
+        if k.startswith(threshold_prefixes)
+        and "_tokens" in k
         and (
             not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES) or (tier_key_suffix != "" and k.endswith(tier_key_suffix))
         )
@@ -699,7 +701,7 @@ def _get_token_base_cost(
         if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.split("_above_")[1].split("_tokens")[0]
+                threshold_str = key.rsplit("_above_", 1)[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
                 if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
@@ -712,7 +714,7 @@ def _get_token_base_cost(
                             service_tier,
                         )
                         if service_tier
-                        else key
+                        else f"input_cost_per_token_above_{threshold_str}_tokens"
                     )
                     prompt_base_cost = cast(
                         float,

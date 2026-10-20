@@ -832,6 +832,107 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _restore_model_cost_entries(model_keys)
 
 
+@pytest.mark.parametrize("field", ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+@pytest.mark.parametrize("rate", (0.0, 0.004))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("provider", (None, "bedrock"))
+def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    rate: float,
+    explicit_base: bool,
+    provider: str | None,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
+
+    model: Final = "openai.gpt-5.6-sol"
+    profile: Final = f"us.{model}"
+    base_model: Final = f"global.{model}"
+    profile_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": 0.001,
+    }
+    base_prices: Final = {**profile_prices, "input_cost_per_token": 0.03, "output_cost_per_token": 0.04}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, profile: dict(profile_prices), base_model: dict(base_prices)}
+    )
+    deployment: Final = Deployment(
+        model_name="profile-priced",
+        litellm_params=LiteLLM_Params(
+            model=f"converse/{model}" if provider else f"bedrock/converse/{model}",
+            model_id=profile,
+            custom_llm_provider=provider,
+        ),
+        model_info=ModelInfo(
+            **{
+                "id": "profile-priced-deployment",
+                field: rate,
+                **({"base_model": f"bedrock/{base_model}"} if explicit_base else {}),
+            }
+        ),
+    )
+    Router._register_deployment_pricing(deployment)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=3,
+            total_tokens=103,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        ),
+    )
+    input_rate: Final = rate if field == "input_cost_per_token" else (0.03 if explicit_base else 0.01)
+    output_rate: Final = rate if field == "output_cost_per_token" else (0.04 if explicit_base else 0.02)
+    cache_rate: Final = rate if field == "cache_read_input_token_cost" else 0.001
+    assert completion_cost(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="profile-priced-deployment",
+    ) == pytest.approx(95 * input_rate + 3 * output_rate + 5 * cache_rate)
+    assert litellm.model_cost[profile] == profile_prices
+
+
+@pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
+def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_entry: dict[str, object] | None,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    model: Final = "openai.unmapped-pricing-test"
+    profile: Final = f"us.{model}"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            **({profile: catalog_entry} if catalog_entry is not None else {}),
+        },
+    )
+    deployment: Final = Deployment(
+        model_name="custom-priced",
+        litellm_params=LiteLLM_Params(model=f"bedrock/converse/{model}", model_id=profile),
+        model_info=ModelInfo(id="unmapped-profile-deployment", input_cost_per_token=0.01, output_cost_per_token=0.02),
+    )
+    Router._register_deployment_pricing(deployment)
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model, usage=Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="unmapped-profile-deployment",
+    ) == pytest.approx(10 * 0.01 + 3 * 0.02)
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the

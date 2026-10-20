@@ -396,12 +396,14 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
+    ModelInfoLookupMiss,
     ModelResponse,
     Rules,
     TextCompletionResponse,
@@ -412,6 +414,8 @@ from litellm.utils import (
     get_utc_datetime,
     is_generalized_model_info,
     is_region_allowed,
+    lookup_model_info_for_registration,
+    model_info_with_pricing_overrides,
     provider_rejectable_params,
     set_live_deployment_replay,
 )
@@ -9836,6 +9840,17 @@ class Router:
         params_base_model: Final = deployment.litellm_params.get("base_model")
         if isinstance(params_base_model, str) and params_base_model:
             return params_base_model
+        params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
+        invoked_model: Final = params.get("model_id")
+        if (
+            isinstance(invoked_model, str)
+            and invoked_model
+            and (
+                deployment.litellm_params.custom_llm_provider == "bedrock"
+                or deployment.litellm_params.model.startswith("bedrock/")
+            )
+        ):
+            return invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
         return deployment.litellm_params.model
 
     @staticmethod
@@ -11075,7 +11090,7 @@ class Router:
         return (backend_key,)
 
     @staticmethod
-    def _deployment_model_cost_payload(deployment: Deployment) -> dict:  # mutable-ok: cost-map entry
+    def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
         Custom pricing lives on ``litellm_params`` rather than ``model_info``, and
@@ -11083,11 +11098,31 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        model_info: Final = dict(  # mutable-ok: existing inheritance helpers fill missing rates in place
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+        )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 model_info[field] = field_value
+        backend_model: Final = Router._cost_map_backend_model(deployment)
+        params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
+        if (
+            params.get("model_id")
+            and backend_model != deployment.litellm_params.model
+            and (
+                deployment.litellm_params.custom_llm_provider == "bedrock"
+                or deployment.litellm_params.model.startswith("bedrock/")
+            )
+        ):
+            profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+            if not isinstance(profile_info, ModelInfoLookupMiss):
+                explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(model_info)
+                priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)
+                return {
+                    **{key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)},
+                    **explicit_info,
+                }
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
             backend_model=deployment.litellm_params.model,
