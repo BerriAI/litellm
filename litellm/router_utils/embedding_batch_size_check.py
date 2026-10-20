@@ -1,11 +1,15 @@
 """Validate the number of inputs in a single embeddings request."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Final
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
+
+_SELECTING_FOR_EMBEDDING: Final[ContextVar[bool]] = ContextVar("selecting_for_embedding", default=False)
 
 
 def _is_str_keyed_mapping(
@@ -78,13 +82,23 @@ def _str_keyed_or_empty(value: object) -> Mapping[str, object]:
     return value if _is_str_keyed_mapping(value) else {}
 
 
+@contextmanager
+def embedding_deployment_selection() -> Generator[None]:
+    """Apply the input limit to deployment selection inside this block, which only embedding calls enter."""
+    token: Final = _SELECTING_FOR_EMBEDDING.set(True)
+    try:
+        yield
+    finally:
+        _SELECTING_FOR_EMBEDDING.reset(token)
+
+
 def deployments_admitting_embedding_batch(
     deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
     input: object,
     request_kwargs: object,
 ) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
     """Keep the deployments whose input limit admits the request, or all of them when none does."""
-    if not _is_embedding_input(input):
+    if not _SELECTING_FOR_EMBEDDING.get():
         return deployments
     kwargs: Final = _str_keyed_or_empty(request_kwargs)
     admitting: Final = [
@@ -93,25 +107,25 @@ def deployments_admitting_embedding_batch(
     return admitting or deployments
 
 
-def raise_if_embedding_batch_too_large(
+def embedding_batch_too_large_error(
     deployment: object,
     input: object,
     request_kwargs: object,
     model: str,
-) -> None:
-    """Reject an embeddings request that exceeds its deployment's input limit."""
+) -> litellm.BadRequestError | None:
+    """Return the 400 for an embeddings request that exceeds its deployment's input limit, else None."""
     if not _is_str_keyed_mapping(deployment):
-        return
+        return None
     limit: Final = _embedding_batch_limit(deployment)
     if limit is None:
-        return
+        return None
 
     input_count: Final = _requested_embedding_count(deployment, input, _str_keyed_or_empty(request_kwargs))
     if input_count <= limit:
-        return
+        return None
 
     provider: Final = _litellm_param(deployment, "custom_llm_provider")
-    raise litellm.BadRequestError(
+    return litellm.BadRequestError(
         message=(
             f"Embedding request has {input_count} inputs, which exceeds "
             f"max_embedding_batch_size={limit} for model={model}. "

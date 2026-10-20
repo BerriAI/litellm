@@ -1,4 +1,6 @@
 import json
+import time
+from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final
 
@@ -8,12 +10,15 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.types.router import RouterRateLimitError
 from litellm.router_utils.embedding_batch_size_check import (
     count_embedding_inputs,
     deployments_admitting_embedding_batch,
     effective_embedding_input,
-    raise_if_embedding_batch_too_large,
+    embedding_batch_too_large_error,
+    embedding_deployment_selection,
 )
 
 _MODEL: Final = "embed-group"
@@ -36,11 +41,15 @@ def _deployment(limit: int | None, extra_body: dict[str, object] | None = None) 
     }
 
 
-def _raise_batch(input_value: str | list, limit: int | None) -> None:
-    raise_if_embedding_batch_too_large(
+def _batch_error(
+    input_value: object,
+    limit: int | None,
+    request_kwargs: dict[str, object] | None = None,
+) -> litellm.BadRequestError | None:
+    return embedding_batch_too_large_error(
         deployment={"model_info": _model_info(limit), "litellm_params": {"custom_llm_provider": _PROVIDER}},
         input=input_value,
-        request_kwargs={},
+        request_kwargs=request_kwargs or {},
         model=_MODEL,
     )
 
@@ -167,6 +176,11 @@ class TestEffectiveEmbeddingInput:
 
 
 class TestDeploymentsAdmittingEmbeddingBatch:
+    @pytest.fixture(autouse=True)
+    def _embedding_selection(self) -> Iterator[None]:
+        with embedding_deployment_selection():
+            yield
+
     @pytest.mark.parametrize(
         ("input_value", "limit"),
         [
@@ -203,8 +217,15 @@ class TestDeploymentsAdmittingEmbeddingBatch:
         assert deployments_admitting_embedding_batch([capped, uncapped], "ok", None) == [uncapped]
         assert deployments_admitting_embedding_batch([capped, uncapped], "ok", {"extra_body": {}}) == [capped, uncapped]
 
+    @pytest.mark.parametrize("top_level", [None, 7, {"text": "a"}])
+    def test_extra_body_input_routes_when_top_level_input_is_not_a_list(self, top_level: object) -> None:
+        capped: Final = _deployment(2)
+        uncapped: Final = _deployment(None)
+        request_kwargs: Final = {"extra_body": {"input": ["a", "b", "c"]}}
+        assert deployments_admitting_embedding_batch([capped, uncapped], top_level, request_kwargs) == [uncapped]
 
-class TestRaiseIfEmbeddingBatchTooLarge:
+
+class TestEmbeddingBatchTooLargeError:
 
     @pytest.mark.parametrize(
         ("input_value", "limit", "message_match"),
@@ -235,21 +256,18 @@ class TestRaiseIfEmbeddingBatchTooLarge:
         limit: int,
         message_match: str | None,
     ) -> None:
-        with pytest.raises(litellm.BadRequestError, match=message_match) as excinfo:
-            _raise_batch(input_value, limit)
-        assert excinfo.value.status_code == 400
+        error: Final = _batch_error(input_value, limit)
+        assert isinstance(error, litellm.BadRequestError)
+        assert error.status_code == 400
         if message_match is not None:
-            assert f"max_embedding_batch_size={limit}" in excinfo.value.message
+            assert message_match in error.message
+            assert f"max_embedding_batch_size={limit}" in error.message
 
     @pytest.mark.parametrize("top_level", [None, 7, {"text": "a"}])
     def test_extra_body_override_counts_when_top_level_input_is_not_a_list(self, top_level: object) -> None:
-        with pytest.raises(litellm.BadRequestError, match="3 inputs"):
-            raise_if_embedding_batch_too_large(
-                deployment={"model_info": _model_info(2), "litellm_params": {"custom_llm_provider": _PROVIDER}},
-                input=top_level,
-                request_kwargs={"extra_body": {"input": ["a", "b", "c"]}},
-                model=_MODEL,
-            )
+        error: Final = _batch_error(top_level, 2, {"extra_body": {"input": ["a", "b", "c"]}})
+        assert error is not None
+        assert "3 inputs" in error.message
 
 
 class TestRouterEmbeddingBatchLimit:
@@ -279,6 +297,53 @@ class TestRouterEmbeddingBatchLimit:
                     input=["one", "two", "three"],
                 )
             assert route.call_count == 0
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_oversized_batch_rejection_reaches_failure_callbacks(self, sync: bool) -> None:
+        failures: Final[list[Exception]] = []
+
+        class FailureRecorder(CustomLogger):
+            def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                failures.append(kwargs["exception"])
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                failures.append(kwargs["exception"])
+
+        recorder: Final = FailureRecorder()
+        logging_obj: Final = LitellmLogging(
+            model="embed",
+            messages=[],
+            stream=False,
+            call_type="embedding" if sync else "aembedding",
+            start_time=time.time(),
+            litellm_call_id="embed-batch-rejected",
+            function_id="embed-batch-rejected",
+            dynamic_failure_callbacks=[recorder] if sync else None,
+            dynamic_async_failure_callbacks=None if sync else [recorder],
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": {}, "proxy_server_request": {}}
+        router: Final = _embedding_router(
+            provider_model="openai/text-embedding-3-small",
+            api_base=_OPENAI_EMBED_BASE,
+            max_embedding_batch_size=2,
+            deployment_id="embed-batch-capped",
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+            )
+            with pytest.raises(litellm.BadRequestError, match="3 inputs") as excinfo:
+                await _call_embedding(
+                    router,
+                    sync=sync,
+                    model="embed",
+                    input=["one", "two", "three"],
+                    litellm_logging_obj=logging_obj,
+                )
+            assert route.call_count == 0
+        assert failures == [excinfo.value]
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio
@@ -336,6 +401,42 @@ class TestRouterEmbeddingBatchLimit:
             for _ in range(5):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
             assert (capped_route.call_count, uncapped_route.call_count) == (0, 5)
+
+    @pytest.mark.asyncio
+    async def test_non_embedding_call_with_input_ignores_embedding_batch_limit(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_key": "sk-fake",
+                        "api_base": _OPENAI_EMBED_BASE,
+                        "order": 1,
+                    },
+                    "model_info": {"id": "capped", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_key": "sk-fake",
+                        "api_base": _UNCAPPED_EMBED_BASE,
+                        "order": 2,
+                    },
+                    "model_info": {"id": "uncapped"},
+                },
+            ],
+            num_retries=0,
+        )
+        responses_input: Final = [{"role": "user", "content": str(turn)} for turn in range(3)]
+
+        async_pick: Final = await router.async_get_available_deployment(
+            model="embed", request_kwargs={}, input=responses_input
+        )
+        sync_pick: Final = router.get_available_deployment(model="embed", request_kwargs={}, input=responses_input)
+
+        assert (async_pick["model_info"]["id"], sync_pick["model_info"]["id"]) == ("capped", "capped")
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio
