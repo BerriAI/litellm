@@ -1161,7 +1161,7 @@ class LiteLLMCompletionResponsesConfig:
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """

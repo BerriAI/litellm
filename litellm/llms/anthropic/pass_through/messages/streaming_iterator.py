@@ -506,7 +506,7 @@ class BaseAnthropicMessagesStreamingIterator:
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
-        self.start_time = datetime.now()
+        self.start_time = litellm_logging_obj.start_time
         self.completion_start_time: datetime | None = None
 
     async def _handle_streaming_logging(self, collected_chunks: list[bytes], *, stream_teardown: bool = False):

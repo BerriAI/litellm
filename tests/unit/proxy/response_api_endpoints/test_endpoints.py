@@ -4270,10 +4270,17 @@ class TestResponsesInputTokens:
         path: str = "/v1/responses/input_tokens",
         counter: AsyncMock | None = None,
         llm_router: litellm.Router | None = None,
+        response_id_security: object | None = None,
+        managed_files: object | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.response_api_endpoints.endpoints import _proxy_llm_router, _proxy_token_counter
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _proxy_llm_router,
+            _proxy_managed_files_hook,
+            _proxy_response_id_security,
+            _proxy_token_counter,
+        )
         from litellm.types.utils import TokenCountResponse
 
         token_counter_mock = (
@@ -4291,6 +4298,10 @@ class TestResponsesInputTokens:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
+        if response_id_security is not None:
+            app.dependency_overrides[_proxy_response_id_security] = lambda: response_id_security
+        if managed_files is not None:
+            app.dependency_overrides[_proxy_managed_files_hook] = lambda: managed_files
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -4299,6 +4310,8 @@ class TestResponsesInputTokens:
             app.dependency_overrides.pop(user_api_key_auth, None)
             app.dependency_overrides.pop(_proxy_token_counter, None)
             app.dependency_overrides.pop(_proxy_llm_router, None)
+            app.dependency_overrides.pop(_proxy_response_id_security, None)
+            app.dependency_overrides.pop(_proxy_managed_files_hook, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -4423,6 +4436,139 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
+        assert counter.await_args.kwargs["responses_request"]["tools"] == [{"type": "web_search"}]
+
+    @pytest.mark.parametrize(
+        ("tools", "expected"),
+        [
+            ([5], {}),
+            (
+                [5, {"type": "web_search"}],
+                {"tools": [{"type": "web_search"}], "tool_choice": "required", "parallel_tool_calls": False},
+            ),
+        ],
+    )
+    def test_tool_choice_leaves_the_count_with_the_tools_drop_params_drops(
+        self, tools: list[object], expected: dict[str, object]
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": "hi",
+                "tools": tools,
+                "tool_choice": "required",
+                "parallel_tool_calls": False,
+                "drop_params": True,
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        sent = counter.await_args.kwargs["responses_request"]
+        assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+
+    def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
+        from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+
+        class DecodingSecurity:
+            def authorize_response_id(self, response_id: str, user_api_key_dict: object) -> str:
+                return {"resp_client_form": "resp_raw"}[response_id]
+
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "previous_response_id": "resp_client_form"},
+            response_id_security=DecodingSecurity(),
+        )
+
+        assert response.status_code == 200, response.text
+        responses_request: Final = counter.await_args.kwargs["responses_request"]
+        assert (responses_request["previous_response_id"], responses_request[ADDRESSED_RESPONSE_ID_FIELD]) == (
+            "resp_raw",
+            "resp_client_form",
+        )
+
+    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        mapping: Final = {"litellm-managed-file": {"deployment-a": "file-on-a"}}
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                if call_type == "aresponses":
+                    data["model_file_id_mapping"] = mapping
+                return None
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
+
+    @pytest.mark.parametrize("caller_mapping", [5, "lots", [1], {"file-x": {"deployment-a": 7}}])
+    def test_a_caller_sent_model_file_id_mapping_does_not_break_the_count(
+        self, monkeypatch: pytest.MonkeyPatch, caller_mapping: object
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+        from litellm.proxy.proxy_server import count_request_tokens
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-files",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "api_base": "https://count.test/v1",
+                    },
+                    "model_info": {"id": "deployment-a"},
+                }
+            ]
+        )
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+        sent: Final[list[object]] = []  # mutable-ok: collects what the mock peer receives
+
+        def count_peer(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7}, request=request)
+
+        with patch.object(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+        ):
+            response, _ = self._post_input_tokens(
+                {"model": "gpt-files", "input": "hi", "model_file_id_mapping": caller_mapping},
+                counter=AsyncMock(side_effect=count_request_tokens),
+                llm_router=router,
+            )
+
+        assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
+
+    def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        denied: Final = "User u1 does not have access to the file litellm-managed-file"
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                raise HTTPException(status_code=403, detail=denied)
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["message"] == denied
+        counter.assert_not_awaited()
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(
@@ -4444,6 +4590,7 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools is None
+        assert "tools" not in counter.await_args.kwargs["responses_request"]
 
     def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
         router: Final = litellm.Router(

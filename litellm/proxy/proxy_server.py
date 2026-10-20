@@ -360,6 +360,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2240,9 +2241,14 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
                 open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
             return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
-        if status_code >= 400:
-            open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
-        parent_otel_span.set_status(Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK))
+        parent_otel_span.set_status(
+            Status(
+                StatusCode.ERROR,
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code),
+            )
+            if status_code >= 400
+            else Status(StatusCode.OK)
+        )
         parent_otel_span.end()
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
@@ -3112,8 +3118,9 @@ def cost_tracking():
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
-        litellm.logging_callback_manager.add_litellm_callback(ProxyDBLogger(spend_event_producer))
-        litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer))
+        db_logger: Final = ProxyDBLogger(spend_event_producer)
+        litellm.logging_callback_manager.add_litellm_callback(db_logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
@@ -7098,6 +7105,7 @@ class ProxyConfig:
                         "vector_store_deny_by_default",
                         "search_tool_deny_by_default",
                         "vertex_ai_pass_through_drop_anthropic_betas",
+                        "request_tag_mappings",
                     )
                     if name in typed_general_settings
                 }
@@ -8342,6 +8350,7 @@ class ProxyConfig:
         previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
         effects: Final = (
+            self._apply_request_tag_mappings_setting,
             self._apply_alerting_settings,
             self._apply_pass_through_settings,
             self._apply_boolean_settings,
@@ -8352,6 +8361,19 @@ class ProxyConfig:
         )
         for effect in effects:
             await effect(db_values)
+
+    async def _apply_request_tag_mappings_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        if "request_tag_mappings" not in db_values:
+            return
+        mappings: Final = self.settings.get("request_tag_mappings")
+        try:
+            ConfigGeneralSettings.model_validate(MappingProxyType({"request_tag_mappings": mappings}))
+        except ValidationError as error:
+            self.settings.pop("request_tag_mappings", None)
+            verbose_proxy_logger.error(
+                "Ignoring invalid general_settings.request_tag_mappings from the DB, so no baggage maps to tags: %s",
+                error,
+            )
 
     async def _apply_alerting_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         alerting: Final = self.settings.get("alerting")
@@ -14682,7 +14704,9 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14695,6 +14719,11 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.litellm_completion_transformation.count_request import (
+    ChatCountBridgeError,
+    chat_count_request,
+    with_provider_file_ids,
+)
 
 
 def _get_provider_token_counter(
@@ -14752,6 +14781,18 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _provider_count_outcome(
+    result: Union["TokenCountResponse", None],
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if result is not None and result.error is True:
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
+            message=result.error_message or "Token counting failed",
+            rejected_before_provider_call=result.rejected_before_provider_call,
+        )
+    return result
+
+
 def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
     call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
     try:
@@ -14764,6 +14805,12 @@ def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
             code=401,
         ) from e
     return call_params
+
+
+def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+    if deployment is None:
+        return None
+    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -14806,6 +14853,7 @@ async def _try_provider_token_count(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14825,31 +14873,44 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=None
-            if deployment_in_region is None
-            else {
-                **deployment_in_region,
-                "litellm_params": _with_resolved_api_key(deployment_in_region.get("litellm_params", {})),
-            },
+            deployment=_with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            chat_params=chat_params,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
             status_code=getattr(e, "status_code", None) or e.response.status_code,
             message=getattr(e, "message", None) or str(e),
         )
-    if result is not None and result.error is True:
-        return ProviderCountFailure(
-            status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
-            rejected_before_provider_call=result.rejected_before_provider_call,
+    return _provider_count_outcome(result)
+
+
+async def _try_native_responses_count(
+    provider_counter: OpenAITokenCounter,
+    custom_llm_provider: str | None,
+    model_to_use: str,
+    _region: str | None,
+    responses_request: Mapping[str, object],
+    policy: DropPolicy,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
+        return None
+    return _provider_count_outcome(
+        await provider_counter.count_responses_request(
+            model_to_use=model_to_use,
+            request=responses_request,
+            policy=policy,
+            deployment=_with_resolved_credentials(deployment),
+            request_model=request_model,
         )
-    return result
+    )
 
 
 async def _provider_token_count(
@@ -15131,6 +15192,7 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
@@ -15205,8 +15267,45 @@ def _count_context_management(
     return CountContextManagement(
         spec=context_management,
         drop_invalid_edits=litellm.drop_params is True
-        or any(params.get("drop_params") is True for params in sent_params),
+        or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
+
+
+def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
+    previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
+    return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
+
+
+def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+
+
+def _native_responses_count(
+    provider_counter: BaseTokenCounter,
+    custom_llm_provider: str | None,
+    responses_request: Mapping[str, object] | None,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
+    if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
+        return None
+    return partial(
+        _try_native_responses_count,
+        provider_counter,
+        custom_llm_provider,
+        responses_request=responses_request,
+        policy=_count_drop_policy(deployment, responses_request),
+        deployment=deployment,
+        request_model=request_model,
+    )
+
+
+def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -15241,6 +15340,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    responses_request: Mapping[str, object] | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15262,7 +15362,7 @@ async def count_request_tokens(
         try:
             deployment = await llm_router.async_get_available_deployment(
                 model=request.model,
-                request_kwargs={},
+                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
             )
         except Exception:
             verbose_proxy_logger.exception(
@@ -15316,23 +15416,54 @@ async def count_request_tokens(
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
+    routed_request: Final = (
+        None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
+    )
+    chat_count: Final = (
+        None
+        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        else await chat_count_request(
+            model_to_use,
+            custom_llm_provider,
+            _deployment_api_base(deployment_view),
+            routed_request,
+            _count_drop_policy(routed_deployment, routed_request),
+        )
+    )
+    if isinstance(chat_count, ChatCountBridgeError):
+        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
     ladder: Final = (
         None
         if provider_counter is None
         else await _provider_token_count(
-            count_with=partial(
+            count_with=_native_responses_count(
+                provider_counter,
+                custom_llm_provider,
+                routed_request,
+                routed_deployment,
+                request.model,
+            )
+            or partial(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
+                messages=(
+                    [dict(message) for message in chat_count.messages]
+                    if chat_count is not None
+                    else [{"role": "user", "content": prompt}]
+                    if prompt_as_message
+                    else request_messages
+                ),
                 contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
-                tools=tools,
+                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
                 system=system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
             settings=settings,
@@ -17754,7 +17885,7 @@ async def model_deprecations(
 
 
 def get_model_group_info(
-    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -17767,7 +17898,7 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
             model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
@@ -17999,7 +18130,10 @@ async def model_group_info(
 
     model_groups: Final = await append_agents_to_model_group(
         model_groups=get_model_group_info(
-            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+            llm_router=llm_router,
+            all_models_str=listed_group_names,
+            model_group=model_group,
+            team_id=user_api_key_dict.team_id,
         ),
         user_api_key_dict=user_api_key_dict,
     )
@@ -18275,6 +18409,7 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse:
@@ -18286,6 +18421,7 @@ async def async_queue_request(
                         request=request,
                     ),
                     media_type="text/event-stream",
+                    headers={"x-litellm-priority": str(queued_priority)},
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -18300,7 +18436,7 @@ async def async_queue_request(
             )
 
         response: Final = await router.schedule_acompletion(**data)
-        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
+        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -18315,6 +18451,10 @@ async def async_queue_request(
             )
         elif isinstance(e, ProxyException):
             raise e
+        elif isinstance(e, litellm.BadRequestError):
+            raise ProxyException(
+                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+            )
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
@@ -19627,6 +19767,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "request_tag_mappings": "RequestTagMappings",
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_in_flight_requests_per_worker": "Integer",

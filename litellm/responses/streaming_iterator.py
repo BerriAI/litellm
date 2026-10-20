@@ -622,7 +622,9 @@ class BaseResponsesAPIStreamingIterator:
                 # the terminal event; dispatching now would snapshot metadata early.
                 self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
             else:
-                asyncio.create_task(logging_coroutine)
+                spawn_logging_task(
+                    asyncio.get_running_loop(), logging_coroutine, task_name="Responses stream success logging"
+                )
         else:
             run_async_function(
                 async_function=self.logging_obj.async_success_handler,
@@ -2386,14 +2388,20 @@ class ResponsesWebSocketStreaming:
         events: Final = list(turn.events)
         exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "", self.logging_obj)
         if exception is None:
-            asyncio.create_task(turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True))
+            spawn_logging_task(
+                asyncio.get_running_loop(),
+                turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True),
+                task_name="Responses WebSocket success logging",
+            )
             return
         if self._failure is None:
             self._failure = exception
         _record_usage_for_failure(turn.logging_obj, events)
         traceback_exception: Final = "".join(traceback.format_exception(exception))
-        asyncio.create_task(
-            turn.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
+        spawn_logging_task(
+            asyncio.get_running_loop(),
+            turn.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True),
+            task_name="Responses WebSocket failure logging",
         )
 
     def _wrap_response_event(self, response_str: str) -> str:

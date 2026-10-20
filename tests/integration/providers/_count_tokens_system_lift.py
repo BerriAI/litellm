@@ -49,6 +49,87 @@ TOOLS: Final[list[JsonValue]] = [
     }
 ]
 
+WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string", "description": "City to look up"}},
+    "required": ["city"],
+}
+RESPONSES_TOOLS: Final[list[JsonValue]] = [
+    {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Look up the current weather for a city",
+        "parameters": WEATHER_SCHEMA,
+    }
+]
+RESPONSES_TOOL_USE: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        "function-tool": {"input": "Count this message", "instructions": "Be terse", "tools": RESPONSES_TOOLS},
+        "tool-round-trip": {
+            "input": [
+                {"role": "user", "content": "What is the weather in Paris?"},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+                {"type": "function_call_output", "call_id": "call_1", "output": "Sunny, 21C"},
+            ],
+            "tools": RESPONSES_TOOLS,
+        },
+    }
+)
+
+
+def counted_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {field: body[field] for field in ("messages", "system", "tools") if field in body}
+
+
+REPORT_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}, "summary": {"type": "string"}},
+    "required": ["city", "summary"],
+    "additionalProperties": False,
+}
+WEATHER_QUESTION: Final = "What is the weather in Paris?"
+RESPONSES_REQUEST_OPTIONS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        "text-format": {
+            "input": WEATHER_QUESTION,
+            "text": {"format": {"type": "json_schema", "name": "weather_report", "schema": REPORT_SCHEMA}},
+        },
+        "forced-tool-choice-dropped": {
+            "input": WEATHER_QUESTION,
+            "tools": RESPONSES_TOOLS,
+            "tool_choice": {"type": "function", "name": "get_weather"},
+            "parallel_tool_calls": False,
+            "drop_params": True,
+        },
+        "reasoning": {
+            "input": WEATHER_QUESTION,
+            "tools": RESPONSES_TOOLS,
+            "tool_choice": "auto",
+            "reasoning": {"effort": "low"},
+        },
+    }
+)
+_REQUEST_OPTIONS: Final = ("tool_choice", "thinking")
+
+
+def count_request_fields(count_body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    options: Final = (*_REQUEST_OPTIONS, "output_config", "output_format")
+    return {**counted_fields(count_body), **{field: count_body[field] for field in options if field in count_body}}
+
+
+def inference_count_fields(inference_body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    output_config: Final = inference_body.get("output_config")
+    output_format: Final = inference_body.get("output_format")
+    counted_config: Final = {
+        **(output_config if isinstance(output_config, dict) else {}),
+        **({} if output_format is None else {"format": output_format}),
+    }
+    return {
+        **counted_fields(inference_body),
+        **{field: inference_body[field] for field in _REQUEST_OPTIONS if field in inference_body},
+        **({"output_config": counted_config} if counted_config else {}),
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class LiftCase:

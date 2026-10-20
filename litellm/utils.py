@@ -3411,14 +3411,20 @@ def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
     return cast(dict[str, Mapping[str, object]], litellm.model_cost)
 
 
-def _replace_cost_map_entry(cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object]) -> None:
+def _replace_cost_map_entry(
+    cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object], registration: Mapping[str, object]
+) -> None:
     current: Final = cost_map.get(key)
     merged: Final = {**(current or {}), **entry}
-    if not isinstance(current, AliasedCostEntry):
-        cost_map.update({key: merged})
-        return
-    sharing_names: Final = tuple(name for name in current.names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, current.names)))
+    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    previous_fields: Final[frozenset[str]] = (
+        current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
+    )
+    registered_fields: Final = previous_fields | frozenset(
+        name for name, value in registration.items() if value is not None
+    )
+    sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
+    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
 
 
 def _without_synthesized_costs(
@@ -3499,6 +3505,25 @@ def _without_overridden_price_variants(
     )
 
 
+@with_config(ConfigDict(extra="allow"))
+class _PricingModelInfo(ModelInfo):
+    pass
+
+
+_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
+
+
+def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+    from litellm.types.utils import is_server_derived_pricing_key
+
+    overrides: Final = {
+        name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
+    }
+    return _PRICING_MODEL_INFO.validate_python(
+        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _BuiltinCostMatch:
     key: str
@@ -3507,7 +3532,7 @@ class _BuiltinCostMatch:
 
 
 @dataclass(frozen=True, slots=True)
-class _LookupMiss:
+class ModelInfoLookupMiss:
     tripped: bool
 
 
@@ -3594,17 +3619,19 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 _REGISTRATION_ATTEMPTS: Final = 3
 
 
-def _lookup_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
     try:
         info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except ModelNotMappedError:
-        return _LookupMiss(tripped=False)
+        return ModelInfoLookupMiss(tripped=False)
     except Exception:
-        return _LookupMiss(tripped=True)
-    return _LookupMiss(tripped=False) if is_generalized_model_info(info) else info
+        return ModelInfoLookupMiss(tripped=True)
+    return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
 
 
-def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+def _get_builtin_model_info_for_registration(
+    model: str, custom_llm_provider: str | None
+) -> ModelInfo | ModelInfoLookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Misses when the lookup cannot map the model or resolved it via a
@@ -3613,10 +3640,12 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     changing the map mid-walk, is retried, so a transient failure registers exactly
     where the untripped lookup would.
     """
-    lookups: Final = (_lookup_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
+    lookups: Final = (
+        lookup_model_info_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
+    )
     return next(
-        (lookup for lookup in lookups if not (isinstance(lookup, _LookupMiss) and lookup.tripped)),
-        _LookupMiss(tripped=True),
+        (lookup for lookup in lookups if not (isinstance(lookup, ModelInfoLookupMiss) and lookup.tripped)),
+        ModelInfoLookupMiss(tripped=True),
     )
 
 
@@ -3651,7 +3680,7 @@ def _registration_base(
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
     )
-    if not isinstance(builtin_model_info, _LookupMiss):
+    if not isinstance(builtin_model_info, ModelInfoLookupMiss):
         return _RegistrationWrite(
             key=builtin_model_info["key"],
             entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),
@@ -3708,7 +3737,7 @@ def _registration_attempt(
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry)
+    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
     return write if final_attempt or litellm.model_cost is source else None
 
 
@@ -3729,6 +3758,27 @@ def _register_on_current_map(
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+
+
+def runtime_model_cost_registrations(
+    model: str, custom_llm_provider: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    names: Final = get_potential_model_names(model, custom_llm_provider)
+    candidates: Final = (
+        model,
+        names["combined_model_name"],
+        f"{custom_llm_provider}/{names['split_model']}",
+        names["split_model"],
+        names["stripped_model_name"],
+    )
+    entries: Final = ((key, _builtin_cost_map().get(key)) for key in dict.fromkeys(candidates))
+    registered: Final = (
+        (key, entry) for key, entry in entries if isinstance(entry, AliasedCostEntry) and entry.registered_fields
+    )
+    return tuple(
+        (key, MappingProxyType({name: value for name, value in entry.items() if name in entry.registered_fields}))
+        for key, entry in registered
+    )
 
 
 class _LiveDeploymentReplay:
@@ -3843,7 +3893,10 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
+            _runtime_registered_model_cost[_registered_key] = update_dictionary(
+                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                _RATE_TABLE.validate_python(_registered_value),
+            )
 
     for key, value in loaded_model_cost.items():
         write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
@@ -5499,8 +5552,9 @@ def add_provider_specific_params_to_optional_params(
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
+            withheld_params: Final = frozenset[str]() if custom_llm_provider == "litellm_proxy" else LITELLM_ONLY_PARAMS
             for k in passed_params:
-                if k not in openai_params and k not in LITELLM_ONLY_PARAMS and passed_params[k] is not None:
+                if k not in openai_params and k not in withheld_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}
@@ -10544,6 +10598,10 @@ class ProviderConfigManager:
             )
 
             return OpenCodeHarnessConfig()
+        if harness == _Harness.PI:
+            from litellm.llms.pi.harness.transformation import PiHarnessConfig
+
+            return PiHarnessConfig()
         if harness == _Harness.DEEPAGENTS:
             from litellm.llms.deepagents.harness.transformation import (
                 DeepAgentsHarnessConfig,
