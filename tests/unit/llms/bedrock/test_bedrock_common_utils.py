@@ -1197,6 +1197,15 @@ def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value:
     assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
 
 
+def test_get_anthropic_beta_from_headers_never_splits_a_json_array_of_numbers_as_text():
+    from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+
+    betas: Final = get_anthropic_beta_from_headers({"anthropic-beta": "[1, 2]"})
+
+    assert all(isinstance(beta, str) for beta in betas)
+    assert not any("[" in beta or "]" in beta for beta in betas)
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
@@ -2126,3 +2135,18 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
     assert turned_off["api_base"] == "https://bedrock.example"
     assert deployment_model_info(turned_off)["id"] == "deployment-1"
     assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+
+def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    with (
+        patch("botocore.loaders.Loader.load_service_model", return_value=["only-in-the-description"]),
+        patch.object(mod.verbose_logger, "warning") as warning,
+    ):
+        shape: Final = mod._load_bedrock_response_stream_shape()
+
+    assert shape is None
+    (logged,) = warning.call_args_list
+    assert "only-in-the-description" not in logged.args[0] % logged.args[1:]

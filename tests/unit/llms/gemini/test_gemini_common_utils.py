@@ -1,3 +1,4 @@
+import contextlib
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -8,7 +9,11 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.common_utils import (
+    GeminiModelInfo,
+    GoogleAIStudioTokenCounter,
+    map_openai_image_params_to_gemini,
+)
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
 
@@ -473,3 +478,22 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+
+def _map_image_config(raw_image_config: str) -> dict[str, object]:
+    return map_openai_image_params_to_gemini(
+        {"imageConfig": raw_image_config},
+        "gemini-3.1-flash-image",
+        ["imageConfig"],
+        parse_image_config_string=True,
+    )
+
+
+def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config():
+    assert _map_image_config('{"aspectRatio": "1:1"}') == {"imageConfig": {"aspectRatio": "1:1"}}
+
+
+@pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])
+def test_map_openai_image_params_to_gemini_drops_or_refuses_a_non_object_image_config(raw_image_config: str):
+    with contextlib.suppress(litellm.UnsupportedParamsError):
+        assert "imageConfig" not in _map_image_config(raw_image_config)
