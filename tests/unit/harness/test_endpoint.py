@@ -21,8 +21,8 @@ from litellm.harness.context import GatewayTarget
 from litellm.harness.types import Harness, Usage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
-REAL_COST_PER_TOKEN = litellm.cost_per_token
-CACHED_MODEL = "claude-haiku-5-5"
+REAL_COST_PER_TOKEN: Final = litellm.cost_per_token
+CACHED_MODEL: Final = "claude-haiku-5-5"
 
 GATEWAY = GatewayTarget(api_base="https://gw.example.com", api_key="sk-gateway-secret")
 
