@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.bedrock import BearerPreparedRequest
+from litellm.types.llms.bedrock import AwsAuthParams, BearerPreparedRequest
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -232,7 +232,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             body (bytes): The request body
         """
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
-            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+            optional_params,
+            model,
+            bearer_token=bedrock_bearer_token(api_key, AwsAuthParams.model_validate(optional_params)),
         )
 
         # Use the existing ARN-aware provider detection method

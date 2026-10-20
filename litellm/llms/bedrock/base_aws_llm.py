@@ -209,9 +209,25 @@ class BearerRequestTarget(BedrockRequestTarget):
     credentials: None = None
 
 
-def bedrock_bearer_token(api_key: str | None) -> str | None:
-    token: Final = api_key if api_key is not None else get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-    return token or None
+def _has_explicit_sigv4_params(auth_params: AwsAuthParams | None) -> bool:
+    return auth_params is not None and any(
+        (
+            auth_params.aws_access_key_id,
+            auth_params.aws_secret_access_key,
+            auth_params.aws_session_token,
+            auth_params.aws_role_name,
+            auth_params.aws_profile_name,
+            auth_params.aws_web_identity_token,
+        )
+    )
+
+
+def bedrock_bearer_token(api_key: str | None, auth_params: AwsAuthParams | None = None) -> str | None:
+    if api_key is not None:
+        return api_key or None
+    if _has_explicit_sigv4_params(auth_params):
+        return None
+    return get_secret_str("AWS_BEARER_TOKEN_BEDROCK") or None
 
 
 class _WebIdentityTokenClaims(LiteLLMBaseModel):
@@ -1626,7 +1642,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest | BearerPreparedRequest:
-        aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
+        aws_bearer_token: Final = (
+            bedrock_bearer_token(api_key) if supports_bearer_token and (api_key or credentials is None) else None
+        )
 
         if aws_bearer_token is not None:
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
@@ -1728,7 +1746,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
-        aws_bearer_token: Final = bedrock_bearer_token(api_key)
+        auth_params: Final = AwsAuthParams.model_validate(optional_params)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, auth_params)
 
         if aws_bearer_token is not None:
             headers = headers or {}
@@ -1742,7 +1761,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         from botocore.awsrequest import AWSRequest
         from botocore.credentials import Credentials
 
-        auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
         credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
 
