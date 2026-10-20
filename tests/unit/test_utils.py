@@ -7391,11 +7391,20 @@ _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own 
         ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
         ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
         ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
+        ("https://mistral-gateway.example/v1", None),
     ],
-    ids=["another host", "credential without api_base", "another scheme", "userinfo trick", "another port", "unparseable"],
+    ids=[
+        "another host",
+        "credential without api_base",
+        "another scheme",
+        "userinfo trick",
+        "another port",
+        "unparseable",
+        "call clears the api_base",
+    ],
 )
 def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
-    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str | None
 ) -> None:
     monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
     credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}

@@ -4254,7 +4254,8 @@ class AdminApiKeySecretReference(str):
         return type(self), (str(self), self.origins)
 
     def may_reach(self, upstream: Mapping[str, object]) -> bool:
-        return upstream_origins(upstream) <= self.origins
+        destinations: Final = upstream_origins(upstream)
+        return destinations <= self.origins if destinations else not self.origins
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
