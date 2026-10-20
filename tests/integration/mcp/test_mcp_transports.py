@@ -3,6 +3,7 @@ import builtins
 import json
 import uuid
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -32,6 +33,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.mcp_grants import create_toolset
+from integration._support.process import owned_proxy
 
 ADD: Final = {"http": "add", "sse": "add", "stdio": "add", "openapi": "getpet"}
 ARGUMENTS: Final = {"add": {"a": 3, "b": 4}, "getpet": {"petId": "7"}}
