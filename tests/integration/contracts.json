@@ -1632,6 +1632,9 @@
     ],
     "tests/integration/providers/test_responses_bridge_incomplete.py::test_chat_stream_over_responses_deployment_folds_message_and_two_function_calls_into_one_choice": [
       "other.provider_wire.responses_bridge.stream_message_and_two_calls_fold_numbered_0_1"
+    ],
+    "tests/integration/spend/test_responses_bridge_spend_once.py::test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_once": [
+      "quota_management.spend_tracking.responses_bridge.logs_and_charges_once_above_offload_threshold"
     ]
   },
   "browser": {

@@ -1,13 +1,18 @@
 import json
+from typing import cast
 
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 from litellm.litellm_core_utils.realtime_errors import (
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
     client_close_code,
+    close_after_upstream_handshake_refusal,
     realtime_error_event,
+    upstream_handshake_close_code,
     websocket_close_reason,
 )
+from litellm.types.realtime import RealtimeErrorEvent
 
 
 def test_realtime_error_event_shape():
@@ -52,3 +57,81 @@ def test_websocket_close_reason_truncates_multibyte_message_by_bytes():
 )
 def test_client_close_code_only_forwards_codes_a_server_may_send(upstream_code, expected):
     assert client_close_code(upstream_code) == expected
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [(401, 1008), (403, 1008), (429, 1013), (500, 1011)],
+)
+def test_upstream_handshake_close_code_maps_http_status_to_close_code(status_code: int, expected: int):
+    assert upstream_handshake_close_code(status_code) == expected
+
+
+class _RecordingWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.closed: tuple[int, str | None] | None = None
+
+    async def send_text(self, data: str) -> None:
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed = (code, reason)
+
+
+@pytest.mark.asyncio
+async def test_close_after_upstream_handshake_refusal_sends_error_event_then_policy_close():
+    websocket = _RecordingWebSocket()
+
+    await close_after_upstream_handshake_refusal(websocket, 401)
+
+    assert len(websocket.sent) == 1
+    event = cast(RealtimeErrorEvent, json.loads(websocket.sent[0]))
+    assert event["type"] == "error"
+    assert event["error"]["type"] == "server_error"
+    assert "401" in event["error"]["message"]
+    assert websocket.closed is not None
+    assert websocket.closed[0] == 1008
+    assert websocket.closed[1]
+
+
+@pytest.mark.asyncio
+async def test_close_after_upstream_handshake_refusal_still_closes_when_send_fails():
+    class _DeadWebSocket(_RecordingWebSocket):
+        async def send_text(self, data: str) -> None:
+            raise RuntimeError("socket gone")
+
+    websocket = _DeadWebSocket()
+
+    await close_after_upstream_handshake_refusal(websocket, 500)
+
+    assert websocket.closed == (1011, "Upstream realtime handshake rejected with HTTP 500")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "close_error",
+    [
+        RuntimeError('Cannot call "send" once a close message has been sent.'),
+        OSError("client disconnected"),
+        WebSocketDisconnect(code=1006),
+    ],
+)
+async def test_close_after_upstream_handshake_refusal_returns_when_client_already_closed(close_error: Exception):
+    class _ClosedWebSocket(_RecordingWebSocket):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_attempts: list[int] = []
+
+        async def send_text(self, data: str) -> None:
+            raise OSError("client disconnected")
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.close_attempts.append(code)
+            raise close_error
+
+    websocket = _ClosedWebSocket()
+
+    await close_after_upstream_handshake_refusal(websocket, 401)
+
+    assert websocket.close_attempts == [1008]
