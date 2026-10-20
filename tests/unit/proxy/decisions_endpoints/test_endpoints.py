@@ -164,6 +164,29 @@ def test_proxy_decisions_dispatches_typesafe_deployment(
     }
 
 
+def test_proxy_systemone_forwards_more_than_128_questions(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "jev", "litellm_params": {"model": "typesafe/jev-latest", "api_key": "k"}}]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    questions: Final = {f"q{index}": {"type": "noul", "instructions": f"Question {index}?"} for index in range(154)}
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json={**_RESPONSE, "answers": {name: {"type": "noul", "noul": 0.5} for name in questions}}
+    )
+
+    response: Final = client.post(
+        "/v1/systemone", json={"model": "jev", "state": {"source": "proxy-test"}, "questions": questions}
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content)["questions"] == questions
+    assert response.json()["answers"].keys() == questions.keys()
+
+
 def test_proxy_decisions_sends_the_env_key_to_the_deployment_api_base(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
