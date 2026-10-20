@@ -228,12 +228,15 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
+    API_KEY_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
+    AdminApiKeySecretReference,
     CallTypes,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialApiKeySecretReference,
     CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
@@ -261,6 +264,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
 )
 
@@ -457,7 +461,13 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import (
+    LOCAL_OIDC_SECRET_PREFIXES,
+    UnresolvableSecretReference,
+    get_secret,
+    oidc_reference_kind,
+    resolve_local_oidc_reference,
+)
 
 from ._logging import is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -721,16 +731,13 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
     return applied_guardrails
 
 
-def load_credentials_from_list(kwargs: dict):
-    """
-    Updates kwargs with the credentials if credential_name in kwarg
-    """
+def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     # Access CredentialAccessor via module to trigger lazy loading if needed
     credential_accessor: Final[type[CredentialAccessor]] = litellm_utils.CredentialAccessor
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if not credential_name:
-        return
+    if not isinstance(credential_name, str) or not credential_name:
+        return MappingProxyType({})
     credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
         verbose_logger.warning(
@@ -738,10 +745,93 @@ def load_credentials_from_list(kwargs: dict):
             credential_name,
             len(litellm.credential_list),
         )
-        return
-    for key, value in credential.credential_values.items():
-        if key not in kwargs:
-            kwargs[key] = value
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in credential_api_key_secret_reference(credential.credential_values).items()
+            if key not in kwargs
+        }
+    )
+
+
+def resolve_api_key_secret_reference(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
+
+
+def _secret_behind_api_key_reference(
+    reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str:
+    if not reference.may_reach(upstream):
+        raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
+    if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+        raise _secret_reference_error(
+            f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
+            "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
+            llm_provider=llm_provider,
+            model=model,
+        )
+    match resolve_local_oidc_reference(reference):
+        case UnresolvableSecretReference(kind=kind, reason=reason):
+            raise _secret_reference_error(
+                f"api_key {kind} secret reference could not be resolved: {reason}",
+                llm_provider=llm_provider,
+                model=model,
+            )
+        case str() as secret:
+            return secret
+
+
+def _secret_reference_error(message: str, llm_provider: object, model: object) -> AuthenticationError:
+    return AuthenticationError(message=message, llm_provider=llm_provider, model=model)
+
+
+def _unreachable_upstream_message(reference: AdminApiKeySecretReference) -> str:
+    if isinstance(reference, CredentialApiKeySecretReference):
+        return (
+            "The api_key secret reference comes from a stored credential, so LiteLLM sends it only to "
+            "that credential's own api_base. Set this api_base on the credential, or give this model its own "
+            "credential."
+        )
+    return (
+        "The api_key secret reference goes only to the host its deployment configures, and this call "
+        "points at another one. Send your own api_key with that host."
+    )
+
+
+def with_named_credential(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {**kwargs, **_named_credential_values(kwargs)}
+
+
+def load_credentials_from_list(kwargs: dict[str, object]) -> None:
+    """
+    Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
+    reference for the secret it points to, read now so a rotated token is used on the next call
+    """
+    kwargs.update(_credential_updates(kwargs))
+
+
+def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    credential_values: Final = _named_credential_values(kwargs)
+    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return credential_values
+    secret: Final = _secret_behind_api_key_reference(
+        api_key,
+        model=kwargs.get("model"),
+        llm_provider=kwargs.get("custom_llm_provider"),
+        upstream=MappingProxyType(
+            {
+                "model": kwargs.get("model"),
+                **{key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
+            }
+        ),
+    )
+    return MappingProxyType({**credential_values, "api_key": secret})
 
 
 def get_dynamic_callbacks(
@@ -8150,6 +8240,23 @@ def _infer_valid_provider_from_env_vars(
     return valid_providers
 
 
+def _provider_listing_params(
+    custom_llm_provider: str, litellm_params: LiteLLM_Params | None
+) -> Mapping[str, object] | None:
+    if litellm_params is None:
+        return None
+    params: Final = litellm_params.model_dump(exclude_none=True)
+    api_key: Final = litellm_params.api_key
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return params
+    return {
+        **params,
+        "api_key": _secret_behind_api_key_reference(
+            api_key, model=litellm_params.model, llm_provider=custom_llm_provider, upstream=params
+        ),
+    }
+
+
 def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
@@ -8161,7 +8268,7 @@ def _get_valid_models_from_provider_api(
         if cached_result is not None:
             return cached_result
         models: Final = provider_config.discover_models(
-            litellm_params=litellm_params.model_dump(exclude_none=True) if litellm_params is not None else None
+            litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
