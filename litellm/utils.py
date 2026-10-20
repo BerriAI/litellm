@@ -71,6 +71,7 @@ from litellm.constants import (
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
@@ -2621,7 +2622,10 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     if kind is None:
         return None
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        tokenizer_or_error: Final = _huggingface_tokenizer_or_load_error(kind, _huggingface_tokenizer_backend())
+        retry_window: Final = int(time.monotonic() // HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
+        tokenizer_or_error: Final = _huggingface_tokenizer_or_load_error(
+            kind, _huggingface_tokenizer_backend(), retry_window
+        )
         if isinstance(tokenizer_or_error, Exception):
             raise tokenizer_or_error.with_traceback(None)
     tokenizer: Final = tokenizer_or_error
@@ -2651,7 +2655,10 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _huggingface_tokenizer_or_load_error(kind: HuggingFaceTokenizerKind, backend: Decision) -> HuggingFace | Exception:
+def _huggingface_tokenizer_or_load_error(
+    kind: HuggingFaceTokenizerKind, backend: Decision, retry_window: int
+) -> HuggingFace | Exception:
+    """retry_window is only a cache key, so a failed load is retried at most once per window."""
     try:
         return _load_huggingface_tokenizer(kind, backend)
     except Exception as error:

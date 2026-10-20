@@ -15,7 +15,7 @@ from itertools import accumulate, chain
 from pathlib import Path
 from types import TracebackType
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
 import pytest
@@ -28,7 +28,7 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -1053,19 +1053,47 @@ class TestTokenizerSelection(unittest.TestCase):
         _load_huggingface_tokenizer.cache_clear()
         _huggingface_tokenizer_or_load_error.cache_clear()
         try:
-            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
-            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-            text: Final = "Count the tokens for this message."
-            expected: Final = len(encoding.encode(text, disallowed_special=()))
+            with patch("litellm.utils.time.monotonic", return_value=0.0):
+                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+                text: Final = "Count the tokens for this message."
+                expected: Final = len(encoding.encode(text, disallowed_special=()))
 
-            first_count: Final = litellm.token_counter(model=model, text=text)
-            first_attempts: Final = mock_from_pretrained.call_count
-            second_count: Final = litellm.token_counter(model=model, text=text)
+                first_count: Final = litellm.token_counter(model=model, text=text)
+                first_attempts: Final = mock_from_pretrained.call_count
+                second_count: Final = litellm.token_counter(model=model, text=text)
 
-            assert first_attempts > 0
-            assert mock_from_pretrained.call_count == first_attempts
-            assert first_count == expected
-            assert second_count == expected
+                assert first_attempts > 0
+                assert mock_from_pretrained.call_count == first_attempts
+                assert first_count == expected
+                assert second_count == expected
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _huggingface_tokenizer_or_load_error.cache_clear()
+
+    @patch("litellm.utils.time.monotonic", return_value=0.0)
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_retried_after_retry_window(
+        self, mock_from_pretrained, mock_monotonic
+    ):
+        _load_huggingface_tokenizer.cache_clear()
+        _huggingface_tokenizer_or_load_error.cache_clear()
+        try:
+            mock_from_pretrained.side_effect = [RuntimeError("HF unavailable"), sentinel.tokenizer]
+
+            first_result: Final = _select_tokenizer_helper("databricks/databricks-meta-llama-3-3-70b-instruct")
+            second_result: Final = _select_tokenizer_helper("databricks/databricks-meta-llama-3-3-70b-instruct")
+
+            assert first_result["type"] == "openai_tokenizer"
+            assert second_result["type"] == "openai_tokenizer"
+            assert mock_from_pretrained.call_count == 1
+
+            mock_monotonic.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            retried_result: Final = _select_tokenizer_helper("databricks/databricks-meta-llama-3-3-70b-instruct")
+
+            assert retried_result["type"] == "huggingface_tokenizer"
+            assert retried_result["tokenizer"] is sentinel.tokenizer
+            assert mock_from_pretrained.call_count == 2
         finally:
             _load_huggingface_tokenizer.cache_clear()
             _huggingface_tokenizer_or_load_error.cache_clear()
@@ -1075,39 +1103,40 @@ class TestTokenizerSelection(unittest.TestCase):
         _load_huggingface_tokenizer.cache_clear()
         _huggingface_tokenizer_or_load_error.cache_clear()
         try:
-            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
-            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-            text: Final = "Count the tokens for this message."
+            with patch("litellm.utils.time.monotonic", return_value=0.0):
+                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+                text: Final = "Count the tokens for this message."
 
-            def traceback_depth(traceback: TracebackType | None) -> int:
-                if traceback is None:
-                    return 0
-                return 1 + traceback_depth(traceback.tb_next)
+                def traceback_depth(traceback: TracebackType | None) -> int:
+                    if traceback is None:
+                        return 0
+                    return 1 + traceback_depth(traceback.tb_next)
 
-            litellm.token_counter(model=model, text=text)
-            error_after_first_count: Final = _huggingface_tokenizer_or_load_error(
-                "llama3", _huggingface_tokenizer_backend()
-            )
-            assert isinstance(error_after_first_count, Exception)
-            depth_after_first_count: Final = traceback_depth(error_after_first_count.__traceback__)
+                litellm.token_counter(model=model, text=text)
+                error_after_first_count: Final = _huggingface_tokenizer_or_load_error(
+                    "llama3", _huggingface_tokenizer_backend(), 0
+                )
+                assert isinstance(error_after_first_count, Exception)
+                depth_after_first_count: Final = traceback_depth(error_after_first_count.__traceback__)
 
-            litellm.token_counter(model=model, text=text)
-            error_after_second_count: Final = _huggingface_tokenizer_or_load_error(
-                "llama3", _huggingface_tokenizer_backend()
-            )
-            assert isinstance(error_after_second_count, Exception)
-            depth_after_second_count: Final = traceback_depth(error_after_second_count.__traceback__)
+                litellm.token_counter(model=model, text=text)
+                error_after_second_count: Final = _huggingface_tokenizer_or_load_error(
+                    "llama3", _huggingface_tokenizer_backend(), 0
+                )
+                assert isinstance(error_after_second_count, Exception)
+                depth_after_second_count: Final = traceback_depth(error_after_second_count.__traceback__)
 
-            litellm.token_counter(model=model, text=text)
-            error_after_third_count: Final = _huggingface_tokenizer_or_load_error(
-                "llama3", _huggingface_tokenizer_backend()
-            )
-            assert isinstance(error_after_third_count, Exception)
-            depth_after_third_count: Final = traceback_depth(error_after_third_count.__traceback__)
+                litellm.token_counter(model=model, text=text)
+                error_after_third_count: Final = _huggingface_tokenizer_or_load_error(
+                    "llama3", _huggingface_tokenizer_backend(), 0
+                )
+                assert isinstance(error_after_third_count, Exception)
+                depth_after_third_count: Final = traceback_depth(error_after_third_count.__traceback__)
 
-            mock_from_pretrained.assert_called_once_with("Xenova/llama-3-tokenizer")
-            assert depth_after_first_count > 0
-            assert depth_after_third_count == depth_after_second_count
+                mock_from_pretrained.assert_called_once_with("Xenova/llama-3-tokenizer")
+                assert depth_after_first_count > 0
+                assert depth_after_third_count == depth_after_second_count
         finally:
             _load_huggingface_tokenizer.cache_clear()
             _huggingface_tokenizer_or_load_error.cache_clear()
