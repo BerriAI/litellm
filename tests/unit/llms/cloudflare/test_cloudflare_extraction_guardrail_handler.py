@@ -223,7 +223,13 @@ async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carry
                 "phone_text": {"type": "text", "value": "4155550123", "span": [10, 20]},
                 "phone_number": {"type": "number", "value": 4155550123, "guess": 4155550123, "span": [10, 20]},
                 "phone_list": {"type": "list", "value": [4155550123], "spans": [[10, 20]]},
-                "phone_mean": {"type": "estimate", "value": None, "mean": 4155550123, "p10": 4155550000, "p_null": 0.6},
+                "phone_mean": {
+                    "type": "estimate",
+                    "value": None,
+                    "mean": 4155550123.4,
+                    "p10": 4155550000,
+                    "p_null": 0.6,
+                },
                 "phone_median": {
                     "type": "estimate",
                     "value": None,
@@ -251,6 +257,34 @@ async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carry
         "phone_median": {"type": "estimate", "value": None, "p_null": 0.6},
         "total": {"type": "number", "value": 174, "guess": 174},
     }
+
+
+@pytest.mark.asyncio
+async def test_a_response_guardrail_does_not_scan_the_fraction_digits_of_an_estimate() -> None:
+    days_late: Final = {
+        "type": "estimate",
+        "value": None,
+        "mean": 3.4525830151341586,
+        "median": 2.4525830151341586,
+        "p_null": 0.2,
+    }
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {"days_late": days_late},
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    result: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("4525830151341586", "[CARD]"),
+        request_data={"fields": {"days_late": {"type": "estimate"}}},
+    )
+
+    assert isinstance(result, ExtractionResponse)
+    assert result.answers["days_late"].model_dump(mode="json") == days_late
 
 
 _MANY_FIELDS: Final = 20_000

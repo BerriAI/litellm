@@ -100,7 +100,9 @@ def _image_urls(images: object) -> tuple[str, ...]:
 def _scalar_text(value: JsonValue) -> str | None:
     if isinstance(value, bool):
         return None
-    return str(value) if isinstance(value, (str, int, float)) else None
+    if isinstance(value, float):
+        return format(value, ".0f")
+    return str(value) if isinstance(value, (str, int)) else None
 
 
 def _item_texts(items: Sequence[JsonValue]) -> tuple[tuple[int, str], ...]:
