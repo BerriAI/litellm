@@ -10597,9 +10597,10 @@ async def test_async_streaming_retry_keeps_the_call_ids_while_the_caller_reads_t
     trace_id_var.set("outer-trace")
     session_id_var.set("outer-session")
     try:
-        stream: Final = await _completion_with_retries_kwargs(
-            False, _ANTHROPIC, num_retries=1, stream=True, litellm_session_id="retried-stream-session"
-        )
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            stream: Final = await _completion_with_retries_kwargs(
+                False, _ANTHROPIC, num_retries=1, stream=True, litellm_session_id="retried-stream-session"
+            )
         ids_while_reading: Final = (trace_id_var.get(), session_id_var.get())
         text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
     finally:
