@@ -153,7 +153,7 @@ class TestTextFormatConversion:
             import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler",
             new=mock_handler,
         ):
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
 
             # Call aresponses with text_format parameter
             response = await litellm.aresponses(

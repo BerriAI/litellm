@@ -3,13 +3,14 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
@@ -30,7 +31,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     upstream_lacks_files_api,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
+    is_base64_encoded_unified_file_id,
     get_batch_id_from_unified_batch_id,
     is_litellm_executed_batch,
 )
@@ -181,7 +182,7 @@ class FakeManagedBatchStore:
         return self.objects[unified_batch_id].batch()
 
 
-REAL_HOOK: Final = _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
+REAL_HOOK: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
 
 
 class RealIdManagedBatchStore(FakeManagedBatchStore):
@@ -592,6 +593,38 @@ async def test_litellm_executed_provider_for_leaves_a_server_with_its_own_files_
     probe = FakeFilesApiProbe(lacks_files_api, [])
     assert await litellm_executed_provider_for(VLLM_CREDENTIALS, probe) == expected
     assert probe.upstreams == [("http://vllm.test/v1/", "vllm-key")]
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected_key"),
+    [({"id": "vllm-batch"}, "vllm-secret"), ({"id": "vllm-batch", "team_id": "team-1"}, None)],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_resolve_litellm_executed_provider_probes_with_the_secret_only_behind_an_admin_oidc_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected_key: str | None
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("vllm-secret")
+    reference: Final = f"oidc/file/{token}"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": BATCH_MODEL,
+                "litellm_params": {**VLLM_CREDENTIALS, "api_key": reference},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+    probe: Final = FakeFilesApiProbe(True, [])
+
+    try:
+        provider: Final = await resolve_litellm_executed_provider(router, "vllm-batch", "team-1", probe)
+    finally:
+        router.discard()
+
+    assert provider == "hosted_vllm"
+    assert probe.upstreams == [("http://vllm.test/v1/", expected_key or reference)]
 
 
 @pytest.mark.parametrize(
@@ -1129,7 +1162,7 @@ async def test_run_completes_under_the_real_hooks_base64_batch_id() -> None:
     harness = make_runner(store_factory=RealIdManagedBatchStore)
     created, finished = await harness.create_and_finish()
 
-    assert _is_base64_encoded_unified_file_id(created.id)
+    assert is_base64_encoded_unified_file_id(created.id)
     assert finished.status == "completed"
     assert [call.model_object_id.startswith("litellm_batch_") for call in harness.store.calls] == [True]
     assert [write.unified_object_id for write in harness.table.writes] == [created.id] * 3

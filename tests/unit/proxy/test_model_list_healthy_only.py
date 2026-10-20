@@ -120,7 +120,7 @@ async def test_model_list_healthy_only_applies_to_scope_expand(
     async def _fake_admin(**kwargs):
         return True
 
-    monkeypatch.setattr(common_utils, "_user_has_admin_privileges", _fake_admin)
+    monkeypatch.setattr(common_utils, "user_has_admin_privileges", _fake_admin)
     monkeypatch.setattr(
         model_checks,
         "get_complete_model_list",
@@ -158,7 +158,7 @@ async def test_model_list_general_setting_applies_to_scope_expand(patched_model_
     async def _fake_admin(**kwargs):
         return True
 
-    monkeypatch.setattr(common_utils, "_user_has_admin_privileges", _fake_admin)
+    monkeypatch.setattr(common_utils, "user_has_admin_privileges", _fake_admin)
     monkeypatch.setattr(
         model_checks,
         "get_complete_model_list",

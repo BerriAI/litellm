@@ -22,13 +22,18 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 
 from .conftest import normalize
 
@@ -830,31 +835,25 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
         assert counter_cache.in_memory_cache.get_cache(key=key) == 1.5
 
 
-@pytest.mark.asyncio
-async def test_increment_spend_counters_pipeline_failure_invalidates_all_counters(
-    monkeypatch,
-):
-    """A failing pipeline must invalidate every pending counter so the next
-    request reseeds from the DB (which already holds this request's cost)
-    instead of trusting a value the write may have partially applied."""
-    from redis.exceptions import MaxConnectionsError
+_PENDING_SPEND_COUNTER_KEYS: tuple[str, ...] = (
+    "spend:key:hashed",
+    "spend:team:team-1",
+    "spend:team_member:user-1:team-1",
+    "spend:user:user-1",
+    "spend:end_user:eu-1",
+    "spend:tag:tag-a",
+    "spend:tag:tag-b",
+    "spend:org:org-1",
+)
 
+
+def _warm_counters_behind_a_failing_pipeline(monkeypatch, pipeline_error: Exception) -> AsyncMock:
     counter_cache = ps.DualCache()
-    pending_keys = (
-        "spend:key:hashed",
-        "spend:team:team-1",
-        "spend:team_member:user-1:team-1",
-        "spend:user:user-1",
-        "spend:end_user:eu-1",
-        "spend:tag:tag-a",
-        "spend:tag:tag-b",
-        "spend:org:org-1",
-    )
-    for key in pending_keys:
+    for key in _PENDING_SPEND_COUNTER_KEYS:
         counter_cache.in_memory_cache.set_cache(key=key, value=1.0)
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=1.0)  # counters warm
-    fake_redis.async_increment_pipeline = AsyncMock(side_effect=MaxConnectionsError())
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=pipeline_error)
     fake_redis.async_increment = AsyncMock()
     fake_redis.async_delete_cache = AsyncMock()
     fake_redis.get_ttl = MagicMock(return_value=None)
@@ -862,23 +861,63 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
     monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
     monkeypatch.setattr(ps, "prisma_client", None)
+    return fake_redis
 
-    with pytest.raises(MaxConnectionsError):
-        await ps.increment_spend_counters(
-            token="hashed",
-            team_id="team-1",
-            user_id="user-1",
-            response_cost=0.5,
-            org_id="org-1",
-            end_user_id="eu-1",
-            tags=["tag-a", "tag-b"],
-        )
 
+async def _increment_every_spend_counter() -> None:
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id="team-1",
+        user_id="user-1",
+        response_cost=0.5,
+        org_id="org-1",
+        end_user_id="eu-1",
+        tags=["tag-a", "tag-b"],
+    )
+
+
+def _assert_every_pending_counter_invalidated(fake_redis: AsyncMock) -> None:
     assert fake_redis.async_increment.await_count == 0
     deleted_keys = {call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list}
-    assert deleted_keys == set(pending_keys)
-    for key in pending_keys:
-        assert counter_cache.in_memory_cache.get_cache(key=key) is None
+    assert deleted_keys == set(_PENDING_SPEND_COUNTER_KEYS)
+    for key in _PENDING_SPEND_COUNTER_KEYS:
+        assert ps.spend_counter_cache.in_memory_cache.get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_pipeline_failure_invalidates_all_counters(
+    monkeypatch,
+):
+    """A failing pipeline must invalidate every pending counter so the next
+    request reseeds from the DB (which already holds this request's cost)
+    instead of trusting a value the write may have partially applied."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    fake_redis = _warm_counters_behind_a_failing_pipeline(monkeypatch, RedisConnectionError("Redis is down"))
+
+    with pytest.raises(RedisConnectionError):
+        await _increment_every_spend_counter()
+
+    _assert_every_pending_counter_invalidated(fake_redis)
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_pool_exhaustion_invalidates_all_counters_without_failing(
+    monkeypatch,
+):
+    """A cluster node with every connection busy raises MaxConnectionsError at once. That is a busy pool, the
+    same as the standalone pool's wait timeout, so the counters are invalidated and the request still succeeds."""
+    from redis import exceptions as redis_exceptions
+
+    max_connections_error = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # old stubs
+    )
+    fake_redis = _warm_counters_behind_a_failing_pipeline(monkeypatch, max_connections_error())
+
+    await _increment_every_spend_counter()
+
+    _assert_every_pending_counter_invalidated(fake_redis)
 
 
 # ---------------------------------------------------------------------------
@@ -1541,7 +1580,6 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
         "u1",
         f"{ps.litellm_proxy_admin_name}:spend",
         "end_user_id:eu1",
-        "team_id:t1",
         "tag:x",
     ]
 
@@ -1566,3 +1604,70 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+async def _drain_spend_cache_writes() -> None:
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
+async def _update_team_spend(team_id: str, response_cost: float) -> None:
+    await ps.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=team_id,
+        response_cost=response_cost,
+        parent_otel_span=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_cache_adds_spend_to_the_cached_team_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key="team_id:warm", value=LiteLLM_TeamTableCachedObj(team_id="warm", spend=5.0, blocked=True))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_team_spend(team_id="warm", response_cost=2.5)
+    await _update_team_spend(team_id="cold", response_cost=2.5)
+    await _drain_spend_cache_writes()
+
+    warm: Final = cache.get_cache(key="team_id:warm", model_type=LiteLLM_TeamTableCachedObj)
+    assert warm is not None
+    assert (warm.spend, warm.blocked) == (7.5, True)
+    assert cache.get_cache(key="team_id:cold") is None
+
+
+async def _block_on_this_worker(cache: UserApiKeyCache, team_id: str) -> None:
+    await refresh_cached_team(
+        team_row=LiteLLM_TeamTable(team_id=team_id, blocked=True),
+        user_api_key_cache=cache,
+        proxy_logging_obj=ps.proxy_logging_obj,
+    )
+
+
+async def _invalidated_by_a_peer(cache: UserApiKeyCache, team_id: str) -> None:
+    evict_local(cache_keys=(f"team_id:{team_id}",), user_api_key_cache=cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("management_write", "expected_blocked"),
+    [(_block_on_this_worker, True), (_invalidated_by_a_peer, None)],
+)
+async def test_update_cache_never_restores_a_team_a_management_write_replaced(
+    management_write: Callable[[UserApiKeyCache, str], Awaitable[None]],
+    expected_blocked: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    team_id: Final = "kill-switch"
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id, blocked=False))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_team_spend(team_id=team_id, response_cost=1.0)
+    await management_write(cache, team_id)
+    await _drain_spend_cache_writes()
+
+    seen_by_auth: Final = cache.get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj)
+    assert (seen_by_auth.blocked if seen_by_auth is not None else None) == expected_blocked

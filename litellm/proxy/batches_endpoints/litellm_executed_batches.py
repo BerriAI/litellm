@@ -32,8 +32,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_B
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.utils import resolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -103,7 +105,7 @@ class _ResultLine(TypedDict):
     error: ReadOnly[_LineError | None]
 
 
-class BatchInputLine(BaseModel):
+class BatchInputLine(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     custom_id: str
@@ -240,7 +242,11 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         )
     except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
         return None
-    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+    if resolved_api_base is None:
+        return None
+    return resolved_api_base, resolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(

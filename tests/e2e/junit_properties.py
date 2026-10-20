@@ -23,8 +23,8 @@ from coverage_registry.management_cases import case_properties
 from e2e_metadata import step_properties, subject_properties
 
 # Hardcoded because the runner image copies tests/e2e/ to /app/e2e, so nothing
-# at runtime names this suite's place in the repo. test_junit_properties.py
-# fails from a checkout if it moves.
+# at runtime names this suite's place in the repo. tests/e2e_harness's
+# test_junit_properties.py fails from a checkout if it moves.
 SUITE_ROOT = "tests/e2e"
 
 

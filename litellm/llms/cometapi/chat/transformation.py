@@ -40,7 +40,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
-        extra_body: Final[dict[str, Any]] = {}
+        extra_body: Final[dict[str, object]] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)

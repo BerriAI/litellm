@@ -9,7 +9,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIError,
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
 )
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
@@ -54,6 +54,8 @@ class NativeVertexBatchCostCalculator(Protocol):
         model: str,
         custom_llm_provider: str | None = None,
         model_info: ModelInfo | None = None,
+        *,
+        vertex_location: str | None = None,
     ) -> tuple[float, float]: ...
 
 
@@ -90,6 +92,7 @@ def native_vertex_batch_row_stats(
     model_info: ModelInfo | None,
     calculate_usage: Callable[[GenerateContentResponseBody], Usage],
     cost_calculator: NativeVertexBatchCostCalculator,
+    vertex_location: str | None = None,
 ) -> NativeVertexBatchRowStats | None:
     """
     Usage and cost of one native Vertex predictions.jsonl row, a
@@ -121,7 +124,11 @@ def native_vertex_batch_row_stats(
         )
     try:
         prompt_cost, completion_cost = cost_calculator(
-            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
+            usage=usage,
+            model=model,
+            custom_llm_provider="vertex_ai",
+            model_info=model_info,
+            vertex_location=vertex_location,
         )
     except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
         verbose_logger.warning(
@@ -181,9 +188,9 @@ class VertexAIBatchTransformation:
         cls, response: VertexBatchPredictionResponse
     ) -> LiteLLMBatch:
         return LiteLLMBatch(
-            id=cls._get_batch_id_from_vertex_ai_batch_response(response),
+            id=cls.get_batch_id_from_vertex_ai_batch_response(response),
             completion_window="24h",
-            created_at=_convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
+            created_at=convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
             endpoint="",
             input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(response),
             object="batch",
@@ -217,7 +224,7 @@ class VertexAIBatchTransformation:
         }
 
     @classmethod
-    def _get_batch_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
+    def get_batch_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the batch id from the Vertex AI Batch response safely
 
@@ -231,6 +238,8 @@ class VertexAIBatchTransformation:
         # Split by '/' and get the last part if it exists
         parts: Final = _name.split("/")
         return parts[-1] if parts else _name
+
+    _get_batch_id_from_vertex_ai_batch_response = get_batch_id_from_vertex_ai_batch_response
 
     @classmethod
     def _get_input_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:

@@ -95,7 +95,7 @@ def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
             voice,
         )
         return None
-    return VertexGeminiConfig()._map_audio_params({"voice": voice})
+    return VertexGeminiConfig().map_audio_params({"voice": voice})
 
 
 class _GeminiLiveSetupEnvelope(TypedDict, total=False):
@@ -159,6 +159,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
+        return True
+
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
 
     @staticmethod
@@ -279,10 +283,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
         dict so callers omit ``realtimeInputConfig`` (mapping it with
-        ``disabled: true`` breaks native-audio sessions).
+        ``disabled: true`` breaks native-audio sessions). An explicit
+        ``create_response: false`` maps to detection off alone where the backend
+        rejects tuning next to ``disabled: true``.
         """
         if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
+        auto_response_off: Final = "create_response" in value and value["create_response"] is False
+        if auto_response_off and self._rejects_vad_tuning_with_detection_off():
+            return AutomaticActivityDetection(disabled=True)
 
         automatic_activity_dection: Final = AutomaticActivityDetection()
         if "create_response" in value and isinstance(value["create_response"], bool):
@@ -331,7 +340,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 vertex_gemini_config = VertexGeminiConfig()
                 # Tools should be at the top level of setup, not inside generationConfig
-                optional_params["tools"] = vertex_gemini_config._map_function(
+                optional_params["tools"] = vertex_gemini_config.map_function(
                     value=value, optional_params=optional_params
                 )
             elif key == "input_audio_transcription" and value is not None:
@@ -1056,7 +1065,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         _modalities: Final = [modality.lower() for modality in cast(list[str], gemini_modalities)]
         resolved_usage_metadata: Final = self._consume_usage_metadata_for_response_done(cast(dict, message))
         if resolved_usage_metadata is not None:
-            _chat_completion_usage = VertexGeminiConfig._calculate_usage(
+            _chat_completion_usage = VertexGeminiConfig.calculate_usage(
                 completion_response=cast(
                     BidiGenerateContentServerMessage,
                     {**cast(dict, message), "usageMetadata": resolved_usage_metadata},
@@ -1070,7 +1079,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             _chat_completion_usage = get_empty_usage()
 
-        responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        responses_api_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
         _usage_dict: Final = responses_api_usage.model_dump()
@@ -1484,7 +1493,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 resolved_tool_call_usage_metadata = self._consume_usage_metadata_for_response_done(json_message)
                 if resolved_tool_call_usage_metadata is not None:
-                    _tool_call_chat_completion_usage = VertexGeminiConfig._calculate_usage(
+                    _tool_call_chat_completion_usage = VertexGeminiConfig.calculate_usage(
                         completion_response=cast(
                             BidiGenerateContentServerMessage,
                             {
@@ -1496,7 +1505,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 else:
                     _tool_call_chat_completion_usage = get_empty_usage()
                 tool_call_responses_api_usage = (
-                    LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                    LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
                         _tool_call_chat_completion_usage,
                     )
                 )

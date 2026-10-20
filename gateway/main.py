@@ -9,9 +9,13 @@ Run with:
     uvicorn gateway.main:app --host 0.0.0.0 --port 4000
 """
 
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from typing import Final
 
-from fastapi.routing import Mount
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.types import Lifespan
 
 # Assemble DATABASE_URL (+ DATABASE_URL_READ_REPLICA) from the discrete
 # DATABASE_* env vars before proxy_server imports spin up Prisma. Handles
@@ -54,14 +58,16 @@ def _is_gateway_route(route) -> bool:
 # register routes. A module-load filter would miss routes added during
 # startup; running inside the lifespan, after the inner __aenter__, catches
 # them while still completing before uvicorn opens the listener.
-_proxy_lifespan = app.router.lifespan_context
+_proxy_lifespan: Final = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def _gateway_lifespan(app_):
-    async with _proxy_lifespan(app_):
+async def _gateway_lifespan(
+    app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
+) -> AsyncGenerator[Mapping[str, object], None]:
+    async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
-        yield
+        yield state if state is not None else {}
 
 
 app.router.lifespan_context = _gateway_lifespan

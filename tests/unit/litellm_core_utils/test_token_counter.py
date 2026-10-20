@@ -9,8 +9,9 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, wait
+from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -512,6 +514,183 @@ def test_token_counter_skips_non_mapping_tools():
     )
 
     assert mixed_tokens == valid_tokens
+
+
+_WEATHER_FUNCTION: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string", "description": "City name"}},
+        "required": ["location"],
+    },
+}
+_TIME_FUNCTION: Final = {
+    "name": "get_time",
+    "description": "Get the local time for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+_WEB_SEARCH_FUNCTION: Final = {
+    "name": "web_search",
+    "description": "Search the web",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+
+def _openai_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": function}
+
+
+def _anthropic_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}
+
+
+_USER_MESSAGES: Final = ({"role": "user", "content": "What is the weather in Paris today?"},)
+_SYSTEM_AND_USER_MESSAGES: Final = ({"role": "system", "content": "You are a helpful assistant."}, *_USER_MESSAGES)
+
+
+@pytest.mark.parametrize("tool_shape", [_openai_tool, _anthropic_tool])
+@pytest.mark.parametrize(
+    ("model", "messages", "functions", "billed_prompt_tokens"),
+    [
+        # usage.prompt_tokens billed for this request by Azure AI Foundry DeepSeek-V4-Flash-0731,
+        # Databricks databricks-qwen35-122b-a10b and DashScope qwen3.5-plus on 2026-10-17
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION,), 295),
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 348),
+        ("DeepSeek-V4-Flash-0731", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 300),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION,), 289),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 352),
+        ("databricks-qwen35-122b-a10b", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 296),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION,), 284),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 342),
+    ],
+)
+def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
+    tool_shape: Callable[[Mapping[str, object]], dict[str, object]],
+    model: str,
+    messages: tuple[dict[str, str], ...],
+    functions: tuple[Mapping[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    counted: Final = token_counter_new(
+        model=model,
+        messages=list(messages),
+        tools=[tool_shape(function) for function in functions],
+    )
+
+    assert abs(counted - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+@pytest.mark.parametrize(
+    ("model", "counted_like"),
+    [
+        ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
+        ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
+        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
+        ("qwen3-235b-a22b", "deepseek-v3.2"),
+    ],
+)
+def test_token_counter_counts_tools_by_the_models_chat_template_family(model: str, counted_like: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION), _openai_tool(_TIME_FUNCTION)]
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools) == token_counter_new(
+        model=counted_like, messages=list(_USER_MESSAGES), tools=tools
+    )
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "builtin_tool",
+    [
+        {"type": "web_search_preview"},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"name": "web_search"},
+    ],
+)
+def test_token_counter_skips_tools_not_sent_as_functions_for_chat_template_families(
+    model: str, builtin_tool: dict[str, object]
+):
+    weather_tool: Final = _openai_tool(_WEATHER_FUNCTION)
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool]) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
+    )
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool, weather_tool]
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[weather_tool])
+
+
+def _responses_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", **function}
+
+
+def _gemini_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"function_declarations": [function]}
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize("function", [_WEATHER_FUNCTION, _WEB_SEARCH_FUNCTION])
+@pytest.mark.parametrize("tool_shape", [_responses_tool, _gemini_tool])
+def test_token_counter_counts_function_tools_like_chat_completions_tools_for_chat_template_families(
+    model: str, function: Mapping[str, object], tool_shape: Callable[[Mapping[str, object]], dict[str, object]]
+):
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[tool_shape(function)]
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
+
+
+# Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
+# these tool_choice values on 2026-10-17, the same as without one
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "anthropic_tool",
+    [
+        {"name": "get_weather", "input_schema": _WEATHER_FUNCTION["parameters"]},
+        _anthropic_tool(_WEATHER_FUNCTION),
+        {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        _anthropic_tool(_WEB_SEARCH_FUNCTION),
+    ],
+)
+def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
+    model: str, anthropic_tool: dict[str, object]
+):
+    sent_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([anthropic_tool])  # pyright: ignore[reportArgumentType]  # raw Anthropic tool dict
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[anthropic_tool]) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=sent_tools
+    )
+
+
+# Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
+# request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
+# either way (both read on Hugging Face on 2026-10-17)
+@pytest.mark.parametrize(
+    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+)
+def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
+    model: str, implicit_system_turn_tokens: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    system_cost_with_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES), tools=tools
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+    system_cost_without_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES)
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES))
+
+    assert system_cost_with_tools == system_cost_without_tools - implicit_system_turn_tokens
 
 
 class NeedsToleranceUpdateError(Exception):
@@ -1444,7 +1623,7 @@ def _count_user_content(content: list[dict]) -> int:
     ids=["base64", "url", "file"],
 )
 def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
-    """A `document` whose bytes can't be tokenized locally is priced like an `image`, not raised on."""
+    """A `document` with no readable pages (a bare PDF header, a URL, a file id) is priced like an `image`, not raised on."""
     prompt = {"type": "text", "text": "Summarize this file."}
 
     assert _count_user_content([prompt, {"type": "document", "source": source}]) == _count_user_content(
@@ -1504,6 +1683,12 @@ def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
     assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
     assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
 
+    readable: Final = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",))
+    readable_file: Final = {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable}}
+    readable_document: Final = {"type": "document", "title": "report.pdf", "source": _pdf_source(readable)}
+    assert _count_user_content([prompt, readable_file]) == _count_user_content([prompt, readable_document])
+    assert _count_user_content([prompt, readable_file]) > _count_user_content([prompt, inline_file])
+
 
 def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     """A `file` block naming an uploaded file has no bytes to price, so it adds only the filename's tokens."""
@@ -1516,6 +1701,101 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
+
+
+def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
+    def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
+        escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        page: Final = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {4 + 2 * index} 0 R >>"
+        ).encode()
+        return content, page
+
+    kids: Final = " ".join(f"{5 + 2 * index} 0 R" for index in range(len(pages)))
+    bodies: Final = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
+    )
+    header: Final = b"%PDF-1.4\n"
+    objects: Final = tuple(
+        f"{number} 0 obj\n".encode() + body + b"\nendobj\n" for number, body in enumerate(bodies, start=1)
+    )
+    offsets: Final = accumulate((len(header), *(len(obj) for obj in objects[:-1])))
+    xref: Final = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode() + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer: Final = (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{len(header) + sum(len(obj) for obj in objects)}\n%%EOF\n"
+    ).encode()
+    return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
+
+
+def _pdf_source(pdf_base64: str) -> dict[str, str]:
+    return {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}
+
+
+def test_base64_pdf_document_counts_every_page_text_and_rendering():
+    """A base64 PDF is read page by page: each page costs its text plus the image Anthropic renders it to.
+
+    Before the fix the whole document was priced as one 85-token image, so a count_tokens call that fell back
+    to the local counter answered 116 for a 12-page PDF the provider then billed at 35941 input tokens.
+    """
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    first: Final = "Revenue grew eleven percent while churn fell to two percent."
+    second: Final = "Headcount is flat and the office lease was renewed for three years."
+    base: Final = _count_user_content([prompt])
+    blank_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+
+    assert blank_page > 0
+    assert _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first, second)))}]) == (
+        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}]) + 2 * blank_page
+    )
+    one_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    twelve_pages: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,) * 12))}]) - base
+    )
+    assert one_page > _count_user_content([prompt, {"type": "text", "text": first}]) - base
+    assert twelve_pages == 12 * one_page
+
+
+@pytest.mark.parametrize("fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"])
+def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[str, str]):
+    """Anthropic rasterizes each PDF page within its image limits (1568 px long edge, 1.15 MP) and bills
+    width * height / 750 tokens for it: https://platform.claude.com/docs/en/build-with-claude/pdf-support and
+    https://platform.claude.com/docs/en/build-with-claude/vision, read 2026-10-07, when Bedrock billed about
+    1550 tokens per blank Letter page on both Sonnet 4.6 and Opus 4.8.
+    """
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+
+    def blank_page_cost(width: int, height: int) -> int:
+        with_page: Final = {"type": "document", "source": _pdf_source(_pdf_base64(("",), width, height)), **fields}
+        without_page: Final = {"type": "document", "source": _pdf_source(_pdf_base64((), width, height)), **fields}
+        return _count_user_content([prompt, with_page]) - _count_user_content([prompt, without_page])
+
+    letter: Final = blank_page_cost(612, 792)
+    poster: Final = blank_page_cost(2448, 3168)
+    strip: Final = blank_page_cost(1000, 100)
+
+    assert letter == poster == 1534
+    assert strip == 328
+
+
+def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.MonkeyPatch):
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    source: Final = _pdf_source(_pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",)))
+    priced_by_page: Final = _count_user_content([prompt, {"type": "document", "source": source}])
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+
+    priced_as_image: Final = _count_user_content([prompt, {"type": "document", "source": source}])
+    assert priced_as_image == _count_user_content([prompt, {"type": "image", "source": source}])
+    assert priced_as_image < priced_by_page
 
 
 def _png_data_url(width: int, height: int) -> str:
@@ -1633,3 +1913,220 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
+    text_value: Final = "A tokenizer fallback should preserve the model encoding."
+    custom_count: Final = _get_exact_count_function("gpt-3.5-turbo", {})(text_value)
+    model_count: Final = _get_exact_count_function("gpt-3.5-turbo", None)(text_value)
+
+    assert custom_count == model_count
+
+
+def _threshold_test_messages(turns: int) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
+    for index in range(turns):
+        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Answer {index}: the capital is city number {index}."}],
+            }
+        )
+    return messages
+
+
+_THRESHOLD_TEST_TOOLS: Final = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_capital",
+            "description": "Look up the capital of a country",
+            "parameters": {"type": "object", "properties": {"country": {"type": "string"}}},
+        },
+    }
+]
+
+
+@pytest.mark.parametrize(
+    "model", ["claude-3-5-sonnet-20240620", "DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"]
+)
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold(model: str) -> None:
+    """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
+    tools and system-message adjustments, so the boundary values must agree exactly."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    messages = _threshold_test_messages(turns=12)
+    total = token_counter_new(
+        model=model,
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model=model,
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+_SHAPE_IMAGE: Final = "data:image/png;base64," + "iVBORw0KGgo=" * 4
+
+_OPENAI_SHAPE_MESSAGES: Final = [
+    {"role": "system", "content": "You are a careful assistant. " * 20},
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30},
+            {"type": "image_url", "image_url": {"url": _SHAPE_IMAGE}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "/a/b"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "c1", "content": "file body line\n" * 40},
+    {"role": "assistant", "content": "Here is what the file does. " * 20},
+]
+
+_ANTHROPIC_SHAPE_MESSAGES: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30, "cache_control": {"type": "ephemeral"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" * 4}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me look."},
+            {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "/a/b"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}],
+    },
+    {"role": "assistant", "content": [{"type": "text", "text": "Here is what the file does. " * 20}]},
+]
+
+_RESPONSES_SHAPE_INPUT: Final = [
+    {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this screenshot. " * 30},
+            {"type": "input_image", "image_url": _SHAPE_IMAGE},
+        ],
+    },
+    {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": '{"path": "/a/b"}'},
+    {"type": "function_call_output", "call_id": "c1", "output": "file body line\n" * 40},
+]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(_OPENAI_SHAPE_MESSAGES, id="openai_chat_shape"),
+        pytest.param(_ANTHROPIC_SHAPE_MESSAGES, id="anthropic_messages_shape"),
+    ],
+)
+def test_messages_reach_token_count_agrees_with_token_counter_per_message_shape(messages: list[dict]) -> None:
+    """Content lists, images, tool calls, tool results and cache_control blocks in the OpenAI chat shape
+    (/v1/chat/completions) and the Anthropic shape (/v1/messages) count the same bounded as in full."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+def test_messages_reach_token_count_rejects_responses_items_exactly_like_token_counter() -> None:
+    """Responses API input items are not chat messages; the full counter raises on them and the
+    bounded counter raises the same error rather than silently returning a verdict."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    with pytest.raises(ValueError, match="input_text") as full:
+        token_counter_new(model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, use_default_image_token_count=True)
+    with pytest.raises(ValueError, match="input_text") as bounded:
+        messages_reach_token_count(
+            model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, threshold=10**6, use_default_image_token_count=True
+        )
+    assert str(bounded.value) == str(full.value)
+
+
+def test_messages_reach_token_count_stops_at_the_first_message_past_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the prompt-cache eligibility check used to tokenize every message of a 700k-token
+    Claude Code conversation to compare against a 1024-token minimum, costing hundreds of
+    milliseconds per request before routing. Counting must stop once the threshold is crossed."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    messages = _threshold_test_messages(turns=500)
+    counted_batches: list[int] = []  # mutable-ok: recorder for the _count_messages double
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_batches.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+    assert token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=1024
+    )
+    assert all(size == 1 for size in counted_batches)
+    bounded_calls: Final = len(counted_batches)
+    assert bounded_calls < len(messages) // 4, bounded_calls
+
+    assert not token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=10**9
+    )
+    assert len(counted_batches) - bounded_calls == len(messages)
+
+
+def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the counter disabled token_counter reports 0, so only a non-positive threshold is reached."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    messages = _threshold_test_messages(turns=3)
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "token_counter", lambda **_: 1_000)
+
+    assert (
+        get_modified_max_tokens(
+            model="gemini/gemini-4-argon",
+            base_model="gemini/gemini-4-argon",
+            messages=[{"role": "user", "content": "Write a complete proof of the prime number theorem."}],
+            user_max_tokens=200_000,
+            buffer_perc=None,
+            buffer_num=None,
+        )
+        == 200_000
+    )

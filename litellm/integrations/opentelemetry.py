@@ -6,13 +6,19 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, cast
+
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
-    SpanAttributes,
+)
+from litellm.integrations._types.open_inference import (
+    SpanAttributes as OpenInferenceSpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langtrace import LANGTRACE_TRACE_PATH
@@ -28,6 +34,7 @@ from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
+from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -36,6 +43,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_served_service_tier,
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -43,6 +51,7 @@ from litellm.types.utils import (
     Function,
     LLMResponseTypes,
     StandardCallbackDynamicParams,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
 )
 
@@ -95,8 +104,18 @@ class _ResponseWithUsageView(TypedDict, total=False):
     usage: "_UsageCompletionTokensView | None"
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+
+class _CacheHitView(TypedDict, total=False):
+    cache_hit: ReadOnly[object]
+    saved_cache_cost: ReadOnly[object]
+
+
+_CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -173,7 +192,7 @@ class OTELMetricAttributeFilter:
     exclude_list: list[str] | None = None
 
 
-def _build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
+def build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
     if isinstance(value, OTELMetricAttributeFilter):
         return value
     if not isinstance(value, dict):
@@ -187,7 +206,10 @@ def _build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
     )
 
 
-def _resolve_metric_attribute_filter(
+_build_metric_attribute_filter = build_metric_attribute_filter
+
+
+def resolve_metric_attribute_filter(
     attributes: OTELMetricAttributeFilter | None,
 ) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     if attributes is None:
@@ -210,6 +232,9 @@ def _resolve_metric_attribute_filter(
         frozenset(include) if include else None,
         frozenset(exclude) if exclude else None,
     )
+
+
+_resolve_metric_attribute_filter = resolve_metric_attribute_filter
 
 
 def _provider_label(custom_llm_provider: object) -> str | None:
@@ -400,7 +425,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if metadata_keys_override is not None:
             config.baggage_metadata_keys = _normalize_team_metadata_keys(metadata_keys_override)
         if metric_attributes_override is not None:
-            config.attributes = _build_metric_attribute_filter(metric_attributes_override)
+            config.attributes = build_metric_attribute_filter(metric_attributes_override)
 
         self.config = config
         self.callback_name = callback_name
@@ -1633,13 +1658,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         attributes = self.config.attributes
         if attributes is None and self.callback_name in (None, "otel"):
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
-            raw: Final = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
+            raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
-                attributes = _build_metric_attribute_filter(raw)
+                attributes = build_metric_attribute_filter(raw)
         (
             self._metric_attr_include,
             self._metric_attr_exclude,
-        ) = _resolve_metric_attribute_filter(attributes)
+        ) = resolve_metric_attribute_filter(attributes)
         self._metric_attr_filter_resolved = True
 
     def _filter_metric_attributes(self, attrs: Mapping[str, str | None]) -> dict[str, str]:
@@ -2051,7 +2076,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             self.safe_set_attribute(
                 span=guardrail_span,
-                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                key=OpenInferenceSpanAttributes.OPENINFERENCE_SPAN_KIND,
                 value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
@@ -2302,8 +2327,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def set_tools_attributes(self, span: Span, tools):
         import json
 
-        from litellm.proxy._types import SpanAttributes
-
         if not tools:
             return
 
@@ -2353,8 +2376,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _tool_calls_kv_pair(
         tool_calls: list[ChatCompletionMessageToolCall],
     ) -> dict[str, object]:
-        from litellm.proxy._types import SpanAttributes
-
         kv_pairs: Final[dict[str, object]] = {}
         for idx, tool_call in enumerate(tool_calls):
             _function = tool_call.get("function")
@@ -2390,8 +2411,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return
-            from litellm.proxy._types import SpanAttributes
-
             optional_params: Final = kwargs.get("optional_params", {})
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
@@ -2403,9 +2422,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = cast(  # cast-ok: payload metadata follows the standard logging contract
+                StandardLoggingMetadata, standard_logging_payload["metadata"]
+            )
             for key, value in metadata.items():
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"metadata.{key}",
+                    value=safe_dumps(value) if key == KUBERNETES_POD_ROUTING_KEY and value is not None else value,
+                )
+            decision: Final = metadata.get("routing_decision")
+            span.set_attributes(routing_decision_attributes(decision))
 
             # get hidden params
             hidden_params: Final = getattr(standard_logging_payload, "hidden_params", None) or (
@@ -2424,6 +2451,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 litellm_params=litellm_params,
             )
             # Cost breakdown tracking
+            cache_view: Final = _CACHE_HIT_VIEW.validate_python(standard_logging_payload)
+            cache_hit: Final = cache_view.get("cache_hit") is True
             cost_breakdown: Final[CostBreakdown | None] = standard_logging_payload.get("cost_breakdown")
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
@@ -2433,6 +2462,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
+            self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=cache_hit)
+            if cache_hit:
+                saved_cache_cost: Final = cache_view.get("saved_cache_cost")
+                if isinstance(saved_cache_cost, (int, float)):
+                    self.safe_set_attribute(span=span, key=LiteLLM.SAVED_CACHE_COST, value=saved_cache_cost)
             #############################################
             ########## LLM Request Attributes ###########
             #############################################
@@ -2919,7 +2953,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 import json
 
                 try:
-                    _parsed: Final[Mapping[str, object]] = json.loads(_raw_response)
+                    _parsed: Final = _JSON_OBJECT.validate_python(json.loads(_raw_response))
                     for param, val in _parsed.items():
                         self.safe_set_attribute(
                             span=span,
