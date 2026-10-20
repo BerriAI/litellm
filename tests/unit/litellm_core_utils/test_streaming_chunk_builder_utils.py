@@ -12,7 +12,7 @@ import respx
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
-from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor, stream_chunk_builder_text_completion
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -2380,17 +2380,60 @@ def test_stream_chunk_builder_drops_only_the_text_completion_logprobs_it_cannot_
     assert response.choices[0].logprobs.tokens == [" world"]
 
 
-def test_stream_chunk_builder_keeps_text_completion_logprobs_of_another_shape() -> None:
-    def chunk(text: str, logprobs: list[float], finish_reason: str | None) -> TextCompletionResponse:
+@pytest.mark.parametrize(
+    "first_logprobs",
+    [[-0.1], {"tokens": ["Hello"], "token_logprobs": [-0.1], "top_logprobs": None, "text_offset": [0]}],
+    ids=["list", "logprobs_object"],
+)
+def test_stream_chunk_builder_keeps_text_completion_logprobs_of_another_shape(
+    first_logprobs: Sequence[float] | Mapping[str, object],
+) -> None:
+    def chunk(
+        text: str, logprobs: Sequence[float] | Mapping[str, object], finish_reason: str | None
+    ) -> TextCompletionResponse:
         return TextCompletionResponse(
             id="cmpl-1",
             model="my-model",
             choices=[TextChoices(index=0, text=text, logprobs=logprobs, finish_reason=finish_reason)],
         )
 
-    response: Final = litellm.stream_chunk_builder(chunks=[chunk("Hello", [-0.1], None), chunk(" world", [-0.2], "stop")])
+    response: Final = litellm.stream_chunk_builder(
+        chunks=[chunk("Hello", first_logprobs, None), chunk(" world", [-0.2], "stop")]
+    )
 
     assert (response.choices[0].text, response.choices[0].logprobs) == ("Hello world", [-0.2])
+
+
+def test_stream_chunk_builder_keeps_the_usage_a_chat_chunk_reports_in_a_text_completion_stream() -> None:
+    response: Final = stream_chunk_builder_text_completion(
+        chunks=[
+            TextCompletionResponse(
+                id="cmpl-1", model="my-model", choices=[TextChoices(index=0, text="Hello", finish_reason="stop")]
+            ),
+            ModelResponseStream(
+                id="cmpl-1",
+                model="my-model",
+                choices=[],
+                usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+            ),
+        ]
+    )
+
+    assert response.usage is not None
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (3, 1, 4)
+
+
+def test_stream_chunk_builder_rebuilds_text_completion_choices_without_an_index_as_index_zero() -> None:
+    response: Final = stream_chunk_builder_text_completion(
+        chunks=[
+            _text_completion_chunk({"text": "Hello", "index": None}),
+            _text_completion_chunk({"text": " world", "index": None, "finish_reason": "stop"}),
+        ]
+    )
+
+    assert [choice.model_dump(include={"index", "text", "finish_reason"}) for choice in response.choices] == [
+        {"index": 0, "text": "Hello world", "finish_reason": "stop"}
+    ]
 
 
 def test_stream_chunk_builder_text_completion_survives_uncountable_prompt() -> None:

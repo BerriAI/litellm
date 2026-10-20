@@ -1246,6 +1246,7 @@ def _as_text_completion_chunk(
             created=chunk.created,
             model=chunk.model,
             choices=[TextChoices(index=choice.index, finish_reason=choice.finish_reason) for choice in chunk.choices],
+            usage=ChunkProcessor.extract_usage_chunk(chunk),
         )
     return _text_completion_chunk_from_mapping(chunk)
 
@@ -1268,9 +1269,12 @@ def _sent_logprobs(choice: _CarriesLogprobs) -> object:
 
 
 def _merged_logprobs(choices: Sequence[TextChoices]) -> object:
-    parts: Final = tuple(logprobs for logprobs in map(_sent_logprobs, choices) if isinstance(logprobs, Logprobs))
+    sent: Final = tuple(logprobs for logprobs in map(_sent_logprobs, choices) if logprobs is not None)
+    parts: Final = tuple(logprobs for logprobs in sent if isinstance(logprobs, Logprobs))
+    if len(parts) < len(sent):
+        return sent[-1]
     if not parts:
-        return next((logprobs for logprobs in map(_sent_logprobs, reversed(choices)) if logprobs is not None), None)
+        return None
     return Logprobs(
         text_offset=_joined_or_none(part.text_offset for part in parts),
         token_logprobs=_joined_or_none(part.token_logprobs for part in parts),
@@ -1284,7 +1288,7 @@ def _text_of(choice: TextChoices) -> str:
 
 
 def _index_of(choice: TextChoices) -> int:
-    return choice.index
+    return choice.index or 0
 
 
 def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoices:
