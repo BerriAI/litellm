@@ -59,8 +59,7 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 
 class BedrockTokenCounter(BaseTokenCounter):
-    """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for Claude models bedrock-runtime answers 400 or 404 for"""
+    """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
     def __init__(
         self,
@@ -127,17 +126,22 @@ class BedrockTokenCounter(BaseTokenCounter):
             **({"tools": tools} if tools else {}),
             **({"system": system} if system else {}),
         }
-        resolved_model: Final = get_bedrock_base_model(model_to_use)
+        use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
+        resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
 
-        runtime: Final = await self._count_with(
-            self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+        primary: Final = await self._count_with(
+            self._mantle_handler if use_mantle else self._runtime_handler,
+            MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE,
+            request_data,
+            litellm_params,
+            resolved_model,
         )
         outcome: Final = (
             await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
             )
-            if _runtime_rejected_claude_model(runtime, resolved_model)
-            else runtime
+            if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            else primary
         )
         match outcome:
             case CountedTokens():
