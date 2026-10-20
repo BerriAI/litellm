@@ -1,6 +1,8 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 import litellm
@@ -10,6 +12,31 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+
+
+def _deployment_pricing_models(deployment: Mapping[str, object]) -> tuple[str, ...]:
+    """Cost-map keys to price a deployment under, ``model_info.base_model`` first, then the
+    deployment's own model, the same order ``completion_cost`` walks for its spend row."""
+    litellm_params: Final = deployment.get("litellm_params")
+    model_info: Final = deployment.get("model_info")
+    params: Final = litellm_params if isinstance(litellm_params, Mapping) else _EMPTY
+    info: Final = model_info if isinstance(model_info, Mapping) else _EMPTY
+    candidates: Final = (info.get("base_model") or params.get("base_model"), params.get("model"))
+    return tuple(candidate for candidate in candidates if isinstance(candidate, str) and candidate)
+
+
+def _deployment_cost_map_entry(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """The first cost-map row among the deployment's pricing models that carries a token price;
+    empty when none does, so the caller falls back to its unmapped default."""
+    rows: Final = (litellm.model_cost.get(model) or _EMPTY for model in _deployment_pricing_models(deployment))
+    return next((row for row in rows if _declares_token_price(row)), _EMPTY)
+
+
+def _declares_token_price(row: Mapping[str, object]) -> bool:
+    return row.get("input_cost_per_token") is not None or row.get("output_cost_per_token") is not None
+
+
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -243,8 +270,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            item_litellm_model_cost_map = _deployment_cost_map_entry(_deployment)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
