@@ -28,7 +28,6 @@ from litellm.caching.redis_batch import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_RELEASE_SCRIPT,
     TOKEN_INCREMENT_SCRIPT,
@@ -36,7 +35,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RequestRateLimiterStash,
     PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET, PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -544,10 +543,10 @@ async def test_the_update_cache_read_armed_before_accounting_rides_the_pipeline_
 
 
 @pytest.mark.asyncio
-async def test_the_armed_update_cache_read_is_declared_under_the_auth_objects_family():
-    """The user, team and tag rows the accounting reads are auth objects, so the pipeline that carries
-    the armed read renders ``redis.pipeline auth_objects``, not a bare ``redis.pipeline``."""
-    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
+async def test_the_armed_update_cache_read_is_declared_under_the_spend_counters_family():
+    """The accounting's post-call read is the global spend scalar, so the pipeline that carries
+    the armed read renders ``redis.pipeline spend_counters``, not a bare ``redis.pipeline``."""
+    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read, update_cache_read_keys
 
     client = FakeClient(_ok_replies)
     redis_cache = PostCallFakeRedisCache(client)
@@ -560,12 +559,13 @@ async def test_the_armed_update_cache_read_is_declared_under_the_auth_objects_fa
 
     redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
 
+    keys = update_cache_read_keys(user_id="user-1", response_cost=1.0)
     with request_redis_batch_scope():
-        await arm_update_cache_read(["user-1", "team_id:t1"], cache=cache)
-        await _read_update_cache_values(["user-1", "team_id:t1"], None, cache=cache)
+        await arm_update_cache_read(keys, cache=cache)
+        await _read_update_cache_values(keys, None, cache=cache)
     await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
 
-    assert pipeline_targets == [AUTH_OBJECTS_TARGET]
+    assert pipeline_targets == [SPEND_COUNTERS_TARGET]
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
+    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -1890,6 +1890,25 @@ def test_bedrock_tools_unpack_defs():
     ]
 
     _bedrock_tools_pt(tools=tools)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": ["object", "null"]},
+        {"type": "object", "properties": {"tier": {"type": "integer"}}, "$defs": [{"type": "string"}]},
+    ],
+    ids=["root_type_list", "defs_list"],
+)
+def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(parameters: dict[str, object]) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools: Final = [{"type": "function", "function": {"name": "json_tool_call", "parameters": parameters}}]
+
+    input_schema: Final = _bedrock_tools_pt(tools=tools)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert input_schema["type"] == "object"
+    assert "$defs" not in input_schema
 
 
 def test_bedrock_tools_pt_strict_parameter():
@@ -4484,7 +4503,7 @@ def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(sanitized) == len(set(sanitized))
     assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
@@ -4498,7 +4517,7 @@ def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_i
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(ids) == len(sanitized)
     assert len(sanitized) == len(set(sanitized))

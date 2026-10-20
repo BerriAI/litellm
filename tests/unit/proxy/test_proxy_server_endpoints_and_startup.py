@@ -4308,7 +4308,7 @@ async def test_async_data_generator_midstream_error():
         return chunk
 
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=mock_streaming_hook)
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     # Mock the global proxy_logging_obj
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
@@ -6191,35 +6191,22 @@ async def test_tag_cache_update_called():
     """
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.in_memory_cache.set_cache("tag:test-tag", {"tag_name": "test-tag", "spend": 10.0})
 
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
+    await litellm.proxy.proxy_server.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=5.0,
+        parent_otel_span=None,
+        tags=["test-tag"],
+        cache=cache,
     )
 
-    mock_tag_obj = {
-        "tag_name": "test-tag",
-        "spend": 10.0,
-    }
-    cache.in_memory_cache.set_cache("tag:test-tag", mock_tag_obj)
-
-    with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[mock_tag_obj])) as mock_get_cache:
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id=None,
-            end_user_id=None,
-            team_id=None,
-            response_cost=5.0,
-            parent_otel_span=None,
-            tags=["test-tag"],
-        )
-
-        mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None, throttle_redis=False)
-        assert cache.in_memory_cache.get_cache("tag:test-tag")["spend"] == 15.0
+    assert cache.in_memory_cache.get_cache("tag:test-tag")["spend"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -6229,42 +6216,24 @@ async def test_tag_cache_update_multiple_tags():
     """
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.in_memory_cache.set_cache("tag:tag1", {"tag_name": "tag1", "spend": 10.0})
+    cache.in_memory_cache.set_cache("tag:tag2", {"tag_name": "tag2", "spend": 20.0})
 
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
+    await litellm.proxy.proxy_server.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=5.0,
+        parent_otel_span=None,
+        tags=["tag1", "tag2"],
+        cache=cache,
     )
 
-    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
-    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
-    cache.in_memory_cache.set_cache("tag:tag1", mock_tag1_obj)
-    cache.in_memory_cache.set_cache("tag:tag2", mock_tag2_obj)
-
-    async def mock_get_cache_side_effect(keys, **kwargs):
-        return [{"tag:tag1": mock_tag1_obj, "tag:tag2": mock_tag2_obj}.get(key) for key in keys]
-
-    with patch.object(
-        cache, "async_batch_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
-    ) as mock_get_cache:
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id=None,
-            end_user_id=None,
-            team_id=None,
-            response_cost=5.0,
-            parent_otel_span=None,
-            tags=["tag1", "tag2"],
-        )
-
-        mock_get_cache.assert_awaited_once_with(
-            keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
-        )
-        assert cache.in_memory_cache.get_cache("tag:tag1")["spend"] == 15.0
-        assert cache.in_memory_cache.get_cache("tag:tag2")["spend"] == 25.0
+    assert cache.in_memory_cache.get_cache("tag:tag1")["spend"] == 15.0
+    assert cache.in_memory_cache.get_cache("tag:tag2")["spend"] == 25.0
 
 
 @pytest.mark.asyncio
@@ -6278,32 +6247,22 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    original_cache = litellm.proxy.proxy_server.user_api_key_cache
     cache = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 1000.0), default_in_memory_ttl=300)
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
-    seed = {"tag_name": "active-tag", "spend": 1.0}
-    cache.in_memory_cache.cache_dict["tag:active-tag"] = seed
+    cache.in_memory_cache.cache_dict["tag:active-tag"] = {"tag_name": "active-tag", "spend": 1.0}
 
-    try:
-        with patch.object(
-            cache,
-            "async_batch_get_cache",
-            new=AsyncMock(return_value=[seed]),
-        ):
-            await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
-                parent_otel_span=None,
-                tags=["active-tag"],
-            )
+    await litellm.proxy.proxy_server.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=5.0,
+        parent_otel_span=None,
+        tags=["active-tag"],
+        cache=cache,
+    )
 
-            assert cache.in_memory_cache.ttl_dict["tag:active-tag"] == 1300.0
-            assert cache.in_memory_cache.get_cache("tag:active-tag")["spend"] == 6.0
-    finally:
-        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+    assert cache.in_memory_cache.ttl_dict["tag:active-tag"] == 1300.0
+    assert cache.in_memory_cache.get_cache("tag:active-tag")["spend"] == 6.0
 
 
 @pytest.mark.asyncio
@@ -6656,10 +6615,9 @@ def test_settings_store_uppercases_db_env_vars(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     proxy_config = ProxyConfig()
-    db_values = proxy_config._prepared_db_settings_values(
-        "environment_variables", {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}
+    proxy_config._apply_db_environment_variables(
+        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}, read=1
     )
-    proxy_config.environment_variables.apply_db_row("environment_variables", db_values)
 
     env_vars = proxy_config.environment_variables.resolved()
     assert env_vars["DD_API_KEY"] == "test-api-key"
@@ -7299,7 +7257,7 @@ async def test_async_data_generator_cleanup_on_early_exit():
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs.get("response")
     )
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     # Create a mock response with aclose
     mock_response = MagicMock()
@@ -7420,7 +7378,7 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging") as mock_deferred_logging:
@@ -7476,7 +7434,7 @@ async def test_async_data_generator_preserves_non_raw_sse_like_bytes():
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7533,7 +7491,7 @@ async def test_async_data_generator_buffers_split_google_native_sse_json_frame()
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7580,7 +7538,7 @@ async def test_async_data_generator_flushes_raw_sse_stream_without_trailing_deli
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7629,7 +7587,7 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7685,7 +7643,7 @@ async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_f
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7737,7 +7695,7 @@ async def test_async_data_generator_google_genai_stream_omits_openai_done():
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7779,7 +7737,7 @@ async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7913,7 +7871,7 @@ async def test_async_data_generator_cleanup_on_midstream_error():
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs.get("response")
     )
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     mock_response = MagicMock()
     mock_response.aclose = AsyncMock()
@@ -9889,10 +9847,22 @@ class _FakeLitellmConfig:
         self.upsert_calls.append((name, value))
 
 
+class _LaggingReplicaLitellmConfig(_FakeLitellmConfig):
+    def __init__(self, replica_rows, writer):
+        super().__init__(initial_rows=replica_rows)
+        self.upsert = writer.upsert
+
+
 class _FakePrismaClient:
-    def __init__(self, initial_rows=None):
+    def __init__(self, initial_rows=None, replica_rows=None):
+        self.writer_db = mock.MagicMock()
+        self.writer_db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
         self.db = mock.MagicMock()
-        self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
+        self.db.litellm_config = (
+            self.writer_db.litellm_config
+            if replica_rows is None
+            else _LaggingReplicaLitellmConfig(replica_rows, writer=self.writer_db.litellm_config)
+        )
         self.jsonify_object = lambda obj: obj
 
 
@@ -9902,8 +9872,8 @@ def _update_config_setup(monkeypatch):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
 
-    def _install(initial_rows=None, store_model_in_db=True):
-        prisma = _FakePrismaClient(initial_rows=initial_rows)
+    def _install(initial_rows=None, store_model_in_db=True, replica_rows=None):
+        prisma = _FakePrismaClient(initial_rows=initial_rows, replica_rows=replica_rows)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
         monkeypatch.setattr(
@@ -9953,6 +9923,22 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(_update_config_setup):
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"SAVED_A_MOMENT_AGO": "enc:new"}},
+        replica_rows={"environment_variables": {}},
+    )
+    try:
+        resp = client.post("/config/update", json={"environment_variables": {"ANOTHER_KEY": "value"}})
+        assert resp.status_code == 200
+        assert prisma.writer_db.litellm_config.rows["environment_variables"] == {
+            "SAVED_A_MOMENT_AGO": "enc:new",
+            "ANOTHER_KEY": "enc:value",
+        }
     finally:
         restore()
 
@@ -15629,44 +15615,39 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
 
 
 @pytest.mark.asyncio
-async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family():
-    """The post-call spend write-back reads and rewrites the cached auth objects, so its
-    Redis spans must read ``redis.mget auth_objects`` / ``redis.set auth_objects`` (the key
-    family the auth phase declares) and the global spend scalar ``redis.set spend_counters``,
-    never a bare ``redis.mget`` with no owner."""
+async def test_update_cache_reads_and_writes_the_global_spend_scalar_as_spend_counters():
+    """The only Redis traffic of the post-call spend update is the global spend scalar, so its
+    read and write spans must both name ``spend_counters``, never a bare ``redis.mget`` with no owner."""
+    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = UserApiKeyCache()
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.in_memory_cache.set_cache("u1", {"user_id": "u1", "spend": 1.0})
     seen: list[tuple[str, str | None]] = []
 
     async def _mget(keys, **_kwargs):
         seen.append(("mget", current_service_target()))
-        return [{"user_id": "u1", "spend": 1.0} for _ in keys]
+        return [10.0 for _ in keys]
 
     async def _set_pipeline(**_kwargs):
         seen.append(("set", current_service_target()))
 
-    try:
-        with (
-            patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=_mget)),
-            patch.object(cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_set_pipeline)),
-        ):
-            await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id="u1",
-                end_user_id=None,
-                team_id=None,
-                response_cost=2.0,
-                parent_otel_span=None,
-            )
-            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-            if pending:
-                await asyncio.wait(pending, timeout=5)
-    finally:
-        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+    with (
+        patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=_mget)),
+        patch.object(cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_set_pipeline)),
+    ):
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id="u1",
+            end_user_id=None,
+            team_id=None,
+            response_cost=2.0,
+            parent_otel_span=None,
+            cache=cache,
+        )
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.wait(pending, timeout=5)
 
-    assert seen, "update_cache must touch the cache for a priced user request"
-    assert {target for _, target in seen} == {"auth_objects"}
+    assert seen == [("mget", "spend_counters"), ("set", "spend_counters")]
     assert current_service_target() is None

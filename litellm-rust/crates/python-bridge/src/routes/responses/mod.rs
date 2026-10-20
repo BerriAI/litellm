@@ -62,7 +62,7 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
         ));
     }
     let host = InferenceHost::new(call.view()?, ROUTE_HOST_MODULE);
-    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost(host))
+    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost::new(host))
 }
 
 #[pyfunction]

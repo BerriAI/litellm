@@ -9,6 +9,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 WRITE_STATEMENT_MAX_BYTES: Final = 200_000
 MESSAGES_PER_REQUEST: Final = 60
 MESSAGE_CHARACTERS: Final = 2_000

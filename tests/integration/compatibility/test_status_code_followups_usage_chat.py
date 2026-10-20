@@ -71,7 +71,7 @@ def _tool_results(usage_chat: _UsageChat, start_date: str, end_date: str) -> tup
     """Runs one chat turn whose model calls every tool with these dates; returns the tool messages the follow-up
     model call carried, keyed by tool, and the tool statuses the SSE stream reported."""
     register_scenario(usage_chat.identity, json_response(_tool_calls(start_date, end_date)))
-    Upstream(usage_chat.gateway.upstream_url).drain()
+    Upstream(usage_chat.gateway.upstream_url).reset()
     with usage_chat.gateway.client.stream(
         "POST",
         "/usage/ai/chat",

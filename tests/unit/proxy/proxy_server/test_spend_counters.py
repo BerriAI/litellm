@@ -22,9 +22,8 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -33,10 +32,13 @@ from opentelemetry.trace import Span
 
 import litellm.proxy.proxy_server as ps
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.proxy._types import LiteLLM_UserTable
+from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.tag import LiteLLM_TagTable
+from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
+from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 
 from .conftest import normalize
 
@@ -1579,13 +1581,7 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
 
     assert fake_user_cache.async_get_cache.await_count == 0
     fake_user_cache.async_batch_get_cache.assert_awaited_once()
-    assert fake_user_cache.async_batch_get_cache.await_args.kwargs["keys"] == [
-        "u1",
-        f"{ps.litellm_proxy_admin_name}:spend",
-        "end_user_id:eu1",
-        "team_id:t1",
-        "tag:x",
-    ]
+    assert fake_user_cache.async_batch_get_cache.await_args.kwargs["keys"] == [f"{ps.litellm_proxy_admin_name}:spend"]
 
 
 @pytest.mark.asyncio
@@ -1610,17 +1606,96 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     assert result is None
 
 
-class _EvictAfterReadUserApiKeyCache(UserApiKeyCache):
-    """Runs the real eviction path between ``update_cache``'s read and its write-back."""
+async def _drain_spend_cache_writes() -> None:
+    for _ in range(3):
+        await asyncio.sleep(0)
 
-    def __init__(
-        self,
-        evict_keys: Sequence[str] = (),
-        refill: Mapping[str, object] = MappingProxyType({}),
-    ) -> None:
+
+async def _update_team_spend(team_id: str, response_cost: float) -> None:
+    await ps.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=team_id,
+        response_cost=response_cost,
+        parent_otel_span=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_cache_adds_spend_to_the_cached_team_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key="team_id:warm", value=LiteLLM_TeamTableCachedObj(team_id="warm", spend=5.0, blocked=True))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_team_spend(team_id="warm", response_cost=2.5)
+    await _update_team_spend(team_id="cold", response_cost=2.5)
+    await _drain_spend_cache_writes()
+
+    warm: Final = cache.get_cache(key="team_id:warm", model_type=LiteLLM_TeamTableCachedObj)
+    assert warm is not None
+    assert (warm.spend, warm.blocked) == (7.5, True)
+    assert cache.get_cache(key="team_id:cold") is None
+
+
+async def _block_on_this_worker(cache: UserApiKeyCache, team_id: str) -> None:
+    await refresh_cached_team(
+        team_row=LiteLLM_TeamTable(team_id=team_id, blocked=True),
+        user_api_key_cache=cache,
+        proxy_logging_obj=ps.proxy_logging_obj,
+    )
+
+
+async def _invalidated_by_a_peer(cache: UserApiKeyCache, team_id: str) -> None:
+    evict_local(cache_keys=(f"team_id:{team_id}",), user_api_key_cache=cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("management_write", "expected_blocked"),
+    [(_block_on_this_worker, True), (_invalidated_by_a_peer, None)],
+)
+async def test_update_cache_never_restores_a_team_a_management_write_replaced(
+    management_write: Callable[[UserApiKeyCache, str], Awaitable[None]],
+    expected_blocked: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    team_id: Final = "kill-switch"
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id, blocked=False))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_team_spend(team_id=team_id, response_cost=1.0)
+    await management_write(cache, team_id)
+    await _drain_spend_cache_writes()
+
+    seen_by_auth: Final = cache.get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj)
+    assert (seen_by_auth.blocked if seen_by_auth is not None else None) == expected_blocked
+
+
+_CachedSpendObject = LiteLLM_UserTable | LiteLLM_EndUserTable | LiteLLM_TeamTableCachedObj | LiteLLM_TagTable
+
+
+def _cached_spend_object(
+    kind: Literal["user", "end_user", "team", "tag"], models: list[str]
+) -> tuple[str, _CachedSpendObject]:
+    match kind:
+        case "user":
+            return "race-user", LiteLLM_UserTable(user_id="race-user", models=models)
+        case "end_user":
+            return end_user_cache_key("race-end-user"), LiteLLM_EndUserTable(
+                user_id="race-end-user", blocked=False, models=models
+            )
+        case "team":
+            return "team_id:race-team", LiteLLM_TeamTableCachedObj(team_id="race-team", models=models)
+        case "tag":
+            return tag_cache_key("race-tag"), LiteLLM_TagTable(tag_name="race-tag", models=models)
+
+
+class _WriteDuringReadUserApiKeyCache(UserApiKeyCache):
+    def __init__(self, management_write: Callable[[UserApiKeyCache], None]) -> None:
         super().__init__(in_memory_cache=InMemoryCache())
-        self._evict_keys: Final = tuple(evict_keys)
-        self._refill: Final = refill
+        self._management_write: Final = management_write
 
     async def async_batch_get_cache(
         self,
@@ -1637,67 +1712,45 @@ class _EvictAfterReadUserApiKeyCache(UserApiKeyCache):
             throttle_redis=throttle_redis,
             **kwargs,
         )
-        evict_local(self._evict_keys, self)
-        for key, value in self._refill.items():
-            self.set_cache(key, value, local_only=True)
+        self._management_write(self)
         return result
 
 
-@pytest.mark.parametrize("scenario", ["kept", "evicted", "refilled"])
 @pytest.mark.asyncio
-async def test_update_cache_does_not_resurrect_entry_evicted_mid_flight(
-    scenario: Literal["kept", "evicted", "refilled"],
-):
-    user_id: Final = "user-race-1"
-    user_key: Final = ps.update_cache_read_keys(
-        user_id=user_id, end_user_id=None, team_id=None, tags=None, response_cost=0.01
-    )[0]
-    refill: Final = (
-        MappingProxyType(
-            {
-                user_key: CacheCodec.serialize(
-                    LiteLLM_UserTable(user_id=user_id, rpm_limit=1, tpm_limit=100000, spend=0.0),
-                    model_type=LiteLLM_UserTable,
-                )
-            }
-        )
-        if scenario == "refilled"
-        else MappingProxyType({})
-    )
-    cache: Final = _EvictAfterReadUserApiKeyCache(
-        evict_keys=() if scenario == "kept" else (user_key,),
-        refill=refill,
-    )
-    seed: Final = CacheCodec.serialize(
-        LiteLLM_UserTable(user_id=user_id, rpm_limit=1000, tpm_limit=100000, spend=0.0),
-        model_type=LiteLLM_UserTable,
-    )
-    cache.set_cache(user_key, seed, local_only=True)
+@pytest.mark.parametrize("kind", ["user", "end_user", "team", "tag"])
+@pytest.mark.parametrize(
+    ("management_write", "expected"),
+    [("none", (["gpt-a"], 0.25)), ("evict", None), ("refresh", (["gpt-b"], 0.25))],
+)
+async def test_update_cache_adds_spend_to_the_entry_a_management_write_left_mid_flight(
+    kind: Literal["user", "end_user", "team", "tag"],
+    management_write: Literal["none", "evict", "refresh"],
+    expected: tuple[list[str], float] | None,
+) -> None:
+    key, seeded = _cached_spend_object(kind, models=["gpt-a"])
+    _, refreshed = _cached_spend_object(kind, models=["gpt-b"])
+
+    def _write(cache: UserApiKeyCache) -> None:
+        if management_write == "none":
+            return
+        evict_local(cache_keys=(key,), user_api_key_cache=cache)
+        if management_write == "refresh":
+            cache.set_cache(key=key, value=refreshed, local_only=True)
+
+    cache: Final = _WriteDuringReadUserApiKeyCache(management_write=_write)
+    cache.set_cache(key=key, value=seeded, local_only=True)
 
     await ps.update_cache(
         token=None,
-        user_id=user_id,
-        end_user_id=None,
-        team_id=None,
-        response_cost=0.01,
+        user_id="race-user",
+        end_user_id="race-end-user",
+        team_id="race-team",
+        response_cost=0.25,
         parent_otel_span=None,
+        tags=["race-tag"],
         cache=cache,
     )
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await _drain_spend_cache_writes()
 
-    memory: Final = cache.in_memory_cache_for(user_key)
-    stored: Final = memory.get_cache(user_key)
-    match scenario:
-        case "kept":
-            kept_user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
-            assert kept_user is not None
-            assert kept_user.spend == pytest.approx(0.01)
-            assert kept_user.rpm_limit == 1000
-        case "evicted":
-            assert stored is None
-        case "refilled":
-            refilled_user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
-            assert refilled_user is not None
-            assert refilled_user.rpm_limit == 1
-            assert refilled_user.spend == 0.0
+    stored: Final = cache.get_cache(key=key, local_only=True, model_type=type(seeded))
+    assert ((stored.models, stored.spend) if stored is not None else None) == expected

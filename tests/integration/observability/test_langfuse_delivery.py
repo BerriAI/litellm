@@ -33,6 +33,8 @@ from opentelemetry.proto.common.v1.common_pb2 import KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import Span
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 PUBLIC_KEY: Final = "pk-lf-integration"
 SECRET_KEY: Final = "sk-lf-integration"
 PROJECTS_PATH: Final = "/api/public/projects"
