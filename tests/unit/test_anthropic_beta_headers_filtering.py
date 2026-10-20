@@ -458,6 +458,19 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
 
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse"])
+    def test_interleaved_thinking_forwarded_for_bedrock(self, provider: str) -> None:
+        """Bedrock InvokeModel (body `anthropic_beta`) and Converse (`additionalModelRequestFields.anthropic_beta`)
+        both accepted interleaved-thinking-2025-05-14 on us.anthropic.claude-haiku-4-5 when probed live on
+        2026-10-20. Dropping it made every request with `thinking.budget_tokens` above `max_tokens` fail with
+        "`max_tokens` must be greater than `thinking.budget_tokens`" on /v1/messages and /chat/completions"""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["interleaved-thinking-2025-05-14"],
+            provider=provider,
+        )
+
+        assert filtered == ["interleaved-thinking-2025-05-14"]
+
     @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
     def test_inline_tools_forwarded(self, provider: str) -> None:
         """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.
