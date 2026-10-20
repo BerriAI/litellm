@@ -4641,6 +4641,67 @@ class TestMCPServerManager:
         assert "HTTP 200 (no RFC 9728 challenge)" in attempts[0]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["config", "database"])
+    async def test_startup_discovery_gives_up_on_metadata_that_never_finishes(
+        self, source: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        body: Final = _OpenEventStream()
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/mcp":
+                return httpx.Response(200)
+            if request.url.path == "/.well-known/oauth-protected-resource/mcp":
+                return httpx.Response(200, headers={"Content-Type": "application/json"}, stream=body)
+            return httpx.Response(404)
+
+        monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1")
+        manager: Final = MCPServerManager()
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=_handler_answering(respond),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT", 0.05),
+        ):
+            if source == "config":
+                await asyncio.wait_for(
+                    manager.load_servers_from_config(
+                        {
+                            "stuck": {
+                                "url": "https://stuck.example.com/mcp",
+                                "transport": "http",
+                                "auth_type": "oauth2",
+                                "oauth2_flow": "authorization_code",
+                                "client_id": "qa-client",
+                            }
+                        }
+                    ),
+                    timeout=5,
+                )
+                server = next(iter(manager.config_mcp_servers.values()))
+            else:
+                server = await asyncio.wait_for(
+                    manager.build_mcp_server_from_table(
+                        LiteLLM_MCPServerTable(
+                            server_id="stuck",
+                            alias="stuck",
+                            url="https://stuck.example.com/mcp",
+                            transport=MCPTransport.http,
+                            auth_type=MCPAuth.oauth2,
+                            oauth2_flow="authorization_code",
+                            created_at=datetime.now(),
+                            updated_at=datetime.now(),
+                        ),
+                        credentials_are_encrypted=False,
+                    ),
+                    timeout=5,
+                )
+
+        assert body.read_started.is_set()
+        assert server.authorization_url is None
+        assert server.token_url is None
+
+    @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
         self,
     ):

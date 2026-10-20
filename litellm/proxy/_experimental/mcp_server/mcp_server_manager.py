@@ -2080,6 +2080,34 @@ class MCPServerManager:
     def _registered_server(self, server: MCPServer) -> MCPServer:
         return self.registry.get(server.server_id) or self.config_mcp_servers.get(server.server_id) or server
 
+    async def _discover_oauth_metadata_within_deadline(
+        self,
+        server_url: str | None,
+        issuer_anchor: str | None,
+        *,
+        allow_origin_fallback: bool,
+        warn_when_no_metadata: bool,
+    ) -> MCPOAuthMetadata | None:
+        discovery: Final = (
+            self._fetch_issuer_anchored_oauth_metadata(issuer_anchor, server_url)
+            if issuer_anchor is not None
+            else self._descovery_metadata(
+                server_url=server_url or "",
+                allow_origin_fallback=allow_origin_fallback,
+                warn_when_no_metadata=warn_when_no_metadata,
+            )
+        )
+        try:
+            return await asyncio.wait_for(discovery, timeout=MCP_METADATA_TIMEOUT)
+        except asyncio.TimeoutError:
+            verbose_logger.warning(
+                "MCP OAuth discovery for %s timed out after %ss; "
+                "OAuth endpoints stay unresolved until a rebuild succeeds",
+                server_url,
+                MCP_METADATA_TIMEOUT,
+            )
+            return None
+
     async def _discover_oauth_metadata_for_server(self, server: MCPServer) -> MCPOAuthMetadata | None:
         manual_issuer: Final = _blank_to_none(server.issuer)
         manual_authorization_url: Final = _blank_to_none(server.authorization_url)
@@ -2627,11 +2655,10 @@ class MCPServerManager:
             discovery_deferred = should_discover and not self._oauth_discovery_on_startup
             if not should_discover or discovery_deferred:
                 mcp_oauth_metadata = None
-            elif use_issuer_anchor and manual_issuer is not None:
-                mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
             else:
-                mcp_oauth_metadata = await self._descovery_metadata(
-                    server_url=server_url,
+                mcp_oauth_metadata = await self._discover_oauth_metadata_within_deadline(
+                    server_url,
+                    manual_issuer if use_issuer_anchor else None,
                     allow_origin_fallback=is_discovery_auth_type,
                     warn_when_no_metadata=warn_on_empty_discovery,
                 )
@@ -3120,16 +3147,16 @@ class MCPServerManager:
             (is_discovery_auth_type and not has_all_upstream_oauth_fields) or obo_needs_discovery
         )
         discovery_deferred: Final = needs_discovery and not self._oauth_discovery_on_startup
-        if not needs_discovery or discovery_deferred:
-            mcp_oauth_metadata: MCPOAuthMetadata | None = None
-        elif use_issuer_anchor and manual_issuer is not None:
-            mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
-        else:
-            mcp_oauth_metadata = await self._descovery_metadata(
-                server_url=server_url,
+        mcp_oauth_metadata: Final = (
+            None
+            if not needs_discovery or discovery_deferred
+            else await self._discover_oauth_metadata_within_deadline(
+                server_url,
+                manual_issuer if use_issuer_anchor else None,
                 allow_origin_fallback=is_discovery_auth_type,
                 warn_when_no_metadata=warn_on_empty_discovery,
             )
+        )
         if use_issuer_anchor:
             return mcp_oauth_metadata, discovery_deferred
         gated_metadata: Final = (
