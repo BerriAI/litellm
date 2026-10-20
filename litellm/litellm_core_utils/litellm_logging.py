@@ -2382,10 +2382,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
-        self.model_call_details["current_attempt_api_call_start_time"] = None
         usage: Final = self.model_call_details.pop("combined_usage_object", None)
         response_cost: Final = self.model_call_details.pop("response_cost", None)
         if isinstance(usage, Usage):
+            self.model_call_details["current_attempt_api_call_start_time"] = None
             self.model_call_details["failed_attempts_usage"] = (
                 *self.model_call_details.get("failed_attempts_usage", ()),
                 (usage, float(response_cost) if isinstance(response_cost, (int, float)) else 0.0),

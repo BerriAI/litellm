@@ -2231,8 +2231,76 @@ def test_attempts_already_summed_into_the_final_row_are_not_lifted_again():
 
     lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
 
-    assert lifted["combined_usage_object"].prompt_tokens == 24
+    current_only_logging_obj: Final = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    current_only: Final = _failure_fields_to_lift(
+        {"litellm_logging_obj": current_only_logging_obj}, provider_billed=True
+    )
+    current_only_usage: Final = current_only["combined_usage_object"]
+
+    assert current_only_usage.prompt_tokens > 0
+    assert lifted["combined_usage_object"].prompt_tokens == 24 + current_only_usage.prompt_tokens
     assert "billed_failed_attempts" not in lifted
+
+
+def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_estimate():
+    import traceback
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
+
+    request_start: Final = real_datetime.datetime.now()
+    logging_obj: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-no-stashed-usage",
+        function_id="fn-lit145-no-stashed-usage",
+    )
+    logging_obj.pre_call(input=ONE_USER_MESSAGE, api_key="sk-test", model=FAILURE_USAGE_MODEL)
+    logging_obj.model_call_details["call_type"] = "acompletion"
+    logging_obj.model_call_details["messages"] = ONE_USER_MESSAGE
+
+    try:
+        try:
+            raise httpx.ReadTimeout("no bytes in time")
+        except httpx.ReadTimeout as cause:
+            raise litellm.Timeout("Request timed out.", model=FAILURE_USAGE_MODEL, llm_provider="openai") from cause
+    except litellm.Timeout as timeout:
+        logging_obj.failure_handler(
+            timeout,
+            traceback.format_exc(),
+            request_start,
+            real_datetime.datetime.now(),
+        )
+
+    assert "combined_usage_object" not in logging_obj.model_call_details
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    before: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+
+    carry_superseded_attempt_usage(request_data)
+
+    after: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    before_usage: Final = before.get("combined_usage_object")
+    after_usage: Final = after.get("combined_usage_object")
+    assert before_usage is not None
+    assert after_usage is not None
+    assert after_usage == before_usage
+    assert before["response_cost"] > 0
+    assert after["response_cost"] == before["response_cost"]
 
 
 def test_a_timed_out_attempt_from_the_group_a_fallback_left_is_still_billed():
