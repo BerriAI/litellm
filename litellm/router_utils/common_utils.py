@@ -35,6 +35,17 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_OBJECT_TUPLE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
+    {
+        "googleSearch",
+        "google_search",
+        "googleSearchRetrieval",
+        "google_search_retrieval",
+        "enterpriseWebSearch",
+        "enterprise_web_search",
+    }
+)
 
 
 def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
@@ -327,9 +338,6 @@ def filter_team_based_models(
     ]
 
 
-_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
-
-
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -350,6 +358,16 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def _is_web_search_tool(tool: object) -> bool:
+    if not isinstance(tool, Mapping):
+        return False
+    tool_mapping: Final = _OBJECT_MAPPING_ADAPTER.validate_python(tool)
+    tool_type: Final = tool_mapping.get("type")
+    if isinstance(tool_type, str) and (tool_type == "web_search" or tool_type.startswith("web_search_")):
+        return True
+    return any(key in _GEMINI_SEARCH_TOOL_KEYS for key in tool_mapping if isinstance(key, str))
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
@@ -366,10 +384,7 @@ def filter_web_search_deployments(
 
     tools: Final[object] = request_kwargs.get("tools")
     is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
-        isinstance(tool, dict)
-        and isinstance(tool_type := tool.get("type"), str)
-        and tool_type in _WEB_SEARCH_TOOL_TYPES
-        for tool in tools
+        _is_web_search_tool(tool) for tool in _OBJECT_TUPLE_ADAPTER.validate_python(tools)
     )
     if not is_web_search_request:
         return healthy_deployments
