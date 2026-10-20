@@ -728,7 +728,7 @@ def update_messages_with_model_file_ids(
 def update_responses_input_with_model_file_ids(
     input: object,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
@@ -769,7 +769,7 @@ def update_responses_input_with_model_file_ids(
             for content_item in content:
                 if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
-                    if file_id:
+                    if isinstance(file_id, str) and file_id:
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
@@ -865,7 +865,7 @@ def _decode_vector_store_ids_in_tools(
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
@@ -2427,6 +2427,16 @@ def is_unsignable_thinking_block(block: object) -> bool:
         return False
     signature: Final = mapping.get("signature")
     return not (isinstance(signature, str) and len(signature) > 0)
+
+
+def has_blank_redacted_data(block: object) -> bool:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return not data.strip()
+        case {"type": "redacted_thinking"}:
+            return True
+        case _:
+            return False
 
 
 def native_redacted_thinking_data(data: str) -> str:
