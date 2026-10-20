@@ -19,9 +19,9 @@ def pricing_models(base_model: object, model: object) -> tuple[str, ...]:
 def deployment_pricing_models(deployment: object) -> tuple[str, ...]:
     """``pricing_models`` read off a raw deployment dict (``model_info.base_model``, then
     ``litellm_params.base_model``, then ``litellm_params.model``); malformed blocks count as unset."""
-    view: Final = _str_keyed(deployment)
-    params: Final = _str_keyed(view.get("litellm_params"))
-    info: Final = _str_keyed(view.get("model_info"))
+    view: Final = str_keyed(deployment)
+    params: Final = str_keyed(view.get("litellm_params"))
+    info: Final = str_keyed(view.get("model_info"))
     return pricing_models(info.get("base_model") or params.get("base_model"), params.get("model"))
 
 
@@ -29,7 +29,8 @@ def _named_models(*candidates: object) -> Iterator[str]:
     return (candidate for candidate in candidates if isinstance(candidate, str) and candidate)
 
 
-def _str_keyed(value: object) -> Mapping[str, object]:
+def str_keyed(value: object) -> Mapping[str, object]:
+    """``value`` as a read-only str-keyed mapping, empty when it is not a dict."""
     try:
         return MappingProxyType(_STR_KEYED.validate_python(value))
     except ValidationError:

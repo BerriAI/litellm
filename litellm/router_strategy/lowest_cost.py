@@ -2,10 +2,7 @@
 #   picks based on response time (for streaming, this is time to first token)
 from collections.abc import Mapping
 from datetime import datetime
-from types import MappingProxyType
 from typing import Final
-
-from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -14,25 +11,17 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
-
-_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
-_STR_KEYED: Final = TypeAdapter(dict[str, object])
-
-
-def _str_keyed(value: object) -> Mapping[str, object]:
-    try:
-        return MappingProxyType(_STR_KEYED.validate_python(value))
-    except ValidationError:
-        return _EMPTY
+from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
     """Input and output per-token prices from the first cost-map row among the deployment's
     pricing models that carries one; (None, None) when no row does, so the caller falls back to
     its unmapped default."""
-    rows: Final = (_str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
-    row: Final = next((row for row in rows if _declares_token_price(row)), _EMPTY)
+    rows: Final = (str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
+    row: Final = next((row for row in rows if _declares_token_price(row)), None)
+    if row is None:
+        return None, None
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
 
 
