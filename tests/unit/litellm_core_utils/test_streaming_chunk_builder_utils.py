@@ -2147,9 +2147,6 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
 def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_usage(
     trailer_choices: list[dict[str, object]], reported_total: dict[str, int]
 ) -> None:
-    """vLLM-style include_usage stream: finish_reason arrives on a text-less chunk, then a
-    usage-only trailer. The rebuilt response must keep both, including the provider's token
-    details, instead of reading chunks[-1] and recounting the prompt from `messages`."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder_text_completion
     from litellm.types.utils import TextCompletionResponse
 
