@@ -995,6 +995,8 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
 
@@ -1048,8 +1050,10 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
-    if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
+    call_type: Final = str(model_call_details.get("call_type"))
+    if call_type not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
+    dispatched_input: Final = model_call_details.get("messages")
     optional_params: Final = model_call_details.get("optional_params")
     dispatched_system: Final = (
         (optional_params.get("system") or optional_params.get("instructions"))
@@ -1059,7 +1063,11 @@ def _failure_usage_to_lift(
     system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
     estimated_usage: Final = _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
-        request_input=messages_since_newest_compaction(model_call_details.get("messages")),
+        request_input=(
+            messages_since_newest_compaction(dispatched_input)
+            if call_type in _RESPONSES_CALL_TYPES
+            else dispatched_input
+        ),
         system_input=system_input,
     )
     if estimated_usage is None:

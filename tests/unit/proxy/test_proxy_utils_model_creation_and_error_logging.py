@@ -2251,32 +2251,50 @@ def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rat
 
 
 
-def test_a_failed_responses_call_counts_its_input_from_the_newest_compaction_item():
+COMPACTION_INSTRUCTIONS = {"role": "system", "content": "answer briefly"}
+COMPACTED_HISTORY = [
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+]
+COMPACTION_ITEM = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+TURN_AFTER_COMPACTION = {"role": "user", "content": "what is the cat's name?"}
+
+
+def _failed_call_prompt_tokens(call_type, request_input):
     from litellm.proxy.utils import _failure_usage_to_lift
 
-    instructions = {"role": "system", "content": "answer briefly"}
-    replaced_history = [
-        {"role": "user", "content": "a long turn " * 200},
-        {"role": "assistant", "content": "a long reply " * 200},
-    ]
-    compaction_item = {
-        "type": "compaction",
-        "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
-    }
-    later_turn = {"role": "user", "content": "what is the cat's name?"}
+    lifted = _failure_usage_to_lift(
+        model_call_details={"call_type": call_type, "model": FAILURE_USAGE_MODEL, "messages": request_input},
+        request_body={},
+        dispatched=True,
+    )
+    assert lifted is not None
+    return lifted[0].prompt_tokens
 
-    def prompt_tokens(request_input):
-        lifted = _failure_usage_to_lift(
-            model_call_details={"call_type": "aresponses", "model": FAILURE_USAGE_MODEL, "messages": request_input},
-            request_body={},
-            dispatched=True,
-        )
-        assert lifted is not None
-        return lifted[0].prompt_tokens
 
-    resent = prompt_tokens([instructions, *replaced_history, compaction_item, later_turn])
-    assert resent == prompt_tokens([instructions, compaction_item, later_turn])
-    assert resent < prompt_tokens([instructions, *replaced_history, later_turn])
+def test_a_failed_responses_call_counts_its_input_from_the_newest_compaction_item():
+    resent = _failed_call_prompt_tokens(
+        "aresponses", [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+    )
+
+    assert resent == _failed_call_prompt_tokens(
+        "aresponses", [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+    )
+    assert resent < _failed_call_prompt_tokens(
+        "aresponses", [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, TURN_AFTER_COMPACTION]
+    )
+
+
+@pytest.mark.parametrize("call_type", ["acompletion", "aanthropic_messages"])
+def test_a_failed_chat_or_messages_call_counts_the_history_before_a_compaction_typed_message(call_type):
+    sent = _failed_call_prompt_tokens(
+        call_type, [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+    )
+
+    assert sent > _failed_call_prompt_tokens(call_type, [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
 @pytest.mark.parametrize(
