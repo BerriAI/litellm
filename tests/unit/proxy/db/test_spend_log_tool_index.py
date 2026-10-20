@@ -4,22 +4,25 @@ only) and the flush that writes LiteLLM_SpendLogToolIndex in bounded statements
 plus the LiteLLM_DailyToolSpend rollup in one transaction.
 """
 
-from types import SimpleNamespace
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-from litellm.proxy.db import spend_log_tool_index
+from litellm.proxy.db import rollup_lock_timeout, spend_log_tool_index
+from litellm.proxy.db.log_db_metrics import record_db_io
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 from litellm.proxy.db.spend_log_tool_index import (
     ToolUsageTransaction,
     build_tool_usage_transaction,
     flush_tool_usage_transactions,
     response_tool_call_names,
 )
-from litellm.proxy.db.log_db_metrics import record_db_io
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -32,6 +35,7 @@ class _FakeBatcher:
     def __init__(self) -> None:
         self.litellm_spendlogtoolindex = MagicMock()
         self.litellm_dailytoolspend = MagicMock()
+        self.execute_raw = MagicMock()
 
     async def __aenter__(self) -> "_FakeBatcher":
         return self
@@ -84,7 +88,9 @@ class TestBuildToolUsageTransaction:
                 mcp_namespaced_tool_name=None,
                 spend=0.5,
                 total_tokens=100,
-                completion_response=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None))]),
+                completion_response=SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None))]
+                ),
             )
             is None
         )
@@ -217,6 +223,37 @@ class TestResponseToolCallNames:
             ]
         }
         assert response_tool_call_names(response) == ("ant_get_weather",)
+
+    def test_auto_executed_mcp_tools_count_from_the_final_responses_api_response(self):
+        final_round = ResponsesAPIResponse.model_validate(
+            {
+                "id": "resp_final",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                    }
+                ],
+            }
+        )
+        logged = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+            final_round,
+            mcp_tools_fetched=[{"name": "demo-echo"}, {"name": "demo-add"}],
+            tool_results=[
+                {"tool_call_id": "call_1", "result": "x", "name": "demo-echo"},
+                {"tool_call_id": "call_2", "result": "3", "name": "demo-add"},
+            ],
+        )
+
+        assert response_tool_call_names(logged) == ("demo-echo", "demo-add")
+        assert response_tool_call_names(logged.model_dump()) == ("demo-echo", "demo-add")
 
 
 def _transaction(
@@ -395,3 +432,25 @@ async def test_a_tool_usage_flush_renders_one_postgres_span_per_table_written(
         "postgres.insert LiteLLM_SpendLogToolIndex",
         "postgres.upsert LiteLLM_DailyToolSpend",
     )
+
+
+@pytest.mark.asyncio
+async def test_rollup_transaction_sets_the_lock_timeout_before_its_first_upsert(monkeypatch) -> None:
+    """Every DailyToolSpend rollup transaction opens by bounding how long its upserts
+    may wait on a row another pod holds, so a waiter costs one cancelled statement
+    rather than a pooled connection pinned until the holder commits. The budget is the
+    SPEND_ROLLUP_LOCK_TIMEOUT_MS knob, bound as a parameter, not baked into the SQL."""
+    monkeypatch.setattr(rollup_lock_timeout, "SPEND_ROLLUP_LOCK_TIMEOUT_MS", 250)
+    prisma, batcher = _prisma_with_batcher()
+    order: list[str] = []
+    batcher.execute_raw.side_effect = lambda *_: order.append("lock_timeout")
+    batcher.litellm_dailytoolspend.upsert.side_effect = lambda **_: order.append("upsert")
+
+    await flush_tool_usage_transactions(
+        prisma_client=prisma,
+        transactions=[_transaction("r1", tool_names=("tool_a", "tool_b"))],
+    )
+
+    assert batcher.execute_raw.call_args_list == [((ROLLUP_LOCK_TIMEOUT_SQL, "250ms"),)]
+    assert order == ["lock_timeout", "upsert", "upsert"]
+    assert "set_config('lock_timeout'" in ROLLUP_LOCK_TIMEOUT_SQL and ", true)" in ROLLUP_LOCK_TIMEOUT_SQL

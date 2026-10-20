@@ -40,11 +40,12 @@ from litellm.llms.base_llm.harness.transformation import (
     event_list,
 )
 from litellm.llms.base_llm.harness.utils import (
+    build_instructions,
     last_json_object,
     native_tool_names,
     normalize_tool_name,
     stderr_tail_text,
-    structured_output_instruction,
+    turn_prompt,
 )
 
 if TYPE_CHECKING:
@@ -252,7 +253,7 @@ def build_opencode_config(
     extra_skills: Final = (skills_path,) if skills_path else ()
     skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
     options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
-    models: Final[dict[str, Any]] = {model: {}}  # mutable-ok: opencode config JSON
+    models: Final[dict[str, Mapping[str, object]]] = {model: {}}  # mutable-ok: opencode config JSON
     provider: Final = {  # mutable-ok: opencode config JSON
         "npm": OPENCODE_PROVIDER_NPM,
         "name": "LiteLLM",
@@ -272,21 +273,6 @@ def build_opencode_config(
     optional: Final = (("instructions", instructions), ("skills", skills if skill_paths else None))
     present: Final = ((key, value) for key, value in optional if value)
     return {**user, **managed, **dict(present)}  # mutable-ok: opencode config JSON
-
-
-def build_instructions(ctx: SessionContext) -> str | None:
-    schema_part: Final = (
-        structured_output_instruction(ctx.output.model_json_schema()) if ctx.output is not None else None
-    )
-    sections: Final = tuple(section for section in (ctx.instructions, schema_part) if section)
-    return "\n\n".join(sections) if sections else None
-
-
-def turn_prompt(ctx: SessionContext, prompt: str) -> str:
-    """Repeat the schema instruction in the user turn; system instructions alone are too weak."""
-    if ctx.output is None:
-        return prompt
-    return f"{prompt}\n\n{structured_output_instruction(ctx.output.model_json_schema())}"
 
 
 class OpenCodeHarnessConfig(BaseCLIHarnessConfig):

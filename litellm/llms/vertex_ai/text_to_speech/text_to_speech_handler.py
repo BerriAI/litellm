@@ -1,16 +1,21 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexInput(TypedDict, total=False):
@@ -140,7 +145,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         ####### Send the request ###################
         if _is_async is True:
             return self.async_audio_speech(logging_obj=logging_obj, url=url, headers=headers, request=request)
-        sync_handler: Final = _get_httpx_client()
+        sync_handler: Final = get_httpx_client()
 
         response = sync_handler.post(
             url=url,
@@ -150,12 +155,12 @@ class VertexTextToSpeechAPI(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}, {response.text}")
         ############ Process the response ############
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(response.json())
 
         response_content: Final = _json_response["audioContent"]
 
         # Decode base64 to get binary content
-        binary_data: Final = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(_STR.validate_python(response_content))
 
         # Create an httpx.Response object
         response = httpx.Response(
@@ -187,12 +192,12 @@ class VertexTextToSpeechAPI(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Request did not return a 200 status code: {response.status_code}, {response.text}")
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(response.json())
 
         response_content: Final = _json_response["audioContent"]
 
         # Decode base64 to get binary content
-        binary_data: Final = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(_STR.validate_python(response_content))
 
         # Create an httpx.Response object
         response = httpx.Response(

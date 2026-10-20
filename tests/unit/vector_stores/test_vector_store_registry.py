@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
+from litellm.types.utils import CredentialItem
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
@@ -147,7 +152,7 @@ def test_search_uses_registry_credentials():
     litellm.vector_store_registry = registry
     try:
         logger = MagicMock()
-        logger._response_cost_calculator.return_value = 0
+        logger.response_cost_calculator.return_value = 0
 
         # Mock the search response
         mock_search_response = {
@@ -186,6 +191,125 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.fixture
+def registry_with_an_oidc_env_credential(monkeypatch):
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-1")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-sa",
+                credential_values={"api_key": "oidc/env/VS_PROJECTED_TOKEN", "api_base": "https://api.openai.com/v1"},
+                credential_info={"custom_llm_provider": "openai"},
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs1",
+                    custom_llm_provider="openai",
+                    litellm_credential_name="openai-sa",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            ]
+        ),
+    )
+
+
+_SEARCH_PAGE: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": ["test"],
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+_VECTOR_STORE_FILE: Final = {
+    "id": "file-1",
+    "object": "vector_store.file",
+    "created_at": 0,
+    "vector_store_id": "vs1",
+    "status": "completed",
+    "usage_bytes": 0,
+    "last_error": None,
+}
+
+
+def _search_vs1(**params: str) -> None:
+    search(vector_store_id="vs1", query="test", custom_llm_provider="openai", **params)
+
+
+def _create_vs1_file(**params: str) -> None:
+    import litellm.vector_store_files.main as vector_store_files_main
+
+    vector_store_files_main.create(vector_store_id="vs1", file_id="file-1", **params)
+
+
+def _sent_by(call, **params: str) -> Sequence[httpx.Request]:
+    with respx.mock(assert_all_called=False) as provider:
+        provider.post(url__regex=r"/vector_stores/vs1/search$").respond(200, json=_SEARCH_PAGE)
+        provider.post(url__regex=r"/vector_stores/vs1/files$").respond(200, json=_VECTOR_STORE_FILE)
+        call(**params)
+        return tuple(sent.request for sent in provider.calls)
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_registry_credentials_oidc_api_key_reaches_the_provider_as_the_token_it_names(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    (first,) = _sent_by(call)
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-2")
+    (second,) = _sent_by(call)
+
+    assert (first.headers["authorization"], second.headers["authorization"]) == (
+        "Bearer projected-token-1",
+        "Bearer projected-token-2",
+    )
+    assert litellm.credential_list[0].credential_values["api_key"] == "oidc/env/VS_PROJECTED_TOKEN"
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_caller_api_base_never_redirects_a_registry_credential_that_sets_its_own(
+    registry_with_an_oidc_env_credential, call
+):
+    (sent,) = _sent_by(call, api_base="https://caller.example/v1")
+
+    assert (sent.url.host, sent.headers["authorization"]) == ("api.openai.com", "Bearer projected-token-1")
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_registry_credential_without_an_api_base_never_sends_its_oidc_token_to_a_caller_api_base(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    credential: Final = litellm.credential_list[0]
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [credential.model_copy(update={"credential_values": {"api_key": "oidc/env/VS_PROJECTED_TOKEN"}})],
+    )
+
+    with respx.mock(assert_all_called=False) as provider:
+        provider.route().respond(200, json=_SEARCH_PAGE)
+        with pytest.raises(litellm.AuthenticationError, match="sends it only to that credential's own api_base"):
+            call(api_base="https://caller.example/v1")
+        assert provider.calls.call_count == 0
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_an_unresolvable_registry_credential_reference_never_reaches_the_provider(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    monkeypatch.delenv("VS_PROJECTED_TOKEN")
+
+    with pytest.raises(litellm.AuthenticationError, match="oidc/env secret reference could not be resolved"):
+        _sent_by(call)
 
 
 def _config_registry(vector_store_id: str = "vs_from_config") -> VectorStoreRegistry:
@@ -300,7 +424,7 @@ def _database_listing_index_rows(rows: Sequence[object]) -> SimpleNamespace:
     ],
 )
 async def test_vector_store_index_rows_from_the_db_are_returned_as_indexes(row: object) -> None:
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
         _database_listing_index_rows([row])
     )
 
@@ -309,7 +433,7 @@ async def test_vector_store_index_rows_from_the_db_are_returned_as_indexes(row: 
 
 @pytest.mark.asyncio
 async def test_vector_store_index_row_without_optional_columns_gets_empty_defaults() -> None:
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
         _database_listing_index_rows([{"id": "idx-1", "index_name": "team-docs", "litellm_params": _INDEX_PARAMS}])
     )
 
@@ -342,4 +466,81 @@ async def test_vector_store_index_row_without_optional_columns_gets_empty_defaul
 )
 async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
     with pytest.raises(ValidationError):
-        await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+
+
+@pytest.mark.parametrize(
+    ("tools", "expected"),
+    [
+        (5, []),
+        (["vector_store_ids", {"type": "file_search", "vector_store_ids": ["vs_kept"]}], ["vs_kept"]),
+        (
+            [{"type": "file_search", "vector_store_ids": 5}, {"type": "file_search", "vector_store_ids": ["vs_kept"]}],
+            ["vs_kept"],
+        ),
+    ],
+    ids=["int", "string_entry", "int_vector_store_ids"],
+)
+def test_vector_store_ids_to_run_skips_malformed_tools(tools: object, expected: list[str]) -> None:
+    assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == expected
+
+
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["vs_requested", ["vs_requested", 5]],
+    ids=["string", "list_with_a_non_string"],
+)
+def test_vector_store_ids_to_run_reads_every_store_id_a_malformed_vector_store_ids_field_names(
+    vector_store_ids: object,
+) -> None:
+    tools: Final = [{"type": "file_search", "vector_store_ids": vector_store_ids}]
+    assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == ["vs_requested"]
+
+
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["vs_allowed", ["vs_allowed", 12345], [12345], ["vs_allowed"]],
+    ids=["string", "list_with_a_non_string", "only_non_strings", "list_of_strings"],
+)
+def test_vector_store_tools_pop_exactly_the_store_ids_the_registry_reports_to_run(vector_store_ids: object) -> None:
+    now: Final = datetime.now(timezone.utc)
+    registry: Final = VectorStoreRegistry(
+        [
+            LiteLLM_ManagedVectorStore(vector_store_id=vector_store_id, created_at=now, updated_at=now)
+            for vector_store_id in ("vs_allowed", 12345)
+        ]
+    )
+    tools: Final = [{"type": "file_search", "vector_store_ids": vector_store_ids}]
+    checked: Final = registry.get_vector_store_ids_to_run(non_default_params={}, tools=tools)
+    ran: Final[list[str]] = []
+
+    registry.get_and_pop_recognised_vector_store_tools(tools=[dict(tool) for tool in tools], vector_store_ids=ran)
+
+    assert ran == checked
+
+
+class TestRegistriesDoNotShareDefaultState:
+    def test_adding_to_one_registry_leaves_the_next_one_empty(self):
+        VectorStoreRegistry().add_vector_store_to_registry(
+            LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock")
+        )
+        assert VectorStoreRegistry().vector_stores == []
+
+    def test_upserting_into_one_index_registry_leaves_the_next_one_empty(self):
+        VectorStoreIndexRegistry().upsert_vector_store_index(
+            LiteLLM_ManagedVectorStoreIndex(
+                id="idx-leak",
+                index_name="leak",
+                litellm_params=IndexCreateLiteLLMParams(vector_store_index="vs-leak", vector_store_name="leak"),
+            )
+        )
+        assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
+
+
+def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
+    registry: Final = VectorStoreRegistry()
+    first: Final = registry.get_vector_store_ids_to_run(
+        {"vector_store_ids": ["vs-a"]}, tools=[{"type": "file_search", "vector_store_ids": ["vs-b", "vs-a"]}]
+    )
+    second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
+    assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])

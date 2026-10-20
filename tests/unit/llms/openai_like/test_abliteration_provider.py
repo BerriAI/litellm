@@ -32,7 +32,7 @@ def test_abliteration_provider_registered():
 def test_abliteration_resolves_env_api_key(monkeypatch):
     config = _get_config()
     monkeypatch.setenv("ABLITERATION_API_KEY", "test-key")
-    api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+    api_base, api_key = config.get_openai_compatible_provider_info(None, None)
     assert api_base == ABLITERATION_BASE_URL
     assert api_key == "test-key"
 

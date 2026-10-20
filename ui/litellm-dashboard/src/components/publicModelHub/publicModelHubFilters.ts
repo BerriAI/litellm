@@ -1,5 +1,7 @@
 import type { ColumnFilter, ColumnFiltersState } from "@tanstack/react-table";
 
+import { expandModeFilterValues } from "@/lib/decisionModels";
+
 export const MODE_FILTER_ID = "mode";
 export const PROVIDER_FILTER_ID = "providers";
 export const FEATURE_FILTER_ID = "features";
@@ -31,6 +33,7 @@ const inFilter = (field: string, value: unknown): QueryEntry[] =>
 const filterParams = (filter: ColumnFilter): QueryEntry[] => {
   switch (filter.id) {
     case MODE_FILTER_ID:
+      return inFilter(filter.id, expandModeFilterValues(asStringArray(filter.value)));
     case PROVIDER_FILTER_ID:
     case FEATURE_FILTER_ID:
       return inFilter(filter.id, filter.value);

@@ -7,6 +7,7 @@ export interface TeamAccessGroupModelGrant {
   models: string[];
   mcp_server_ids?: string[];
   agent_ids?: string[];
+  skill_names?: string[];
 }
 
 export type TeamModelBadgeKind = "all-proxy" | "no-default" | "direct" | "access-group";

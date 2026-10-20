@@ -972,6 +972,28 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   )}
                 </MountedFormField>
 
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      RPM limit (all callers)
+                      <SimpleTooltip content="Max requests per minute to this server across all keys and teams. Leave empty for no limit">
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="rpm"
+                >
+                  {(control) => (
+                    <Input
+                      {...numberControl(control, 0)}
+                      min={0}
+                      step={1}
+                      placeholder="e.g. 60"
+                      className="w-full rounded-lg"
+                    />
+                  )}
+                </MountedFormField>
+
                 {/* Authentication - for HTTP, SSE, and OpenAPI */}
                 {!isStdioTransport && (
                   <>

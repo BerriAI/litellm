@@ -1,9 +1,12 @@
+from collections.abc import Mapping
 from typing import Any, Final
+
+from pydantic import TypeAdapter
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, requires_native_compaction_beta
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
-    _messages_carry_output_config,
+    messages_carry_output_config,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -15,6 +18,8 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -112,10 +117,10 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if optional_params.get("safeguards") is not None:
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
-        if _messages_carry_output_config(messages):
+        if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        if requires_native_compaction_beta("vertex_ai", optional_params, messages):
+        if requires_native_compaction_beta("vertex_ai", _OPTIONAL_PARAMS.validate_python(optional_params), messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         if beta_values:

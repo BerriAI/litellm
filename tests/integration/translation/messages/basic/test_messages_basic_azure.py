@@ -6,10 +6,12 @@ from integration.translation.messages.bases.azure import (
     GPT_5_4_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
+    GPT_5_6_TERRA_TEST_CASE,
     GPT_6_1_SOL_TEST_CASE,
+    GPT_6_ASTRA_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -20,8 +22,10 @@ from integration.translation.runner import run
         GPT_5_6_LUNA_TEST_CASE,
         GPT_6_LUNA_TEST_CASE,
         GPT_6_1_SOL_TEST_CASE,
+        GPT_6_ASTRA_TEST_CASE,
+        GPT_5_6_TERRA_TEST_CASE,
     ],
     ids=lambda case: case.id,
 )
 def test_messages_basic_azure(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)

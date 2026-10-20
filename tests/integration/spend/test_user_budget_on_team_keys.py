@@ -10,6 +10,8 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("spend.user_budget.opted_in_team_key_is_denied_once_owner_budget_is_exhausted")
 def test_team_key_is_denied_before_provider_once_owner_personal_budget_is_exhausted_when_opted_in(
@@ -43,7 +45,7 @@ def test_team_key_is_denied_before_provider_once_owner_personal_budget_is_exhaus
         assert read_rows(
             'SELECT max_budget FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
         ) == [{"max_budget": None}]
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = candidate.request(
             "POST",
             "/v1/chat/completions",
