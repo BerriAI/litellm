@@ -11,11 +11,10 @@ from typing import Any, Final
 
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+from litellm.llms.anthropic.common_utils import count_tokens_feature_betas
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
     ("claude", "anthropic"),
@@ -33,11 +32,10 @@ def count_tokens_publisher(model: str) -> str | None:
 
 def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) -> Mapping[str, str]:
     authorization: Final = {"Authorization": f"Bearer {access_token}"}
-    if not requires_native_compaction_beta(
+    betas: Final = count_tokens_feature_betas(
         "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
-    ):
-        return authorization
-    return {**authorization, "anthropic-beta": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value}
+    )
+    return {**authorization, "anthropic-beta": ",".join(betas)} if betas else authorization
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):

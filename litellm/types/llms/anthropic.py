@@ -783,7 +783,7 @@ class AnthropicThinkingParam(TypedDict, total=False):
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]
 
 
-LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("azure_ai", "vertex_ai"))
+LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("anthropic", "azure_ai", "vertex_ai"))
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

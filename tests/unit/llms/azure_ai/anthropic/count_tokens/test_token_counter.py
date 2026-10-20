@@ -248,3 +248,23 @@ async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_comp
     assert result is not None
     assert result.total_tokens == 376
     assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 541}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "user", "content": "Use the ping tool once."},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 541
+    assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"

@@ -6541,11 +6541,64 @@ def test_handle_anthropic_messages_response_logging_reparses_a_served_compaction
 
     assert isinstance(logged, ModelResponse)
     assert logged.id == "msg_compacted"
-    assert logged.usage.prompt_tokens == 410  # type: ignore[attr-defined]
-    assert logged.usage.completion_tokens == 95  # type: ignore[attr-defined]
-    assert logged.choices[0].message.provider_specific_fields["compaction_blocks"] == [  # type: ignore[union-attr]
-        {"content": None, **compaction_block}
-    ]
+    assert logged.usage.prompt_tokens == 410
+    assert logged.usage.completion_tokens == 95
+    assert logged.choices[0].message.provider_specific_fields["compaction_blocks"] == [compaction_block]
+
+
+_WEB_SEARCH_REPLY: Final = (
+    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "weather"}},
+    {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Weather"}],
+    },
+    {"type": "text", "text": "It is sunny."},
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason"),
+    [
+        (list(_WEB_SEARCH_REPLY), "end_turn"),
+        (list(_WEB_SEARCH_REPLY), "pause_turn"),
+        ([{"type": "text", "text": "The context window is full."}], "model_context_window_exceeded"),
+        (
+            [
+                {"type": "mcp_tool_use", "id": "mcptoolu_1", "name": "lookup", "server_name": "docs", "input": {}},
+                {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "is_error": False, "content": [{"type": "text", "text": "ok"}]},
+                {"type": "text", "text": "Found it."},
+            ],
+            "end_turn",
+        ),
+        ([{"type": "container_upload", "file_id": "file_1"}, {"type": "text", "text": "Uploaded."}], "end_turn"),
+    ],
+    ids=["web_search", "pause_turn", "model_context_window_exceeded", "mcp_tool_use", "container_upload"],
+)
+def test_handle_anthropic_messages_response_logging_bills_a_served_server_tool_response(
+    content: list[dict[str, object]], stop_reason: str
+):
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_server_tools",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": content,
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1200, "output_tokens": 80},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_server_tools"
+    assert logged.usage.prompt_tokens == 1200
+    assert logged.usage.completion_tokens == 80
+    assert logged.choices[0].message.content == content[-1]["text"]
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():

@@ -7,6 +7,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -176,7 +177,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             if requires_native_compaction_beta("vertex_ai", params, _REQUEST_MESSAGES.validate_python(data["messages"]))
             else frozenset[str]()
         )
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
         extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(params.get("extra_headers") or {})
         data.pop("extra_headers", None)
         injected_betas: Final = frozenset(beta_set) | _client_betas(

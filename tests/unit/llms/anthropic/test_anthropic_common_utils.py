@@ -4242,7 +4242,8 @@ def test_thinking_display_beta_requires_active_thinking(thinking: object, expect
         ("azure_ai", "omitted", {"type": "adaptive", "display": "omitted"}),
         ("azure_ai", "updates", {"type": "adaptive", "display": "updates"}),
         ("vertex_ai", "updates", {"type": "adaptive", "display": "updates"}),
-        ("anthropic", "updates", {"type": "adaptive"}),
+        ("anthropic", "updates", {"type": "adaptive", "display": "updates"}),
+        ("databricks", "updates", {"type": "adaptive"}),
     ),
 )
 def test_shared_legacy_thinking_translation_preserves_supported_display(

@@ -32,3 +32,29 @@ def test_count_tokens_on_a_compaction_request_sends_the_compact_beta(request_dat
 )
 def test_count_tokens_without_compaction_sends_no_beta(request_data: dict[str, object]) -> None:
     assert count_tokens_headers("token", request_data) == {"Authorization": "Bearer token"}
+
+
+_TOOL_ADDITION: Final = {
+    "role": "system",
+    "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected_beta"),
+    [
+        ({"messages": [*_HISTORY, _TOOL_ADDITION]}, "mid-conversation-tool-changes-2026-07-01"),
+        (
+            {"messages": [*_HISTORY, _TOOL_ADDITION], "compaction": {"type": "summarize"}},
+            "compact-2026-09-04,mid-conversation-tool-changes-2026-07-01",
+        ),
+    ],
+    ids=["tool_addition", "tool_addition_with_compaction"],
+)
+def test_count_tokens_on_a_tool_change_request_sends_the_tool_change_beta(
+    request_data: dict[str, object], expected_beta: str
+) -> None:
+    assert count_tokens_headers("token", request_data) == {
+        "Authorization": "Bearer token",
+        "anthropic-beta": expected_beta,
+    }

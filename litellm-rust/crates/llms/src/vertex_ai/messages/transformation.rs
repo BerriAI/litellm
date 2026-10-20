@@ -662,6 +662,17 @@ mod tests {
         &["compact-2026-01-12", "context-management-2025-06-27"]
     )]
     #[case::compaction(json!({"compaction": {"type": "summarize"}}), &["compact-2026-09-04"])]
+    #[case::thinking_display_updates(
+        json!({"thinking": {"type": "adaptive", "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]}
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
     #[case::advisor_tool_is_not_a_vertex_beta(
         json!({"tools": [{"type": "advisor_20260301", "name": "advisor"}]}),
         &[]
