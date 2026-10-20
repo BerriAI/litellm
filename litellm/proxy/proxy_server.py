@@ -2240,9 +2240,14 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
                 open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
             return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
-        if status_code >= 400:
-            open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
-        parent_otel_span.set_status(Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK))
+        parent_otel_span.set_status(
+            Status(
+                StatusCode.ERROR,
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code),
+            )
+            if status_code >= 400
+            else Status(StatusCode.OK)
+        )
         parent_otel_span.end()
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
