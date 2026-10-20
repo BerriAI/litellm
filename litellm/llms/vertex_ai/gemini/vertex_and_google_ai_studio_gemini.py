@@ -200,7 +200,7 @@ _SAMPLING_DEPRECATION_WARNED_MODELS_MAX: Final = 64
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
-@lru_cache(maxsize=_SAMPLING_DEPRECATION_WARNED_MODELS_MAX)
+@lru_cache(maxsize=None)
 def _log_gemini_sampling_params_deprecated(model: str) -> None:
     verbose_logger.warning(
         "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
@@ -210,7 +210,8 @@ def _log_gemini_sampling_params_deprecated(model: str) -> None:
 
 def _warn_gemini_sampling_params_deprecated(model: str) -> None:
     with _sampling_deprecation_lock:
-        _log_gemini_sampling_params_deprecated(model)
+        if _log_gemini_sampling_params_deprecated.cache_info().currsize < _SAMPLING_DEPRECATION_WARNED_MODELS_MAX:
+            _log_gemini_sampling_params_deprecated(model)
 
 
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:

@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -23,7 +23,9 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    _SAMPLING_DEPRECATION_WARNED_MODELS_MAX,
     VertexGeminiConfig,
+    _log_gemini_sampling_params_deprecated,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
@@ -6492,6 +6494,14 @@ def test_supported_reasoning_efforts_still_map(model):
         assert "thinkingConfig" in result
 
 
+@pytest.fixture
+def fresh_sampling_deprecation_cache() -> Iterator[None]:
+    _log_gemini_sampling_params_deprecated.cache_clear()
+    yield
+    _log_gemini_sampling_params_deprecated.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
 def test_gemini_3_sampling_deprecation_is_logged_once_per_model(caplog: pytest.LogCaptureFixture) -> None:
     flash_lite: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
     pro: Final = f"gemini-3-pro-{uuid.uuid4().hex}"
@@ -6515,6 +6525,7 @@ def test_gemini_3_sampling_deprecation_is_logged_once_per_model(caplog: pytest.L
     assert all((m["temperature"], m["top_p"], m["top_k"]) == (0.2, 0.9, 5) for m in mapped)
 
 
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
 def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
     model: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
 
@@ -6540,6 +6551,23 @@ def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(capl
         verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
 
     assert sum("DeprecationWarning" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_stays_bounded_past_the_model_cap(caplog: pytest.LogCaptureFixture) -> None:
+    models: Final = tuple(
+        f"gemini-3.1-flash-lite-{uuid.uuid4().hex}" for _ in range(_SAMPLING_DEPRECATION_WARNED_MODELS_MAX + 1)
+    )
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in models * 3:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = sum("DeprecationWarning" in r.getMessage() for r in caplog.records)
+    assert deprecations == _SAMPLING_DEPRECATION_WARNED_MODELS_MAX
 
 
 @pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
