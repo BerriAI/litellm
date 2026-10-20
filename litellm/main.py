@@ -395,7 +395,11 @@ class LiteLLM:
 
 
 class Chat:
-    def __init__(self, params, router_obj: "Router | None"):
+    def __init__(
+        self,
+        params: dict[str, object],  # mutable-ok: pops the acompletion flag in place
+        router_obj: "Router | None",
+    ):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
@@ -9108,7 +9112,7 @@ async def ahealth_check(
 
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
