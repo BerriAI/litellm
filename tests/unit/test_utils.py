@@ -3935,6 +3935,59 @@ def test_function_setup_moves_async_callbacks_while_another_thread_drops_a_callb
     assert litellm._async_success_callback == [async_callback]
 
 
+class _DropsACallbackFromAnotherThreadWhenComparedToSentry:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+        self.drop_finished_during_logger_setup = False
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "sentry" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=5)
+            self.drop_finished_during_logger_setup = not self.drop_thread.is_alive()
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_lets_other_threads_drop_callbacks_while_it_sets_up_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToSentry(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [drops_on_compare])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="logger-setup-outside-lock",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert drops_on_compare.drop_finished_during_logger_setup
+
+
 class TestMetadataNoneHandling:
     """
     Test that metadata=None in kwargs doesn't cause TypeError.

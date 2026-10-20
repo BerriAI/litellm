@@ -1152,14 +1152,13 @@ def function_setup(
                     f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
                 )
 
-            if (
-                len(litellm.input_callback) > 0
-                or len(litellm.success_callback) > 0
-                or len(litellm.failure_callback) > 0
-            ) and len(callback_list) == 0:
-                callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
-                get_set_callbacks: Final[Callable[[], Callable[..., None]]] = litellm_utils.get_set_callbacks
-                get_set_callbacks()(callback_list=callback_list, function_id=function_id)
+            callbacks_to_set_up: Final = (
+                list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
+                if len(callback_list) == 0
+                else []
+            )
+            if callbacks_to_set_up:
+                callback_list = callbacks_to_set_up
             ## ASYNC CALLBACKS - safety net for callbacks added via direct append
             if len(litellm.input_callback) > 0:
                 removed_async_items = []
@@ -1201,6 +1200,9 @@ def function_setup(
                 # Pop the async items from failure_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
                     litellm.failure_callback.pop(index)
+        if callbacks_to_set_up:
+            get_set_callbacks: Final[Callable[[], Callable[..., None]]] = litellm_utils.get_set_callbacks
+            get_set_callbacks()(callback_list=callbacks_to_set_up, function_id=function_id)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
         dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
