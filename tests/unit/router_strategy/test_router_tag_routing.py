@@ -3175,6 +3175,112 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     assert deployment["model_info"]["id"] == "team-a-deployment"
 
 
+def _baggage_mapped_metadata(client_tags: list[str], inherited_tags: list[str]) -> dict:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from fastapi import Request
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"metadata": {"tags": client_tags, "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    return data["metadata"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "client_tags,inherited_tags,expected_model_id",
+    [
+        ([], [], "default-deployment"),
+        (["usecase:a"], [], "usecase-deployment"),
+        ([], ["usecase:a"], "usecase-deployment"),
+    ],
+)
+async def test_baggage_mapped_tags_classify_spend_without_selecting_deployments(
+    client_tags, inherited_tags, expected_model_id
+):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"]},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    metadata = _baggage_mapped_metadata(client_tags, inherited_tags)
+    assert "usecase:a" in metadata["tags"]
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(metadata),
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == expected_model_id
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "client_tags,inherited_tags,expected_model_id",
+    [
+        ([], [], "tier-b"),
+        (["usecase:a"], [], "tier-a"),
+        ([], ["usecase:a"], "tier-a"),
+    ],
+)
+async def test_baggage_mapped_tags_never_select_a_tagged_pre_routing_strategy(
+    client_tags, inherited_tags, expected_model_id
+):
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "plain-smart"},
+            },
+            {
+                "model_name": "tier-a",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "tier-a"},
+            },
+            {
+                "model_name": "tier-b",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"id": "tier-b"},
+            },
+        ],
+        num_retries=0,
+    )
+    router.auto_routers = {
+        "smart": [
+            TaggedPreRoutingStrategy(tags=("usecase:b",), strategy=_RewriteToTierStrategy("tier-b")),
+            TaggedPreRoutingStrategy(tags=("usecase:a",), strategy=_RewriteToTierStrategy("tier-a")),
+        ]
+    }
+    metadata = _baggage_mapped_metadata(client_tags, inherited_tags)
+    assert "usecase:a" in metadata["tags"]
+
+    response = await router.acompletion(
+        model="smart",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == expected_model_id
+
+
 def _tag_router(model_list: list[dict[str, object]], tag_routing_prefix: str = "route:") -> litellm.Router:
     return litellm.Router(model_list=model_list, enable_tag_filtering=True, tag_routing_prefix=tag_routing_prefix)
 

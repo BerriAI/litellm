@@ -8312,6 +8312,37 @@ async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_serves_an_invalid_db_request_tag_mappings_like_unset_until_fixed(monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings)
+
+    async def mapped_tags() -> list[str]:
+        data: Final[dict[str, object]] = {}
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            Request({"type": "http", "headers": [(b"baggage", b"tenant=a")]}),
+            data,
+            proxy_server_module.general_settings,
+            None,
+            MagicMock(),
+        )
+        metadata: Final = data.get("metadata")
+        return list(metadata.get("tags", [])) if isinstance(metadata, dict) else []
+
+    await proxy_config._update_general_settings(db_general_settings={"request_tag_mappings": [{"key": "tenant"}]})
+    assert await mapped_tags() == []
+
+    await proxy_config._update_general_settings(
+        db_general_settings={"request_tag_mappings": [{"key": "tenant", "tag_prefix": "tenant:", "required": True}]}
+    )
+    assert await mapped_tags() == ["tenant:a"]
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
     """A DB value must not silently override an explicit YAML capacity on reload."""
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
