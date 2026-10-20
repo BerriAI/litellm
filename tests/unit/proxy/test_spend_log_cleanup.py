@@ -20,13 +20,13 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SizeCleanupState,
+    SpendLogCleanup,
     SpendLogStorage,
     StorageProbe,
-    advance_size_state,
-    SPEND_LOG_CLEANUP_BOUND_SETTINGS,
-    SpendLogCleanup,
     TableCleanupResult,
+    advance_size_state,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
@@ -1539,8 +1539,8 @@ async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
-    """With APSCHEDULER_MAX_INSTANCES above one, two runs share the cleaner but not their progress"""
+async def test_a_size_pass_that_fires_while_an_age_pass_is_running_in_the_same_pod_waits_for_it(monkeypatch):
+    """Without Redis there is no pod lock, and the two jobs are scheduled on two SpendLogCleanup instances"""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     mock_logger = MagicMock()
@@ -1557,22 +1557,31 @@ async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
     slow_client = MagicMock()
     _wire_tx(slow_client.db)
     slow_client.db.execute_raw = _slow_execute_raw
-    fast_client = MagicMock()
-    _wire_tx(fast_client.db)
-    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0])
+    size_db = MagicMock()
+    _wire_tx(size_db)
+    size_db.execute_raw = AsyncMock(return_value=1000)
+    _wire_size_probes(size_db, [_storage(allocated=10 * 1024**3, live=1000, dead=0)], cutoff=datetime.now(timezone.utc))
+    size_client = MagicMock()
+    size_client.db = size_db
 
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
-    cleaner.pod_lock_manager = None
+    age_cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    age_cleaner.pod_lock_manager = None
+    size_cleaner = _size_cleaner({})
 
-    slow_run = asyncio.ensure_future(cleaner.cleanup_old_spend_logs(slow_client))
+    slow_run = asyncio.ensure_future(age_cleaner.cleanup_old_spend_logs(slow_client))
     await asyncio.wait_for(first_batch_done.wait(), timeout=5)
-    await cleaner.cleanup_old_spend_logs(fast_client)
+    size_run = asyncio.ensure_future(size_cleaner.cleanup_spend_logs_by_size(size_client))
+    await asyncio.sleep(0.05)
+    assert size_db.deletes.await_count == 0 and not size_run.done(), "the size pass ran while the age pass held the pod"
+
     second_run_done.set()
     await asyncio.sleep(0)
     slow_run.cancel()
     with pytest.raises(asyncio.CancelledError):
         await slow_run
+    await asyncio.wait_for(size_run, timeout=5)
 
+    assert size_db.deletes.await_count > 0, "the size pass never ran once the age pass let go"
     (error_call,) = mock_logger.error.call_args_list
     rendered = error_call[0][0] % error_call[0][1:]
     assert "(rows_deleted=100, batches=1)" in rendered
