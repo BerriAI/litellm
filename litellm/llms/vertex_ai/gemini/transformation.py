@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -1308,15 +1309,34 @@ def sync_transform_request_body(
     )
 
 
-def _chat_model_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
+class _CostMapOutputModalities(TypedDict):
+    supported_output_modalities: NotRequired[ReadOnly[tuple[str, ...]]]
+
+
+_COST_MAP_OUTPUT_MODALITIES: Final = TypeAdapter(_CostMapOutputModalities)
+
+
+def _answers_text(cost_map_key: str) -> bool:
+    try:
+        row: Final = _COST_MAP_OUTPUT_MODALITIES.validate_python(litellm.model_cost.get(cost_map_key))  # pyright: ignore[reportUnknownMemberType]  # cost map rows are untyped JSON
+    except ValidationError:
+        return False
+    return "text" in row.get("supported_output_modalities", ("text",))
+
+
+def _text_chat_model_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
     info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
+        return None
+    if not _answers_text(info["key"]):
         return None
     return info.get("max_output_tokens")
 
 
 def _with_default_output_budget(request_body: RequestBody, model: str, custom_llm_provider: str) -> RequestBody:
-    return with_default_output_budget(request_body, partial(_chat_model_max_output_tokens, model, custom_llm_provider))
+    return with_default_output_budget(
+        request_body, partial(_text_chat_model_max_output_tokens, model, custom_llm_provider)
+    )
 
 
 def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:

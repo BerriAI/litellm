@@ -52,6 +52,7 @@ CUT_OFF_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", HOP_END_FINISH_REASON})
 
 DEFAULT_OUTPUT_BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
 _OUTPUT_LIMIT_KEYS: Final = frozenset({"max_output_tokens", "maxOutputTokens"})
+_REQUEST_KEYS_THAT_SKIP_THE_DEFAULT_BUDGET: Final = frozenset({"generation_config", "continuationToken"})
 
 _VERTEX_V1_PATH: Final = "/v1/projects/"
 _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
@@ -103,7 +104,9 @@ def with_default_output_budget(
 ) -> RequestBody:
     generation_config: Final = request_body.get("generationConfig", GenerationConfig())
     budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
-    if budget is None or budget <= 0 or "generation_config" in request_body:
+    if budget is None or budget <= 0:
+        return request_body
+    if not _REQUEST_KEYS_THAT_SKIP_THE_DEFAULT_BUDGET.isdisjoint(request_body):
         return request_body
     if not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
         return request_body

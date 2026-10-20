@@ -1451,6 +1451,43 @@ async def test_env_budget_skips_a_model_the_cost_map_does_not_list_as_a_chat_mod
 
 
 @pytest.mark.parametrize(
+    "output_modalities, expected_limits",
+    [
+        ({}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["text"]}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["text", "audio"]}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["audio"]}, {}),
+        ({"supported_output_modalities": "audio"}, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_chat_model_the_cost_map_lists_as_answering_text(
+    monkeypatch: pytest.MonkeyPatch, output_modalities: Mapping[str, object], expected_limits: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    litellm.register_model(
+        {
+            UNMAPPED_GEMINI: {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                "max_output_tokens": 1000,
+                **output_modalities,
+            }
+        }
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=UNMAPPED_GEMINI,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+@pytest.mark.parametrize(
     "extra_body",
     [
         {"generation_config": {"temperature": 0.1}},
@@ -1473,6 +1510,70 @@ async def test_env_budget_leaves_a_snake_case_generation_config_from_extra_body_
         client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
     )
 
+    assert _output_limits(sent[0]) == {}
+
+
+def _gemini_chat_models_answering_no_text() -> tuple[str, ...]:
+    rows: Final = (
+        (name, row)
+        for name, row in litellm.model_cost.items()
+        if row.get("mode") == "chat" and "text" not in row.get("supported_output_modalities", ("text",))
+    )
+    return tuple(
+        name if name.startswith("gemini/") else f"vertex_ai/{name}"
+        for name, row in rows
+        if row.get("litellm_provider") in ("gemini", "vertex_ai-language-models")
+    )
+
+
+@pytest.mark.asyncio
+async def test_env_budget_skips_every_chat_model_the_cost_map_lists_as_answering_no_text(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint: _TokenEndpoint
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    models: Final = _gemini_chat_models_answering_no_text()
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = tuple(httpx.Response(200, json=HOP_2) for _ in models)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model in models:
+        await litellm.acompletion(
+            model=model,
+            messages=list(MESSAGES),
+            api_key="fake-gemini-key",
+            vertex_project="p",
+            vertex_location="us-central1",
+            vertex_credentials=token_endpoint.credentials,
+            client=client,
+        )
+
+    assert models
+    assert {model: _output_limits(request) for model, request in zip(models, sent, strict=True)} == dict.fromkeys(
+        models, {}
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_env_budget_leaves_a_continuation_token_resume_with_no_limit_alone(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+    reply: Final = _sse(HOP_2) if stream else httpx.Response(200, json=HOP_2)
+
+    response: Final = await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        continuation_token="dG9rLTE=",
+        stream=stream,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((reply,), sent))),
+    )
+    if stream:
+        _ = [chunk async for chunk in response]
+
+    assert sent[0]["continuationToken"] == "dG9rLTE="
     assert _output_limits(sent[0]) == {}
 
 
