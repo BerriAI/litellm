@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import split_message_text
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -95,42 +95,36 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Calls Google's Text Moderation API
         - Rejects request if it fails safety check
         """
-        # Covers multimodal list content + Responses-API input. System, instructions
-        # and tool text go in a second document after the message text.
-        message_text, added_text = split_message_text(data)
-        texts = [text for text in ("".join(message_text), "".join(added_text)) if text]
-        if texts:
-            for text in texts:
-                self._moderate_text(text)
+        # Covers multimodal list content + Responses-API input.
+        text = "".join(iter_message_text(data))
+        if text:
+            document = self.language_document(content=text, type_=self.document_type)
+
+            request = self.moderate_text_request(
+                document=document,
+            )
+
+            # Make the request
+            response = self.client.moderate_text(request=request)
+            for category in response.moderation_categories:
+                category_name = category.name
+                category_name = category_name.lower()
+                category_name = category_name.replace("&", "and")
+                category_name = category_name.replace(",", "")
+                category_name = category_name.replace(
+                    " ", "_"
+                )  # e.g. go from 'Firearms & Weapons' to 'firearms_and_weapons'
+                if category.confidence > getattr(
+                    self, f"{category_name}_confidence_threshold"
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Violated content safety policy. Category={category}"
+                        },
+                    )
             # Handle the response
             return data
-
-    def _moderate_text(self, text: str) -> None:
-        document = self.language_document(content=text, type_=self.document_type)
-
-        request = self.moderate_text_request(
-            document=document,
-        )
-
-        # Make the request
-        response = self.client.moderate_text(request=request)
-        for category in response.moderation_categories:
-            category_name = category.name
-            category_name = category_name.lower()
-            category_name = category_name.replace("&", "and")
-            category_name = category_name.replace(",", "")
-            category_name = category_name.replace(
-                " ", "_"
-            )  # e.g. go from 'Firearms & Weapons' to 'firearms_and_weapons'
-            if category.confidence > getattr(
-                self, f"{category_name}_confidence_threshold"
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Violated content safety policy. Category={category}"
-                    },
-                )
 _ENTERPRISE_GoogleTextModeration = ENTERPRISE_GoogleTextModeration
 
 

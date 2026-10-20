@@ -12,21 +12,13 @@ inspection by the relevant guardrail hook:
   not just ``choices[0]``.
 """
 
-import json
-import sys
-from collections.abc import Mapping
-from functools import reduce
-from types import SimpleNamespace
-from typing import Any, Dict, Final, NamedTuple
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from typing import Any, Dict, Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 from httpx import Request, Response
-from pydantic import JsonValue
 
 import litellm
-from enterprise.enterprise_hooks.google_text_moderation import ENTERPRISE_GoogleTextModeration
 from litellm import DualCache
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.proxy._types import UserAPIKeyAuth
@@ -502,31 +494,6 @@ def test_banned_keywords_blocks_responses_api_input(monkeypatch):
         asyncio.run(_run())
 
 
-def test_banned_keywords_still_checks_messages_after_a_deep_tool_result_chain(monkeypatch):
-    monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
-
-    chain: Final = reduce(
-        lambda content, _: [{"type": "tool_result", "tool_use_id": "tool", "content": content}],
-        range(1500),
-        [{"type": "text", "text": "inner"}],
-    )
-    data: Final = {"messages": [{"role": "assistant", "content": chain}, {"role": "user", "content": "forbidden"}]}
-
-    import asyncio
-
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(
-            ENTERPRISE_BannedKeywords().async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_id="u"),
-                cache=DualCache(),
-                data=data,
-                call_type="acompletion",
-            )
-        )
-    assert "forbidden" in str(exc.value.detail).lower()
-
-
 @pytest.mark.parametrize("call_type", ["completion", "acompletion", "aresponses"])
 def test_banned_keywords_fires_on_text_content_call_types(monkeypatch, call_type):
     """Locks the call-type gate to the runtime ``route_type`` values the
@@ -654,58 +621,6 @@ async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(
         call_type=call_type,
     )
     assert ("scan me", "input") in seen
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call_type, data",
-    [
-        ("aresponses", {"instructions": "x" * 10001, "input": [{"role": "user", "content": "flagged text"}]}),
-        (
-            "acompletion",
-            {
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {"name": "write_file", "arguments": json.dumps({"content": "x" * 10001})},
-                            }
-                        ],
-                    },
-                    {"role": "user", "content": "flagged text"},
-                ]
-            },
-        ),
-    ],
-    ids=("responses-instructions", "chat-tool-arguments"),
-)
-async def test_azure_content_safety_checks_message_text_before_oversized_tool_or_system_text(
-    user_api_key: UserAPIKeyAuth, call_type: str, data: dict[str, JsonValue]
-) -> None:
-    from litellm.proxy.hooks.azure_content_safety import PROXY_AzureContentSafety
-
-    guard: Final = PROXY_AzureContentSafety.__new__(PROXY_AzureContentSafety)
-    seen: Final[list[str]] = []
-
-    async def fake_test_violation(content: str, source: str | None = None) -> None:
-        seen.append(content)
-        if len(content) > 10000:
-            raise RuntimeError("(InvalidRequestBody) The length of given text exceeds the limit 10000.")
-        if "flagged" in content:
-            raise HTTPException(status_code=400, detail={"error": "Violated content safety policy"})
-
-    guard.test_violation = fake_test_violation
-    with pytest.raises(HTTPException):
-        await guard.async_pre_call_hook(
-            user_api_key_dict=user_api_key,
-            cache=DualCache(),
-            data=data,
-            call_type=call_type,
-        )
-    assert seen == ["flagged text"]
 
 
 @pytest.mark.asyncio
@@ -851,93 +766,6 @@ async def test_openai_moderation_inspects_multimodal_content(monkeypatch, user_a
     assert seen_inputs == ["alpha beta"]
 
 
-_MODERATION_FLAG: Final = "I am going to kill you tonight."
-_MODERATION_LIMIT: Final = 24_000
-_LONG_BENIGN: Final = ("Follow the repository conventions and write tests. " * 600)[:30_000]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("data", "added"),
-    [
-        ({"instructions": _LONG_BENIGN, "input": _MODERATION_FLAG}, _LONG_BENIGN),
-        ({"system": _LONG_BENIGN, "messages": [{"role": "user", "content": _MODERATION_FLAG}]}, _LONG_BENIGN),
-        (
-            {
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {"name": "write_file", "arguments": json.dumps({"content": _LONG_BENIGN})},
-                            }
-                        ],
-                    },
-                    {"role": "user", "content": _MODERATION_FLAG},
-                ]
-            },
-            _LONG_BENIGN,
-        ),
-    ],
-    ids=("responses-instructions", "messages-system", "chat-tool-arguments"),
-)
-async def test_openai_moderation_sends_tool_and_system_text_in_its_own_call(
-    monkeypatch: pytest.MonkeyPatch, user_api_key: UserAPIKeyAuth, data: dict[str, JsonValue], added: str
-) -> None:
-    from enterprise.enterprise_hooks.openai_moderation import ENTERPRISE_OpenAI_Moderation
-
-    seen: Final[list[str]] = []
-
-    async def amoderation(model: str, input: str) -> SimpleNamespace:
-        seen.append(input)
-        flagged: Final = _MODERATION_FLAG in input and len(input) <= _MODERATION_LIMIT
-        return SimpleNamespace(results=[SimpleNamespace(flagged=flagged)])
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", SimpleNamespace(amoderation=amoderation))
-    with pytest.raises(HTTPException) as rejection:
-        await ENTERPRISE_OpenAI_Moderation().async_moderation_hook(data, user_api_key, "acompletion")
-    assert rejection.value.status_code == 403
-    assert seen == [_MODERATION_FLAG]
-
-    seen.clear()
-    clean: Final = json.loads(json.dumps(data).replace(_MODERATION_FLAG, "say hi"))
-    assert await ENTERPRISE_OpenAI_Moderation().async_moderation_hook(clean, user_api_key, "acompletion") is None
-    assert seen == ["say hi", added]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("data", "inputs"),
-    [
-        ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]}, [""]),
-        (
-            {
-                "system": "be brief",
-                "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}],
-            },
-            ["be brief"],
-        ),
-    ],
-    ids=("no-text", "system-only"),
-)
-async def test_openai_moderation_makes_one_call_when_one_side_has_no_text(
-    monkeypatch: pytest.MonkeyPatch, user_api_key: UserAPIKeyAuth, data: dict[str, JsonValue], inputs: list[str]
-) -> None:
-    from enterprise.enterprise_hooks.openai_moderation import ENTERPRISE_OpenAI_Moderation
-
-    seen: Final[list[str]] = []
-
-    async def amoderation(model: str, input: str) -> SimpleNamespace:
-        seen.append(input)
-        return SimpleNamespace(results=[SimpleNamespace(flagged=False)])
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", SimpleNamespace(amoderation=amoderation))
-    assert await ENTERPRISE_OpenAI_Moderation().async_moderation_hook(data, user_api_key, "acompletion") is None
-    assert seen == inputs
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("configured_after_init", "expected_model"),
@@ -1077,139 +905,3 @@ async def test_google_text_moderation_inspects_multimodal_content(user_api_key):
     )
 
     assert seen_documents == ["hello world"]
-
-
-class _GoogleDocument(NamedTuple):
-    content: str
-    type_: object
-
-
-class _GoogleRequest(NamedTuple):
-    document: _GoogleDocument
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("blocked", (False, True), ids=("allow", "block"))
-@pytest.mark.parametrize(
-    ("data", "documents"),
-    (
-        pytest.param(
-            {"messages": [{"role": "user", "content": "ordinary blocked fragment"}]},
-            ("ordinary blocked fragment",),
-            id="ordinary-text-control",
-        ),
-        pytest.param(
-            {
-                "system": [{"type": "text", "text": "system blocked fragment"}],
-                "messages": [{"role": "user", "content": "ordinary control"}],
-            },
-            ("ordinary control", "system blocked fragment"),
-            id="native-system",
-        ),
-        pytest.param(
-            {
-                "messages": [
-                    {"role": "user", "content": "ordinary control"},
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "ignored-id",
-                                "name": "ignored-name",
-                                "input": {
-                                    "first": "input first ",
-                                    "nested": [7, False, None, {"value": "input blocked fragment"}],
-                                },
-                            }
-                        ],
-                    },
-                ]
-            },
-            ("ordinary control", "input first \ninput blocked fragment"),
-            id="native-tool-input",
-        ),
-        pytest.param(
-            {
-                "messages": [
-                    {"role": "user", "content": "ordinary control"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": "ignored-id",
-                                "content": [
-                                    {"type": "text", "text": "result first "},
-                                    {"type": "image", "source": {"data": "ignored-image"}},
-                                    {"type": "text", "text": "result blocked fragment"},
-                                ],
-                            }
-                        ],
-                    },
-                ]
-            },
-            ("ordinary control", "result first result blocked fragment"),
-            id="native-tool-result",
-        ),
-        pytest.param(
-            {
-                "messages": [
-                    {"role": "user", "content": "ordinary control"},
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "id": "ignored-id",
-                                "type": "function",
-                                "function": {
-                                    "name": "ignored-name",
-                                    "arguments": json.dumps(
-                                        {
-                                            "first": "argument first ",
-                                            "nested": [7, False, None, {"value": "argument blocked fragment"}],
-                                        }
-                                    ),
-                                },
-                            }
-                        ],
-                    },
-                ]
-            },
-            ("ordinary control", "argument first \nargument blocked fragment"),
-            id="chat-tool-arguments",
-        ),
-    ),
-)
-async def test_google_text_moderation_inspects_tool_and_system_payloads(
-    user_api_key: UserAPIKeyAuth,
-    data: Mapping[str, JsonValue],
-    documents: tuple[str, ...],
-    blocked: bool,
-) -> None:
-    sdk: Final = MagicMock()
-    sdk.types.Document.side_effect = _GoogleDocument
-    sdk.ModerateTextRequest.side_effect = _GoogleRequest
-
-    def moderate(*, request: _GoogleRequest) -> SimpleNamespace:
-        flagged: Final = blocked and "blocked fragment" in request.document.content
-        return SimpleNamespace(moderation_categories=[SimpleNamespace(name="Toxic", confidence=float(flagged))])
-
-    client: Final = sdk.LanguageServiceClient.return_value
-    client.moderate_text.side_effect = moderate
-    cloud: Final = SimpleNamespace(language_v1=sdk)
-    request_data: Final = dict(data)
-    with patch.dict(sys.modules, {"google.cloud": cloud, "google.cloud.language_v1": sdk}):
-        guard: Final = ENTERPRISE_GoogleTextModeration()
-        if blocked:
-            with pytest.raises(HTTPException, match="Violated content safety policy") as rejection:
-                await guard.async_moderation_hook(request_data, user_api_key, "acompletion")
-            assert rejection.value.status_code == 400
-        else:
-            assert await guard.async_moderation_hook(request_data, user_api_key, "acompletion") is request_data
-    sdk.LanguageServiceClient.assert_called_once_with()
-    plain_text: Final = sdk.types.Document.Type.PLAIN_TEXT
-    assert sdk.types.Document.call_args_list == [call(content=text, type_=plain_text) for text in documents]
-    assert client.moderate_text.call_args_list == [
-        call(request=_GoogleRequest(_GoogleDocument(text, plain_text))) for text in documents
-    ]

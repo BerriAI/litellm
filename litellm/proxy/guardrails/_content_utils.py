@@ -11,7 +11,6 @@ every text fragment.
 import json
 import math
 import re
-from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -156,13 +155,6 @@ def iter_tool_json_text(value: object) -> Iterator[str]:
         yield text
 
 
-def _tool_payload_text(value: object) -> Iterator[str]:
-    """Yield a tool payload's string values as one newline-joined fragment, like one text part."""
-    text: Final = "\n".join(iter_tool_json_text(value))
-    if text:
-        yield text
-
-
 @dataclass(frozen=True, slots=True)
 class _ToolFrame:
     source: object
@@ -208,20 +200,6 @@ def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
 
 def _tool_json(value: object) -> JsonValue:
     return map_tool_json_text(value, lambda text: text)
-
-
-def _iter_native_content_text(content: object) -> Iterator[str]:
-    parts: Final = _object_list(content)
-    if parts is None:
-        yield from _iter_text_parts_in_content(content)
-        return
-    for part in parts:
-        yield from _iter_text_parts_in_content([part])
-        fields = _text_object(part)
-        if fields is not None and fields.get("type") == "tool_result":
-            yield from _iter_text_parts_in_content(fields.get("content"))
-        elif fields is not None and fields.get("type") == "tool_use":
-            yield from _tool_payload_text(fields.get("input"))
 
 
 # Responses-API item types whose ``output`` field carries user/tool text
@@ -309,59 +287,15 @@ def _iter_inspection_messages(data: Mapping[str, object]) -> Iterator[object]:
 
 
 def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
-    """Yield every text fragment from ``messages``, ``input``, ``system``, ``instructions`` AND tool payloads.
+    """Yield every text fragment from ``messages`` AND ``input``.
 
-    Message text parts come first, in conversation order, followed by the
-    system, instructions and tool text. Walks every role (user, assistant,
-    system, …) — guardrails inspect the entire conversation, not just user turns.
+    Walks every role (user, assistant, system, …) — guardrails inspect
+    the entire conversation, not just user turns.
     """
-    message_text, added_text = split_message_text(data)
-    yield from message_text
-    yield from added_text
-
-
-def split_message_text(data: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return the message text parts, then the system, instructions and tool text, in :func:`iter_message_text` order."""
-    message_text: Final = tuple(_iter_message_parts_text(data))
-    return message_text, tuple(_iter_added_text(data, message_text))
-
-
-def _iter_added_text(data: Mapping[str, object], message_text: tuple[str, ...]) -> Iterator[str]:
-    pending: Final = Counter(message_text)
-    for text in _iter_request_text(data):
-        if pending[text]:
-            pending[text] -= 1
-        else:
-            yield text
-
-
-def _iter_message_parts_text(data: Mapping[str, object]) -> Iterator[str]:
     for message in _iter_inspection_messages(data):
-        fields = _text_object(message)
-        if fields is not None:
-            yield from _iter_text_parts_in_content(fields.get("content"))
-
-
-def _iter_request_text(data: Mapping[str, object]) -> Iterator[str]:
-    yield from _iter_native_content_text(data.get("system"))
-    yield from _iter_native_content_text(data.get("instructions"))
-    for message in _iter_inspection_messages(data):
-        fields = _text_object(message)
-        if fields is None:
+        if not isinstance(message, dict):
             continue
-        yield from _iter_native_content_text(fields.get("content"))
-        calls = _object_list(fields.get("tool_calls"))
-        if calls is not None:
-            for call in calls:
-                call_fields = _text_object(call)
-                function = _text_object(call_fields.get("function")) if call_fields is not None else None
-                if function is not None:
-                    yield from _iter_arguments_text(function.get("arguments"))
-    items: Final = _object_list(data.get("input")) if isinstance(data.get("input"), list) else None
-    for item in items or ():
-        call = _call_item(item)
-        if call is not None:
-            yield from _iter_arguments_text(call[1])
+        yield from _iter_text_parts_in_content(message.get("content"))
 
 
 def _call_item(item: object) -> tuple[str, object] | None:
@@ -369,18 +303,6 @@ def _call_item(item: object) -> tuple[str, object] | None:
     fields: Final = _text_object(item)
     field: Final = _CALL_ITEM_FIELDS.get(str(fields.get("type"))) if fields is not None else None
     return (field, fields.get(field)) if fields is not None and field is not None and field in fields else None
-
-
-def _iter_arguments_text(arguments: object) -> Iterator[str]:
-    if isinstance(arguments, str) and arguments:
-        try:
-            parsed: Final = _tool_arguments(arguments)
-        except (ValueError, RecursionError):
-            yield arguments
-        else:
-            yield from _tool_payload_text(parsed)
-    elif isinstance(arguments, dict):
-        yield from _tool_payload_text(arguments)
 
 
 def walk_user_text(

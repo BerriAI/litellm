@@ -20,7 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import split_message_text
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -37,24 +37,22 @@ class ENTERPRISE_OpenAI_Moderation(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
-        # Covers multimodal list content + Responses-API input. System, instructions
-        # and tool text go in a second call after the message text.
-        message_text, added_text = split_message_text(data)
-        texts = tuple(text for text in ("".join(message_text), "".join(added_text)) if text) or ("",)
+        # Covers multimodal list content + Responses-API input.
+        text = "".join(iter_message_text(data))
 
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is None:
             return
 
-        for text in texts:
-            moderation_response = await llm_router.amoderation(
-                model=self.model_name, input=text
-            )
+        moderation_response = await llm_router.amoderation(
+            model=self.model_name, input=text
+        )
 
-            verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
-            if moderation_response and moderation_response.results[0].flagged is True:
-                raise HTTPException(
-                    status_code=403, detail={"error": "Violated content safety policy"}
-                )
+        verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
+        if moderation_response and moderation_response.results[0].flagged is True:
+            raise HTTPException(
+                status_code=403, detail={"error": "Violated content safety policy"}
+            )
+        pass
 _ENTERPRISE_OpenAI_Moderation = ENTERPRISE_OpenAI_Moderation
