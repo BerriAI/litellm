@@ -1465,7 +1465,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
@@ -4840,12 +4840,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 };
 
 export interface ConnectFlowStatus {
-  state: "unscoped" | "interactive" | "m2m" | "stale";
+  state: "unscoped" | "interactive" | "m2m" | "multi" | "stale";
   client_origin: string;
   server_id: string | null;
   server_name: string | null;
   connected: boolean | null;
   requested_scopes?: string[];
+  servers: { server_id: string; server_name: string; connected: boolean }[] | null;
 }
 
 /**
@@ -4858,11 +4859,20 @@ export interface ConnectFlowStatus {
 export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
   apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
+export const fetchMCPServers = async (
+  accessToken: string,
+  teamId?: string | null,
+  connectedAppView?: boolean,
+  userId?: string | null,
+) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {
       accessToken,
-      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+      query: {
+        team_id: teamId || undefined,
+        connected_app_view: connectedAppView || undefined,
+        user_id: userId || undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
@@ -5776,7 +5786,7 @@ export const ragIngestCall = async (
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+      throw new Error(deriveErrorMessage(error));
     }
 
     return await response.json();

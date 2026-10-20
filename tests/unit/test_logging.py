@@ -89,6 +89,40 @@ def test_json_mode_emits_one_record_per_logger(capfd):
         assert "timestamp" in obj, "`timestamp` key missing"
 
 
+@pytest.mark.parametrize(
+    ("litellm_log", "want_info_lines"),
+    [("INFO", 2), ("DEBUG", 2), (None, 0)],
+)
+def test_json_mode_root_logger_honours_litellm_log(monkeypatch, capfd, litellm_log, want_info_lines):
+    root: Final = logging.getLogger()
+    saved_level: Final = root.level
+    saved_handlers: Final = list(root.handlers)
+    saved_propagate: Final = root.propagate
+    if litellm_log is None:
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_LOG", litellm_log)
+    try:
+        turn_on_json()
+        logging.getLogger("some.third.party").info("library info line")
+        logging.info("root info line")
+        logging.getLogger("some.third.party").warning("library warning line")
+        out, err = capfd.readouterr()
+    finally:
+        root.handlers.clear()
+        root.handlers.extend(saved_handlers)
+        root.setLevel(saved_level)
+        root.propagate = saved_propagate
+
+    records = [json.loads(line) for line in (out + err).splitlines() if line.strip()]
+    info_records = [r for r in records if r["level"] == "INFO"]
+    assert len(info_records) == want_info_lines, records
+    if want_info_lines:
+        assert {r["message"] for r in info_records} == {"library info line", "root info line"}
+        assert {r["component"] for r in info_records} == {"some.third.party", "root"}
+    assert [r["message"] for r in records if r["level"] == "WARNING"] == ["library warning line"]
+
+
 def test_json_formatter_parses_embedded_json_message():
     """
     Test that JsonFormatter parses embedded JSON in the message field and promotes

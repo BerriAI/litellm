@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
 )
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
     ChatCompletionReasoningItem,
@@ -250,14 +251,7 @@ async def convert_to_streaming_response_async(
         setattr(
             model_response_object,
             "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-                completion_tokens_details=_cached_completion_tokens_details(
-                    _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
-                ),
-            ),
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -344,12 +338,10 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
-        model_response_object.usage.completion_tokens_details = _cached_completion_tokens_details(
-            _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
+        setattr(
+            model_response_object,
+            "usage",
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -405,6 +397,7 @@ class _ParallelToolUseArgs(TypedDict):
 
 
 _PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+_DECODED_TOOL_ARGUMENTS: Final = TypeAdapter(object)
 
 
 class _CachedMessageProviderFields(TypedDict, total=False):
@@ -412,13 +405,28 @@ class _CachedMessageProviderFields(TypedDict, total=False):
 
 
 class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens: ReadOnly[object]
+    prompt_tokens: ReadOnly[object]
+    total_tokens: ReadOnly[object]
     completion_tokens_details: ReadOnly[object]
+    prompt_tokens_details: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[object]
+    cache_creation_input_tokens: ReadOnly[object]
+
+
+class _PromptCacheTokenCounts(TypedDict, total=False):
+    cache_read_input_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
 
 
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+_PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
+_PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_TOKEN_COUNT: Final = TypeAdapter(int)
+_PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
 
 
 def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
@@ -434,6 +442,44 @@ def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionT
         return _COMPLETION_TOKENS_DETAILS.validate_python(details)
     except ValidationError:
         return None
+
+
+def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDetailsWrapper | None:
+    details: Final = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _PROMPT_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_token_count(count: object) -> int | None:
+    try:
+        return _TOKEN_COUNT.validate_python(count)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
+    return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
+        {
+            field: count
+            for field in _PROMPT_CACHE_TOKEN_FIELDS
+            if (count := _cached_token_count(usage.get(field))) is not None
+        }
+    )
+
+
+def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
+    return Usage(
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")) or 0,
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")) or 0,
+        total_tokens=_cached_token_count(usage.get("total_tokens")) or 0,
+        completion_tokens_details=_cached_completion_tokens_details(usage),
+        prompt_tokens_details=_cached_prompt_tokens_details(usage),
+        **_cached_prompt_cache_token_counts(usage),
+    )
 
 
 def handle_invalid_parallel_tool_calls(
@@ -453,7 +499,7 @@ def handle_invalid_parallel_tool_calls(
             if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
                 continue
             current_function = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+            function_args = _DECODED_TOOL_ARGUMENTS.validate_python(json.loads(tool_call.function.arguments))
             if current_function == "multi_tool_use.parallel":
                 verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
                 for _fake_i, _fake_tool_use in enumerate(
@@ -832,7 +878,9 @@ def convert_to_model_response_object(
                 if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
-            return model_response_object
+            ollama_ids: Final = OllamaResponseIdNormalizer()
+            ollama_ids.observe(model_response_object)
+            return ollama_ids.apply(model_response_object)
         elif response_type == "embedding" and (
             model_response_object is None or isinstance(model_response_object, EmbeddingResponse)
         ):

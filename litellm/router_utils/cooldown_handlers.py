@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -26,11 +26,19 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment
-from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+    CooldownDeploymentInfo,
+    InternalCallOrigin,
+)
+from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,
@@ -43,7 +51,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span | Any
+    Span = _Span
 else:
     LitellmRouter = Any
     Span = Any
@@ -71,13 +79,23 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
 
 
-def is_background_response_cost_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:
-    """Whether a background response cost poll failed with a provider 404."""
+_BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(
+    {BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN}
+)
+
+
+def is_background_response_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:
+    """Whether a background response poll, a status check or the billed read, failed with a provider 404."""
     return getattr(exception, "status_code", None) == 404 and any(
         isinstance(candidate, Mapping)
-        and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+        and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) in _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS
         for candidate in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
     )
+
+
+def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
@@ -317,6 +335,12 @@ def _should_run_cooldown_logic(
     ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: caller-credential errors are scoped to one user's connection"
+        )
+        return False
+
+    if isinstance(original_exception, litellm.MalformedRequestFieldError):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
         return False
 
@@ -628,6 +652,26 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
 _get_cooldown_deployments = get_cooldown_deployments
 
 
+def _deployment_api_base(litellm_router_instance: LitellmRouter, model_id: str) -> str | None:
+    deployment: Final = litellm_router_instance.get_deployment(model_id=model_id)
+    api_base: Final = deployment.litellm_params.api_base if deployment else None
+    return None if api_base is None else mask_api_base_credentials(api_base)
+
+
+def get_cooldown_deployment_info(
+    litellm_router_instance: LitellmRouter, route_model_ids: Collection[str], cooldown_list: Sequence[str]
+) -> tuple[CooldownDeploymentInfo, ...]:
+    """
+    The deployments the router resolved for this request (`route_model_ids`) that are in `cooldown_list`, each
+    with its masked api_base
+    """
+    return tuple(
+        CooldownDeploymentInfo(model_id=model_id, api_base=_deployment_api_base(litellm_router_instance, model_id))
+        for model_id in cooldown_list
+        if model_id in route_model_ids
+    )
+
+
 def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
@@ -740,6 +784,10 @@ def is_caller_timeout_408(
     if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
         return False
     return (finished - started).total_seconds() >= timeout
+
+
+def is_stream_stall(exception: BaseException) -> bool:
+    return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
 
 
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:

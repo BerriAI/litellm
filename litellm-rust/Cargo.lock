@@ -4083,12 +4083,14 @@ dependencies = [
 name = "litellm-inference-responses"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-core-utils",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",

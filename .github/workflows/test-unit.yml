@@ -266,6 +266,7 @@ jobs:
               tests/unit/llms/featherless_ai
               tests/unit/llms/firecrawl
               tests/unit/llms/fireworks_ai
+              tests/unit/llms/friendliai
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
@@ -321,6 +322,7 @@ jobs:
               tests/unit/llms/pass_through
               tests/unit/llms/perplexity
               tests/unit/llms/pg_vector
+              tests/unit/llms/pi
               tests/unit/llms/publicai
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
@@ -410,6 +412,7 @@ jobs:
               tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
+              tests/unit/fine_tuning
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
@@ -456,11 +459,11 @@ jobs:
               tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: load
 
           - shard: proxy-auth
             test-path: |-
@@ -565,7 +568,6 @@ jobs:
 
           - shard: mcp-elicitation
             test-path: |-
-              --override-ini=pythonpath=tests
               tests/unit/experimental_mcp_client/test_mcp_client.py
               tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
               tests/unit/proxy/_experimental/mcp_server/test_interactions.py
@@ -573,9 +575,8 @@ jobs:
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
               tests/unit/proxy/_experimental/mcp_server/test_operations.py
-              tests/integration/mcp/test_interactions.py
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -660,6 +661,7 @@ jobs:
           - shard: proxy-extras
             test-path: >-
               tests/unit/litellm_proxy_extras
+              tests/unit/db_scripts
             python-version: "3.12"
             workers: 2
             reruns: 0
@@ -698,7 +700,6 @@ jobs:
               tests/unit/responses/litellm_completion_transformation
               tests/unit/responses/test_additional_tools.py
               tests/unit/responses/test_custom_tool_call.py
-              tests/unit/responses/test_dispatch.py
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py
               tests/unit/responses/test_null_test_fix.py
@@ -1453,7 +1454,6 @@ jobs:
             tests/unit/caching/test_redis_connection_pool.py \
             tests/unit/caching/test_redis_cluster_cache.py \
             tests/unit/caching/test_evicted_client_closer.py \
-            tests/integration/sdk/test_redis_cluster_iam_auth.py \
             --tb=short -vv -rs -p no:rerunfailures -p no:pytest-retry --timeout=120 --durations=20 \
             --cov=./litellm --cov-report=xml:coverage.xml
 

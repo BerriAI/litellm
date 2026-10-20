@@ -1,12 +1,26 @@
 import io
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from os import PathLike
-from typing import Final
+from typing import Final, TypeVar
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
+
+_DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
+_ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
+
+BATCH_ENDPOINT: Final = "/v1/batch"
+_AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
+
+_batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
@@ -42,7 +56,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         if char == "\n":
             # Try to parse what we have so far
             try:
-                json_object = json.loads(buffer.strip())
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
                 json_objects.append(json_object)
                 buffer = ""  # Reset buffer for next JSON object
             except json.JSONDecodeError:
@@ -52,13 +66,79 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
     # Handle any remaining content in buffer
     if buffer.strip():
         try:
-            json_object = json.loads(buffer.strip())
+            json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
             verbose_logger.error("error parsing final buffer: %s..., error: %s", buffer[:100], e)
             raise e
 
     return json_objects
+
+
+@contextmanager
+def batch_create_routing() -> Generator[None, None, None]:
+    token: Final = _batch_create_routing.set(True)
+    try:
+        yield
+    finally:
+        _batch_create_routing.reset(token)
+
+
+def is_batch_create_routing() -> bool:
+    return _batch_create_routing.get()
+
+
+def _deployment_field(deployment: Mapping[str, object], field: str) -> Mapping[str, object]:
+    return _DEPLOYMENT_FIELD.validate_python(deployment.get(field) or {})
+
+
+def is_batch_capable(deployment: Mapping[str, object]) -> bool:
+    return _deployment_field(deployment, "model_info").get("mode") == "batch"
+
+
+def _deployment_provider(deployment: Mapping[str, object]) -> str | None:
+    litellm_params: Final = _deployment_field(deployment, "litellm_params")
+    configured_provider: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(configured_provider, str):
+        return configured_provider
+    model: Final = litellm_params.get("model")
+    return model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
+
+
+def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) -> bool:
+    return provider in _AZURE_PROVIDERS and not is_batch_capable(deployment)
+
+
+def without_deployments_that_cannot_batch(
+    deployments: Sequence[_DeploymentT], caller_deployments: Callable[[], Iterable[Mapping[str, object]]]
+) -> Sequence[_DeploymentT]:
+    if not is_batch_create_routing() or not any(is_batch_capable(deployment) for deployment in caller_deployments()):
+        return deployments
+    return [
+        deployment
+        for deployment in deployments
+        if not _cannot_run_batches(deployment, _deployment_provider(deployment))
+    ]
+
+
+def _endpoint_paths(configured: object) -> tuple[str, ...]:
+    try:
+        return _ENDPOINT_PATHS.validate_python(configured)
+    except ValidationError:
+        return ()
+
+
+def deployment_supported_endpoints(
+    resolved_endpoints: object, deployment: Mapping[str, object], provider: str | None
+) -> tuple[str, ...]:
+    endpoints: Final = _endpoint_paths(resolved_endpoints)
+    if is_batch_capable(deployment) and provider in _AZURE_PROVIDERS:
+        return (BATCH_ENDPOINT,)
+    if is_batch_capable(deployment):
+        return endpoints if BATCH_ENDPOINT in endpoints else (*endpoints, BATCH_ENDPOINT)
+    if _cannot_run_batches(deployment, provider):
+        return tuple(endpoint for endpoint in endpoints if endpoint != BATCH_ENDPOINT)
+    return endpoints
 
 
 def should_replace_model_in_jsonl(
@@ -125,7 +205,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
                 buffer = ""
                 continue
             try:
-                json_object = json.loads(stripped)
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
             if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):

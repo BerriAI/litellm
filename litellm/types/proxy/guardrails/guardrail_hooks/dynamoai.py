@@ -1,6 +1,7 @@
 # Type definitions for DynamoAI Guardrails API
 
 import enum
+from collections.abc import Mapping
 from typing import Any, Literal, TypedDict
 
 from pydantic import Field
@@ -93,7 +94,7 @@ class DynamoAIProcessedResult(TypedDict):
     """Processed result from DynamoAI guardrail check"""
 
     violations_detected: list[str]
-    violation_details: dict[str, Any]
+    violation_details: Mapping[str, Mapping[str, object]]
 
 
 class DynamoAIGuardrailConfigModel(GuardrailConfigModel):

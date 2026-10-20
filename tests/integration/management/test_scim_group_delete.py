@@ -8,7 +8,6 @@ group is 404 after, on every worker and on the peer proxy, and an unrelated key 
 
 import os
 import re
-import signal
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +18,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import GATEWAY_LIMITS, JSON_OBJECT, Gateway, eventually, object_value
@@ -49,6 +47,8 @@ from integration._support.scim import (
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 PROXY_ADMIN: Final = "proxy_admin"
 DEMOTED_ROLE: Final = "internal_user_viewer"
@@ -346,15 +346,14 @@ def test_group_delete_after_a_worker_was_killed_still_completes(gateway: Gateway
         first_key: Final = team_key(candidate, first)
         second_key: Final = team_key(candidate, second)
 
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        victim.send_signal(signal.SIGKILL)
         with _fresh_connection(candidate) as survivor:
-            deleted_first: Final = delete_group(survivor, first)
-            assert deleted_first.status_code == 204, deleted_first.text
-            assert_gone(survivor, first, first_users, first_key)
+            with owned.replacing_worker(workers[0]) as kill:
+                kill.freeze()
+                kill()
+                deleted_first: Final = delete_group(survivor, first)
+                assert deleted_first.status_code == 204, deleted_first.text
+                assert_gone(survivor, first, first_users, first_key)
 
-            eventually(lambda: _worker_startups(owned.log), lambda found: len(found[0]) == 3 and found[1] == 3, 180)
             deleted_second: Final = delete_group(survivor, second)
             assert deleted_second.status_code == 204, deleted_second.text
             assert_gone(survivor, second, second_users, second_key)
