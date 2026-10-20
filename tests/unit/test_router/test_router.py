@@ -2473,6 +2473,25 @@ def test_model_group_info_lists_batch_only_to_callers_that_may_use_the_batch_dep
     assert ("/v1/batch" in (info.supported_endpoints or ())) is lists_batch
 
 
+def test_model_group_info_lists_only_batch_for_an_azure_batch_deployment():
+    """An Azure batch deployment answers chat, Responses, and Messages calls with 400 "The current operation is not
+    allowed in this deployment", so a group of them must advertise only /v1/batch whatever the endpoint list says."""
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-batch-only",
+                "batch-sku",
+                "batch",
+                supported_endpoints=["/v1/chat/completions", "/v1/responses", "/v1/batch"],
+            )
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-batch-only")
+
+    assert info is not None and info.supported_endpoints == ("/v1/batch",)
+
+
 def _alias_cost_router() -> Router:
     return Router(
         model_list=[
@@ -13229,6 +13248,41 @@ async def test_acreate_batch_prefers_only_the_batch_deployments_the_caller_may_u
     assert {host: route.call_count for host, route in routes.items()} == {
         host: int(host == reached_host) for host in routes
     }
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_a_legacy_routing_strategy_keeps_shared_deployments_for_callers_outside_the_batch_team(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """usage-based-routing picks through the sync path, which keeps every team's deployments, so a batch deployment
+    owned by one team must not pull the creates of callers outside that team onto its credentials."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ],
+        routing_strategy="usage-based-routing",
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        for _ in range(30):
+            await router.acreate_batch(
+                model="gpt-mixed",
+                input_file_id="file-batch-input",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                metadata={"user_api_key_team_id": None},
+            )
+
+    assert chat_route.call_count > 0
 
 
 @pytest.mark.parametrize(

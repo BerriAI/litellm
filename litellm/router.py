@@ -192,7 +192,6 @@ from litellm.router_utils.batch_utils import (
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
-    is_usable_by_team,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
     without_deployments_that_cannot_batch,
@@ -204,6 +203,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
     format_fallback_outcome_message,
@@ -12213,7 +12213,7 @@ class Router:
                                 deployment_supported_endpoints(
                                     model_info.get("supported_endpoints"), model, llm_provider
                                 )
-                                if is_usable_by_team(model, team_id)
+                                if team_may_use_deployment(_configured_model_info(model).get("team_id"), team_id)
                                 else ()
                             ),
                         )
@@ -14382,7 +14382,8 @@ class Router:
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=list(
                 without_deployments_that_cannot_batch(
-                    cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
+                    cast(Sequence[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are dicts
+                    caller_deployments=lambda: request_deployments,
                 )
             ),
             parent_otel_span=parent_otel_span,
@@ -15621,7 +15622,8 @@ class Router:
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
             healthy_deployments=list(
                 without_deployments_that_cannot_batch(
-                    cast(Sequence[dict[str, object]], healthy_deployments)  # cast-ok: router deployments are dicts
+                    cast(Sequence[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are dicts
+                    caller_deployments=lambda: deployments_the_caller_may_use(request_deployments, routing_kwargs),
                 )
             ),
             parent_otel_span=parent_otel_span,

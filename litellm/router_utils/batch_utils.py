@@ -1,6 +1,6 @@
 import io
 import json
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from os import PathLike
@@ -95,11 +95,6 @@ def is_batch_capable(deployment: Mapping[str, object]) -> bool:
     return _deployment_field(deployment, "model_info").get("mode") == "batch"
 
 
-def is_usable_by_team(deployment: Mapping[str, object], team_id: str | None) -> bool:
-    owner_team_id: Final = _deployment_field(deployment, "model_info").get("team_id")
-    return owner_team_id is None or owner_team_id == team_id
-
-
 def _deployment_provider(deployment: Mapping[str, object]) -> str | None:
     litellm_params: Final = _deployment_field(deployment, "litellm_params")
     configured_provider: Final = litellm_params.get("custom_llm_provider")
@@ -113,8 +108,10 @@ def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) 
     return provider in _AZURE_PROVIDERS and not is_batch_capable(deployment)
 
 
-def without_deployments_that_cannot_batch(deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
-    if not is_batch_create_routing() or not any(is_batch_capable(deployment) for deployment in deployments):
+def without_deployments_that_cannot_batch(
+    deployments: Sequence[_DeploymentT], caller_deployments: Callable[[], Iterable[Mapping[str, object]]]
+) -> Sequence[_DeploymentT]:
+    if not is_batch_create_routing() or not any(is_batch_capable(deployment) for deployment in caller_deployments()):
         return deployments
     return [
         deployment
@@ -127,6 +124,8 @@ def deployment_supported_endpoints(
     resolved_endpoints: Sequence[str] | None, deployment: Mapping[str, object], provider: str | None
 ) -> tuple[str, ...]:
     endpoints: Final = tuple(resolved_endpoints or ())
+    if is_batch_capable(deployment) and provider in _AZURE_PROVIDERS:
+        return (BATCH_ENDPOINT,)
     if is_batch_capable(deployment):
         return endpoints if BATCH_ENDPOINT in endpoints else (*endpoints, BATCH_ENDPOINT)
     if _cannot_run_batches(deployment, provider):

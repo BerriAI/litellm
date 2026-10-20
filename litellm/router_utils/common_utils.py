@@ -30,6 +30,9 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
@@ -307,6 +310,20 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
+
+def deployments_the_caller_may_use(
+    deployments: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object] | None
+) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _DEPLOYMENT_ROWS_ADAPTER.validate_python(
+            filter_team_based_models(
+                [dict(deployment) for deployment in deployments],
+                None if request_kwargs is None else dict(request_kwargs),
+            )
+        )
+    except BadRequestError:
+        return ()
 
 
 _WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
