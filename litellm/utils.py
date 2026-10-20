@@ -8621,7 +8621,7 @@ def validate_and_fix_openai_messages(messages: list):
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
-def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
+def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -8713,9 +8713,9 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 
 def validate_chat_completion_tool_choice(
-    tool_choice: dict | str | None,
+    tool_choice: dict[str, object] | str | None,
     model: str = "",
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
