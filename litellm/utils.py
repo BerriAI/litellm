@@ -6878,6 +6878,7 @@ def get_model_info_helper(
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
+                search_free_requests=_model_info.get("search_free_requests", None),
                 google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
