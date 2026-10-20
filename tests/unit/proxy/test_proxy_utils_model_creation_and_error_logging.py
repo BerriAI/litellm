@@ -788,6 +788,49 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert request_data["response_cost"] == pytest.approx(expected_input_cost)
 
     @pytest.mark.asyncio
+    async def test_client_disconnect_before_provider_handoff_is_not_priced(self):
+        """The proxy-only error handler's own pre_call stamps first_api_call_start_time on every
+        failure it logs, so the handoff check must be read before it runs: a caller that hung up
+        while the request was still in pre-call hooks never cost the provider anything."""
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "count these input tokens please"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="lit145-pre-handoff",
+            function_id="lit145",
+        )
+        assert logging_obj.model_call_details.get("first_api_call_start_time") is None
+        request_data = {"litellm_logging_obj": logging_obj, "model": "gpt-3.5-turbo", "metadata": {}}
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "_dispatch_proxy_only_failure_handlers", new=AsyncMock()),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=HTTPException(
+                    status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+                ),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            )
+
+        assert logging_obj.model_call_details["first_api_call_start_time"] is not None
+        assert request_data.get("response_cost", 0.0) == 0.0
+
+    @pytest.mark.asyncio
     async def test_connect_timeout_never_reached_the_provider_stays_zero_cost(self):
         from datetime import datetime
 
