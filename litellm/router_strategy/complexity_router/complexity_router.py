@@ -3444,18 +3444,22 @@ class ComplexityRouter(CustomLogger):
         model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(previous_response_id)
         if model_id is None:
             return None
-        candidate_groups: list[str] = []
         for pool in self._tier_pools().values():
-            candidate_groups.extend(pool)
-        if self.config.default_model and self.config.default_model not in candidate_groups:
-            candidate_groups.append(self.config.default_model)
-        for group in candidate_groups:
-            for deployment in self._group_deployments(group):
-                model_info: Final = deployment.get("model_info")
-                deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
-                if deployment_id is not None and str(deployment_id) == model_id:
+            for group in pool:
+                if self._group_has_deployment_id(group, model_id):
                     return group, self._tier_for_model(group)
+        default_model: Final = self.config.default_model
+        if default_model and self._group_has_deployment_id(default_model, model_id):
+            return default_model, self._tier_for_model(default_model)
         return None
+
+    def _group_has_deployment_id(self, group: str, model_id: str) -> bool:
+        for deployment in self._group_deployments(group):
+            model_info: Final = deployment.get("model_info")
+            deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+            if deployment_id is not None and str(deployment_id) == model_id:
+                return True
+        return False
 
     def _group_deployments(self, group: str) -> Sequence[Mapping[str, object]]:
         list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
