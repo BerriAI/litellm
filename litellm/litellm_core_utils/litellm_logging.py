@@ -995,6 +995,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 return model_id
         return None
 
+    def get_router_pricing_provider(self) -> str | None:
+        """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
+        if not hasattr(self, "litellm_params"):
+            return None
+        for key in ("litellm_metadata", "metadata"):
+            meta = self.litellm_params.get(key, {}) or {}
+            info = meta.get("model_info", {}) or {}
+            pricing_provider = info.get("pricing_provider")
+            if isinstance(pricing_provider, str) and pricing_provider:
+                return pricing_provider
+        return None
+
     def _routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
         metadata: Final = (
@@ -2020,6 +2032,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
+                "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
                     self.litellm_params.get("data_residency")
@@ -2164,7 +2177,7 @@ class Logging(LiteLLMLoggingBaseClass):
         pricing: Final = pricing_entry_for_cost_calc(
             model=model,
             completion_response=result,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
             custom_pricing=self.custom_pricing_for(result),
             base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),

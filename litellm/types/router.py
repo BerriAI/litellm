@@ -274,6 +274,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """

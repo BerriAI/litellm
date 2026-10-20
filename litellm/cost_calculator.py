@@ -362,6 +362,12 @@ def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
     )
 
 
+def _priced_deployment_model_info(deployment_model_info: ModelInfo | None) -> ModelInfo | None:
+    if deployment_model_info is None or not _has_token_or_tiered_pricing(deployment_model_info):
+        return None
+    return deployment_model_info
+
+
 def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
     mode: Final = model_info.get("mode")
     return mode is None or mode in _WALL_CLOCK_PRICED_MODES
@@ -442,6 +448,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    deployment_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -760,6 +767,7 @@ def cost_per_token(
             usage=usage_block,
             service_tier=service_tier,
             data_residency=data_residency,
+            model_info=_priced_deployment_model_info(deployment_model_info),
         )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -799,7 +807,12 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        priced_deployment_info: Final = _priced_deployment_model_info(deployment_model_info)
+        model_info: Final = (
+            priced_deployment_info
+            if priced_deployment_info is not None
+            else cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        )
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -807,6 +820,7 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                model_info=priced_deployment_info,
             )
         verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
         return 0.0, 0.0
@@ -1507,6 +1521,7 @@ def completion_cost(
     litellm_model_name: str | None = None,
     router_model_id: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    pricing_provider: str | None = None,
     ### SERVICE TIER ###
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
@@ -1527,6 +1542,8 @@ def completion_cost(
     """
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
+        if pricing_provider is not None:
+            custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
 
         if call_type == CallTypes.aresponses_websocket.value and isinstance(
             completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -1552,6 +1569,7 @@ def completion_cost(
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
                         base_model=base_model,
+                        pricing_provider=pricing_provider,
                         standard_built_in_tools_params=standard_built_in_tools_params,
                         litellm_model_name=litellm_model_name,
                         router_model_id=router_model_id,
@@ -1645,7 +1663,7 @@ def completion_cost(
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
-        for idx, (model, pricing_provider) in enumerate(potential_model_names):
+        for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -1712,7 +1730,9 @@ def completion_cost(
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
+                        custom_llm_provider = pricing_provider or hidden_params.get(
+                            "custom_llm_provider", custom_llm_provider or None
+                        )
                         region_name = hidden_params.get("region_name", region_name)
 
                 else:
@@ -1998,7 +2018,7 @@ def completion_cost(
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=_pricing_provider_for_cost_candidate(
-                        candidate_provider=pricing_provider,
+                        candidate_provider=candidate_pricing_provider,
                         request_provider=request_pricing_provider,
                         current_provider=custom_llm_provider,
                     ),
@@ -2020,6 +2040,7 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    deployment_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -2102,7 +2123,7 @@ def completion_cost(
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
                             custom_llm_provider=_pricing_provider_for_cost_candidate(
-                                candidate_provider=pricing_provider,
+                                candidate_provider=candidate_pricing_provider,
                                 request_provider=request_pricing_provider,
                                 current_provider=custom_llm_provider,
                             ),
@@ -2225,6 +2246,7 @@ def response_cost_calculator(
     litellm_model_name: str | None = None,
     router_model_id: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    pricing_provider: str | None = None,
     ### SERVICE TIER ###
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
@@ -2265,6 +2287,7 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                pricing_provider=pricing_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
                 vertex_location=vertex_location,

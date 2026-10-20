@@ -11219,6 +11219,10 @@ class Router:
         return (backend_key,)
 
     @staticmethod
+    def _deployment_pricing_provider(deployment: Deployment) -> str | None:
+        return deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
+
+    @staticmethod
     def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
@@ -11254,23 +11258,23 @@ class Router:
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=Router._deployment_pricing_provider(deployment),
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
                 backend_model=backend_model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+                custom_llm_provider=Router._deployment_pricing_provider(deployment),
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=Router._deployment_pricing_provider(deployment),
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            custom_llm_provider=Router._deployment_pricing_provider(deployment),
         )
         return model_info
 
@@ -11287,6 +11291,7 @@ class Router:
             model_info=Router._deployment_model_cost_payload(deployment),
             model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            pricing_provider=deployment.model_info.pricing_provider,
         )
 
     @staticmethod
@@ -11296,6 +11301,7 @@ class Router:
         model_info: dict,  # mutable-ok: cost-map entry
         model: str,
         custom_llm_provider: str | None,
+        pricing_provider: str | None = None,
     ) -> None:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
@@ -11319,7 +11325,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=pricing_provider or custom_llm_provider,
                 add_to_provider_model_sets=False,
             )
 
@@ -11361,6 +11367,7 @@ class Router:
                 model_info=Router._deployment_model_cost_payload(deployment),
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+                pricing_provider=deployment.model_info.pricing_provider,
             )
         self._invalidate_model_group_info_cache()
 
