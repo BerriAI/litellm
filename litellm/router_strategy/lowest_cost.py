@@ -287,7 +287,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            deployment_view: Final[object] = _deployment
+            deployment_view: object = _deployment
             map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
