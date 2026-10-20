@@ -2739,6 +2739,42 @@ async def test_xai_stream_auto_execute_bills_each_round_at_its_own_price_with_on
     assert json.loads(events[-1].model_dump_json())["response"]["usage"]["context_details"] == {"cached_tokens": 6}
 
 
+_UNPRICED_MODEL: Final = "litellm-unpriced-mcp-rounds"
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_on_an_unpriced_model_logs_both_rounds_as_a_failed_cost_lookup_not_a_free_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    rounds: Final = tuple(
+        MappingProxyType({**body, "model": _UNPRICED_MODEL}) for body in (_ROUND_ONE_BODY, _ROUND_TWO_BODY)
+    )
+    _serve_rounds(respx_mock, monkeypatch, rounds)
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        events: Final = await _drain(
+            await litellm.aresponses(
+                model=f"openai/{_UNPRICED_MODEL}",
+                input="Call echo with PING",
+                tools=[dict(_ECHO_MCP_TOOL)],
+                api_key="sk-mcp-rounds",
+                api_base="https://mcp-rounds.example.com/v1",
+                stream=True,
+                litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-stream-unpriced-rounds"),
+            )
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    client: Final = _final_response(events)
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["response_cost_failure_debug_info"] is not None
+    assert client.usage is not None
+    assert client.usage.cost is None
+
+
 async def _stop_reading_once_the_follow_up_answers(logging_obj: Logging) -> None:
     stream: Final = await _open_stream_auto_execute(logging_obj)
     async for event in cast(Any, stream):

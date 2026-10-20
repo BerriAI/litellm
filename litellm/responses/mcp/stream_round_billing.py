@@ -46,7 +46,7 @@ def _event_loop_running() -> bool:
 
 def _priced(response: ResponsesAPIResponse, price: UncachedPrice) -> ResponsesAPIResponse:
     priced: Final = response.model_copy()
-    priced.hidden_params = {**response.hidden_params, "response_cost": price.cost or 0.0}
+    priced.hidden_params = {**response.hidden_params, "response_cost": price.cost}
     return priced
 
 
