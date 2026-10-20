@@ -258,12 +258,16 @@ impl AnthropicBeta {
             Self::InterleavedThinking20250514 | Self::WebSearch20250305 => {
                 &[BetaProvider::BedrockConverse, BetaProvider::Bedrock]
             }
-            Self::MidConversationOutputConfig20260701
-            | Self::MidConversationToolChanges20260701 => &[
+            Self::MidConversationOutputConfig20260701 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
+                BetaProvider::Databricks,
+            ],
+            Self::MidConversationToolChanges20260701 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
             Self::Output128k20250219 | Self::TokenEfficientTools20250219 => &[

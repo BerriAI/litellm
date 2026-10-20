@@ -156,6 +156,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="vertex_ai",
+            is_thinking_display_updates_used=self.is_thinking_display_updates_used(
+                _NON_DEFAULT_PARAMS.validate_python(data).get("thinking")
+            ),
         )
 
         beta_set: Final = set(auto_betas)

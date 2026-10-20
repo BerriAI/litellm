@@ -55,6 +55,8 @@ def _provider_fields() -> dict[str, object]:
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
         "citations": [{"cited_text": SECRET}],
         "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
+        "compaction_start": {"type": "compaction", "content": SECRET},
+        "compaction_delta": {"type": "compaction_delta", "content": SECRET},
         "thought_signatures": [SIGNATURE],
     }
 

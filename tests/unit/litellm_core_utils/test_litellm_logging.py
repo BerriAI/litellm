@@ -6512,10 +6512,19 @@ def test_handle_anthropic_messages_response_logging_reparses_the_served_body_wit
     assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
 
 
-def test_handle_anthropic_messages_response_logging_reparses_a_served_compaction_response():
+@pytest.mark.parametrize(
+    "compaction_block",
+    [
+        {"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"},
+        {"type": "compaction", "signature": "sig-abc"},
+    ],
+    ids=["with_summary", "without_content"],
+)
+def test_handle_anthropic_messages_response_logging_reparses_a_served_compaction_response(
+    compaction_block: dict[str, str],
+):
     logging_obj = _anthropic_messages_logging_obj()
     logging_obj.optional_params = {}
-    compaction_block = {"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"}
 
     logged = logging_obj._handle_anthropic_messages_response_logging(
         result={
@@ -6534,7 +6543,9 @@ def test_handle_anthropic_messages_response_logging_reparses_a_served_compaction
     assert logged.id == "msg_compacted"
     assert logged.usage.prompt_tokens == 410  # type: ignore[attr-defined]
     assert logged.usage.completion_tokens == 95  # type: ignore[attr-defined]
-    assert logged.choices[0].message.provider_specific_fields["compaction_blocks"] == [compaction_block]  # type: ignore[union-attr]
+    assert logged.choices[0].message.provider_specific_fields["compaction_blocks"] == [  # type: ignore[union-attr]
+        {"content": None, **compaction_block}
+    ]
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():

@@ -702,7 +702,7 @@ class AnthropicResponseContentBlockCompaction(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["compaction"]
-    content: str | None
+    content: str | None = None
     signature: str | None = None
 
 
@@ -781,6 +781,9 @@ class AnthropicThinkingParam(TypedDict, total=False):
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]
+
+
+LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("azure_ai", "vertex_ai"))
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

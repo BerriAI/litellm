@@ -52,6 +52,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -548,10 +549,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
-        if not isinstance(thinking, dict):
-            return False
-        return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+    def is_thinking_display_updates_used(self, thinking: object) -> bool:
+        match thinking:
+            case {"type": "adaptive" | "enabled", "display": "updates"}:
+                return True
+            case _:
+                return False
 
     def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
         for message in messages:
@@ -1003,7 +1006,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
-        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        keeps_display: Final = display in ("summarized", "omitted") or (
+            display == "updates" and custom_llm_provider in LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS
+        )
+        supported_display: Final = {"display": display} if keeps_display else {}
         carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )

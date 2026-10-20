@@ -4236,15 +4236,17 @@ def test_thinking_display_beta_requires_active_thinking(thinking: object, expect
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("display", "expected_thinking"),
+    ("provider", "display", "expected_thinking"),
     (
-        ("summarized", {"type": "adaptive", "display": "summarized"}),
-        ("omitted", {"type": "adaptive", "display": "omitted"}),
-        ("updates", {"type": "adaptive"}),
+        ("azure_ai", "summarized", {"type": "adaptive", "display": "summarized"}),
+        ("azure_ai", "omitted", {"type": "adaptive", "display": "omitted"}),
+        ("azure_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("vertex_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("anthropic", "updates", {"type": "adaptive"}),
     ),
 )
 def test_shared_legacy_thinking_translation_preserves_supported_display(
-    display: str, expected_thinking: dict[str, str]
+    provider: str, display: str, expected_thinking: dict[str, str]
 ) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -4255,7 +4257,7 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
         model="claude-opus-5",
         optional_params=optional_params,
-        custom_llm_provider="azure_ai",
+        custom_llm_provider=provider,
         drop_params=False,
     )
 

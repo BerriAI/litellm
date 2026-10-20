@@ -84,6 +84,7 @@ class TestAnthropicBetaHeadersFiltering:
             beta_headers=all_headers, provider=provider
         )
         assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
+        assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
 
         for header in unsupported_headers:
             assert (
