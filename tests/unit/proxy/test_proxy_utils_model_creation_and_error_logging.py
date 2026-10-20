@@ -1174,7 +1174,7 @@ from typing import cast
 import litellm
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
-from litellm.types.utils import ModelInfo
+from litellm.types.utils import ModelInfo, ModelResponse, Usage
 
 
 def _fake_model_info(**fields: object) -> ModelInfo:
@@ -2335,6 +2335,34 @@ def test_an_azure_deployment_is_priced_at_its_base_model_like_the_success_path()
     )
     assert expected_cost > 0
     assert lifted["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_an_unmapped_base_model_falls_back_to_the_deployment_model_like_the_success_path():
+    """``completion_cost`` tries ``base_model`` first and then the deployment model, so a
+    ``model_info.base_model`` the cost map does not know still prices a success row at the
+    deployment model's rate. The failure row must land on the same number instead of $0."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(metadata={"model_info": {"base_model": "not-in-the-cost-map"}}),
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    prompt_tokens = lifted["combined_usage_object"].prompt_tokens
+    success_cost = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model=FAILURE_USAGE_MODEL, usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=0)
+        ),
+        model=FAILURE_USAGE_MODEL,
+        custom_llm_provider="openai",
+        base_model="not-in-the-cost-map",
+    )
+    assert success_cost > 0
+    assert lifted["response_cost"] == pytest.approx(success_cost)
 
 
 def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price():

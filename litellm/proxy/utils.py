@@ -1200,6 +1200,25 @@ def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPer
     )
 
 
+def _priced_input_cost(
+    pricing_model: str,
+    custom_llm_provider: str | None,
+    prompt_tokens: int,
+    custom_cost_per_token: CostPerToken | None,
+) -> float | None:
+    try:
+        estimated_input_cost, _ = litellm.cost_per_token(
+            model=pricing_model,
+            custom_llm_provider=custom_llm_provider,
+            prompt_tokens=prompt_tokens,
+            custom_cost_per_token=custom_cost_per_token,
+        )
+    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
+        verbose_proxy_logger.debug("failure spend estimate: could not price %s: %s", pricing_model, exc)
+        return None
+    return estimated_input_cost
+
+
 def _estimated_input_cost(
     model_call_details: Mapping[str, object],
     prompt_tokens: int,
@@ -1207,23 +1226,19 @@ def _estimated_input_cost(
     base_model: str | None,
 ) -> float:
     """Input price for the estimated prompt: the deployment's registered rate when it has one, else
-    the cost map's rate for ``base_model`` or the deployment model (an Azure deployment name is not
-    in the cost map, its ``base_model`` is). An unpriceable model keeps the row at $0 rather than
-    dropping the failure row."""
-    try:
-        model: Final = str(model_call_details.get("model") or "")
-        estimated_input_cost, _ = litellm.cost_per_token(
-            model=base_model or model,
-            custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
-            prompt_tokens=prompt_tokens,
-            custom_cost_per_token=_deployment_cost_per_token(deployment_id, model),
-        )
-    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
-        verbose_proxy_logger.debug(
-            "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
-        )
-        return 0.0
-    return estimated_input_cost
+    the cost map's rate for ``base_model``, else the deployment model, the same candidate order
+    ``completion_cost`` walks (an Azure deployment name is not in the cost map, its ``base_model``
+    is; a ``base_model`` the cost map does not know falls through to the deployment model). A model
+    no candidate can price keeps the row at $0 rather than dropping the failure row."""
+    model: Final = str(model_call_details.get("model") or "")
+    custom_llm_provider: Final = str(model_call_details.get("custom_llm_provider") or "") or None
+    custom_cost_per_token: Final = _deployment_cost_per_token(deployment_id, model)
+    pricing_models: Final = (base_model, model) if base_model is not None else (model,)
+    candidate_costs: Final = (
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens, custom_cost_per_token)
+        for pricing_model in pricing_models
+    )
+    return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
