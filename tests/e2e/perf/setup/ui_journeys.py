@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict
 
 MONEY: Final = re.compile(r"^\$[\d,]+\.\d{2}$")
 LOADING_LOGS: Final = "Loading request logs…"
+LOADING_MODELS: Final = "Loading models…"
+LOADING_KEYS: Final = "Loading keys..."
 
 
 class Sample(BaseModel):
@@ -113,17 +115,24 @@ class Ceiling:
 
 LOGS_CEILING: Final = Ceiling(p50_seconds=10, p90_seconds=20)
 CHART_CEILING: Final = Ceiling(p50_seconds=20, p90_seconds=40)
+TABLE_CEILING: Final = Ceiling(p50_seconds=5, p90_seconds=10)
 UI_JOURNEY_LIMITS: Final = MappingProxyType(
     {
         "logs_open_24h": LOGS_CEILING,
         "logs_last_7_days": LOGS_CEILING,
         "logs_next_page": LOGS_CEILING,
         "logs_filter_key_hash": LOGS_CEILING,
+        "logs_filter_key_alias": LOGS_CEILING,
         "logs_filter_team": LOGS_CEILING,
         "logs_filter_model": LOGS_CEILING,
         "usage_open": CHART_CEILING,
+        "usage_last_30_days": CHART_CEILING,
         "usage_team_view": CHART_CEILING,
+        "usage_customer_view": CHART_CEILING,
+        "usage_model_activity_30_days": CHART_CEILING,
         "cache_open": CHART_CEILING,
+        "models_open": TABLE_CEILING,
+        "keys_open": TABLE_CEILING,
     }
 )
 
@@ -233,6 +242,17 @@ def _cache_settled(page: Page, timeout: float) -> int:
     return bars.count()
 
 
+def _table_settled(loading: str) -> Callable[[Page, float], int]:
+    def settled(page: Page, timeout: float) -> int:
+        millis: Final = timeout * 1000
+        rows: Final = page.locator("[data-row-id]")
+        expect(rows.first).to_be_visible(timeout=millis)
+        expect(page.get_by_text(loading)).to_have_count(0, timeout=millis)
+        return rows.count()
+
+    return settled
+
+
 def _open_logs(page: Page, timeout: float) -> None:
     _ = page.goto("/ui/logs")
     _ = _logs_settled(page, timeout)
@@ -262,6 +282,34 @@ def _pick_first_option(page: Page, combobox: str) -> None:
 def _open_time_range(page: Page, timeout: float) -> None:
     _open_logs(page, timeout)
     page.get_by_role("button", name="Last 24 Hours").click()
+
+
+def _open_usage_range(page: Page, timeout: float) -> None:
+    _open_usage(page, timeout)
+    page.locator('[data-slot="advanced-date-picker-trigger"]').click()
+
+
+def _model_activity_settled(page: Page, timeout: float) -> int:
+    millis: Final = timeout * 1000
+    expect(page.locator('[role="tab"][data-active]', has_text="Model Activity")).to_be_visible(timeout=millis)
+    _no_skeletons(page, timeout)
+    money: Final = page.get_by_text(MONEY).filter(visible=True)
+    expect(money.first).to_be_visible(timeout=millis)
+    return money.count()
+
+
+def _open_model_activity_range(page: Page, timeout: float) -> None:
+    _open_usage(page, timeout)
+    page.get_by_role("tab", name="Model Activity").click()
+    _ = _model_activity_settled(page, timeout)
+    page.locator('[data-slot="advanced-date-picker-trigger"]').click()
+
+
+def _pick_usage_preset(preset: str) -> Callable[[Page], None]:
+    def act(page: Page) -> None:
+        page.locator('[data-slot="advanced-date-picker-preset"]', has_text=preset).click()
+
+    return act
 
 
 def _select_usage_view(page: Page, view: str) -> None:
@@ -305,13 +353,31 @@ def journeys(api_key: str) -> tuple[Journey, ...]:
             "logs_filter_key_hash",
             lambda page: _filters_drawer(page).get_by_placeholder("Enter key hash…").fill(api_key),
         ),
+        _logs_filter("logs_filter_key_alias", lambda page: _pick_first_option(page, "Search a key alias")),
         _logs_filter("logs_filter_team", lambda page: _pick_first_option(page, "Search or select a team")),
         _logs_filter("logs_filter_model", lambda page: _pick_first_option(page, "Search a model")),
         Journey("usage_open", "usage", _nothing, _goto("/ui/usage"), _usage_settled),
+        Journey("usage_last_30_days", "usage", _open_usage_range, _pick_usage_preset("Last 30 days"), _usage_settled),
         Journey(
             "usage_team_view", "usage", _open_usage, lambda page: _select_usage_view(page, "Team Usage"), _usage_settled
         ),
+        Journey(
+            "usage_customer_view",
+            "usage",
+            _open_usage,
+            lambda page: _select_usage_view(page, "Customer Usage"),
+            _usage_settled,
+        ),
+        Journey(
+            "usage_model_activity_30_days",
+            "usage",
+            _open_model_activity_range,
+            _pick_usage_preset("Last 30 days"),
+            _model_activity_settled,
+        ),
         Journey("cache_open", "caching", _nothing, _goto("/ui/caching"), _cache_settled),
+        Journey("models_open", "models", _nothing, _goto("/ui/models-and-endpoints"), _table_settled(LOADING_MODELS)),
+        Journey("keys_open", "keys", _nothing, _goto("/ui/api-keys"), _table_settled(LOADING_KEYS)),
     )
 
 

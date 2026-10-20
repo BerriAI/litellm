@@ -92,7 +92,7 @@ def test_all_journey_percentiles_include_first_and_use_nearest_rank_p90() -> Non
 def test_journeys_have_unique_names_and_cover_every_dashboard_surface() -> None:
     names: Final = tuple(journey.name for journey in journeys("key"))
     assert len(names) == len(frozenset(names))
-    assert frozenset(journey.surface for journey in journeys("key")) == {"logs", "usage", "caching"}
+    assert frozenset(journey.surface for journey in journeys("key")) == {"logs", "usage", "caching", "models", "keys"}
 
 
 def _metrics(postgres: str, batch: str) -> str:
