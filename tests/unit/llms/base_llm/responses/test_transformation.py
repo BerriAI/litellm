@@ -24,7 +24,7 @@ from litellm.types.llms.openai import(
     ResponsesAPIStreamEvents,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Any, AsyncIterator, List
+from typing import Any, AsyncIterator, Final, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 
@@ -438,7 +438,6 @@ class TestBaseResponsesAPIStreamingIterator:
 
         # This should NOT raise an exception
         # Previously it would fail with: TypeError: cannot pickle 'ValidatorIterator'
-        # Mock the logging task spawn and executor.submit since we're not in async context
         with (
             patch("asyncio.get_running_loop"),
             patch("litellm.responses.streaming_iterator.spawn_logging_task"),
@@ -741,7 +740,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
             # Success handlers are dispatched as one async task (via _handle_logging_completed_response);
             # the sync handler must never be submitted to the executor concurrently (LIT-4210)
-            spawned_task_names = [call.kwargs["task_name"] for call in mock_spawn_logging_task.call_args_list]
+            spawned_task_names: Final = [call.kwargs["task_name"] for call in mock_spawn_logging_task.call_args_list]
             assert spawned_task_names.count("Responses stream success logging") == 1
             mock_executor.submit.assert_not_called()
 

@@ -5,8 +5,10 @@ completion_start_time = end_time."""
 
 import asyncio, importlib
 import functools
+import gc
 import json
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, Optional
@@ -2599,7 +2601,7 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_waits_for_a_pending_logging_task():
-    row_written = asyncio.Event()
+    row_written: Final = asyncio.Event()
 
     async def write_row():
         await asyncio.sleep(0.05)
@@ -2614,7 +2616,7 @@ async def test_shutdown_drain_waits_for_a_pending_logging_task():
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
+    stuck: Final = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
 
     await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
 
@@ -2656,7 +2658,9 @@ _WS_TERMINAL_EVENTS: Final = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_event, dispatch_name", _WS_TERMINAL_EVENTS)
-async def test_shutdown_drain_waits_for_a_websocket_turns_logging(terminal_event, dispatch_name):
+async def test_shutdown_drain_waits_for_a_websocket_turns_logging(
+    terminal_event: dict[str, object], dispatch_name: str
+):
     row_written: Final = asyncio.Event()
     logging_obj: Final = MagicMock()
     logging_obj.copy_for_new_call.return_value = logging_obj
@@ -2674,3 +2678,64 @@ async def test_shutdown_drain_waits_for_a_websocket_turns_logging(terminal_event
     await streaming_module.drain_logging_tasks(timeout=1)
 
     assert row_written.is_set()
+
+
+def _parked_on_an_unreferenced_future(
+    parked: asyncio.Event, logging_tasks: "weakref.WeakSet[asyncio.Task[object]]"
+) -> Mock:
+    async def wait_forever(*args: object, **kwargs: object) -> None:
+        logging_tasks.add(asyncio.current_task())
+        parked.set()
+        await asyncio.get_running_loop().create_future()
+
+    return Mock(side_effect=wait_forever)
+
+
+async def _logging_tasks_left_after_garbage_collection(
+    parked: asyncio.Event, logging_tasks: "weakref.WeakSet[asyncio.Task[object]]"
+) -> int:
+    await parked.wait()
+    gc.collect()
+    survivors: Final = tuple(logging_tasks)
+    for task in survivors:
+        task.cancel()
+    await asyncio.gather(*survivors, return_exceptions=True)
+    return len(survivors)
+
+
+@pytest.mark.asyncio
+async def test_completed_streams_success_logging_survives_garbage_collection():
+    parked: Final = asyncio.Event()
+    logging_tasks: Final = weakref.WeakSet[asyncio.Task[object]]()
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj.dispatch_success_handlers = _parked_on_an_unreferenced_future(parked, logging_tasks)
+    iterator: Final = _make_iterator(sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=logging_obj)
+
+    async for _ in iterator:
+        pass
+
+    assert await _logging_tasks_left_after_garbage_collection(parked, logging_tasks) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_event, dispatch_name", _WS_TERMINAL_EVENTS)
+async def test_websocket_turns_logging_survives_garbage_collection(
+    terminal_event: dict[str, object], dispatch_name: str
+):
+    parked: Final = asyncio.Event()
+    logging_tasks: Final = weakref.WeakSet[asyncio.Task[object]]()
+    logging_obj: Final = MagicMock()
+    logging_obj.copy_for_new_call.return_value = logging_obj
+    logging_obj.response_cost_calculator.return_value = 0.0
+    setattr(logging_obj, dispatch_name, _parked_on_an_unreferenced_future(parked, logging_tasks))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps(terminal_event), websockets.exceptions.ConnectionClosedOK(None, None)]
+    )
+    streaming: Final = streaming_module.ResponsesWebSocketStreaming(
+        websocket=MagicMock(send_text=AsyncMock()), backend_ws=backend_ws, logging_obj=logging_obj
+    )
+
+    await streaming.backend_to_client()
+
+    assert await _logging_tasks_left_after_garbage_collection(parked, logging_tasks) == 1
