@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import (
     CredentialLiteLLMParams,
+    CustomPricingLiteLLMParams,
     Deployment,
     FallbackSkipReason,
     LiteLLM_Params,
@@ -485,6 +486,31 @@ def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapp
     warning: Final = (
         f"Deployment '{model_name}' sets {flags} under litellm_params, where litellm ignores them and never "
         "sends them to the provider. Move them under model_info for litellm to use them."
+    )
+    verbose_router_logger.warning(warning)
+    return warning
+
+
+def warn_on_unpriced_base_model(
+    model_name: str, model_info: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> str | None:
+    """Warn when ``model_info.base_model`` names a cost-map key with no prices (an undated alias that only a
+    capability rule matches, or a typo), since every request on the deployment would then bill from the
+    response model or at $0 while budgets keep passing. Custom pricing on the deployment wins, so it is left alone"""
+    from litellm.cost_calculator import cost_map_declares_rates
+
+    base_model: Final = model_info.get("base_model")
+    if not isinstance(base_model, str) or not base_model:
+        return None
+    if any(litellm_params.get(field) is not None for field in CustomPricingLiteLLMParams.model_fields):
+        return None
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    if cost_map_declares_rates(base_model, custom_llm_provider if isinstance(custom_llm_provider, str) else None):
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets model_info.base_model='{base_model}', which has no prices in the cost map, "
+        "so its requests bill from the response model or at $0. Use a priced cost-map key (for example a dated "
+        "one) or set input_cost_per_token and output_cost_per_token on the deployment."
     )
     verbose_router_logger.warning(warning)
     return warning

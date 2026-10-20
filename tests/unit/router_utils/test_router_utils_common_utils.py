@@ -22,6 +22,7 @@ from litellm.router_utils.common_utils import (
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
+    warn_on_unpriced_base_model,
 )
 from litellm.types.router import Deployment, FallbackSkipReason, LiteLLM_Params, ModelInfo, SkippedFallbackTarget
 from litellm.types.utils import ProviderSpecificModelInfo
@@ -677,6 +678,59 @@ def test_format_fallback_outcome_preserves_attempted_failure_wording_without_ski
         == "\n\nLiteLLM: model group 'primary' failed with the error above. "
         "Fallback to fallback also failed: detail"
     )
+
+
+class TestWarnOnUnpricedBaseModel:
+    """LIT-9812: a base_model that is not a priced cost-map key bills $0 or the response model's price on every
+    request while budgets keep passing, so the deployment load is where the admin hears about it"""
+
+    PRICED_MODEL: Final = "azure/gpt-9.9-2026-01-01"
+
+    @pytest.fixture(autouse=True)
+    def _priced_cost_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                self.PRICED_MODEL: {
+                    "litellm_provider": "azure",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.0000111,
+                    "output_cost_per_token": 0.0000222,
+                }
+            },
+        )
+
+    def test_warns_when_the_base_model_has_no_prices(self):
+        warning = warn_on_unpriced_base_model(
+            model_name="eu-gpt",
+            model_info={"base_model": "azure/eu/gpt-9.9"},
+            litellm_params={"model": "azure/my-eu-deployment"},
+        )
+
+        assert warning is not None
+        assert "eu-gpt" in warning
+        assert "azure/eu/gpt-9.9" in warning
+
+    def test_silent_when_the_base_model_is_priced(self):
+        assert (
+            warn_on_unpriced_base_model(
+                model_name="eu-gpt",
+                model_info={"base_model": self.PRICED_MODEL},
+                litellm_params={"model": "azure/my-eu-deployment"},
+            )
+            is None
+        )
+
+    def test_silent_when_the_deployment_carries_its_own_prices(self):
+        assert (
+            warn_on_unpriced_base_model(
+                model_name="eu-gpt",
+                model_info={"base_model": "azure/eu/gpt-9.9"},
+                litellm_params={"model": "azure/my-eu-deployment", "input_cost_per_token": 0.000002},
+            )
+            is None
+        )
 
 
 class TestWarnOnProviderCredentialMismatch:

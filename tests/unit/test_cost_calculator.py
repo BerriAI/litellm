@@ -391,6 +391,38 @@ def test_completion_cost_bills_undated_azure_data_zone_base_model_at_its_dated_r
     )
 
 
+def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-9812: a deployment whose base_model is an undated name only a capability rule matches must not
+    stop the ladder at $0 when the response names a priced model"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/gpt-9.9-2026-01-01": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9-2026-01-01", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-eu-deployment",
+        custom_llm_provider="azure",
+        base_model="azure/eu/gpt-9.9",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
 def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
     _local_model_cost_map: None,
 ) -> None:

@@ -911,10 +911,15 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
+def cost_map_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
+    """Whether the cost map prices ``model`` at all, so a capability-rule-only or unmapped name is False"""
+    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+
+
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
     """The provider to price an explicit base_model under, when the deployment's own provider has
     no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
-    if custom_llm_provider is None or _declares_rates(_cost_map_model_info(base_model, custom_llm_provider)):
+    if custom_llm_provider is None or cost_map_declares_rates(base_model, custom_llm_provider):
         return None
     own_model_info: Final = _cost_map_model_info(base_model, None)
     if own_model_info is None or not _declares_rates(own_model_info):
@@ -1642,7 +1647,7 @@ def completion_cost(
             *(((model, request_pricing_provider),) if model is not None else ()),
         )
         potential_model_names: Final = (
-            raw_candidates if explicit_pricing else _priced_candidates_before_unpriced_rules(raw_candidates)
+            raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
         for idx, (model, pricing_provider) in enumerate(potential_model_names):

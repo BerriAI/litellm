@@ -223,6 +223,7 @@ from litellm.router_utils.common_utils import (
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    warn_on_unpriced_base_model,
     with_admin_api_key_secret_reference,
     without_model_capability_flags,
     without_router_only_kwargs,
@@ -10181,6 +10182,11 @@ class Router:
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
+            warn_on_unpriced_base_model(
+                model_name=_model_name,
+                model_info=_MODEL_INFO_ADAPTER.validate_python(_model_info),
+                litellm_params=declared_params,
+            )
             deployment = without_model_capability_flags(
                 Deployment(
                     **deployment_info,
