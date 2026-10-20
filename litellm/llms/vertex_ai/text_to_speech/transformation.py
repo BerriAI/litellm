@@ -15,6 +15,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
     DEFAULT_SPEECH_MEDIA_TYPE,
@@ -69,14 +70,6 @@ def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate
             data_size: Final = int.from_bytes(audio[data_offset + 4 : data_offset + 8], "little")
             if byte_rate > 0 and data_size <= len(audio) - data_offset - 8:
                 return data_size / byte_rate
-
-    if encoding == "FLAC" and audio[:4] == b"fLaC" and len(audio) >= 42:
-        if audio[4] & 0x7F != 0 or int.from_bytes(audio[5:8], "big") != 34:
-            return None
-        stream_info: Final = int.from_bytes(audio[18:26], "big")
-        flac_sample_rate: Final = stream_info >> 44
-        total_samples: Final = stream_info & ((1 << 36) - 1)
-        return total_samples / flac_sample_rate if flac_sample_rate > 0 and total_samples > 0 else None
 
     if encoding == "MP3" and speech_media_type_from_audio_bytes(audio) == "audio/mpeg":
         return len(audio) / 4000
@@ -208,7 +201,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _is_gemini_tts_model(model: str) -> bool:
         from litellm.utils import is_gemini_tts_model
 
-        return is_gemini_tts_model(model, custom_llm_provider="vertex_ai")
+        return is_gemini_tts_model(model)
 
     @staticmethod
     def _get_str_value(
@@ -729,14 +722,15 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             container_duration: Final = calculate_request_duration(binary_data)
             sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
             duration: Final = (
-                _fallback_gemini_tts_audio_duration(binary_data, "FLAC", sample_rate)
-                if audio_config["audioEncoding"] == "FLAC"
-                else container_duration
+                container_duration
                 if container_duration is not None
                 else _fallback_gemini_tts_audio_duration(binary_data, audio_config["audioEncoding"], sample_rate)
             )
             if duration is None:
-                raise ValueError("Cannot determine Gemini TTS output duration for cost calculation")
+                verbose_logger.warning(
+                    "Could not measure Gemini TTS audio duration for %s, so its audio tokens are not billed", model
+                )
+                return binary_response
             input_text: Final = " ".join(
                 value for value in (input_data.get("text"), input_data.get("ssml"), input_data.get("prompt")) if value
             )

@@ -13437,16 +13437,13 @@ async def audio_speech(
                 detail=e.detail,
                 headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
             )
-        raw_status_code: Final = getattr(e, "status_code", None)
-        if not isinstance(raw_status_code, int):
-            raise
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=raw_status_code,
+            code=getattr(e, "status_code", 500),
         )
 
 

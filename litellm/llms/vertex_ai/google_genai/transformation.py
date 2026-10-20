@@ -2,7 +2,6 @@
 Transformation for Calling Google models in their native format.
 """
 
-from collections.abc import Mapping
 from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
@@ -39,15 +38,34 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
         return default_headers
 
+    def _camel_to_snake(self, camel_str: str) -> str:
+        """Convert camelCase to snake_case"""
+        import re
+
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
+
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict: Mapping[str, object],
+        generate_content_config_dict,
         model: str,
-    ) -> dict[str, object]:  # mutable-ok: inherited provider interface returns a request dictionary
-        return super().map_generate_content_optional_params(
-            generate_content_config_dict=generate_content_config_dict,
-            model=model,
-        )
+    ):
+        """
+        Map Google GenAI parameters to provider-specific format.
+
+        Args:
+            generate_content_optional_params: Optional parameters for generate content
+            model: The model name
+
+        Returns:
+            Mapped parameters for the provider
+        """
+
+        _generate_content_config_dict: Final[dict] = {}
+
+        for param, value in generate_content_config_dict.items():
+            camel_case_key = self._camel_to_snake(param)
+            _generate_content_config_dict[camel_case_key] = value
+        return _generate_content_config_dict
 
     def transform_generate_content_request(
         self,

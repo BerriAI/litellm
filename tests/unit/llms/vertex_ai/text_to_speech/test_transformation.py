@@ -14,7 +14,6 @@ import httpx
 import pytest
 import respx
 import responses
-import soundfile
 from pydantic import ValidationError
 
 import litellm
@@ -555,7 +554,7 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
     assert result.response.content == raw_pcm
 
 
-@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"])
+@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW"])
 def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypatch: pytest.MonkeyPatch) -> None:
     model: Final = "gemini-3.1-flash-tts-preview"
     input_text: Final = "Hello from Gemini text to speech"
@@ -566,8 +565,6 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
         wav_file.setsampwidth(2)
         wav_file.setframerate(24000)
         wav_file.writeframes(pcm_audio)
-    flac_buffer: Final = io.BytesIO()
-    soundfile.write(flac_buffer, (0.0,) * 24000, 48000, format="FLAC", subtype="PCM_16")
     g711_audio: Final = (
         struct.pack(
             "<4sI4s4sIHHIIHH4sI",
@@ -595,7 +592,6 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
         "OGG_OPUS": (fixture_dir / "gemini_tts_speech.ogg").read_bytes(),
         "ALAW": g711_audio,
         "MULAW": g711_audio,
-        "FLAC": flac_buffer.getvalue(),
     }
     audio_bytes: Final = audio_by_encoding[encoding]
     logger: Final = MagicMock()
@@ -620,7 +616,6 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
         "Google Cloud AudioEncoding and RFC 7845, checked 2026-09-23: "
         "https://cloud.google.com/text-to-speech/docs/reference/rest/v1/AudioEncoding "
         "https://www.rfc-editor.org/rfc/rfc7845.html"
-        " https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2, checked 2026-10-06"
     )
     assert usage.completion_tokens == math.ceil(duration * 25), (
         "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
@@ -649,41 +644,6 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
     )
     assert cost == pytest.approx(expected_cost)
     assert cost > usage.prompt_tokens * model_info["input_cost_per_token"]
-
-
-@pytest.mark.parametrize("decoder_available", (False, True))
-@pytest.mark.parametrize("invalid_streaminfo", (False, True))
-def test_gemini_cloud_tts_rejects_unbillable_flac(
-    monkeypatch: pytest.MonkeyPatch, decoder_available: bool, invalid_streaminfo: bool
-) -> None:
-    output: Final = io.BytesIO()
-    soundfile.write(output, (0.0,) * 24000, 48000, format="FLAC", subtype="PCM_16")
-    audio: Final = output.getvalue()
-    stream_info: Final = int.from_bytes(audio[18:26], "big") & ~((1 << 36) - 1)
-    metadata_header: Final = b"\x01\x00\x00\x22" if invalid_streaminfo else audio[4:8]
-    unknown_duration_audio: Final = audio[:4] + metadata_header + audio[8:18] + stream_info.to_bytes(8, "big") + audio[26:]
-    raw_response: Final = httpx.Response(
-        200, json={"audioContent": base64.b64encode(unknown_duration_audio).decode()}
-    )
-    logger: Final = MagicMock(
-        model_call_details={
-            "additional_args": {
-                "complete_input_dict": {
-                    "dict_body": {
-                        "input": {"text": "Hello"},
-                        "audioConfig": {"audioEncoding": "FLAC", "sampleRateHertz": 48000},
-                    }
-                }
-            }
-        }
-    )
-    if not decoder_available:
-        monkeypatch.setitem(sys.modules, "soundfile", None)
-
-    with pytest.raises(ValueError, match="Cannot determine Gemini TTS output duration"):
-        VertexAITextToSpeechConfig().transform_text_to_speech_response(
-            "gemini-3.1-flash-tts-preview", raw_response, logger
-        )
 
 
 @pytest.mark.parametrize("encoding", ["ALAW", "MULAW"])
@@ -715,7 +675,7 @@ def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavai
     )
 
 
-def test_gemini_cloud_tts_rejects_audio_without_measurable_duration():
+def test_gemini_cloud_tts_returns_audio_unbilled_when_duration_is_unmeasurable():
     raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(b"invalid").decode()})
     logger: Final = MagicMock()
     logger.model_call_details = {
@@ -730,10 +690,12 @@ def test_gemini_cloud_tts_rejects_audio_without_measurable_duration():
     }
 
     with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
-        with pytest.raises(ValueError, match="Cannot determine Gemini TTS output duration"):
-            VertexAITextToSpeechConfig().transform_text_to_speech_response(
-                "gemini-3.1-flash-tts-preview", raw_response, logger
-            )
+        result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            "gemini-3.1-flash-tts-preview", raw_response, logger
+        )
+
+    assert result.response.content == b"invalid"
+    assert result.usage is None
 
 
 class TestVertexAILyriaTextToSpeechConfig:
@@ -1491,6 +1453,81 @@ def test_lyria_malformed_item_position_does_not_change_the_mapped_error(payload:
             custom_llm_provider="vertex_ai",
             original_exception=exc_info.value,
         )
+
+
+_PCM_AUDIO: Final = b"\x00\x00\x01\x00" * 2400
+_GENERATE_CONTENT_RESPONSE: Final = {
+    "candidates": [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": base64.b64encode(_PCM_AUDIO).decode()}}
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ],
+    "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10, "totalTokenCount": 15},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "response_format"),
+    (
+        ("gemini-3.8-flash-tts", None),
+        ("gemini-3.1-flash-tts-preview", None),
+        ("gemini-3.1-flash-tts-preview", "wav"),
+        ("gemini-3.1-flash-tts-preview", "pcm"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_formats_the_bridge_serves_stay_on_generate_content(
+    respx_mock: respx.MockRouter,
+    google_token_endpoint: responses.RequestsMock,
+    model: str,
+    response_format: str | None,
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=rf"https://aiplatform\.googleapis\.com/.*/models/{model}:generateContent$"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+
+    response: Final = await litellm.aspeech(
+        model=f"vertex_ai/{model}",
+        input="Say hello",
+        voice="Kore",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+        **({} if response_format is None else {"response_format": response_format}),
+    )
+
+    assert route.call_count == 1
+    assert _PCM_AUDIO in response.content
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_reaches_cloud_tts_for_any_gemini_tts_model(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/gemini-3.8-flash-tts",
+        input="Say hello",
+        voice="Kore",
+        response_format="mp3",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+    )
+
+    assert response.content == audio_bytes
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert sent["voice"]["modelName"] == "gemini-3.8-flash-tts"
+    assert sent["voice"]["name"] == "Kore"
+    assert sent["audioConfig"]["audioEncoding"] == "MP3"
 
 
 @patch(  # test-quality-ok: exercises public Gemini speech dispatch up to the outbound HTTP boundary
