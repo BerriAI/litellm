@@ -5557,11 +5557,9 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
-    for key in tokens:
-        user_api_key_cache.delete_cache(key)
-        # remove hash token from cache
-        hashed_token = hash_token(cast(str, key))
-        user_api_key_cache.delete_cache(hashed_token)
+    # On every worker, not just this one: auth serves key objects cache-first, so a worker that
+    # kept its copy would go on authenticating the deleted key until user_api_key_cache_ttl expired
+    await evict_and_broadcast(cache_keys=tuple(str(token) for token in tokens), user_api_key_cache=user_api_key_cache)
 
     # After credential invalidation, so a failure here can never keep a deleted key alive.
     for deleted_key in authorized_keys:

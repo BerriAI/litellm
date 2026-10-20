@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 from pydantic import JsonValue
+from redis.asyncio import Redis
 
 import inspect
 
@@ -5678,7 +5679,7 @@ class _RecordingEvict:
         self.cache_keys = ()
 
     async def __call__(self, cache_keys, user_api_key_cache):
-        self.cache_keys = tuple(cache_keys)
+        self.cache_keys += tuple(cache_keys)
 
 
 @pytest.mark.asyncio
@@ -5754,7 +5755,77 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     assert recording_evict.cache_keys == (
         jwt_key_mapping_cache_key("email", "user@example.com", None),
         jwt_key_mapping_cache_key("email", "user@example.com", "https://issuer.example"),
+        "hashed-token-1",
     )
+
+
+class _RecordingPublishRedis(Redis):
+    def __init__(self) -> None:
+        self.cache_keys: list[str] = []
+
+    async def publish(self, channel, message) -> int:
+        self.cache_keys.append(json.loads(message)["cache_key"])
+        return 1
+
+
+class _CoordinationRedis:
+    namespace = None
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def init_pubsub_client(self):
+        return self._client
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_tells_every_worker_to_drop_the_deleted_key(monkeypatch):
+    """Auth serves key objects cache-first. A worker that is not told about the delete keeps
+    authenticating the deleted key from its own copy until user_api_key_cache_ttl expires"""
+    key = LiteLLM_VerificationToken(
+        token="hashed-token-1",
+        user_id="user-123",
+        team_id=None,
+        key_alias="doomed-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key])
+    prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
+    prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    prisma_client.delete_data = AsyncMock(return_value=["hashed-token-1"])
+    redis = _RecordingPublishRedis()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token_if_needed", lambda token: token
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        lambda: _CoordinationRedis(redis),
+    )
+    cache = UserApiKeyCache()
+    cache.set_cache(key="hashed-token-1", value={"token": "hashed-token-1"})
+
+    await delete_verification_tokens(
+        tokens=["hashed-token-1"],
+        user_api_key_cache=cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+    )
+
+    assert cache.get_cache(key="hashed-token-1") is None
+    assert redis.cache_keys == ["hashed-token-1"]
 
 
 @pytest.mark.asyncio
