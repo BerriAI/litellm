@@ -58,6 +58,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
+from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -67,6 +68,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TokenCountModel,
     TokenCountSettings,
     cost_map_entry,
+    unreliable_local_estimate,
 )
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.proxy_server import (
@@ -2637,3 +2639,169 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "messages", "tools", "expected"),
+    [
+        ("bedrock", "meta.llama4-maverick", [{"content": [{"type": "document"}]}], None, "document content"),
+        ("bedrock", "us.amazon.nova-2-lite", [], [{"name": "search"}], "more than 5%"),
+        ("azure_ai", "DeepSeek-V4-Pro", [], [{"name": "search"}], "more than 5%"),
+        ("azure_ai", "grok-4-1-fast-reasoning", [], None, "more than 5%"),
+    ],
+)
+def test_unreliable_local_estimate_returns_reason(
+    provider: str,
+    model: str,
+    messages: list[object],
+    tools: list[object] | None,
+    expected: str,
+) -> None:
+    reason: Final = unreliable_local_estimate(provider, model, messages, tools)
+
+    assert reason is not None and expected in reason
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "messages", "tools"),
+    [
+        ("bedrock", "meta.llama4-maverick", [{"content": "text"}], None),
+        ("bedrock", "us.amazon.nova-2-lite", [], None),
+        ("azure_ai", "deepseek-v4-pro", [], None),
+        ("azure_ai", "grok-4-1-fast-reasoning", [], [{"name": "search"}]),
+        ("azure", "gpt-4.1", [{"content": "text"}], None),
+    ],
+)
+def test_unreliable_local_estimate_preserves_local_count(
+    provider: str, model: str, messages: list[object], tools: list[object] | None
+) -> None:
+    assert unreliable_local_estimate(provider, model, messages, tools) is None
+
+
+@pytest.mark.parametrize(
+    ("resolved_model", "messages", "tools", "call_endpoint", "reject"),
+    [
+        ("bedrock/meta.llama4-maverick", [{"role": "user", "content": [{"type": "document"}]}], None, True, True),
+        ("bedrock/meta.llama4-maverick", [{"role": "user", "content": "text"}], None, True, False),
+        ("bedrock/us.amazon.nova-2-lite", [{"role": "user", "content": "text"}], [{"name": "search"}], True, True),
+        ("bedrock/us.amazon.nova-2-lite", [{"role": "user", "content": "text"}], None, True, False),
+        ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], [{"name": "search"}], True, True),
+        ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], None, True, False),
+        ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], None, True, True),
+        ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], [{"name": "search"}], True, False),
+        (
+            "bedrock/meta.llama4-maverick",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQK",
+                            },
+                        }
+                    ],
+                }
+            ],
+            None,
+            False,
+            False,
+        ),
+        ("azure/gpt-4.1", [{"role": "user", "content": "text"}], None, True, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_count_request_tokens_rejects_only_known_unreliable_estimates(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved_model: str,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    call_endpoint: bool,
+    reject: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {"model": resolved_model, "api_key": "test-key", "api_base": "https://count.test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    failure: Final = ProviderCountFailure(status_code=400, message="unsupported")
+    with patch.object(
+        proxy_server,
+        "_provider_token_count",
+        new=AsyncMock(return_value=failure),
+    ):
+        if reject:
+            with pytest.raises(ProxyException) as raised:
+                await count_request_tokens(
+                    request=TokenCountRequest(model="count-target", messages=messages, tools=tools),
+                    call_endpoint=call_endpoint,
+                    messages_format="anthropic",
+                )
+            assert raised.value.code == "400"
+        else:
+            response: Final = await count_request_tokens(
+                request=TokenCountRequest(model="count-target", messages=messages, tools=tools),
+                call_endpoint=call_endpoint,
+                messages_format="anthropic",
+            )
+            assert response.count_source == "local_estimate"
+
+
+@pytest.mark.asyncio
+async def test_document_block_keeps_successful_provider_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    provider_result: Final = TokenCountResponse(
+        total_tokens=17,
+        request_model="count-target",
+        model_used="anthropic.claude-sonnet-4-6",
+        tokenizer_type="openai_tokenizer",
+        count_source="provider",
+    )
+    with patch.object(
+        proxy_server,
+        "_provider_token_count",
+        new=AsyncMock(return_value=provider_result),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="count-target",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": "JVBERi0xLjQK",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert result is provider_result

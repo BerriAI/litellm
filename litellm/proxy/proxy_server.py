@@ -151,6 +151,9 @@ from litellm.proxy.common_utils.token_count_settings import (
     cost_map_entry,
     resolve_token_count_settings,
 )
+from litellm.proxy.common_utils.token_count_settings import (
+    unreliable_local_estimate as _unreliable_local_estimate,
+)
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -14109,6 +14112,21 @@ async def count_request_tokens(
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
+
+    if call_endpoint is True:
+        unreliable_reason: Final = _unreliable_local_estimate(
+            custom_llm_provider=custom_llm_provider,
+            model=model_to_use,
+            messages=messages,
+            tools=tools,
+        )
+        if unreliable_reason is not None:
+            raise ProxyException(
+                message=unreliable_reason,
+                type="invalid_request_error",
+                param="model",
+                code=400,
+            )
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:

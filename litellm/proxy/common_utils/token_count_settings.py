@@ -1,7 +1,7 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -75,6 +75,67 @@ class ProviderCountFailure:
             param="model",
             code=self.status_code,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _UnreliableLocalEstimateRule:
+    provider: str
+    model_substring: str
+    trigger: Literal["tools", "no_tools"]
+
+
+_UNRELIABLE_LOCAL_ESTIMATE_RULES: Final[tuple[_UnreliableLocalEstimateRule, ...]] = (
+    _UnreliableLocalEstimateRule("bedrock", "nova-2-lite", "tools"),
+    _UnreliableLocalEstimateRule("azure_ai", "deepseek-v4", "tools"),
+    _UnreliableLocalEstimateRule("azure_ai", "grok-4", "no_tools"),
+)
+
+
+def _content_blocks(message: object) -> tuple[object, ...]:
+    message_mapping: Final = as_str_mapping(message)
+    if message_mapping is None:
+        return ()
+    content: Final = message_mapping.get("content")
+    if not _is_object_sequence(content):
+        return ()
+    return tuple(content)
+
+
+def _is_object_sequence(value: object) -> TypeGuard[Sequence[object]]:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _is_document_content_block(block: object) -> bool:
+    block_mapping: Final = as_str_mapping(block)
+    return block_mapping is not None and block_mapping.get("type") in {"document", "file"}
+
+
+def _has_document_content_block(messages: Sequence[object] | None) -> bool:
+    return any(
+        any(_is_document_content_block(block) for block in _content_blocks(message)) for message in messages or ()
+    )
+
+
+def unreliable_local_estimate(
+    custom_llm_provider: str | None,
+    model: str,
+    messages: Sequence[object] | None,
+    tools: Sequence[object] | None,
+) -> str | None:
+    if _has_document_content_block(messages):
+        return f"{model} has no server-side count_tokens and LiteLLM cannot count document content locally"
+    trigger: Final = "tools" if tools else "no_tools"
+    matched_rule: Final = next(
+        (
+            rule
+            for rule in _UNRELIABLE_LOCAL_ESTIMATE_RULES
+            if custom_llm_provider == rule.provider
+            and rule.model_substring in model.casefold()
+            and rule.trigger == trigger
+        ),
+        None,
+    )
+    return None if matched_rule is None else f"Local token estimate for {model} is known to be off by more than 5%"
 
 
 def cost_map_entry(model: str, custom_llm_provider: str | None = None) -> Mapping[str, object]:
