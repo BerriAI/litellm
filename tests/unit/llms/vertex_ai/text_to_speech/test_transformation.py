@@ -1899,7 +1899,7 @@ async def test_aspeech_vertex_ai_beta_lyria_2_serves_the_openai_params_it_ignore
 
 
 @pytest.mark.asyncio
-async def test_aspeech_vertex_ai_gemini_tts_wav_unknown_voice_keys_are_bad_requests_unless_dropped(
+async def test_aspeech_vertex_ai_gemini_tts_wav_drops_unknown_voice_keys(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
 ) -> None:
     route: Final = respx_mock.post(
@@ -1914,11 +1914,7 @@ async def test_aspeech_vertex_ai_gemini_tts_wav_unknown_voice_keys_are_bad_reque
         "vertex_location": "global",
     }
 
-    with pytest.raises(litellm.BadRequestError, match="does not support the voice keys style"):
-        await litellm.aspeech(**request)
-    assert not route.called
-
-    response: Final = await litellm.aspeech(**request, drop_params=True)
+    response: Final = await litellm.aspeech(**request)
 
     assert _PCM_AUDIO in response.content
     assert json.loads(route.calls[0].request.content)["generationConfig"]["speechConfig"] == {

@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_param
 
 if TYPE_CHECKING:
@@ -99,16 +98,10 @@ class SpeechToCompletionBridgeTransformationHandler:
         model: str,
         voice: str | Mapping[str, object] | None,
         optional_params: Mapping[str, object],
-        drop_params: bool,
-        custom_llm_provider: str,
     ) -> ChatAudioParam | ChatSpeechConfigAudioParam | None:
         if isinstance(voice, Mapping) and self._is_gemini_tts_model(model):
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                normalize_gemini_speech_config,
-                reject_unknown_gemini_tts_voice_keys,
-            )
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import normalize_gemini_speech_config
 
-            reject_unknown_gemini_tts_voice_keys(model, voice, drop_params, custom_llm_provider)
             speech_audio: Final[ChatSpeechConfigAudioParam] = {
                 "speech_config": normalize_gemini_speech_config(voice),
                 "format": GEMINI_TTS_CHAT_AUDIO_FORMAT,
@@ -141,13 +134,7 @@ class SpeechToCompletionBridgeTransformationHandler:
             "messages": [user_message],
             "modalities": ["audio"],
             **self._chat_completion_params(optional_params),
-            "audio": self._chat_audio_param(
-                model,
-                voice,
-                optional_params,
-                drops_unsupported_params(litellm_params.get("drop_params")),
-                custom_llm_provider,
-            ),
+            "audio": self._chat_audio_param(model, voice, optional_params),
             **litellm_params,
             "headers": headers,
             "litellm_logging_obj": litellm_logging_obj,
