@@ -89,7 +89,6 @@ def payload(response: object) -> Mapping[str, JsonValue]:
     return JSON_OBJECT.validate_json(response.model_dump_json(exclude_none=True))
 
 
-@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 completion(tools=...) imports optional mcp")
 def check_tools(base: str, asynchronous: bool = False) -> None:
     tools: Final = [
         {
@@ -122,7 +121,6 @@ def check_tools(base: str, asynchronous: bool = False) -> None:
     assert json.loads(body) == {"model": "gpt-6", "messages": MESSAGES, "tools": tools}
 
 
-@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 responses() imports optional mcp")
 def check_responses(base: str, asynchronous: bool = False) -> None:
     output: Final[Sequence[JsonValue]] = [
         {
@@ -144,14 +142,62 @@ def check_responses(base: str, asynchronous: bool = False) -> None:
             "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
         }
     )
-    arguments: Final = dict(model="openai/gpt-6", input="ping", api_key="test-key", api_base=base + "/v1")
+    tools: Final = [
+        {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"},
+        {"type": "mcp", "server_label": "repos", "server_url": "https://mcp.example.com/mcp/repos"},
+    ]
+    arguments: Final = dict(model="openai/gpt-6", input="ping", tools=tools, api_key="test-key", api_base=base + "/v1")
     response: Final = asyncio.run(litellm.aresponses(**arguments)) if asynchronous else litellm.responses(**arguments)
     assert payload(response)["output"] == output
     assert payload(response)["usage"] == {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
     path, headers, body = REQUESTS.get(timeout=10)
     assert path == "/v1/responses"
     assert headers["authorization"] == "Bearer test-key"
-    assert json.loads(body) == {"model": "gpt-6", "input": "ping"}
+    assert json.loads(body) == {"model": "gpt-6", "input": "ping", "tools": tools}
+
+
+def check_messages_tools(base: str) -> None:
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up the forecast for a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        }
+    ]
+    content: Final = [{"type": "tool_use", "id": "toolu-http-check", "name": "lookup", "input": {"city": "Paris"}}]
+    enqueue(
+        {
+            "id": "msg-tools-http-check",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": content,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 3, "output_tokens": 2},
+        }
+    )
+
+    async def send() -> object:
+        create: Final = cast(  # cast-ok: SDK facade exposes untyped kwargs
+            Callable[..., Awaitable[object]], litellm.anthropic.messages.acreate
+        )
+        return await create(
+            model="anthropic/claude-sonnet-5-5",
+            messages=MESSAGES,
+            tools=tools,
+            max_tokens=16,
+            api_key="test-key",
+            api_base=base,
+        )
+
+    response: Final = JSON_OBJECT.validate_python(asyncio.run(send()))
+    assert response["content"] == content, response
+    path, headers, body = REQUESTS.get(timeout=10)
+    assert path == "/v1/messages"
+    assert headers["x-api-key"] == "test-key"
+    sent: Final = JSON_OBJECT.validate_json(body)
+    assert (sent["model"], sent["messages"], sent["tools"]) == ("claude-sonnet-5-5", MESSAGES, tools), sent
 
 
 @skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 cache hits import proxy-only fastapi")
@@ -392,6 +438,7 @@ def main() -> None:
                 partial(check_tools, asynchronous=True),
                 check_responses,
                 partial(check_responses, asynchronous=True),
+                check_messages_tools,
                 check_cache_hit,
                 check_messages_stream_and_callback,
             ):

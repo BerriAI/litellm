@@ -71,10 +71,6 @@ def _patch_responses_dispatch():
             side_effect=_provider_by_model,
         ),
         patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "should_use_litellm_mcp_gateway",
-            return_value=False,
-        ),
-        patch.object(
             import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
@@ -158,7 +154,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -193,7 +189,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -216,7 +212,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -247,7 +243,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.model_call_details = {}
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -273,7 +269,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -305,7 +301,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -328,7 +324,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -368,7 +364,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -399,8 +395,7 @@ class TestResponsesAPIPromptManagement:
                 side_effect=_provider_by_model,
             ),
             patches[1],
-            patches[2],
-            patches[3] as mock_handler,
+            patches[2] as mock_handler,
         ):
             import litellm
 
@@ -437,7 +432,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             await litellm.aresponses(
@@ -467,7 +462,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             await litellm.aresponses(
@@ -498,7 +493,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             await litellm.aresponses(
@@ -524,7 +519,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             await litellm.aresponses(
@@ -657,7 +652,7 @@ async def test_async_guardrail_block_from_prompt_hook_reaches_caller_unwrapped()
     logging_obj.async_get_chat_completion_prompt = AsyncMock(side_effect=block)
 
     patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+    with patches[0], patches[1], patches[2], pytest.raises(HTTPException) as exc_info:
         await litellm.aresponses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
@@ -669,7 +664,7 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
     logging_obj.get_chat_completion_prompt.side_effect = block
 
     patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+    with patches[0], patches[1], patches[2], pytest.raises(HTTPException) as exc_info:
         litellm.responses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
