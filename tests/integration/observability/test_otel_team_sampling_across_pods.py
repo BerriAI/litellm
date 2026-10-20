@@ -13,8 +13,9 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from itertools import chain, product
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
@@ -43,12 +44,12 @@ CREDENTIALS: Final = {"arize_space_key": SPACE, "arize_api_key": "arize-sampled"
 FAILING: Final = re.compile(rb"sampling-fail")
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 TRACES: Final = 16
-Endpoint = Literal["chat", "responses", "messages"]
-Verdicts = dict[str, tuple[bool, ...]]
+Endpoint: TypeAlias = Literal["chat", "responses", "messages"]
+Verdicts: TypeAlias = Mapping[str, tuple[bool, ...]]
 
 
 def _chat_reply(stream: bool) -> Reply:
-    usage: Final[dict[str, JsonValue]] = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+    usage: Final[JsonValue] = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
     if not stream:
         return Reply(
             body=json.dumps(
@@ -65,7 +66,7 @@ def _chat_reply(stream: bool) -> Reply:
             ).encode()
         )
     chunk: Final = {"id": "chatcmpl-sampling", "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o-mini"}
-    deltas: Final[tuple[dict[str, JsonValue], ...]] = (
+    deltas: Final[tuple[JsonValue, ...]] = (
         {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
         {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         {**chunk, "choices": [], "usage": usage},
@@ -77,7 +78,7 @@ def _chat_reply(stream: bool) -> Reply:
 
 
 def _responses_reply(stream: bool) -> Reply:
-    response: Final[dict[str, JsonValue]] = {
+    response: Final[Mapping[str, JsonValue]] = {
         "id": "resp_sampling",
         "object": "response",
         "created_at": 1,
@@ -96,7 +97,7 @@ def _responses_reply(stream: bool) -> Reply:
     }
     if not stream:
         return Reply(body=json.dumps(response).encode())
-    events: Final[tuple[dict[str, JsonValue], ...]] = (
+    events: Final[tuple[Mapping[str, JsonValue], ...]] = (
         {
             "type": "response.created",
             "sequence_number": 0,
@@ -110,7 +111,7 @@ def _responses_reply(stream: bool) -> Reply:
             "content_index": 0,
             "delta": "ok",
         },
-        {"type": "response.completed", "sequence_number": 2, "response": response},
+        {"type": "response.completed", "sequence_number": 2, "response": dict(response)},
     )
     return Reply(
         content_type="text/event-stream",
@@ -137,8 +138,8 @@ class Sent:
 @dataclass(frozen=True, slots=True)
 class Call:
     path: str
-    body: dict[str, JsonValue]
-    headers: dict[str, str]
+    body: Mapping[str, JsonValue]
+    headers: Mapping[str, str]
     sent: Sent
     expected: int
 
@@ -148,7 +149,7 @@ def _call(
 ) -> Call:
     parent: Final = uuid.uuid4().hex[:16]
     call_id: Final = str(uuid.uuid4())
-    messages: Final[list[JsonValue]] = [{"role": "user", "content": content}]
+    messages: Final[JsonValue] = [{"role": "user", "content": content}]
     path, body = {
         "chat": ("/v1/chat/completions", {"model": MODEL, "messages": messages, "stream": stream}),
         "responses": ("/v1/responses", {"model": MODEL, "input": content, "stream": stream}),
@@ -161,7 +162,7 @@ def _call(
         **({} if trace_id is None else {"traceparent": f"00-{trace_id}-{parent}-01"}),
     }
     expected: Final = 500 if FAILING.search(content.encode()) else 200
-    return Call(path, dict(body), headers, Sent(trace_id or "", parent if trace_id else "", call_id), expected)
+    return Call(path, body, headers, Sent(trace_id or "", parent if trace_id else "", call_id), expected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,18 +225,18 @@ def _suspended_all_but(pod: OwnedProxy, workers: Sequence[int], serving: int) ->
         yield
 
 
+def _space_id(request: Mapping[str, JsonValue]) -> JsonValue:
+    return {name.lower(): value for name, value in object_value(request.get("headers") or {}).items()}.get(
+        "arize-space-id"
+    )
+
+
 def _space_span_ids(url: str) -> frozenset[str]:
     """Span ids the Arize sink received in export requests sent with the team's space id."""
-    return frozenset(
-        span_id
-        for request in recorded_requests(url)
-        if {name.lower(): value for name, value in object_value(request.get("headers") or {}).items()}.get(
-            "arize-space-id"
-        )
-        == SPACE
-        for span_id in list_value(request.get("span_ids") or [])
-        if isinstance(span_id, str)
+    ours: Final = (
+        list_value(request.get("span_ids") or []) for request in recorded_requests(url) if _space_id(request) == SPACE
     )
+    return frozenset(span_id for span_id in chain.from_iterable(ours) if isinstance(span_id, str))
 
 
 def _team_spans(pods: Pods, since: int) -> tuple[Span, ...]:
@@ -280,6 +281,17 @@ def _cursors(pods: Pods) -> Cursors:
     return Cursors(recorded_spans(pods.sinks.operator)[0], recorded_spans(pods.sinks.arize)[0])
 
 
+def _await_flushed(pods: Pods, cursors: Cursors, fence_key: str) -> None:
+    """Wait until every worker of both pods has sent the team's exporter everything it decided so far."""
+    fences: Final = pods.fence(fence_key)
+
+    def arrived() -> None:
+        delivered: Final = _delivered(_team_spans(pods, cursors.arize), fences)
+        assert {fence.call_id for fence in fences} <= delivered, "the unsampled team's calls have not arrived yet"
+
+    until_asserted(arrived, seconds=30)
+
+
 def _settled(
     pods: Pods,
     cursors: Cursors,
@@ -289,13 +301,12 @@ def _settled(
 ) -> Verdicts:
     """Per trace, which of its calls reached the team's space, once every worker has sent what it decided
     and ``holds`` is true of every trace."""
-    calls: Final = [call for sent in by_trace.values() for call in sent]
+    calls: Final = tuple(chain.from_iterable(by_trace.values()))
     _await_logged(pods, cursors.operator, calls)
-    fences: Final = pods.fence(fence_key)
+    _await_flushed(pods, cursors, fence_key)
 
     def check() -> Verdicts:
-        delivered: Final = _delivered(_team_spans(pods, cursors.arize), [*calls, *fences])
-        assert {fence.call_id for fence in fences} <= delivered, "the unsampled team's calls have not arrived yet"
+        delivered: Final = _delivered(_team_spans(pods, cursors.arize), calls)
         verdicts: Final = {
             trace_id: tuple(call.call_id in delivered for call in sent) for trace_id, sent in by_trace.items()
         }
@@ -399,11 +410,13 @@ def test_a_replaced_worker_reaches_the_verdict_its_predecessor_reached(pods: Pod
     traces still answer the way the first ones did."""
     sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.5"})
     cursors: Final = _cursors(pods)
+    fence_key: Final = pods.team_key(CREDENTIALS)
     traces: Final = _trace_ids("replaced")
     before: Final = {
         trace_id: pods.on_each_worker(pods.second, lambda t=trace_id: _call(sampled, t)) for trace_id in traces
     }
-    _await_logged(pods, cursors.operator, [call for sent in before.values() for call in sent])
+    _await_logged(pods, cursors.operator, tuple(chain.from_iterable(before.values())))
+    _await_flushed(pods, cursors, fence_key)
     for victim in sorted(pods.second.worker_pids()):
         pods.second.kill_worker(victim)
     by_trace: Final = {
@@ -411,7 +424,7 @@ def test_a_replaced_worker_reaches_the_verdict_its_predecessor_reached(pods: Pod
         for trace_id in traces
     }
 
-    verdicts: Final = _settled(pods, cursors, by_trace, pods.team_key(CREDENTIALS))
+    verdicts: Final = _settled(pods, cursors, by_trace, fence_key)
 
     assert 0 < _kept(verdicts) < TRACES
 
@@ -440,6 +453,30 @@ def test_a_failed_call_is_kept_wherever_a_successful_call_of_its_trace_is(pods: 
     assert any(kept == (True, True) for kept in verdicts.values()), "no trace sat under both rates"
 
 
+def test_a_failed_call_answers_to_the_error_rate_on_a_pod_that_dropped_its_trace(pods: Pods) -> None:
+    """A pod that already dropped a successful call of the trace still keeps a later failed call of it at an
+    unset error rate, as the pod that only served the failed call does."""
+    sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.3"})
+    cursors: Final = _cursors(pods)
+    traces: Final = _trace_ids("failed-after-dropped")
+    succeeded: Final = {trace_id: pods.send(pods.first, _call(sampled, trace_id)) for trace_id in traces}
+    _await_logged(pods, cursors.operator, tuple(succeeded.values()))
+    by_trace: Final = {
+        trace_id: (
+            succeeded[trace_id],
+            pods.send(pods.first, _call(sampled, trace_id, content="sampling-fail")),
+            pods.send(pods.second, _call(sampled, trace_id, content="sampling-fail")),
+        )
+        for trace_id in traces
+    }
+
+    verdicts: Final = _settled(
+        pods, cursors, by_trace, pods.team_key(CREDENTIALS), holds=lambda kept: kept[1] and kept[2]
+    )
+
+    assert any(not kept[0] for kept in verdicts.values()), "no successful call was dropped before its trace failed"
+
+
 @pytest.mark.parametrize(
     ("variables", "expected"),
     [({"arize_success_sampling_rate": "1.0"}, TRACES), ({"arize_success_sampling_rate": "0.0"}, 0), ({}, TRACES)],
@@ -465,7 +502,9 @@ def test_a_request_without_a_traceparent_is_sampled_whole_at_the_rate(pods: Pods
     together and the rate still keeps some requests and drops others."""
     sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.5"})
     cursors: Final = _cursors(pods)
-    sent: Final = tuple(pods.send(pod, _call(sampled, None)) for _ in range(12) for pod in (pods.first, pods.second))
+    sent: Final = tuple(
+        pods.send(pod, _call(sampled, None)) for _, pod in product(range(12), (pods.first, pods.second))
+    )
     _await_logged(pods, cursors.operator, sent)
     trace_of: Final = {
         str(span["attributes"][CALL_ID]): span["trace_id"]
@@ -474,9 +513,11 @@ def test_a_request_without_a_traceparent_is_sampled_whole_at_the_rate(pods: Pods
     }
     fences: Final = pods.fence(pods.team_key(CREDENTIALS))
 
-    def check() -> dict[str, tuple[bool, bool]]:
+    def check() -> Mapping[str, tuple[bool, bool]]:
         spans: Final = _team_spans(pods, cursors.arize)
-        assert {fence.call_id for fence in fences} <= _delivered(spans, fences)
+        assert {fence.call_id for fence in fences} <= _delivered(spans, fences), (
+            "the unsampled team's calls have not arrived yet"
+        )
         kinds: Final = {
             call.call_id: (
                 any(span["kind"] == SERVER for span in spans if span["trace_id"] == trace_of[call.call_id]),
@@ -522,7 +563,7 @@ def test_a_concurrent_burst_keeps_every_trace_whole(pods: Pods) -> None:
     sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.5"})
     cursors: Final = _cursors(pods)
     traces: Final = _trace_ids("burst", 24)
-    plan: Final = [(trace_id, pod) for trace_id in traces for pod in (pods.first, pods.second, pods.first, pods.second)]
+    plan: Final = tuple(product(traces, (pods.first, pods.second, pods.first, pods.second)))
 
     def send(job: tuple[str, OwnedProxy]) -> Sent:
         return pods.send(job[1], _call(sampled, job[0]))
