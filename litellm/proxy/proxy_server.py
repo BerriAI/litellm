@@ -6922,6 +6922,7 @@ class ProxyConfig:
                     for name in (
                         "vector_store_deny_by_default",
                         "search_tool_deny_by_default",
+                        "model_access_group_deny_by_default",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                     )

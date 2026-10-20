@@ -94,6 +94,12 @@ from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
 )
+from litellm.proxy.auth.model_access_group_grants import (
+    access_group_model_denied,
+    model_access_group_deny_by_default,
+    requested_model_names,
+    ungranted_access_group_models,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
@@ -1287,7 +1293,12 @@ async def common_checks(
                 llm_router=llm_router,
                 user_object=user_object,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                teams_grant_access_group_models=personal_key_team_model_access_applies(valid_token),
             )
+    if _model and team_object is None and user_object is None and valid_token is not None:
+        await _require_key_access_group_grant(
+            model=_model, valid_token=valid_token, llm_router=llm_router, prisma_client=prisma_client
+        )
 
     if end_user_object is not None and end_user_object.models:
         with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
@@ -5487,6 +5498,10 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if valid_token.user_id is None:
+        await _require_key_access_group_grant(
+            model=model, valid_token=valid_token, llm_router=llm_router, prisma_client=prisma_client
+        )
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return can_object_call_model(
@@ -5519,6 +5534,39 @@ async def can_key_call_model(
         raise
 
 
+async def _require_key_access_group_grant(
+    model: str | Sequence[str],
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+    prisma_client: DatabaseClient | None,
+) -> None:
+    """A key with no team and no loaded owner owns its own grant, so deny-by-default reads the key's models"""
+    if (
+        valid_token.team_id is not None
+        or valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
+        or not _is_strict_grant_identity(valid_token)
+        or personal_key_team_model_access_applies(valid_token)
+        or not _model_access_group_deny_by_default_enabled()
+    ):
+        return
+    ungranted: Final = await _ungranted_after_access_group_ids(
+        ungranted=ungranted_access_group_models(
+            names=requested_model_names(
+                model, valid_token.team_model_aliases, key_model_aliases_for_auth_check(valid_token)
+            ),
+            granted_models=_resolve_key_models_for_auth_check(valid_token=valid_token),
+            llm_router=llm_router,
+            team_id=None,
+        ),
+        access_group_ids=valid_token.access_group_ids,
+        llm_router=llm_router,
+        team_id=None,
+        prisma_client=prisma_client,
+    )
+    if ungranted:
+        raise access_group_model_denied(model=model, ungranted=ungranted, object_type="key")
+
+
 async def _personal_key_owner(
     valid_token: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
@@ -5545,6 +5593,40 @@ async def _personal_key_owner(
             e,
         )
         return None
+
+
+async def _require_teamless_owner_access_group_grant(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    if (
+        not _is_strict_grant_identity(valid_token)
+        or personal_key_team_model_access_applies(valid_token)
+        or not _model_access_group_deny_by_default_enabled()
+    ):
+        return
+    owner: Final = await _personal_key_owner(
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if owner is None:
+        await _require_key_access_group_grant(
+            model=model, valid_token=valid_token, llm_router=llm_router, prisma_client=prisma_client
+        )
+        return
+    _require_user_access_group_grant(
+        model=model,
+        user_role=owner.user_role,
+        user_models=_user_models(owner),
+        llm_router=llm_router,
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+    )
 
 
 async def can_key_call_resolved_model(
@@ -5625,6 +5707,16 @@ async def can_key_call_resolved_model(
                 proxy_logging_obj=proxy_logging_obj,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
+
+    if team_object is None:
+        await _require_teamless_owner_access_group_grant(
+            model=model,
+            valid_token=valid_token,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     if personal_key_team_model_access_applies(valid_token) and valid_token.user_id is not None:
         owner: Final = await _personal_key_owner(
@@ -5709,7 +5801,18 @@ async def can_team_access_model(
 
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
+    3. Under general_settings.model_access_group_deny_by_default, a model in a model access group also needs
+       the team to name that group or model explicitly
     """
+    if team_object is not None:
+        await _require_team_access_group_grant(
+            model=model,
+            team_object=team_object,
+            llm_router=llm_router,
+            team_model_aliases=team_model_aliases,
+            key_model_aliases=key_model_aliases,
+            prisma_client=prisma_client,
+        )
     try:
         return can_object_call_model(
             model=model,
@@ -5739,6 +5842,68 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+def _proxy_general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import general_settings
+
+    return typed_general_settings(general_settings)
+
+
+def _model_access_group_deny_by_default_enabled() -> bool:
+    return model_access_group_deny_by_default(_proxy_general_settings())
+
+
+_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+def _user_models(user_object: LiteLLM_UserTable) -> tuple[str, ...]:
+    return _MODEL_NAMES.validate_python(user_object.models)
+
+
+async def _ungranted_after_access_group_ids(
+    ungranted: tuple[str, ...],
+    access_group_ids: Sequence[str] | None,
+    llm_router: Router | None,
+    team_id: str | None,
+    prisma_client: DatabaseClient | None,
+) -> tuple[str, ...]:
+    if not ungranted or not access_group_ids:
+        return ungranted
+    return ungranted_access_group_models(
+        names=ungranted,
+        granted_models=await get_models_from_access_groups(
+            access_group_ids=access_group_ids, prisma_client=prisma_client
+        ),
+        llm_router=llm_router,
+        team_id=team_id,
+    )
+
+
+async def _require_team_access_group_grant(
+    model: str | Sequence[str],
+    team_object: LiteLLM_TeamTable,
+    llm_router: Router | None,
+    team_model_aliases: Mapping[str, str] | None,
+    key_model_aliases: Mapping[str, str] | None,
+    prisma_client: DatabaseClient | None,
+) -> None:
+    if team_object.team_id == UI_TEAM_ID or not _model_access_group_deny_by_default_enabled():
+        return
+    ungranted: Final = await _ungranted_after_access_group_ids(
+        ungranted=ungranted_access_group_models(
+            names=requested_model_names(model, team_model_aliases, key_model_aliases),
+            granted_models=team_object.models,
+            llm_router=llm_router,
+            team_id=team_object.team_id,
+        ),
+        access_group_ids=team_object.access_group_ids,
+        llm_router=llm_router,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+    )
+    if ungranted:
+        raise access_group_model_denied(model=model, ungranted=ungranted, object_type="team")
 
 
 async def get_authorized_resources_from_key_access_groups(
@@ -5827,9 +5992,14 @@ async def key_access_group_grants_model(
             key_model_aliases=key_model_aliases,
             object_type="key",
         )
-        return True
     except ProxyException:
         return False
+    return not _model_access_group_deny_by_default_enabled() or not ungranted_access_group_models(
+        names=requested_model_names(model, valid_token.team_model_aliases if valid_token else None, key_model_aliases),
+        granted_models=authorized_models,
+        llm_router=llm_router,
+        team_id=valid_token.team_id if valid_token else None,
+    )
 
 
 _key_access_group_grants_model: Final = key_access_group_grants_model
@@ -5890,6 +6060,7 @@ async def can_user_call_model(
     llm_router: Router | None,
     user_object: LiteLLM_UserTable | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    teams_grant_access_group_models: bool = False,
 ) -> Literal[True]:
     if user_object is None:
         return True
@@ -5907,13 +6078,42 @@ async def can_user_call_model(
             code=status.HTTP_403_FORBIDDEN,
         )
 
-    return can_object_call_model(
+    user_models: Final = _user_models(user_object)
+    can_object_call_model(
         model=model,
         llm_router=llm_router,
-        models=user_object.models,
+        models=list(user_models),
         key_model_aliases=key_model_aliases,
         object_type="user",
     )
+    if not teams_grant_access_group_models:
+        _require_user_access_group_grant(
+            model=model,
+            user_role=user_object.user_role,
+            user_models=user_models,
+            llm_router=llm_router,
+            key_model_aliases=key_model_aliases,
+        )
+    return True
+
+
+def _require_user_access_group_grant(
+    model: str | Sequence[str],
+    user_role: str | None,
+    user_models: Sequence[str],
+    llm_router: Router | None,
+    key_model_aliases: Mapping[str, str] | None,
+) -> None:
+    if user_role == LitellmUserRoles.PROXY_ADMIN or not _model_access_group_deny_by_default_enabled():
+        return
+    ungranted: Final = ungranted_access_group_models(
+        names=requested_model_names(model, key_model_aliases=key_model_aliases),
+        granted_models=user_models,
+        llm_router=llm_router,
+        team_id=None,
+    )
+    if ungranted:
+        raise access_group_model_denied(model=model, ungranted=ungranted, object_type="user")
 
 
 def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -> bool:
@@ -6558,7 +6758,7 @@ async def can_caller_call_search_tool(
 
 async def can_token_call_search_tool(search_tool_name: str, valid_token: UserAPIKeyAuth) -> Literal[True]:
     """`can_caller_call_search_tool` against the proxy's own settings, team cache and database"""
-    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     async def _load_team_object() -> LiteLLM_TeamTable | None:
         if not valid_token.team_id:
@@ -6574,7 +6774,7 @@ async def can_token_call_search_tool(search_tool_name: str, valid_token: UserAPI
     return await can_caller_call_search_tool(
         search_tool_name=search_tool_name,
         valid_token=valid_token,
-        general_settings=typed_general_settings(general_settings),
+        general_settings=_proxy_general_settings(),
         load_team_object=_load_team_object,
     )
 

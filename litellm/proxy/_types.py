@@ -2765,6 +2765,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt",
     )
+    model_access_group_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a model tagged with model_info.access_groups is only reachable by a caller whose grant names one of its groups or the model itself. The grant that counts is the team's for a team key, the user's for a personal key, and the key's own for a key with neither. An empty models list, '*', all-proxy-models and wildcard patterns no longer reach these models. Untagged models are unaffected, and proxy admins' personal access is exempt",
+    )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
         description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
