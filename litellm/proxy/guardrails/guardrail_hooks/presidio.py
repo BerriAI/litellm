@@ -243,7 +243,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async with self._session_lock:
                 if self._http_session is None or self._http_session.closed:
                     self._http_session = aiohttp.ClientSession()
-                yield self._http_session
+                session = self._http_session
+            yield session
         else:
             # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
@@ -487,9 +488,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # The semaphore is shared per event loop across every chunked call on
         # this instance, so many oversized blocks in one request (or many
         # concurrent requests) still hold at most this many analyzer calls in
-        # flight. On the proxy's main thread the shared-session lock in
-        # _get_session_iterator additionally serializes the HTTP calls; the
-        # bound matters for loop-bound sessions (background threads).
+        # flight. This bound applies to both the shared session and the
+        # loop-bound sessions used by background threads.
         analyze_semaphore: Final = self._get_chunk_semaphore()
 
         async def _analyze_chunk_bounded(
