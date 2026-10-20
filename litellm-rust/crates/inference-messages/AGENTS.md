@@ -12,3 +12,4 @@
 - Per-call dependencies are grouped in `litellm_inference::context::CallContext`. `src/lib.rs` explicitly sequences cache lookup, provider execution, result acceptance (`CallContext::result_ready`), and cache storage
 - Preserve the order of validation, normalization, caller-requested parameter removal, and provider transformation when that order affects observable behavior
 - Test provider dispatch, auth precedence, header handling, transformations, and responses through behavior, not source structure
+- A deployment with no Messages config that Chat Completions serves goes through `ChatCompletions` in `src/chat.rs` when the host installs one: the body is translated by `llms/src/anthropic/adapters`, sent through `ChatCompletionsRoute::run_openai`, and the answer translated back. That path skips the Messages response cache

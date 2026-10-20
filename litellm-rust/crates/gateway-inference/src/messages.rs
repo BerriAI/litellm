@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_host_http::Sse;
-use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_inference_messages::{ChatCompletions, MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -81,7 +81,14 @@ async fn handle(
         edit(&mut body);
         Ok(body)
     };
-    let route = gateway.messages.clone();
+    let route = gateway
+        .messages
+        .clone()
+        .with_chat_completions(ChatCompletions {
+            route: gateway.chat_completions.clone(),
+            drop_params: gateway.drop_params(),
+            model_info: gateway.model_info(),
+        });
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
             cache.clone(),

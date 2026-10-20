@@ -239,3 +239,124 @@ async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("x-api-key"));
 }
+
+#[rstest]
+#[case::openai("openai/gpt-6-astra", "gpt-6-astra")]
+#[case::hosted_vllm("hosted_vllm/test-model", "test-model")]
+#[tokio::test]
+async fn chat_deployments_answer_messages_through_chat_completions(
+    #[case] model: &str,
+    #[case] upstream_model: &str,
+    #[values(false, true)] streaming: bool,
+) {
+    let upstream = MockServer::start().await;
+    let completion = json!({"id": "chatcmpl-1", "object": "chat.completion", "created": 1,
+        "model": upstream_model, "choices": [{"index": 0, "finish_reason": "tool_calls",
+        "message": {"role": "assistant", "content": "Checking.", "tool_calls": [{"id": "call_1",
+        "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Oslo\"}"}}]}}],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13}});
+    let chunk = |body: serde_json::Value| format!("data: {body}\n\n");
+    let sse = [
+        chunk(json!({"id": "c", "choices": [{"index": 0, "delta": {"content": "Hel"}}]})),
+        chunk(json!({"id": "c", "choices": [{"index": 0, "delta": {"content": "lo"}, "finish_reason": "stop"}]})),
+        chunk(json!({"id": "c", "choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}})),
+        "data: [DONE]\n\n".to_owned(),
+    ]
+    .concat();
+    let template = if streaming {
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    } else {
+        ResponseTemplate::new(200).set_body_json(completion)
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(template)
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "test-version")
+        .header("anthropic-beta", "test-feature")
+        .body(Body::from(
+            json!({"model": "public/model", "max_tokens": 16, "stream": streaming,
+                "system": "be brief",
+                "messages": [{"role": "user", "content": "weather in Oslo?"}],
+                "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}]})
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = support::app(model, &format!("{}/v1", upstream.uri()))
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    if streaming {
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        let body = to_bytes(response.into_body(), 1 << 16).await.unwrap();
+        let events: Vec<serde_json::Value> = std::str::from_utf8(&body)
+            .unwrap()
+            .split("\n\n")
+            .filter_map(|frame| frame.split_once("\ndata: "))
+            .map(|(name, data)| {
+                let event: serde_json::Value = serde_json::from_str(data).unwrap();
+                assert_eq!(name.strip_prefix("event: "), event["type"].as_str());
+                event
+            })
+            .collect();
+        let types: Vec<&str> = events
+            .iter()
+            .filter_map(|event| event["type"].as_str())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_delta",
+                "content_block_stop",
+                "message_delta",
+                "message_stop"
+            ]
+        );
+        assert_eq!(events[2]["delta"]["text"], "Hel");
+        assert_eq!(events[3]["delta"]["text"], "lo");
+        assert_eq!(
+            events[5],
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 9, "output_tokens": 2}})
+        );
+    } else {
+        let body = support::json(response).await;
+        assert_eq!(body["type"], "message");
+        assert_eq!(
+            body["content"],
+            json!([{"type": "text", "text": "Checking."},
+                {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}])
+        );
+        assert_eq!(body["stop_reason"], "tool_use");
+        assert_eq!(
+            body["usage"],
+            json!({"input_tokens": 9, "output_tokens": 4})
+        );
+    }
+    let requests = upstream.received_requests().await.unwrap();
+    let sent: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(sent["model"], upstream_model);
+    assert_eq!(
+        sent["messages"],
+        json!([{"role": "system", "content": "be brief"},
+            {"role": "user", "content": "weather in Oslo?"}])
+    );
+    assert_eq!(sent["tools"][0]["function"]["name"], "get_weather");
+    assert_eq!(
+        sent["stream_options"],
+        json!(streaming.then(|| json!({"include_usage": true})))
+    );
+    assert!(!requests[0].headers.contains_key("anthropic-version"));
+    assert!(!requests[0].headers.contains_key("anthropic-beta"));
+}
