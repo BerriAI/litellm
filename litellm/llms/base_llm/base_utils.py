@@ -535,15 +535,22 @@ def _text_blocks(
     return [text_block]
 
 
+def _lone_text_block_text(blocks: list[object]) -> str | None:
+    match blocks:
+        case [{"type": "text", "text": str() as text}] if blocks == [{"type": "text", "text": text}]:
+            return text
+        case _:
+            return None
+
+
 def _plain_text(message: ChatCompletionSystemMessage) -> str | None:
-    content: Final = _system_content(message)
-    if (
-        not isinstance(content, str)
-        or _message_cache_control(message)
-        or content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
-    ):
+    if _message_cache_control(message):
         return None
-    return content
+    content: Final = _system_content(message)
+    text: Final = content if isinstance(content, str) else _lone_text_block_text(content)
+    if text is None or text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
+        return None
+    return text
 
 
 def _is_system_message(

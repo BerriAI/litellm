@@ -71,11 +71,11 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
     def test_empty_string_message_adds_no_block_when_the_run_merges_as_blocks(self):
         messages = [
             {"role": "system", "content": ""},
-            {"role": "developer", "content": [{"type": "text", "text": "Rules"}]},
+            {"role": "developer", "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}]},
             {"role": "user", "content": "Hi"},
         ]
         assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
-            {"role": "system", "content": [{"type": "text", "text": "Rules"}]},
+            {"role": "system", "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}]},
             {"role": "user", "content": "Hi"},
         ]
 
@@ -308,7 +308,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
         ]
 
-    def test_hoisted_block_content_developer_message_merges_as_blocks_after_string_instructions(self):
+    def test_hoisted_single_text_block_developer_message_joins_string_instructions_as_text(self):
         messages = [
             {"role": "system", "content": "You are Codex"},
             {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
@@ -316,15 +316,29 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
         ]
         assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "You are Codex\n\n<permissions instructions>"},
+            {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
+            {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+        ]
+
+    def test_multi_block_developer_message_keeps_its_blocks_after_string_instructions(self):
+        messages = [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "user", "content": "Hi"},
+            {"role": "developer", "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}]},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "You are Codex"},
-                    {"type": "text", "text": "<permissions instructions>"},
+                    {"type": "text", "text": "Rule 1"},
+                    {"type": "text", "text": "Rule 2"},
                 ],
             },
-            {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
-            {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+            {"role": "user", "content": "Hi"},
+            {"role": "user", "content": "What is the capital of France?"},
         ]
 
     def test_system_message_without_content_folds_into_the_run_instead_of_raising(self):
