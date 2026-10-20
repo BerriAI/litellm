@@ -236,8 +236,10 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.embedding_batch_size_check import (
     deployments_admitting_embedding_batch,
+    deployments_when_none_admits_embedding_batch,
     embedding_batch_too_large_error,
     embedding_deployment_selection,
+    flag_rejected_before_provider_call,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -6824,6 +6826,7 @@ class Router:
             if batch_error is not None:
                 logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
                 if isinstance(logging_obj, LiteLLMLogging):
+                    flag_rejected_before_provider_call(logging_obj)
                     logging_obj.failure_handler(batch_error, "".join(traceback.format_exception(batch_error)))
                 raise batch_error
 
@@ -6912,6 +6915,7 @@ class Router:
             if batch_error is not None:
                 logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
                 if isinstance(logging_obj, LiteLLMLogging):
+                    flag_rejected_before_provider_call(logging_obj)
                     await logging_obj.dispatch_failure_handlers(
                         exception=batch_error,
                         traceback_exception="".join(traceback.format_exception(batch_error)),
@@ -14622,11 +14626,26 @@ class Router:
             cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
             _OPAQUE_VALUE_ADAPTER.validate_python(input),
             _OPAQUE_VALUE_ADAPTER.validate_python(request_kwargs),
-            before_cooldown=cast(list[dict[str, object]], _pre_cooldown_deployments),  # cast-ok: plain dicts
-            cooldown_ids=cooldown_deployments,
+        )
+        batch_routed_deployments: Final = (
+            batch_admitting_deployments
+            if batch_admitting_deployments is not None
+            else deployments_when_none_admits_embedding_batch(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                cast(list[dict[str, object]], _pre_cooldown_deployments),  # cast-ok: router deployments are plain dicts
+                await self._async_routable_cooled_deployment_ids(
+                    model=model,
+                    request_deployments=request_deployments,
+                    cooldown_deployments=cooldown_deployments,
+                    request_kwargs=cast(Mapping[str, object], request_kwargs),  # cast-ok: str-keyed request kwargs
+                    has_request_input=True,
+                ),
+                _OPAQUE_VALUE_ADAPTER.validate_python(input),
+                _OPAQUE_VALUE_ADAPTER.validate_python(request_kwargs),
+            )
         )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            list(self._narrow_to_video_deployment(batch_admitting_deployments)),
+            list(self._narrow_to_video_deployment(batch_routed_deployments)),
             target_order=_target_order,
         )
 
@@ -15832,11 +15851,27 @@ class Router:
             cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
             _OPAQUE_VALUE_ADAPTER.validate_python(input),
             routing_kwargs,
-            before_cooldown=cast(list[dict[str, object]], _pre_cooldown_deployments),  # cast-ok: plain dicts
-            cooldown_ids=cooldown_deployments,
+        )
+        batch_routed_deployments: Final = (
+            batch_admitting_deployments
+            if batch_admitting_deployments is not None
+            else deployments_when_none_admits_embedding_batch(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                cast(list[dict[str, object]], _pre_cooldown_deployments),  # cast-ok: router deployments are plain dicts
+                self._deployment_ids(
+                    self._region_routable_deployments(
+                        request_deployments,
+                        cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: str-keyed request kwargs
+                        True,
+                    )
+                )
+                & frozenset(cooldown_deployments),
+                _OPAQUE_VALUE_ADAPTER.validate_python(input),
+                routing_kwargs,
+            )
         )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            list(self._narrow_to_video_deployment(batch_admitting_deployments)),
+            list(self._narrow_to_video_deployment(batch_routed_deployments)),
             target_order=_target_order,
         )
 

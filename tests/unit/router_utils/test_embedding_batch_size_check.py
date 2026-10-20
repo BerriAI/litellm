@@ -7,15 +7,20 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.types.router import RouterRateLimitError
 from litellm.router_utils.embedding_batch_size_check import (
     count_embedding_inputs,
     deployments_admitting_embedding_batch,
+    deployments_when_none_admits_embedding_batch,
     effective_embedding_input,
     embedding_batch_too_large_error,
     embedding_deployment_selection,
@@ -49,9 +54,14 @@ def _admitted(
     deployments: list[dict[str, object]],
     input_value: object,
     request_kwargs: dict[str, object] | None = None,
+    cooling: tuple[dict[str, object], ...] = (),
+    routable_cooling_ids: frozenset[str] = frozenset(),
 ) -> list[dict[str, object]]:
-    return deployments_admitting_embedding_batch(
-        deployments, input_value, request_kwargs, before_cooldown=deployments, cooldown_ids=()
+    admitting: Final = deployments_admitting_embedding_batch(deployments, input_value, request_kwargs)
+    if admitting is not None:
+        return admitting
+    return deployments_when_none_admits_embedding_batch(
+        deployments, (*deployments, *cooling), routable_cooling_ids, input_value, request_kwargs
     )
 
 
@@ -216,10 +226,11 @@ class TestDeploymentsAdmittingEmbeddingBatch:
         uncapped: Final = _deployment(None)
         assert _admitted([capped, uncapped], ["a", "b", "c"]) == [uncapped]
 
-    def test_keeps_every_deployment_when_none_admits_the_batch(self) -> None:
-        smaller: Final = _deployment(1)
-        small: Final = _deployment(2)
-        assert _admitted([smaller, small], ["a", "b", "c"]) == [smaller, small]
+    def test_keeps_the_largest_limit_deployments_when_none_admits_the_batch(self) -> None:
+        smaller: Final = _deployment(1, deployment_id="smaller")
+        small: Final = _deployment(2, deployment_id="small")
+        other_small: Final = _deployment(2, deployment_id="other-small")
+        assert _admitted([small, smaller, other_small], ["a", "b", "c"]) == [small, other_small]
 
     def test_request_without_embedding_input_keeps_every_deployment(self) -> None:
         capped: Final = _deployment(1)
@@ -242,26 +253,26 @@ class TestDeploymentsAdmittingEmbeddingBatch:
     def test_keeps_no_deployment_while_only_a_cooling_one_admits_the_batch(self) -> None:
         capped: Final = _deployment(2, deployment_id="capped")
         cooling: Final = _deployment(None, deployment_id="cooling")
-        assert (
-            deployments_admitting_embedding_batch(
-                [capped], ["a", "b", "c"], None, before_cooldown=[capped, cooling], cooldown_ids=["cooling"]
-            )
-            == []
-        )
+        assert _admitted([capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})) == []
+
+    def test_cooling_deployment_the_request_cannot_route_to_does_not_hold_the_batch(self) -> None:
+        capped: Final = _deployment(2, deployment_id="capped")
+        cooling: Final = _deployment(None, deployment_id="cooling")
+        assert _admitted([capped], ["a", "b", "c"], cooling=(cooling,)) == [capped]
+
+    def test_paused_cooling_deployment_does_not_hold_the_batch(self) -> None:
+        capped: Final = _deployment(2, deployment_id="capped")
+        paused: Final = {"model_info": {"id": "cooling", "blocked": True}, "litellm_params": {}}
+        assert _admitted([capped], ["a", "b", "c"], cooling=(paused,), routable_cooling_ids=frozenset({"cooling"})) == [
+            capped
+        ]
 
     def test_keeps_every_deployment_when_the_cooling_one_also_rejects_the_batch(self) -> None:
         capped: Final = _deployment(2, deployment_id="capped")
         cooling: Final = _deployment(1, deployment_id="cooling")
-        assert deployments_admitting_embedding_batch(
-            [capped], ["a", "b", "c"], None, before_cooldown=[capped, cooling], cooldown_ids=["cooling"]
-        ) == [capped]
-
-    def test_admitting_deployment_dropped_by_another_filter_does_not_hold_the_request(self) -> None:
-        capped: Final = _deployment(2, deployment_id="capped")
-        tag_excluded: Final = _deployment(None, deployment_id="tag-excluded")
-        assert deployments_admitting_embedding_batch(
-            [capped], ["a", "b", "c"], None, before_cooldown=[capped, tag_excluded], cooldown_ids=[]
-        ) == [capped]
+        assert _admitted([capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})) == [
+            capped
+        ]
 
 
 @pytest.mark.parametrize(
@@ -338,14 +349,14 @@ class TestRouterEmbeddingBatchLimit:
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio
     async def test_oversized_batch_rejection_reaches_failure_callbacks(self, sync: bool) -> None:
-        failures: Final[list[Exception]] = []
+        failures: Final[list[tuple[Exception, object]]] = []
 
         class FailureRecorder(CustomLogger):
             def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-                failures.append(kwargs["exception"])
+                failures.append((kwargs["exception"], kwargs["litellm_params"].get(PROXY_REJECTED_BEFORE_ROUTING_KEY)))
 
             async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-                failures.append(kwargs["exception"])
+                failures.append((kwargs["exception"], kwargs["litellm_params"].get(PROXY_REJECTED_BEFORE_ROUTING_KEY)))
 
         recorder: Final = FailureRecorder()
         logging_obj: Final = LitellmLogging(
@@ -380,7 +391,50 @@ class TestRouterEmbeddingBatchLimit:
                     litellm_logging_obj=logging_obj,
                 )
             assert route.call_count == 0
-        assert failures == [excinfo.value]
+        assert failures == [(excinfo.value, True)]
+
+    @pytest.fixture
+    def _isolated_prometheus_registry(self) -> Iterator[None]:
+        def unregister_all() -> None:
+            for collector in tuple(REGISTRY._collector_to_names):
+                REGISTRY.unregister(collector)
+
+        unregister_all()
+        yield
+        unregister_all()
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_isolated_prometheus_registry")
+    async def test_oversized_batch_rejection_leaves_the_deployment_healthy_in_prometheus(self) -> None:
+        prometheus: Final = PrometheusLogger()
+        metadata: Final[dict[str, object]] = {}
+        logging_obj: Final = LitellmLogging(
+            model="embed",
+            messages=[],
+            stream=False,
+            call_type="aembedding",
+            start_time=time.time(),
+            litellm_call_id="embed-batch-prometheus",
+            function_id="embed-batch-prometheus",
+            dynamic_async_failure_callbacks=[prometheus],
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": metadata, "proxy_server_request": {}}
+        router: Final = _embedding_router(
+            provider_model="openai/text-embedding-3-small",
+            api_base=_OPENAI_EMBED_BASE,
+            max_embedding_batch_size=2,
+            deployment_id="embed-batch-capped",
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+            )
+            with pytest.raises(litellm.BadRequestError, match="3 inputs"):
+                await router.aembedding(
+                    model="embed", input=["one", "two", "three"], metadata=metadata, litellm_logging_obj=logging_obj
+                )
+        assert prometheus.litellm_deployment_state._metrics == {}
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio
@@ -512,6 +566,48 @@ class TestRouterEmbeddingBatchLimit:
             with pytest.raises(litellm.RateLimitError):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
             with pytest.raises(RouterRateLimitError):
+                await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
+            assert (capped_route.call_count, uncapped_route.call_count) == (0, 1)
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_oversized_batch_names_the_cap_while_a_paused_admitting_deployment_cools_down(
+        self, sync: bool
+    ) -> None:
+        uncapped_params: Final = {"model": "hosted_vllm/bge-m3", "api_key": "sk-fake", "api_base": _UNCAPPED_EMBED_BASE}
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _VLLM_EMBED_BASE,
+                    },
+                    "model_info": {"id": "vllm-embed-capped", "max_embedding_batch_size": 2},
+                },
+                {"model_name": "embed", "litellm_params": uncapped_params, "model_info": {"id": "vllm-embed-uncapped"}},
+            ],
+            num_retries=0,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+            )
+            with pytest.raises(litellm.RateLimitError):
+                await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
+            router.upsert_deployment(
+                Deployment(
+                    model_name="embed",
+                    litellm_params=LiteLLM_Params(**uncapped_params),
+                    model_info=ModelInfo(id="vllm-embed-uncapped", blocked=True),
+                )
+            )
+            with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
             assert (capped_route.call_count, uncapped_route.call_count) == (0, 1)
 
@@ -699,6 +795,97 @@ class TestRouterEmbeddingBatchLimit:
             with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
                 await router.aembedding(model="embed", input=["a", "b", "c"], metadata={"tags": ["team-a"]})
             assert (capped_route.call_count, uncapped_route.call_count) == (0, 0)
+
+    @pytest.mark.asyncio
+    async def test_oversized_batch_names_the_cap_while_another_tags_admitting_deployment_cools_down(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _VLLM_EMBED_BASE,
+                        "tags": ["team-a"],
+                    },
+                    "model_info": {"id": "team-a-capped", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _UNCAPPED_EMBED_BASE,
+                        "tags": ["team-b"],
+                    },
+                    "model_info": {"id": "team-b-uncapped"},
+                },
+            ],
+            enable_tag_filtering=True,
+            num_retries=0,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+            )
+            with pytest.raises(litellm.RateLimitError):
+                await router.aembedding(model="embed", input=["a", "b", "c"], metadata={"tags": ["team-b"]})
+            with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
+                await router.aembedding(model="embed", input=["a", "b", "c"], metadata={"tags": ["team-a"]})
+            assert (capped_route.call_count, uncapped_route.call_count) == (0, 1)
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_oversized_batch_names_the_cap_while_another_regions_admitting_deployment_cools_down(
+        self, sync: bool
+    ) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _VLLM_EMBED_BASE,
+                        "region_name": "eu",
+                    },
+                    "model_info": {"id": "eu-capped", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _UNCAPPED_EMBED_BASE,
+                        "region_name": "us",
+                    },
+                    "model_info": {"id": "us-uncapped"},
+                },
+            ],
+            enable_pre_call_checks=True,
+            num_retries=0,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+            )
+            with pytest.raises(litellm.RateLimitError):
+                await _call_embedding(
+                    router, sync=sync, model="embed", input=["a", "b", "c"], allowed_model_region="us"
+                )
+            with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
+                await _call_embedding(
+                    router, sync=sync, model="embed", input=["a", "b", "c"], allowed_model_region="eu"
+                )
+            assert (capped_route.call_count, uncapped_route.call_count) == (0, 1)
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio

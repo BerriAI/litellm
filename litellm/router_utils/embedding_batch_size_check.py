@@ -1,13 +1,17 @@
 """Validate the number of inputs in a single embeddings request."""
 
-from collections.abc import Collection, Generator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
+from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SELECTING_FOR_EMBEDDING: Final[ContextVar[bool]] = ContextVar("selecting_for_embedding", default=False)
 
@@ -85,18 +89,12 @@ def _str_keyed_or_empty(value: object) -> Mapping[str, object]:
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     model_info: Final = deployment.get("model_info")
     deployment_id: Final = model_info.get("id") if _is_str_keyed_mapping(model_info) else None
-    return deployment_id if isinstance(deployment_id, str) else None
+    return None if deployment_id is None else str(deployment_id)
 
 
-def _is_cooling_deployment_admitting_batch(
-    deployment: Mapping[str, object],
-    cooldown_ids: Collection[str],
-    input: object,
-    request_kwargs: Mapping[str, object],
-) -> bool:
-    return _deployment_id(deployment) in cooldown_ids and _deployment_admits_embedding_batch(
-        deployment, input, request_kwargs
-    )
+def _is_paused(deployment: Mapping[str, object]) -> bool:
+    model_info: Final = deployment.get("model_info")
+    return _is_str_keyed_mapping(model_info) and model_info.get("blocked") is True
 
 
 @contextmanager
@@ -113,23 +111,43 @@ def deployments_admitting_embedding_batch(
     deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
     input: object,
     request_kwargs: object,
-    before_cooldown: Sequence[Mapping[str, object]],
-    cooldown_ids: Collection[str],
-) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
-    """Keep the deployments whose input limit admits the request, none while only cooling ones do, else all."""
+) -> list[dict[str, object]] | None:  # mutable-ok: returns a mutable deployment list
+    """Keep the deployments whose input limit admits the request, all of them outside embedding selection, else None"""
     if not _SELECTING_FOR_EMBEDDING.get():
         return deployments
     kwargs: Final = _str_keyed_or_empty(request_kwargs)
     admitting: Final = [
         deployment for deployment in deployments if _deployment_admits_embedding_batch(deployment, input, kwargs)
     ]
-    if admitting:
-        return admitting
-    cooling_admits: Final = any(
-        _is_cooling_deployment_admitting_batch(deployment, cooldown_ids, input, kwargs)
+    return admitting or None
+
+
+def deployments_when_none_admits_embedding_batch(
+    deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
+    before_cooldown: Iterable[Mapping[str, object]],
+    routable_cooling_ids: frozenset[str],
+    input: object,
+    request_kwargs: object,
+) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
+    """None while an unpaused cooling deployment the request routes to admits it, so it waits out the cooldown,
+    else the deployments with the largest limit, so the 400 names the most the group accepts"""
+    kwargs: Final = _str_keyed_or_empty(request_kwargs)
+    routable_cooling: Final = (
+        deployment
         for deployment in before_cooldown
+        if _deployment_id(deployment) in routable_cooling_ids and not _is_paused(deployment)
     )
-    return [] if cooling_admits else deployments
+    if any(_deployment_admits_embedding_batch(deployment, input, kwargs) for deployment in routable_cooling):
+        return []
+    largest_limit: Final = max((_embedding_batch_limit(deployment) or 0 for deployment in deployments), default=0)
+    return [deployment for deployment in deployments if _embedding_batch_limit(deployment) == largest_limit]
+
+
+def flag_rejected_before_provider_call(logging_obj: "LiteLLMLoggingObj") -> None:
+    """Mark the request as never reaching a provider, so deployment health metrics skip its failure"""
+    litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
 
 
 def embedding_batch_too_large_error(
