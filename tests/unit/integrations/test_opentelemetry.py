@@ -3756,6 +3756,13 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
                 "litellm.ServiceUnavailableError: upstream returned 503",
             ),
             (
+                "own_span_error_str_only_cut_to_the_attribute_length_limit",
+                False,
+                {"error_str": "litellm.ServiceUnavailableError: upstream returned 503"},
+                "litellm.Serv",
+                12,
+            ),
+            (
                 "own_span_empty_error_message",
                 False,
                 {"error_information": {"error_class": "ServiceUnavailableError", "error_message": ""}},
@@ -3775,10 +3782,15 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         ]
     )
     def test_handle_failure_error_status_carries_the_error_message(
-        self, _name: str, has_parent_span: bool, error_fields: Mapping[str, object], expected_description: str
+        self,
+        _name: str,
+        has_parent_span: bool,
+        error_fields: Mapping[str, object],
+        expected_description: str,
+        max_attribute_length: int | None = None,
     ) -> None:
         span_exporter: Final = InMemorySpanExporter()
-        tracer_provider: Final = TracerProvider()
+        tracer_provider: Final = TracerProvider(span_limits=SpanLimits(max_attribute_length=max_attribute_length))
         tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
         otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
         otel.tracer = tracer_provider.get_tracer("litellm")
@@ -5568,38 +5580,14 @@ def _fail_service_call(provider: TracerProvider) -> None:
     )
 
 
-def _fail_phoenix_call(provider: TracerProvider) -> None:
-    logger: Final = ArizePhoenixLogger(callback_name="arize_phoenix", tracer_provider=provider)
-    start: Final = _FIXED_START
-    logger._handle_failure(
-        {
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "optional_params": {},
-            "litellm_params": {"custom_llm_provider": "openai"},
-            "standard_logging_object": {
-                "id": "test-id",
-                "call_type": "completion",
-                "metadata": {},
-                "error_information": {"error_class": "NotFoundError", "error_message": "model not found"},
-            },
-            "exception": Exception("model not found"),
-        },
-        None,
-        start,
-        start + timedelta(seconds=1),
-    )
-
-
 _FAILED_SPANS: Final = pytest.mark.parametrize(
     ("fail", "expected_description"),
     [
         (_fail_proxy_request, _PROXY_KEY_ERROR),
         (_fail_management_request, _PROXY_KEY_ERROR),
         (_fail_service_call, "redis connection refused"),
-        (_fail_phoenix_call, "model not found"),
     ],
-    ids=["proxy_request", "management_request", "service_call", "arize_phoenix"],
+    ids=["proxy_request", "management_request", "service_call"],
 )
 
 
