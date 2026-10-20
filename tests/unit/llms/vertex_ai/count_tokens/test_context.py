@@ -1,12 +1,12 @@
 import asyncio
 import base64
 import logging
-import time
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 from typing import Final, Literal
 from unittest.mock import patch
 
@@ -297,25 +297,37 @@ async def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: L
 _PNG_BYTES: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
-_DOWNLOAD_SECONDS: Final = 0.5
+_LOOP_PROOF_TIMEOUT_SECONDS: Final = 5
 
 
-class _SlowPngHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        time.sleep(_DOWNLOAD_SECONDS)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(_PNG_BYTES)))
-        self.end_headers()
-        self.wfile.write(_PNG_BYTES)
+@dataclass(frozen=True, slots=True)
+class _LoopProbe:
+    request_arrived: Event = field(default_factory=Event)
+    loop_ran: Event = field(default_factory=Event)
+    loop_ran_while_download_pending: Event = field(default_factory=Event)
 
-    def log_message(self, format: str, *args: object) -> None:
-        return None
+
+def _png_handler_waiting_for_loop(probe: _LoopProbe) -> type[BaseHTTPRequestHandler]:
+    class _PngHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            probe.request_arrived.set()
+            if probe.loop_ran.wait(_LOOP_PROOF_TIMEOUT_SECONDS):
+                probe.loop_ran_while_download_pending.set()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(_PNG_BYTES)))
+            self.end_headers()
+            self.wfile.write(_PNG_BYTES)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    return _PngHandler
 
 
 @contextmanager
-def _slow_png_server() -> Generator[str, None, None]:
-    with ThreadingHTTPServer(("127.0.0.1", 0), _SlowPngHandler) as server:
+def _png_server_waiting_for_loop(probe: _LoopProbe) -> Generator[str, None, None]:
+    with ThreadingHTTPServer(("127.0.0.1", 0), _png_handler_waiting_for_loop(probe)) as server:
         thread: Final = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -324,10 +336,9 @@ def _slow_png_server() -> Generator[str, None, None]:
             server.shutdown()
 
 
-async def _event_loop_wake_delay(nap_seconds: float) -> float:
-    started: Final = time.monotonic()
-    await asyncio.sleep(nap_seconds)
-    return time.monotonic() - started
+async def _run_loop_once_download_starts(probe: _LoopProbe) -> None:
+    assert await asyncio.to_thread(probe.request_arrived.wait, _LOOP_PROOF_TIMEOUT_SECONDS)
+    probe.loop_ran.set()
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
@@ -335,10 +346,11 @@ async def test_remote_image_downloads_without_blocking_the_event_loop(
     custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
-    with _slow_png_server() as base_url:
+    probe: Final = _LoopProbe()
+    with _png_server_waiting_for_loop(probe) as base_url:
         image_url: Final = f"{base_url}/{uuid.uuid4().hex}.png"
-        wake_delay, contents = await asyncio.gather(
-            _event_loop_wake_delay(0.05),
+        _, contents = await asyncio.gather(
+            _run_loop_once_download_starts(probe),
             gemini_count_contents(
                 (
                     {
@@ -365,7 +377,7 @@ async def test_remote_image_downloads_without_blocking_the_event_loop(
             ],
         }
     ]
-    assert wake_delay < _DOWNLOAD_SECONDS / 2
+    assert probe.loop_ran_while_download_pending.is_set()
 
 
 class _MissingImageHandler(BaseHTTPRequestHandler):
