@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from itertools import chain
@@ -16,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.caching.dual_cache as dual_cache_module
+import litellm.router_utils.health_state_cache as health_state_cache_module
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
@@ -559,14 +559,19 @@ async def test_a_direct_cooldown_read_covers_only_the_groups_deployments_and_sti
 
 
 @pytest.mark.asyncio
-async def test_a_cooling_deployment_the_health_check_already_dropped_still_shows_in_the_no_deployment_error() -> None:
+async def test_a_cooling_deployment_the_health_check_already_dropped_still_shows_in_the_no_deployment_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock: Final = 1_000_000.0
+    monkeypatch.setattr(health_state_cache_module.time, "time", lambda: clock)
     router: Final = Router(
         model_list=[_deployment(deployment_id) for deployment_id in sorted(_GROUP_IDS)],
         enable_health_check_routing=True,
     )
     router.health_state_cache.set_deployment_health_states(
-        {"dep-a": {"is_healthy": False, "timestamp": time.time(), "reason": "probe failed"}}
+        {"dep-a": {"is_healthy": False, "timestamp": clock, "reason": "probe failed"}}
     )
+    assert router.health_state_cache.get_unhealthy_deployment_ids() == {"dep-a"}
     memory: Final = router.cooldown_cache.cooldown_store.in_memory_cache
     assert memory is not None
     for model_id in sorted(_GROUP_IDS):
