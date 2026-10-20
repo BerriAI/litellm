@@ -354,8 +354,38 @@ async def chunks_of(chunks: list[dict[str, object]]) -> AsyncIterator[dict[str, 
                 }
             ],
         ),
+        (
+            "/chat/completions",
+            (litellm, "acompletion"),
+            [
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 10,
+                        "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 100},
+                    },
+                }
+            ],
+        ),
+        (
+            "/v1/responses",
+            (litellm, "aresponses"),
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "usage": {
+                            "input_tokens": 1000,
+                            "output_tokens": 10,
+                            "input_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 100},
+                        }
+                    },
+                }
+            ],
+        ),
     ],
-    ids=["messages", "chat", "responses"],
+    ids=["messages", "chat", "responses", "chat cache_write_tokens", "responses cache_write_tokens"],
 )
 async def test_sdk_stream_cost_prices_cached_prompt_tokens_like_litellm(
     monkeypatch: pytest.MonkeyPatch, path: str, sdk: tuple[object, str], chunks: list[dict[str, object]]

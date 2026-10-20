@@ -202,8 +202,12 @@ def prompt_cache_from_mapping(usage: object) -> PromptCache:
     fields: Final = json_object(usage)
     details: Final = json_object(fields.get("prompt_tokens_details", fields.get("input_tokens_details")))
     return PromptCache(
-        read_tokens=_as_int(fields.get("cache_read_input_tokens", details.get("cached_tokens"))),
-        creation_tokens=_as_int(fields.get("cache_creation_input_tokens", details.get("cache_creation_tokens"))),
+        read_tokens=_as_int(fields.get("cache_read_input_tokens") or details.get("cached_tokens")),
+        creation_tokens=_as_int(
+            fields.get("cache_creation_input_tokens")
+            or details.get("cache_write_tokens")
+            or details.get("cache_creation_tokens")
+        ),
         outside_input="prompt_tokens" not in fields and "input_tokens_details" not in fields,
     )
 
