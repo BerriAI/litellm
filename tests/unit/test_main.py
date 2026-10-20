@@ -6,10 +6,11 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
-from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
@@ -42,7 +43,9 @@ from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
@@ -10042,6 +10045,30 @@ def retry_upstream(monkeypatch: pytest.MonkeyPatch):
         yield upstream
 
 
+@pytest.fixture
+def logging_futures() -> Iterator[queue.SimpleQueue[Future[object]]]:
+    futures: Final = queue.SimpleQueue[Future[object]]()
+    real_submit: Final = logging_executor.submit
+
+    def submit_and_track(fn: Callable[..., object], *args: object) -> Future[object]:
+        future: Final = real_submit(fn, *args)
+        futures.put(future)
+        return future
+
+    with patch.object(  # test-quality-ok: wraps the real submit only to collect the futures to join, the pool still runs
+        logging_executor, "submit", side_effect=submit_and_track
+    ):
+        yield futures
+
+
+async def _finish_logging(logging_futures: queue.SimpleQueue[Future[object]]) -> None:
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+    while not logging_futures.empty():
+        await asyncio.wrap_future(logging_futures.get())
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
 async def _completion_with_retries_kwargs(sync_mode: bool, upstream: _RetryUpstream, **kwargs: object) -> object:
     request: Final = {
         "model": upstream.model,
@@ -10340,6 +10367,7 @@ class _OutcomeRecorder(CustomLogger):
 )
 async def test_retried_completion_logs_only_the_outcome_the_caller_gets(
     retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
     monkeypatch: pytest.MonkeyPatch,
     sync_mode: bool,
     second_response: Callable[[], httpx.Response],
@@ -10354,13 +10382,31 @@ async def test_retried_completion_logs_only_the_outcome_the_caller_gets(
             await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=1)
         except litellm.AuthenticationError:
             pass
-    for _ in range(100):
-        if recorder.outcomes:
-            break
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.2)
+    await _finish_logging(logging_futures)
 
     assert tuple(recorder.outcomes) == expected_outcomes
+
+
+@pytest.mark.asyncio
+async def test_async_retry_runs_the_callers_async_success_callback_without_emptying_its_list(
+    retry_upstream: respx.MockRouter, logging_futures: queue.SimpleQueue[Future[object]]
+):
+    successes: Final = queue.SimpleQueue[object]()
+
+    async def record_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        successes.put(response)
+
+    success_callback: Final = [record_success]
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "1"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, success_callback=success_callback)
+    await _finish_logging(logging_futures)
+
+    assert successes.qsize() == 1
+    assert success_callback == [record_success]
 
 
 @pytest.mark.asyncio

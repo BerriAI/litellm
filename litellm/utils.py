@@ -1087,6 +1087,10 @@ def _ocr_document_summary(document: object) -> str:
     return kind
 
 
+def _runs_as_async_success_callback(callback: str | Callable[..., object] | CustomLogger) -> bool:
+    return check_coroutine(callback) or callback in ("dynamodb", "s3")
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 
 
@@ -1202,20 +1206,15 @@ def function_setup(
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
         dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
-            removed_async_items = []
-            for index, callback in enumerate(kwargs["success_callback"]):
-                if coroutine_checker.is_async_callable(callback) or callback == "dynamodb" or callback == "s3":
-                    if dynamic_async_success_callbacks is not None and isinstance(
-                        dynamic_async_success_callbacks, list
-                    ):
-                        dynamic_async_success_callbacks.append(callback)
-                    else:
-                        dynamic_async_success_callbacks = [callback]
-                    removed_async_items.append(index)
-            # Pop the async items from success_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                kwargs["success_callback"].pop(index)
-            dynamic_success_callbacks = kwargs.pop("success_callback")
+            requested_success_callbacks: Final[list[str | Callable[..., object] | CustomLogger]] = kwargs.pop(
+                "success_callback"
+            )
+            dynamic_async_success_callbacks = [
+                callback for callback in requested_success_callbacks if _runs_as_async_success_callback(callback)
+            ] or None
+            dynamic_success_callbacks = [
+                callback for callback in requested_success_callbacks if not _runs_as_async_success_callback(callback)
+            ]
         if kwargs.get("failure_callback", None) is not None and isinstance(kwargs["failure_callback"], list):
             dynamic_failure_callbacks = kwargs.pop("failure_callback")
 
@@ -2371,7 +2370,7 @@ def client(original_function):
                 and bool(num_retries)
                 and not is_acompletion_litellm_router_call
                 and not isinstance(e, ImportError)
-            )  # router has its own logic for retrying
+            )
             if retries_apply:
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
             status_code: Final[object] = getattr(e, "status_code", None)
