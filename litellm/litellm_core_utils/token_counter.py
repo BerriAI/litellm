@@ -447,23 +447,19 @@ def _is_openai_chat_model(model: str) -> bool:
     return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
 
 
-_OPENAI_FILE_INPUT_PROVIDERS: Final = frozenset({"openai", "azure"})
+def _openai_model_family(model: str) -> str | None:
+    deployment_name: Final = model.removeprefix("openai/").removeprefix("azure/").rsplit("/", 1)[-1]
+    words: Final = deployment_name.split("-")
+    prefixes: Final = ("-".join(words[:end]) for end in range(len(words), 0, -1))
+    return next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
 
 
-def _served_through_openai_file_inputs(bare_name: str) -> bool:
-    entries: Final = (litellm.model_cost.get(key) for key in (bare_name, f"azure/{bare_name}", f"openai/{bare_name}"))
-    return any(
-        isinstance(entry, Mapping) and entry.get("litellm_provider") in _OPENAI_FILE_INPUT_PROVIDERS
-        for entry in entries
-    )
+def _is_openai_or_azure_model(model: str) -> bool:
+    return _is_openai_chat_model(model) or _openai_model_family(model) is not None
 
 
 def _pdf_page_pricing(model: str | None) -> PdfPagePricing:
-    name: Final = model or ""
-    bare_name: Final = name.removeprefix("openai/").removeprefix("azure/")
-    if _is_openai_chat_model(name) or _is_openai_chat_model(bare_name) or _served_through_openai_file_inputs(bare_name):
-        return "openai"
-    return "claude"
+    return "openai" if _is_openai_or_azure_model(model or "") else "claude"
 
 
 def token_counter(
@@ -794,9 +790,16 @@ def openai_tokenizer_encoding(model: str) -> "Encoding":
     return get_encoding(openai_tokenizer_encoding_name(model))
 
 
+def _tiktoken_model_name(model: str) -> str:
+    listed_name: Final = _fix_model_name(model)
+    if listed_name != "gpt-3.5-turbo":
+        return listed_name
+    return _fix_model_name(_openai_model_family(model) or model)
+
+
 def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding."""
-    model_to_use: Final = _fix_model_name(model)
+    model_to_use: Final = _tiktoken_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:

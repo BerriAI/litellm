@@ -2021,7 +2021,18 @@ def test_openai_model_keeps_the_text_of_a_page_whose_forms_nest_too_deep_to_walk
 _NON_LATIN_SAMPLE: Final = "Привет, как дела? これは日本語のテキストです。 Ceci est un texte en français: éèàç. " * 8
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-5.4-mini", "gpt-6-sol", "azure/gpt-41"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.6-sol",
+        "gpt-5.4-mini",
+        "gpt-6-sol",
+        "azure/gpt-41",
+        "azure/gpt-5.6-sol",
+        "eu/gpt-5.6-sol",
+        "gpt-5.6-sol-2026-07-09",
+    ],
+)
 def test_openai_models_tiktoken_does_not_know_count_with_o200k(model: str):
     """OpenAI models newer than the installed tiktoken's map bill text with o200k_base: measured 2026-10-20 on
     /v1/responses/input_tokens, gpt-5, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol, and gpt-6-sol all billed 255 for a
@@ -2031,7 +2042,17 @@ def test_openai_models_tiktoken_does_not_know_count_with_o200k(model: str):
     assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(o200k.encode(_NON_LATIN_SAMPLE))
 
 
-@pytest.mark.parametrize("model", ["", "anthropic/claude-fable-5", "DeepSeek-V4-Flash-0731", "my-private-model"])
+@pytest.mark.parametrize(("deployment_name", "model"), [("azure/gpt-4", "gpt-4"), ("eu/gpt-35-turbo", "gpt-35-turbo")])
+def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deployment_name: str, model: str):
+    assert token_counter_new(model=deployment_name, text=_NON_LATIN_SAMPLE) == token_counter_new(
+        model=model, text=_NON_LATIN_SAMPLE
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["", "anthropic/claude-fable-5", "DeepSeek-V4-Flash-0731", "my-private-model", "azure/mistral-large-latest", "command-r-plus"],
+)
 def test_non_openai_models_keep_pricing_pdf_pages_as_claude_renders_them(model: str):
     """Only known OpenAI and Azure OpenAI models switch to OpenAI's PDF billing, so an empty or unknown model keeps
     Claude's text plus rendered page image, 1534 tokens for a blank Letter page."""
