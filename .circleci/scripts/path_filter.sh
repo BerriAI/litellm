@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: path_filter.sh <backend|client|provider-harness|redis-compat>}"
+category="${1:?usage: path_filter.sh <backend|client|windows-release>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run_full() {

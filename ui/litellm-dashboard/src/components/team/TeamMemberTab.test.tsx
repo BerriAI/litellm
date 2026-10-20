@@ -316,6 +316,91 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByText("Jul 15, 2026")).toBeInTheDocument();
   });
 
+  it("shows each member the values from its own membership row", () => {
+    const baseMembership = createMockTeamData().team_memberships[0];
+    const teamData = createMockTeamData({
+      team_memberships: [
+        {
+          ...baseMembership,
+          spend: 1.25,
+          total_spend: 10,
+          litellm_budget_table: { ...baseMembership.litellm_budget_table, max_budget: 250 },
+        },
+        {
+          ...baseMembership,
+          user_id: "user2@test.com",
+          spend: 7.5,
+          total_spend: 20,
+          litellm_budget_table: {
+            ...baseMembership.litellm_budget_table,
+            max_budget: 2500,
+            rpm_limit: 7,
+            tpm_limit: 70,
+          },
+        },
+      ],
+    });
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const user1Row = screen.getByRole("row", { name: /user1@test\.com/ });
+    expect(within(user1Row).getByText("$1.25")).toBeInTheDocument();
+    expect(within(user1Row).getByText("$10.00")).toBeInTheDocument();
+    expect(within(user1Row).getByText("$250.00")).toBeInTheDocument();
+    expect(within(user1Row).getByText("100 RPM / 10000 TPM")).toBeInTheDocument();
+
+    const user2Row = screen.getByRole("row", { name: /user2@test\.com/ });
+    expect(within(user2Row).getByText("$7.50")).toBeInTheDocument();
+    expect(within(user2Row).getByText("$20.00")).toBeInTheDocument();
+    expect(within(user2Row).getByText("$2,500.00")).toBeInTheDocument();
+    expect(within(user2Row).getByText("7 RPM / 70 TPM")).toBeInTheDocument();
+  });
+
+  it("shows a member's new spend and budget once the team is refetched", () => {
+    const baseMembership = createMockTeamData().team_memberships[0];
+    const teamWith = (spend: number, maxBudget: number) =>
+      createMockTeamData({
+        team_memberships: [
+          {
+            ...baseMembership,
+            spend,
+            litellm_budget_table: { ...baseMembership.litellm_budget_table, max_budget: maxBudget },
+          },
+        ],
+      });
+    const renderTab = (teamData: TeamData) => (
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />
+    );
+
+    const { rerender } = renderWithProviders(renderTab(teamWith(1.25, 250)));
+    rerender(renderTab(teamWith(3.5, 400)));
+
+    const row = screen.getByRole("row", { name: /user1@test\.com/ });
+    expect(within(row).getByText("$3.50")).toBeInTheDocument();
+    expect(within(row).getByText("$400.00")).toBeInTheDocument();
+    expect(within(row).queryByText("$1.25")).not.toBeInTheDocument();
+  });
+
   it("should display formatted budget and Unlimited for member with no budget", () => {
     renderWithProviders(
       <TeamMembersComponent
@@ -432,8 +517,29 @@ describe("TeamMembersComponent", () => {
       allowed_models: [],
       temp_budget_increase: 0,
       temp_budget_expiry: "2030-01-02T03:04:00Z",
+      model_max_budget: null,
     };
     expect(seedMemberBudgetFields({ user_id: "user1@test.com", role: "member" }, budget)).toStrictEqual(seeded);
+  });
+
+  it("seeds the team's default per-model budget when the member has no per-model override", () => {
+    const teamDefault = { "gpt-4o": { max_budget: 10, budget_duration: "30d" } };
+    const ownRowWithoutModelCaps = {
+      ...createMockTeamData().team_memberships[0].litellm_budget_table,
+      model_max_budget: {},
+    };
+    const memberOverride = { "gpt-4o": { max_budget: 2.5, budget_duration: "7d" } };
+    const ownRowWithModelCaps = { ...ownRowWithoutModelCaps, model_max_budget: memberOverride };
+
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithoutModelCaps, teamDefault).model_max_budget,
+    ).toBe(teamDefault);
+    expect(seedMemberBudgetFields({ user_id: "u", role: "user" }, undefined, teamDefault).model_max_budget).toBe(
+      teamDefault,
+    );
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithModelCaps, teamDefault).model_max_budget,
+    ).toBe(memberOverride);
   });
 
   it("seeds null temporary budget fields for a member without a budget row", () => {

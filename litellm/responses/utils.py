@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -10,7 +10,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
     OutputTokensDetails,
@@ -73,6 +73,26 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    declared_reasoning_efforts: Collection[str],
+) -> Mapping[str, object]:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    if (
+        declared_reasoning_efforts
+        and isinstance(config, OpenAIResponsesAPIConfig)
+        and type(config).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+    ):
+        return config.map_openai_params_for_deployment(
+            params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 class ResponsesAPIRequestUtils:
@@ -202,6 +222,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         """
         Get optional parameters for the responses API.
@@ -234,10 +255,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                declared_reasoning_efforts,
             ),
             strict=True,
         )
@@ -1294,3 +1317,19 @@ class ResponseAPILoggingUtils:
         return chat_usage
 
     _transform_response_api_usage_to_chat_usage = transform_response_api_usage_to_chat_usage
+
+
+def auto_reasoning_summary(model: str, custom_llm_provider: object) -> ReasoningSummaryLevel:
+    """The summary level the auto summary injects for a target, read from its Responses API config."""
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        provider: Final = (
+            custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+        )
+    except litellm.exceptions.BadRequestError:
+        return "detailed"
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider, model.removeprefix(f"{provider}/")
+    )
+    return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()
