@@ -48,17 +48,3 @@ class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionCon
             "languages",
             "stream",
         ]
-
-    def transform_audio_transcription_request(
-        self,
-        model: str,
-        audio_file: FileTypes,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-    ) -> AudioTranscriptionRequestData:
-        data: Final = {
-            "model": model,
-            "file": audio_file,
-            **optional_params,
-        }
-        return AudioTranscriptionRequestData(data=data)

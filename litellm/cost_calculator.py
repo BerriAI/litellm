@@ -352,13 +352,36 @@ def _transcription_uses_token_pricing(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def _bills_provider_transcription_seconds(model: str | None, custom_llm_provider: str | None) -> bool:
+def _transcription_duration_for_cost(
+    completion_response: object, model: str | None, custom_llm_provider: str | None
+) -> float:
+    provider_duration: Final = _get_transcription_usage_duration(completion_response)
+    transcription_info: Final = (
+        _get_model_info_or_none(model, custom_llm_provider)
+        if model is not None and custom_llm_provider is not None
+        else None
+    )
+    transcription_metadata: Final = (
+        as_str_mapping(transcription_info.get("provider_specific_entry")) if transcription_info is not None else None
+    )
+    if (
+        provider_duration is not None
+        and transcription_metadata is not None
+        and transcription_metadata.get("transcription_usage_duration") == 1
+    ):
+        return provider_duration
+    hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
+    measured_duration: Final = normalized_audio_duration_seconds(
+        hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
+    )
+    if measured_duration is not None and measured_duration > 0:
+        return measured_duration
     if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
-        return False
+        return 0.0
     transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
     )
-    return isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig)
+    return (provider_duration or 0.0) if isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig) else 0.0
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1883,32 +1906,8 @@ def completion_cost(
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils.count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    # Check _hidden_params first (duration stored there to
-                    # avoid polluting the response body), then fall back to
-                    # the response attribute (for verbose_json responses that
-                    # naturally include duration from the provider).
-                    _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    provider_duration, transcription_info = (
-                        _get_transcription_usage_duration(completion_response),
-                        _get_model_info_or_none(requested_model, custom_llm_provider)
-                        if requested_model is not None and custom_llm_provider is not None
-                        else None,
-                    )
-                    audio_transcription_file_duration = (
-                        provider_duration
-                        if provider_duration is not None
-                        and transcription_info is not None
-                        and (
-                            transcription_metadata := as_str_mapping(transcription_info.get("provider_specific_entry"))
-                        )
-                        is not None
-                        and transcription_metadata.get("transcription_usage_duration") == 1
-                        else _hidden.get("audio_transcription_duration", getattr(completion_response, "duration", 0.0))
-                        or (
-                            (provider_duration or 0.0)
-                            if _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
-                            else 0.0
-                        )
+                    audio_transcription_file_duration = _transcription_duration_for_cost(
+                        completion_response, requested_model, custom_llm_provider
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
