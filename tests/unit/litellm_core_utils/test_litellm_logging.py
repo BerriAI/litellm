@@ -2462,6 +2462,40 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("different_headers", [False, True])
+async def test_completed_success_preserves_generic_logger_configuration(
+    monkeypatch: pytest.MonkeyPatch, different_headers: bool
+) -> None:
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+
+    first: Final = GenericAPILogger(
+        endpoint="https://logs.example.test/events",
+        headers={"Authorization": "Bearer first"},
+        event_types=["llm_api_success"],
+    )
+    second: Final = GenericAPILogger(
+        endpoint="https://logs.example.test/events",
+        headers={"Authorization": "Bearer second" if different_headers else "Bearer first"},
+        event_types=["llm_api_success"] if different_headers else ["llm_api_failure"],
+    )
+    monkeypatch.setattr(litellm, "success_callback", [first])
+    monkeypatch.setattr(litellm, "_async_success_callback", [second])
+    monkeypatch.setattr(litellm, "generic_api_use_v1", False)
+    logging_obj: Final = _async_request_logging_obj("distinct-generic-loggers", [])
+    response: Final = ModelResponse(id="chatcmpl-distinct-generic-loggers")
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_success_handler(response, now, now)
+
+    assert len(first.log_queue) == 1
+    assert first.log_queue[0]["id"] == response.id
+    if different_headers:
+        assert second.log_queue == first.log_queue
+    else:
+        assert second.log_queue == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("registration", ["sync", "async", "overlapping", "equivalent", "distinct"])
 @pytest.mark.parametrize("kind", ["sync", "async", "dual"])
 @pytest.mark.parametrize("compatibility_first", [False, True])
@@ -2537,7 +2571,7 @@ async def test_completed_success_selects_one_implemented_hook(
         await logging_obj.async_success_handler(response, now, now)
         logging_obj.handle_sync_success_callbacks_for_async_calls(response, now, now)
 
-    expected_count: Final = 2 if registration == "distinct" else 1
+    expected_count: Final = 2 if registration in ("equivalent", "distinct") else 1
     assert events.qsize() == expected_count
     for _ in range(expected_count):
         hook, response_id, cost, thread_id = events.get_nowait()
