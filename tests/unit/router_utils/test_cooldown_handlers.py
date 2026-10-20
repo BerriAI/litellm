@@ -735,6 +735,27 @@ class TestRouterLevelAllowedFailsEqualToDefault:
 
         assert decisions == [False] * (litellm.allowed_fails + 1)
 
+    def test_default_allowed_fails_saved_through_update_settings_keeps_the_rate_based_default(self):
+        router: Final = _make_router(
+            model_list=[
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
+            ],
+        )
+        router.update_settings(allowed_fails=litellm.allowed_fails)
+        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+
+        decisions: Final = [
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="primary",
+                exception_status=503,
+                original_exception=_exception,
+            )
+            for _ in range(litellm.allowed_fails + 1)
+        ]
+
+        assert decisions == [False] * (litellm.allowed_fails + 1)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
@@ -2985,7 +3006,7 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
     assert tuple(cooldown_deployments) == ()
 
 
-async def _complete_like_the_proxy(router: Router, model: str) -> object:
+async def _complete_like_the_proxy(router: Router, model: str) -> str:
     logging_obj, request = litellm.utils.function_setup(
         original_function="acompletion",
         rules_obj=litellm.utils.Rules(),
@@ -2995,7 +3016,9 @@ async def _complete_like_the_proxy(router: Router, model: str) -> object:
         litellm_call_id=str(uuid.uuid4()),
     )
     response: Final = await router.acompletion(**request, litellm_logging_obj=logging_obj)
-    return response._hidden_params.get("model_id")
+    model_id: Final = response._hidden_params["model_id"]
+    assert isinstance(model_id, str)
+    return model_id
 
 
 @pytest.mark.asyncio
