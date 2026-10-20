@@ -4209,14 +4209,14 @@ async def test_completed_responses_post_call_releases_parallel_slot() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() -> None:
-    api_key = hash_token("sk-mcp-auto-execute")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(
+    api_key: Final = hash_token("sk-mcp-auto-execute")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
-    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
-    owner_call_id = "mcp-auto-execute-owner"
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = "mcp-auto-execute-owner"
 
     async def in_flight() -> int:
         return handler._gauge_in_flight_from_cache_value(
@@ -4241,9 +4241,7 @@ async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() 
     async def pre_call_from_another_request(
         data: dict[str, object], call_type: str
     ) -> None:
-        await asyncio.create_task(
-            pre_call(data, call_type), context=contextvars.Context()
-        )
+        await contextvars.Context().run(asyncio.create_task, pre_call(data, call_type))
 
     await pre_call(
         {"model": "gpt-4o-mini", "input": "add 2 and 3", "litellm_call_id": owner_call_id},
