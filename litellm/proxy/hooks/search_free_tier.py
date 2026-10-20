@@ -108,7 +108,7 @@ async def apply_search_free_tier(
             "apply_search_free_tier is on but the proxy has no Redis, grounding is billed at full price"
         )
         return response_cost
-    provider: Final = sl_object.get("custom_llm_provider") or model_info["litellm_provider"]
+    provider: Final = sl_object["custom_llm_provider"] or model_info["litellm_provider"]
     key: Final = search_free_tier_key(provider, allowance, now)
     try:
         total_after: Final = await counter.async_increment(key, units, ttl=search_free_tier_ttl(allowance, now))
