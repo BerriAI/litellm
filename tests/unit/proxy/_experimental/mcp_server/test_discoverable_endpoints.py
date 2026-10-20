@@ -20,9 +20,9 @@ if TYPE_CHECKING:
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
     from fastapi import APIRouter
+    from respx import MockRouter
 
     from litellm.proxy.auth.handle_jwt import JWTHandler
-
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -11981,6 +11981,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     prisma: Final = MagicMock()
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return handler, signing_key
 
@@ -12568,10 +12569,12 @@ async def test_oauth_write_denial_does_not_erase_identity_binding(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("admin_only", [False, True])
+@pytest.mark.parametrize("cimd", [False, True])
 async def test_signed_oauth_callback_honors_credential_write_policy(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     admin_only: bool,
+    cimd: bool,
 ) -> None:
     import httpx
     import litellm
@@ -12586,7 +12589,8 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
 
     server: Final = MCPServer(
         server_id="signed-server", name="signed-server", transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="client",
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id=None if cimd else "client",
+        client_id_metadata_document_supported=cimd,
         token_url="https://upstream.example.test/token",
     )
     monkeypatch.setattr(proxy_server, "general_settings", {
@@ -12594,6 +12598,7 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
         "admin_only_routes": [f"/v1/mcp/server/{server.server_id}/oauth-user-credential"] if admin_only else [],
     })
     monkeypatch.setenv("LITELLM_SALT_KEY", "signed-oauth-test-salt")
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
     manager: Final = MagicMock()
     manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
     manager.invalidate_user_oauth_token_cache = AsyncMock()
@@ -12629,6 +12634,16 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
         assert table.upsert.call_args.kwargs["where"]["user_id_server_id"] == {
             "user_id": "jwt-owner", "server_id": server.server_id,
         }
+
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+        payload: Final = json.loads(decrypt_value_helper(
+            table.upsert.call_args.kwargs["data"]["create"]["credential_b64"], "credential_b64"
+        ))
+        if cimd:
+            assert payload["cimd_client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+        else:
+            assert "cimd_client_id" not in payload
 
 
 @pytest.mark.asyncio
@@ -13362,3 +13377,600 @@ async def test_register_application_type_keeps_no_registration_endpoint_fallback
         "redirect_uris": ["https://gateway.example/callback"],
     }
     assert len(upstream.calls) == 0
+
+
+def _cimd_oauth_server():
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer.model_validate(
+        {
+            "server_id": "cimd-server",
+            "name": "cimd-server",
+            "server_name": "cimd-server",
+            "url": "https://mcp.example.com/mcp",
+            "transport": "http",
+            "auth_type": "oauth2",
+            "oauth2_flow": "authorization_code",
+            "authorization_url": "https://idp.example.com/authorize",
+            "token_url": "https://idp.example.com/token",
+            "client_id_metadata_document_supported": True,
+        }
+    )
+
+
+def _cimd_request():
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [],
+            "server": ("gateway.example.com", 443),
+            "client": ("127.0.0.1", 10000),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_cimd_registration_returns_https_identity_without_dcr(monkeypatch, respx_mock):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    response = await endpoints.register_client_with_server(
+        _cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None
+    )
+    body = json.loads(response.body) if hasattr(response, "body") else response
+    assert body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in body
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_cimd_authorization_uses_metadata_identity_and_s256(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
+    response = await endpoints.authorize_with_server(
+        _cimd_request(),
+        _cimd_oauth_server(),
+        "placeholder",
+        "https://gateway.example.com/ui/",
+        code_challenge="a" * 43,
+        code_challenge_method="S256",
+    )
+    params = parse_qs(urlparse(response.headers["location"]).query)
+    assert params["client_id"] == ["https://gateway.example.com/oauth/client-metadata.json"]
+    assert params["redirect_uri"] == ["https://gateway.example.com/callback"]
+    assert params["code_challenge_method"] == ["S256"]
+
+
+@pytest.mark.asyncio
+async def test_cimd_authorization_rejects_missing_pkce(monkeypatch):
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.authorize_with_server(
+            _cimd_request(), _cimd_oauth_server(), "placeholder", "https://gateway.example.com/ui/"
+        )
+    assert exc.value.status_code == 400
+
+
+def test_cimd_refresh_request_uses_same_identity_without_caller_secret(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    request = build_upstream_oauth2_token_request(
+        _cimd_oauth_server(), auth_method=None, client_id="placeholder", client_secret="dummy"
+    )
+    assert request.body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in request.body
+    assert "Authorization" not in request.headers
+
+
+@pytest.mark.parametrize(
+    "base", [None, "http://gateway.example.com", "invalid", "https://user:secret@gateway.example.com"]
+)
+@pytest.mark.asyncio
+async def test_cimd_without_stable_https_origin_reports_actionable_error(monkeypatch, base, respx_mock):
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.register_client_with_server(_cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None)
+    assert exc.value.status_code == 400
+    assert "HTTPS PROXY_BASE_URL" in str(exc.value.detail)
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize("base", [None, "http://gateway.example.com"])
+@pytest.mark.asyncio
+async def test_cimd_without_https_origin_falls_back_to_available_dcr(monkeypatch, base, respx_mock):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    assert json.loads(response.body)["client_id"] == "registered-client"
+    assert post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cimd_yields_to_dynamic_registration_when_the_authorization_server_offers_both(monkeypatch, respx_mock):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    assert json.loads(response.body)["client_id"] == "registered-client"
+    assert post.call_count == 1
+    assert get_cimd_client_id(server) is None
+
+
+@pytest.mark.asyncio
+async def test_cimd_is_preferred_over_dynamic_registration_when_the_deployment_opts_in(monkeypatch, respx_mock):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_prefer_client_id_metadata_document": True})
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    body = json.loads(response.body) if hasattr(response, "body") else response
+    assert body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in body
+    assert post.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"client_id": "static-client", "client_secret": "static-secret"},
+        {"client_id": "persisted-dcr-client", "dcr_issuer": "https://idp.example.com"},
+        {"client_id_metadata_document_supported": False},
+        {"auth_type": "oauth_delegate", "dcr_bridge": True},
+        {"auth_type": "true_passthrough", "dcr_bridge": True},
+        {"delegate_auth_to_upstream": True},
+        {"oauth2_flow": "client_credentials"},
+        {"client_secret": "configured-secret"},
+        {"token_endpoint_auth_method": "client_secret_basic"},
+    ],
+)
+def test_cimd_preserves_existing_identity_and_other_auth_modes(monkeypatch, updates):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    assert get_cimd_client_id(_cimd_oauth_server().model_copy(update=updates)) is None
+
+
+@pytest.mark.asyncio
+async def test_cimd_document_is_public_and_binds_configured_origin(monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://attacker.example") as client:
+        response = await client.get("/oauth/client-metadata.json", headers={"X-Forwarded-Host": "attacker.example"})
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "https://gateway.example.com/proxy/oauth/client-metadata.json"
+    assert response.json()["redirect_uris"] == ["https://gateway.example.com/proxy/callback"]
+    assert response.json()["token_endpoint_auth_method"] == "none"
+    assert "client_secret" not in response.json()
+    assert response.headers["cache-control"] == "public, max-age=300"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", [None, "https://[invalid"])
+async def test_cimd_document_is_unavailable_without_configured_https_origin(monkeypatch, base):
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.oauth_client_metadata()
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch, respx_mock):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    upstream = respx_mock.post("https://idp.example.com/token").respond(
+        401, json={"error": "invalid_client", "error_description": "provider-private-detail"}
+    )
+    response = await endpoints.exchange_token_with_server(
+        request=_cimd_request(),
+        mcp_server=_cimd_oauth_server(),
+        grant_type="authorization_code",
+        code="code",
+        redirect_uri="https://gateway.example.com/callback",
+        client_id="caller-placeholder",
+        client_secret="dummy",
+        code_verifier="verifier",
+    )
+    assert upstream.call_count == 1
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "provider-private-detail" not in body["error_description"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow", ["refresh", "authorize"])
+async def test_optional_cimd_discovery_preserves_the_callers_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter", flow: str
+) -> None:
+    from urllib.parse import parse_qs
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "0")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
+    token: Final = respx_mock.post("https://idp.example.com/token").respond(
+        200, json={"access_token": "upstream-access", "token_type": "Bearer", "expires_in": 3600}
+    )
+    discovery: Final = respx_mock.route().respond(503)
+    manager: Final = manager_module.MCPServerManager()
+    monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
+    await manager.load_servers_from_config({"manual": {
+        "url": "https://mcp.example.com/mcp", "transport": "http", "auth_type": "oauth2",
+        "oauth2_flow": "authorization_code",
+        **({"token_url": "https://idp.example.com/token"} if flow == "refresh"
+           else {"authorization_url": "https://idp.example.com/authorize"}),
+    }})
+    server: Final = next(iter(manager.config_mcp_servers.values()))
+    async with manager.catalog.operation():
+        if flow == "refresh":
+            response: Final = await endpoints.exchange_token_with_server(
+                request=_cimd_request(), mcp_server=server, grant_type="refresh_token",
+                refresh_token="existing-refresh", client_id="existing-client",
+                code=None, redirect_uri=None, client_secret=None, code_verifier=None,
+            )
+            assert response.status_code == 200
+            assert json.loads(response.body)["access_token"] == "upstream-access"
+            assert parse_qs(token.calls[0].request.content.decode())["refresh_token"] == ["existing-refresh"]
+        else:
+            redirect: Final = await endpoints.authorize_with_server(
+                _cimd_request(), server, "existing-client", "https://gateway.example.com/ui/",
+                code_challenge="a" * 43, code_challenge_method="S256",
+            )
+            assert redirect.status_code == 307
+            assert redirect.headers["location"].startswith("https://idp.example.com/authorize?")
+    assert discovery.call_count > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [None, "https://renamed-gateway.example.com"])
+async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    origin: str | None,
+) -> None:
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, mcp_server_manager
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "saved-cimd-route-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = _cimd_oauth_server()
+    mcp_server_manager.global_mcp_server_manager.registry[server.server_id] = server
+    identity: Final = "https://gateway.example.com/oauth/client-metadata.json"
+    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    await endpoints._store_per_user_token_server_side(
+        server, "jwt-owner", {"access_token": "expired", "refresh_token": "saved-refresh", "expires_in": -1},
+        cimd_client_id=identity,
+    )
+
+    async def saved_row(**kwargs):
+        return SimpleNamespace(credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+
+    table.find_unique.side_effect = saved_row
+    if origin is None:
+        monkeypatch.delenv("PROXY_BASE_URL")
+    else:
+        monkeypatch.setenv("PROXY_BASE_URL", origin)
+    _, key = jwt_oauth_identity
+    upstream: Final = respx_mock.post(server.token_url).respond(
+        200, json={"access_token": "fresh", "refresh_token": "rotated", "expires_in": 3600}
+    )
+    response: Final = await endpoints.exchange_token_with_server(
+        _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(key, scope='litellm_proxy_admin')}"}),
+        server, "refresh_token", None, None, identity, None, None, refresh_token="saved-refresh",
+    )
+    assert response.status_code == 200
+    assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
+    persisted: Final = await db.get_user_oauth_credential(proxy_server.prisma_client, "jwt-owner", server.server_id)
+    assert persisted is not None and persisted["cimd_client_id"] == identity
+    assert persisted["refresh_token"] == "rotated"
+    assert table.upsert.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    "matching", "unicode_grant", "foreign_refresh", "missing_refresh", "missing_grant", "database_missing",
+    "database_outage", "static_client", "anonymous",
+])
+async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
+    monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "saved-cimd-owner-test-salt")
+    server: Final = _cimd_oauth_server()
+    identity: Final = "https://original-gateway.example.com/oauth/client-metadata.json"
+    grant: Final = "alice-refresh-\u00e9" if state == "unicode_grant" else "alice-refresh"
+    database: Final = MagicMock()
+    table: Final = database.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    await db.store_user_oauth_credential(
+        database, "alice", server.server_id, "expired",
+        refresh_token=None if state == "missing_refresh" else grant, cimd_client_id=identity,
+    )
+    table.find_unique.reset_mock()
+    table.find_unique.return_value = (
+        None if state == "missing_grant" else SimpleNamespace(
+            credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"]
+        )
+    )
+    if state == "database_missing":
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+    if state == "database_outage":
+        table.find_unique.side_effect = RuntimeError("database unavailable")
+    if state == "static_client":
+        server.client_id = "configured-client"
+    resolved: Final = await endpoints._saved_refresh_credential(
+        server, None if state == "anonymous" else "alice",
+        "foreign-refresh" if state == "foreign_refresh" else grant,
+    )
+    if state in ("matching", "unicode_grant", "static_client"):
+        assert resolved is not None and resolved["cimd_client_id"] == identity
+        assert resolved["refresh_token"] == grant
+    else:
+        assert resolved is None
+    if state in ("anonymous", "database_missing"):
+        table.find_unique.assert_not_awaited()
+    else:
+        table.find_unique.assert_awaited_once_with(where={"user_id_server_id": {"user_id": "alice", "server_id": server.server_id}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")])
+async def test_managed_authorize_retains_the_callers_previous_grant(jwt_oauth_identity, monkeypatch, prior_scopes, expected):
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "scope-grant-test-salt")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
+    global_mcp_server_manager.registry[server.server_id] = server
+    credential = db.encrypt_value_helper(json.dumps({"type": "oauth2", "access_token": "old-access", "scopes": prior_scopes}))
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    response = await endpoints.authorize_with_server(
+        request, server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.write",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    assert parse_qs(urlsplit(response.headers["location"]).query)["scope"] == [expected]
+    assert table.find_unique.call_args.kwargs["where"] == {
+        "user_id_server_id": {"user_id": "jwt-owner", "server_id": server.server_id}
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned_scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", [])])
+async def test_managed_code_exchange_preserves_requested_scope_only_when_omitted(
+    jwt_oauth_identity, monkeypatch, respx_mock, returned_scope, expected,
+):
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "requested-scope-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    started = await endpoints.authorize_with_server(
+        request, server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.read tools.write",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    cookies = SimpleCookie()
+    cookies.load(started.headers["set-cookie"])
+    callback_request = _token_request({"Cookie": "; ".join(f"{name}={value.value}" for name, value in cookies.items())})
+    returned = await endpoints.callback(callback_request, code="provider-code", state=state, error=None, iss=None)
+    code = parse_qs(urlsplit(returned.headers["location"]).query)["code"][0]
+    upstream = respx_mock.post(server.token_url).respond(200, json={
+        "access_token": "new-access", "token_type": "Bearer", "refresh_token": "new-refresh",
+        **({"scope": returned_scope} if returned_scope is not None else {}),
+    })
+    exchanged = await endpoints.exchange_token_with_server(
+        request, server, "authorization_code", client_id="scope-client", code=code, code_verifier="verifier", redirect_uri="http://127.0.0.1:9/cb", client_secret=None,
+    )
+    assert parse_qs(upstream.calls[0].request.content.decode())["code"] == ["provider-code"]
+    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("scopes") == expected
+    assert json.loads(exchanged.body)["scope"] == " ".join(expected or ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("advertised, expected", [(True, "tools.read offline_access"), (False, "tools.read")])
+async def test_managed_authorize_requests_only_selected_scope_and_supported_refresh_access(monkeypatch, advertised, expected):
+    from urllib.parse import parse_qs, urlsplit
+
+    from mcp.shared.auth import OAuthMetadata
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "metadata-scope-test-salt")
+    metadata = OAuthMetadata(
+        issuer="https://idp.example.com", authorization_endpoint="https://idp.example.com/authorize",
+        token_endpoint="https://idp.example.com/token", response_types_supported=["code"],
+        scopes_supported=["tools.read", "admin"] + (["offline_access"] if advertised else []),
+    )
+    server = _cimd_oauth_server().model_copy(update={"authorization_server_metadata": metadata.model_dump(mode="json")})
+    response = await endpoints.authorize_with_server(
+        _cimd_request(), server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.read",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    assert parse_qs(urlsplit(response.headers["location"]).query)["scope"] == [expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["server", "issuer", "user", "mode", "tampered", "invalid_payload"])
+async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identity, monkeypatch, respx_mock, mismatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "scope-boundary-test-salt")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    payload = endpoints._ManagedAuthorizationCode(
+        upstream_code="provider-code", mcp_server_id="other-server" if mismatch == "server" else server.server_id,
+        issuer="https://other-issuer.test" if mismatch == "issuer" else server.issuer,
+        requested_scope="tools.read tools.write", scope_user_id="other-user" if mismatch == "user" else "jwt-owner",
+    )
+    code = endpoints._MANAGED_AUTH_CODE_PREFIX + ("invalid" if mismatch == "tampered" else endpoints.encrypt_value_helper("{}" if mismatch == "invalid_payload" else payload.model_dump_json()))
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    if mismatch == "mode":
+        server.auth_type = MCPAuth.true_passthrough
+    with pytest.raises(HTTPException) as raised:
+        await endpoints.exchange_token_with_server(
+            request, server, "authorization_code", code=code, redirect_uri="http://127.0.0.1:9/cb",
+            client_id="scope-client", client_secret=None, code_verifier="verifier",
+        )
+    assert raised.value.status_code == 400
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope, requested_scope, expected", [
+    (None, None, ["tools.read", "tools.write"]), ("tools.read", None, ["tools.read"]), ("", None, []),
+    (None, "tools.write", ["tools.write"]), ("tools.read", "tools.write", ["tools.read"]), ("", "tools.write", []),
+])
+async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity, monkeypatch, respx_mock, scope, requested_scope, expected):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "refresh-scope-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    credential = db.encrypt_value_helper(json.dumps({
+        "type": "oauth2", "access_token": "old-access", "refresh_token": "owner-refresh", "scopes": ["tools.read", "tools.write"],
+    }))
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
+    table.upsert = AsyncMock()
+    upstream = respx_mock.post(server.token_url).respond(200, json={
+        "access_token": "new-access", "token_type": "Bearer", "refresh_token": "new-refresh",
+        **({"scope": scope} if scope is not None else {}),
+    })
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    await endpoints.exchange_token_with_server(
+        request, server, "refresh_token", code=None, redirect_uri=None, client_id="scope-client", client_secret=None,
+        code_verifier=None, refresh_token="owner-refresh", scope=requested_scope,
+    )
+    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("scopes") == expected
+    assert upstream.call_count == 1
+    from urllib.parse import parse_qs
+    sent = parse_qs(upstream.calls.last.request.content.decode())
+    assert sent.get("scope") == ([requested_scope] if requested_scope else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("per_server_relay", [False, True])
+async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch, per_server_relay):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _cimd_oauth_server().model_copy(update={
+        "scopes": ["tools.read", "offline_access"], "per_server_oauth_discovery": per_server_relay,
+    })
+    global_mcp_server_manager.registry[server.server_id] = server
+    result = await endpoints._build_oauth_protected_resource_response(_cimd_request(), server.server_id, True)
+    assert result["scopes_supported"] == ["tools.read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("granted, required, expected", [
+    (["tools.read"], ("tools.write",), "absent"),
+    (["tools.read", "tools.write"], ("tools.write",), "present"),
+    (None, ("tools.write",), "absent"),
+    (["tools.read"], (), "present"),
+])
+async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+
+    credential = {**_stored_grant(), "scopes": granted}
+    read = AsyncMock(return_value=credential)
+    prisma = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(db, "get_user_oauth_credential", read)
+    assert await endpoints._vendor_credential_state("owner", "server", required) == expected
+    read.assert_awaited_once_with(prisma, "owner", "server")

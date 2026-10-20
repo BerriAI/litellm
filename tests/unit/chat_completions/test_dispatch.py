@@ -134,13 +134,13 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
     )
 
     request, call_args, call_kwargs = captured[0]
-    assert request.bound["model"] == "anthropic/claude-sonnet-4-5"
-    assert request.bound["messages"] is MESSAGES
-    assert request.bound["stream"] is True
-    assert request.bound["api_key"] == "sk-test"
-    assert request.bound["base_url"] == "https://example.invalid"
-    assert request.bound["custom_llm_provider"] == "anthropic"
-    assert request.bound["extra_headers"] == {"x-test": "1"}
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["messages"] is MESSAGES
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["base_url"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.resolved["extra_headers"] == {"x-test": "1"}
     assert request.kwargs is kwargs
     assert call_args == args
     assert call_kwargs == kwargs
@@ -218,7 +218,7 @@ def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
     finally:
         NATIVE_COMPLETION.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
@@ -238,7 +238,7 @@ async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.Mo
     finally:
         NATIVE_ACOMPLETION.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
@@ -257,10 +257,10 @@ def test_sync_completion_request_projects_public_arguments() -> None:
     expected: Final = ModelResponse()
 
     def native(request: NativeCall) -> ModelResponse:
-        assert request.bound["model"] == "test-model"
-        assert request.bound["messages"] == MESSAGES
-        assert request.bound["custom_llm_provider"] == "openai"
-        assert request.bound["stream"] is True
+        assert request.resolved["model"] == "test-model"
+        assert request.resolved["messages"] == MESSAGES
+        assert request.resolved["custom_llm_provider"] == "openai"
+        assert request.resolved["stream"] is True
         return expected
 
     binding: Final[NativeBinding[NativeCompletion]] = NativeBinding("completion", validate=lambda _: None)
@@ -335,6 +335,6 @@ def test_internal_acompletion_marker_bypasses_native() -> None:
 def test_positional_parameters_remain_available_to_native_projection() -> None:
     request: Final = _DISPATCH.request(("anthropic/test-model", MESSAGES, 12.0, 0.25), {})
     assert request is not None
-    assert request.bound["timeout"] == 12.0
-    assert request.bound["temperature"] == 0.25
-    assert request.bound["messages"] is MESSAGES
+    assert request.resolved["timeout"] == 12.0
+    assert request.resolved["temperature"] == 0.25
+    assert request.resolved["messages"] is MESSAGES

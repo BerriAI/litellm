@@ -440,10 +440,10 @@ db:
 # Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
 # the pod NotReady and blocks only until in-flight requests actually finish
 # (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
-# waiting the worst-case duration. The drain runs once (the preStop hook and
-# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
-# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
-# SIGKILL.
+# waiting the worst-case duration. After SIGTERM the server waits up to
+# GRACEFUL_SHUTDOWN_TIMEOUT again for connections still open and then cancels
+# them, so set terminationGracePeriodSeconds a few seconds above twice
+# GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before SIGKILL.
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop
@@ -653,12 +653,28 @@ serviceMonitor:
     matchNames: []
     # - test-namespace
 
+lens:
+  library: true
+
 lensWorker:
+  retainResources: false
+  mode: ""
+  externalUrl: ""
+  externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
+  standaloneUrl: ""
+  adminTokenSecret:
+    name: ""
+    key: admin-token
+  extraEnv: []
+  extraEnvFrom: []
   enabled: false
   replicaCount: 1
   image:
-    repository: ghcr.io/berriai/litellm-lens-worker
-    tag: ""
+    repository: ghcr.io/berriai/lens
+    tag: "0.1.0-dev.0"
     digest: ""
     pullPolicy: IfNotPresent
   tokenSecret:
@@ -667,6 +683,17 @@ lensWorker:
   serviceTokenSecret:
     name: ""
     key: service-token
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
+    storage: 20Gi
+    storageClassName: null
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
   clickhouseDatabase: litellm
   retentionDays: 14
   clickhouseSecret:
@@ -678,6 +705,7 @@ lensWorker:
     annotations: {}
   ingress:
     enabled: false
+    path: /v1/
     className: ""
     host: ""
     annotations: {}

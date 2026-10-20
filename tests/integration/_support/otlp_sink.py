@@ -19,16 +19,19 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+import uuid
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
 
 import httpx
 import psutil
+import yaml
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -186,6 +189,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "count": len(recorded),
                 "host": self.headers.get("host", ""),
                 "headers": dict(self.headers),
+                "span_ids": [span["span_id"] for span in recorded],
             }
         )
         self._send_json({"recorded": len(recorded)}, status=self.state.status)
@@ -363,6 +367,47 @@ class SpanSinks:
     arize: str
 
 
+AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
+_AUDIT_CONFIGURATION: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def audit_configuration_writer(sinks: SpanSinks) -> AuditConfigWriter:
+    tenant_host: Final = urlparse(sinks.tenant).netloc
+
+    def write(directory: Path, litellm_settings: Mapping[str, JsonValue] = MappingProxyType({})) -> Path:
+        config: Final = _AUDIT_CONFIGURATION.validate_python(
+            yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        )
+        settings: Final = _AUDIT_CONFIGURATION.validate_python(config.get("litellm_settings", {}))
+        general: Final = _AUDIT_CONFIGURATION.validate_python(config.get("general_settings", {}))
+        configured: Final = {
+            **config,
+            "litellm_settings": {
+                **settings,
+                "callbacks": ["otel"],
+                "provider_url_destination_allowed_hosts": [tenant_host],
+                **litellm_settings,
+            },
+            "callback_settings": {
+                "otel": {"exporter": "http/json", "endpoint": sinks.operator, "use_simple_processor": True}
+            },
+            "general_settings": {**general, "user_api_key_cache_ttl": 2},
+        }
+        path: Final = directory / f"otel-audit-{uuid.uuid4().hex}.yaml"
+        path.write_text(yaml.safe_dump(configured))
+        return path
+
+    return write
+
+
+def langfuse_callback_variables(sinks: SpanSinks) -> dict[str, JsonValue]:
+    return {
+        "langfuse_public_key": "pk-lf-audit",
+        "langfuse_secret_key": "sk-lf-audit",
+        "langfuse_host": sinks.tenant,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class GrpcSink:
     url: str
@@ -466,9 +511,7 @@ def _await_sink(url: str) -> None:
 def owned_grpc_sink(directory: Path) -> Iterator[GrpcSink]:
     http_port: Final = _free_port()
     grpc_port: Final = _free_port()
-    with _spawn_sink(
-        directory, "otlp-grpc-sink.log", ["--port", str(http_port), "--grpc-port", str(grpc_port)]
-    ):
+    with _spawn_sink(directory, "otlp-grpc-sink.log", ["--port", str(http_port), "--grpc-port", str(grpc_port)]):
         control_url: Final = f"http://127.0.0.1:{http_port}"
         _await_sink(control_url)
         yield GrpcSink(url=f"http://127.0.0.1:{grpc_port}", control_url=control_url)

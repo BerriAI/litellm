@@ -53,11 +53,14 @@ from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
     OpenAIError,
+    OpenAIHTTPClient,
     build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
     is_output_token_limit_error,
+    model_dump_provider_response,
 )
 from .workload_identity import resolve_openai_workload_identity_config
 
@@ -850,7 +853,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         )
 
                         logging_obj.model_call_details["response_headers"] = headers
-                        stringified_response = provider_config.transform_parsed_response_dict(response.model_dump())
+                        stringified_response = provider_config.transform_parsed_response_dict(
+                            model_dump_provider_response(response)
+                        )
                         logging_obj.post_call(
                             input=messages,
                             api_key=api_key,
@@ -988,7 +993,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     logging_obj=logging_obj,
                 )
-                stringified_response = provider_config.transform_parsed_response_dict(response.model_dump())
+                stringified_response = provider_config.transform_parsed_response_dict(
+                    model_dump_provider_response(response)
+                )
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -1749,9 +1756,9 @@ class OpenAIFilesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2107,9 +2114,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2317,7 +2324,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data)
+            openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2342,7 +2349,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = AsyncOpenAI(**data)
+            openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
         else:
             openai_client = client
 

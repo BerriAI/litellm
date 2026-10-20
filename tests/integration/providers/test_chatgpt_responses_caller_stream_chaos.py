@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -304,15 +303,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_json(gatewa
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_in_its_own_shape(item)
             follow_up: Final = _Call("responses", False, uuid.uuid4().hex)
             (answered,) = await _burst(candidate, _CONFIG_MODEL, (follow_up,))
             _assert_answered_in_its_own_shape(answered)

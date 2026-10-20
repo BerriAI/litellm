@@ -52,6 +52,10 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
 _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 
+def as_str_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 def normalize_drop_params(value: object) -> bool | None:
     if value is None or isinstance(value, bool):
         return value

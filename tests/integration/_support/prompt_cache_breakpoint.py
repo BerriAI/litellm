@@ -32,13 +32,13 @@ _SCRIPTED_FAILURE: Final = re.compile(r"fail-(\d{3})")
 _MINTED_RESPONSE: Final = re.compile(r"^resp_([0-9a-f]{32})-[0-9a-f]{32}$")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 
-Kind: TypeAlias = Literal["text", "image_url", "file", "input_audio"]
-KINDS: Final[tuple[Kind, ...]] = ("text", "image_url", "file", "input_audio")
+Kind: TypeAlias = Literal["text", "image_url", "file", "video_url"]
+KINDS: Final[tuple[Kind, ...]] = ("text", "image_url", "file", "video_url")
 WIRE_TYPE: Final[Mapping[Kind, str]] = {
     "text": "input_text",
     "image_url": "input_image",
     "file": "input_file",
-    "input_audio": "input_text",
+    "video_url": "input_text",
 }
 
 
@@ -91,10 +91,17 @@ def block(kind: Kind, value: str) -> dict[str, JsonValue]:
             return {"type": "image_url", "image_url": {"url": "https://example.com/breakpoint.png"}}
         case "file":
             return {"type": "file", "file": {"file_id": "file-breakpoint"}}
-        case "input_audio":
-            return {"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}
+        case "video_url":
+            return {"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}}
         case _:
             assert_never(kind)
+
+
+AUDIO_PAYLOAD: Final[Mapping[str, JsonValue]] = {"data": "Zm9v", "format": "wav"}
+
+
+def audio() -> dict[str, JsonValue]:
+    return {"type": "input_audio", "input_audio": dict(AUDIO_PAYLOAD)}
 
 
 def drained_posts(wire: Wire) -> tuple[Request, ...]:

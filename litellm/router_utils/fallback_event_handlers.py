@@ -1,11 +1,13 @@
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -22,13 +24,19 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
 )
-from litellm.types.router import LiteLLMParamsTypedDict, reject_server_owned_wif_params
+from litellm.types.router import (
+    FallbackSkipReason,
+    LiteLLMParamsTypedDict,
+    SkippedFallbackTarget,
+    reject_server_owned_wif_params,
+)
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -108,6 +116,14 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
+        deployment: Final = litellm_router.get_deployment(model_id=deployment_id)
+        if is_caller_scoped_auth_failure(deployment, exception_status):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
+                deployment_id,
+            )
+            return
+
         # Priority: deployment config > response header > router default, matching
         # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
@@ -118,8 +134,8 @@ def _trigger_cooldown_for_failed_deployment(
             if deployment_dict is not None
             else None
         )
-        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
-            original_exception=exception
+        exception_headers: Final[httpx.Headers | None] = (
+            litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(original_exception=exception)
         )
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
@@ -147,6 +163,7 @@ def _trigger_cooldown_for_failed_deployment(
             original_exception=exception,
             deployment=deployment_id,
             time_to_cooldown=time_to_cooldown,
+            request_kwargs=kwargs,
         )
 
         verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)
@@ -192,12 +209,27 @@ class AttemptedFallbackTargets:
     """
 
     keys: frozenset[str] = frozenset()
+    _skip_reasons: dict[str, FallbackSkipReason] = field(default_factory=dict)  # mutable-ok: O(1) per caller-sized list
 
     def __contains__(self, key: str) -> bool:
         return key in self.keys
 
     def record(self, key: str) -> None:
         self.keys = self.keys | frozenset((key,))
+
+    @property
+    def skipped(self) -> tuple[SkippedFallbackTarget, ...]:
+        return tuple(
+            SkippedFallbackTarget(target=target, reason=reason) for target, reason in self._skip_reasons.items()
+        )
+
+    def record_skip(self, target: str, reason: FallbackSkipReason) -> None:
+        self._skip_reasons.setdefault(target, reason)
+
+
+def attempted_fallback_targets_from(kwargs: Mapping[str, object]) -> AttemptedFallbackTargets:
+    carried_targets: Final[object] = kwargs.get("attempted_targets")
+    return carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
 
 
 def has_unattempted_fallback_target(
@@ -210,6 +242,16 @@ def has_unattempted_fallback_target(
     if not isinstance(attempted, AttemptedFallbackTargets):
         return True
     return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
+
+
+def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupported_params: bool) -> bool:
+    if fallback_on_unsupported_params or not isinstance(exception, litellm.BadRequestError):
+        return False
+    if isinstance(exception, litellm.UnsupportedParamsError):
+        return True
+    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+        return False
+    return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
@@ -335,6 +377,28 @@ def per_request_fallback_controls(kwargs: Mapping[str, object]) -> MidStreamFall
     )
 
 
+def mid_stream_fallback_snapshot_kwargs(
+    model: str,
+    controls: object,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+    """
+    The kwargs a completion attempt's stream re-enters the fallback chain with if it fails.
+
+    async_function_with_retries popped the per-request fallback lists before the attempt ran, so
+    the carrier restores them here and rides along into every hop this re-entry opens. A shallow
+    copy keeps the metadata buckets shared with the live kwargs, the way the attempt's own
+    in-place bucket writes expect.
+    """
+    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
+    return {
+        **kwargs,
+        **hop_controls.overrides,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
+        "model": model,
+    }
+
+
 def mid_stream_fallback_hop_kwargs(
     model: str,
     original_generic_function: Callable[..., object],
@@ -342,22 +406,18 @@ def mid_stream_fallback_hop_kwargs(
     kwargs: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
     """
-    The kwargs one streaming attempt re-enters the fallback chain with if its stream fails.
+    The kwargs one generic-endpoint streaming attempt re-enters the fallback chain with if its stream fails.
 
     A shallow copy keeps ``attempted_targets`` shared with the outer chain, so entries this
     request already tried are never retried; the metadata buckets are copied key by key because
     the attempt writes deployment-specific fields into them in place.
     """
-    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
     copied_buckets: Final = MappingProxyType(
         {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
     )
     return {
-        **kwargs,
+        **mid_stream_fallback_snapshot_kwargs(model=model, controls=controls, kwargs=kwargs),
         **copied_buckets,
-        **hop_controls.overrides,
-        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
-        "model": model,
         "original_generic_function": original_generic_function,
     }
 
@@ -486,7 +546,7 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
 
 
 def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
 ) -> bool:
     resolved, generic_idx = result
@@ -496,7 +556,7 @@ def _resolved_a_specific_chain(
 
 
 def get_fallback_model_group_for_lookup_groups(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
@@ -510,7 +570,10 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
-def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
+def get_fallback_model_group(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    model_group: str,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
@@ -579,6 +642,8 @@ async def _is_fallback_target_authorized(
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
 ) -> bool:
     access_check: Final = litellm_router.fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
@@ -595,6 +660,7 @@ async def _is_fallback_target_authorized(
         "Skipping fallback to model_group = %s: caller is not authorized to call it",
         mask_sensitive_structure(fallback_entry),
     )
+    attempted.record_skip(target, FallbackSkipReason.NOT_AUTHORIZED)
     return False
 
 
@@ -603,6 +669,8 @@ async def _is_fallback_target_within_budget(
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
 ) -> bool:
     budget_check: Final = litellm_router.fallback_budget_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
@@ -614,6 +682,7 @@ async def _is_fallback_target_within_budget(
         "Skipping fallback to model_group = %s: caller is over budget",
         mask_sensitive_structure(fallback_entry),
     )
+    attempted.record_skip(target, FallbackSkipReason.OVER_BUDGET)
     return False
 
 
@@ -702,13 +771,7 @@ async def run_async_fallback(
     same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
         kwargs
     )
-    # Read out of kwargs and narrowed here rather than declared as a parameter: every caller
-    # reaches this function by spreading a loosely-typed kwargs dict, so a declared parameter
-    # would carry an annotation that no call site can actually be checked against.
-    carried_targets: Final = kwargs.get("attempted_targets")
-    attempted: Final = (
-        carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
-    )
+    attempted: Final = attempted_fallback_targets_from(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # keep legacy kwargs untyped
     failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
     attempted.record(failed_model_group)
 
@@ -730,9 +793,13 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
-        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_authorized(
+            litellm_router, mg, original_model_group, kwargs, attempted=attempted
+        ):
             continue
-        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_within_budget(
+            litellm_router, mg, original_model_group, kwargs, attempted=attempted
+        ):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:

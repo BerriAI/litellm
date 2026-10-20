@@ -191,26 +191,12 @@ async def google_count_tokens(request: Request, model_name: str):
         request=token_request,
         call_endpoint=True,
     )
-    if token_response is not None:
-        # cast the response to the well known format
-        original_response: Final[dict] = token_response.original_response or {}
-        if original_response:
-            return TokenCountDetailsResponse(
-                totalTokens=original_response.get("totalTokens", 0),
-                promptTokensDetails=original_response.get("promptTokensDetails", []),
-            )
-        else:
-            return TokenCountDetailsResponse(
-                totalTokens=token_response.total_tokens or 0,
-                promptTokensDetails=[],
-            )
-
-    #########################################################
-    # Return the response in the well known format
-    #########################################################
+    if token_response is None:
+        return TokenCountDetailsResponse(totalTokens=0, promptTokensDetails=[])
+    original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(
-        totalTokens=0,
-        promptTokensDetails=[],
+        totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,
+        promptTokensDetails=original_response.get("promptTokensDetails", []),
     )
 
 

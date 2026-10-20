@@ -29,11 +29,11 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
-            name: lens-service
-            key: service-token
+            name: lens-test-lens-gateway
+            key: gateway-secret
 - it: routes uploads directly to Lens instead of the gateway
   template: ingress.yaml
   set:
@@ -117,7 +117,7 @@ tests:
     lensWorker.clickhouseSecret.name: lens-storage
   asserts:
   - failedTemplate:
-      errorMessage: lensWorker.publicUrl is required
+      errorMessage: lensWorker.publicUrl is required when there is no single ingress hostname
 - it: omits Lens connection settings when disabled in deployment.yaml
   template: deployment.yaml
   asserts:

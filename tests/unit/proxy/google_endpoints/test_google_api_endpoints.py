@@ -3,6 +3,7 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -179,3 +180,30 @@ def test_google_count_tokens_unchanged():
         assert response.status_code == 200
         body = response.json()
         assert body["totalTokens"] == 7
+
+
+def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs():
+    """A provider that counts in Anthropic shape (Bedrock, Anthropic) carries no totalTokens key, so the normalized total must win over the raw response's missing field."""
+    try:
+        client: Final = _build_test_client()
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+
+    fake_response: Final = MagicMock()
+    fake_response.original_response = {"input_tokens": 2167}
+    fake_response.total_tokens = 2167
+
+    with patch(
+        "litellm.proxy.proxy_server.token_counter",
+        new_callable=AsyncMock,
+        return_value=fake_response,
+    ):
+        response: Final = client.post(
+            "/v1beta/models/claude-opus-4-8:countTokens",
+            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        )
+
+        assert response.status_code == 200
+        body: Final = response.json()
+        assert body["totalTokens"] == 2167
+        assert body["promptTokensDetails"] == []

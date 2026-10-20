@@ -42,8 +42,8 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 

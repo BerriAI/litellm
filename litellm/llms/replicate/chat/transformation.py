@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -29,6 +29,7 @@ else:
     LoggingClass = Any
 
 _TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ReplicateConfig(BaseConfig):
@@ -79,7 +80,7 @@ class ReplicateConfig(BaseConfig):
         seed: int | None = None,
         debug: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -250,7 +251,7 @@ class ReplicateConfig(BaseConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        raw_response_json: Final = raw_response.json()
+        raw_response_json: Final = _JSON_DICT.validate_python(raw_response.json())
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,

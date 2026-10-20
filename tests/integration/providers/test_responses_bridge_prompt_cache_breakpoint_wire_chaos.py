@@ -1,6 +1,5 @@
 import asyncio
 import dataclasses
-import signal
 import threading
 import uuid
 from collections import Counter
@@ -13,7 +12,6 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support import prompt_cache_breakpoint as pcb
@@ -252,6 +250,26 @@ def test_global_drop_params_drops_a_malformed_marker(global_rig: _GlobalRig, mod
     spend.landed(model, control_id, control)
 
 
+@pytest.mark.parametrize("model", (_GLOBAL_UNSET, _GLOBAL_FALSE), ids=("deployment-unset", "deployment-false"))
+def test_global_drop_params_drops_the_audio_part_and_carries_its_marker(
+    global_rig: _GlobalRig, model: str, spend: pcb.SpendLogs
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    content: Final[list[JsonValue]] = [pcb.text(pcb.prompt(marker)), pcb.marked(pcb.audio(), pcb.EXPLICIT)]
+    response: Final = global_rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": content}], **pcb.NO_CACHE},
+    )
+    call_id: Final = _completion(response, marker)
+    assert _user_block_on_wire(global_rig.wire, marker) == {
+        "type": "input_text",
+        "text": pcb.prompt(marker),
+        "prompt_cache_breakpoint": pcb.EXPLICIT,
+    }
+    spend.landed(model, call_id, marker)
+
+
 async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pcb.SpendLogs) -> None:
     calls: Final = _calls(24, _ENDPOINTS)
     with wire_server(pcb.respond) as wire, gateway.scenario() as scenario:
@@ -351,16 +369,16 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
             held_by: Final = MappingProxyType({pid: pcb.open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            held.release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
-            _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                held.release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_in_its_own_shape(item)
+                _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
             follow_up: Final = uuid.uuid4().hex
             call_id: Final = _completion(_chat(candidate, _GLOBAL_UNSET, follow_up, "yes"), follow_up)
             pcb.assert_marker(_user_block_on_wire(wire, follow_up), None)
@@ -377,7 +395,7 @@ async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
             _worker_pids(first)
             burst: Final = await _hold_burst(held, first.gateway, _GLOBAL_UNSET, calls)
-            first.process.terminate()
+            first.begin_shutdown()
             held.release.set()
             served: Final = await burst
         for item in served:

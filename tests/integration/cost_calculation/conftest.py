@@ -86,10 +86,7 @@ def approx_equal(actual: float, expected: float) -> bool:
 
 
 def assert_total_is_sum_of_components(row: CostRow, breakdown: CostBreakdown, context: str) -> None:
-    total: Final = sum(
-        cost or 0.0
-        for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
-    )
+    total: Final = sum(cost or 0.0 for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost))
     assert breakdown.total_cost is not None and approx_equal(breakdown.total_cost, total), (
         f"{context}: total_cost {breakdown.total_cost} != input_cost {breakdown.input_cost} "
         f"+ output_cost {breakdown.output_cost} + tool_usage_cost {breakdown.tool_usage_cost} "
@@ -112,7 +109,7 @@ def poll_cost_row(key: str) -> CostRow:
 
     def read() -> CostRow | None:
         rows: Final = read_rows(
-            'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type '
+            "SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type "
             'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (digest,),
         )
@@ -126,7 +123,7 @@ def poll_cost_row(key: str) -> CostRow:
 def read_rows_now(key: str) -> tuple[CostRow, ...]:
     digest: Final = sha256(key.encode()).hexdigest()
     rows: Final = read_rows(
-        'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type '
+        "SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type "
         'FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"',
         (digest,),
     )
@@ -178,12 +175,12 @@ def poll_rollups(
             (end_user_id,),
         )
         daily_user_rows: Final = read_rows(
-            'SELECT spend, prompt_tokens, completion_tokens, api_requests '
+            "SELECT spend, prompt_tokens, completion_tokens, api_requests "
             'FROM "LiteLLM_DailyUserSpend" WHERE user_id=%s AND api_key=%s AND date=CURRENT_DATE::text',
             (user_id, digest),
         )
         daily_team_rows: Final = read_rows(
-            'SELECT spend, prompt_tokens, completion_tokens, api_requests '
+            "SELECT spend, prompt_tokens, completion_tokens, api_requests "
             'FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s AND api_key=%s AND date=CURRENT_DATE::text',
             (team_id, digest),
         )
@@ -232,11 +229,7 @@ def poll_failure_row(key: str) -> FailureRow:
             (digest,),
         )
         return next(
-            (
-                parsed
-                for row in rows
-                if (parsed := FailureRow.model_validate(row)).status == "failure"
-            ),
+            (parsed for row in rows if (parsed := FailureRow.model_validate(row)).status == "failure"),
             None,
         )
 
@@ -247,11 +240,15 @@ def poll_failure_row(key: str) -> FailureRow:
 
 @functools.cache
 def _vertex_private_key_pem() -> str:
-    return rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    return (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
 
 
 def _vertex_service_account_json(url: str) -> str:
@@ -311,6 +308,17 @@ def register_scenario_deployment(
             else {}
         ),
         **(
+            {
+                "search_context_cost_per_query": {
+                    "search_context_size_low": case.deployment.search_cost_per_query,
+                    "search_context_size_medium": case.deployment.search_cost_per_query,
+                    "search_context_size_high": case.deployment.search_cost_per_query,
+                }
+            }
+            if case.deployment is not None and case.deployment.search_cost_per_query is not None
+            else {}
+        ),
+        **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
             if case.rates.litellm_provider.startswith("vertex_ai")
             else {}
@@ -318,15 +326,13 @@ def register_scenario_deployment(
     }
     created: Final = scenario.gateway.post(
         "/model/new",
-        JSON_OBJECT.validate_python({
-            "model_name": registered_model_name,
-            "litellm_params": parameters,
-            "model_info": (
-                {"base_model": case.base_model}
-                if case.base_model is not None
-                else {}
-            ),
-        }),
+        JSON_OBJECT.validate_python(
+            {
+                "model_name": registered_model_name,
+                "litellm_params": parameters,
+                "model_info": ({"base_model": case.base_model} if case.base_model is not None else {}),
+            }
+        ),
     )
     identity: Final = string_value(object_value(created["model_info"])["id"])
     scenario.cleanups.callback(scenario.delete_model, identity)

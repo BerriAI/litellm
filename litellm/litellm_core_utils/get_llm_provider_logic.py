@@ -1,6 +1,8 @@
 from typing import Final, cast
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
+
 import litellm
 from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
@@ -14,6 +16,12 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+
+def invalid_provider_routing_hints_message(error: ValidationError) -> str:
+    return "; ".join(
+        f"Invalid {'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}" for detail in error.errors()
+    )
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -795,13 +803,36 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     elif custom_llm_provider == "github_copilot":
-        (
-            api_base,
-            dynamic_api_key,
-            custom_llm_provider,
-        ) = litellm.GithubCopilotConfig().get_openai_compatible_provider_info(
-            model, api_base, api_key, custom_llm_provider
+        from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+        from litellm.llms.github_copilot.per_user_auth import (
+            github_copilot_per_user_credential_name,
+            github_copilot_user_session_from,
         )
+
+        user_session: Final = github_copilot_user_session_from(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        if user_session is not None:
+            api_base = user_session.api_base  # rebind-ok: resolves provider args in place
+            dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
+        elif (
+            github_copilot_per_user_credential_name(
+                cast("dict[str, object]", litellm_params)  # cast-ok: untyped params dict
+            )
+            is not None
+        ):
+            # per-user deployments resolve no token at provider-info time; the
+            # caller's session supplies base + key per request
+            api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE  # rebind-ok: resolves provider args in place
+            dynamic_api_key = None  # rebind-ok: resolves provider args in place
+        else:
+            (
+                api_base,  # rebind-ok: resolves provider args in place
+                dynamic_api_key,  # rebind-ok: resolves provider args in place
+                custom_llm_provider,  # rebind-ok: resolves provider args in place
+            ) = litellm.GithubCopilotConfig().get_openai_compatible_provider_info(
+                model, api_base, api_key, custom_llm_provider
+            )
     elif custom_llm_provider == "chatgpt":
         (
             api_base,

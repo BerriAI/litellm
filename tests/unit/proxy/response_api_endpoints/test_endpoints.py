@@ -43,27 +43,57 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     model: Final = "gpt-6-astra"
     message: Final = "Upstream cannot complete this response"
     code: Final = {
-        "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "429",
-        "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
+        "rate_limit": "rate_limit_exceeded",
+        "numeric_rate_limit": "429",
+        "server_error": "server_error",
+        "response_failed": "server_error",
+        "cyber_policy": "cyber_policy",
     }[error_kind]
     error: Final = {"message": message, "code": code, "type": None, "param": "input"}
-    response: Final = {"id": "resp_upstream", "object": "response", "created_at": 1,
-                      "status": "in_progress", "model": model, "output": [],
-                      "parallel_tool_calls": True, "tool_choice": "auto", "tools": []}
+    response: Final = {
+        "id": "resp_upstream",
+        "object": "response",
+        "created_at": 1,
+        "status": "in_progress",
+        "model": model,
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    }
     created: Final = {"type": "response.created", "sequence_number": 0, "response": response}
-    tool_added: Final = {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0,
-                        "item": {"type": "function_call", "id": "fc_partial", "call_id": "call_partial",
-                                 "name": "read_file", "arguments": "", "status": "in_progress"}}
-    tool_delta: Final = {"type": "response.function_call_arguments.delta", "sequence_number": 2,
-                        "item_id": "fc_partial", "output_index": 0, "delta": '{"path":"partial'}
+    tool_added: Final = {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "id": "fc_partial",
+            "call_id": "call_partial",
+            "name": "read_file",
+            "arguments": "",
+            "status": "in_progress",
+        },
+    }
+    tool_delta: Final = {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 2,
+        "item_id": "fc_partial",
+        "output_index": 0,
+        "delta": '{"path":"partial',
+    }
     failed: Final = (
-        {"type": "response.failed", "sequence_number": 9,
-         "response": {**response, "status": "failed", "error": error}}
-        if error_kind in ("response_failed", "cyber_policy") else {"type": "error", "error": error}
+        {"type": "response.failed", "sequence_number": 9, "response": {**response, "status": "failed", "error": error}}
+        if error_kind in ("response_failed", "cyber_policy")
+        else {"type": "error", "error": error}
     )
-    chat: Final = {"id": "chatcmpl_partial", "object": "chat.completion.chunk", "created": 1,
-                  "model": model, "choices": [{"index": 0, "delta": {"content": "partial"},
-                                                "finish_reason": None}]}
+    chat: Final = {
+        "id": "chatcmpl_partial",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": model,
+        "choices": [{"index": 0, "delta": {"content": "partial"}, "finish_reason": None}],
+    }
     is_chat: Final = path == "/v1/chat/completions"
     partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed", "cyber_policy")
     response_events: Final = (created, tool_added, tool_delta, failed) if partial else (failed,)
@@ -71,8 +101,12 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in upstream_events)
     upstream_url: Final = "https://streaming.example/v1"
     router: Final = litellm.Router(
-        model_list=[{"model_name": model, "litellm_params": {
-            "model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"}}],
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"},
+            }
+        ],
         num_retries=0,
     )
     monkeypatch.setattr(ps, "llm_router", router)
@@ -84,15 +118,18 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
             result: Final = await client.post(
-                path, json={
-                    "model": model, "stream": True,
+                path,
+                json={
+                    "model": model,
+                    "stream": True,
                     **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
                 },
             )
     frames: Final = tuple(frame for frame in result.text.split("\n\n") if "data: " in frame)
     events: Final = tuple(
         json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
-        for frame in frames if "data: [DONE]" not in frame
+        for frame in frames
+        if "data: [DONE]" not in frame
     )
 
     assert result.status_code == 200, result.text
@@ -102,8 +139,10 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert frames[-2].startswith("event: response.failed\n"), result.text
         if partial:
             assert [event["type"] for event in events] == [
-                "response.created", "response.output_item.added",
-                "response.function_call_arguments.delta", "response.failed",
+                "response.created",
+                "response.output_item.added",
+                "response.function_call_arguments.delta",
+                "response.failed",
             ]
             assert events[2]["delta"] == tool_delta["delta"]
             assert events[-1]["sequence_number"] == events[-2]["sequence_number"] + 1
@@ -113,10 +152,16 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
             assert events[0]["sequence_number"] == 0
             assert events[0]["response"]["id"].startswith("resp_")
         assert events[-1]["response"]["status"] == "failed"
-        assert events[-1]["response"]["error"]["code"] == {
-            "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "rate_limit_exceeded",
-            "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
-        }[error_kind]
+        assert (
+            events[-1]["response"]["error"]["code"]
+            == {
+                "rate_limit": "rate_limit_exceeded",
+                "numeric_rate_limit": "rate_limit_exceeded",
+                "server_error": "server_error",
+                "response_failed": "server_error",
+                "cyber_policy": "cyber_policy",
+            }[error_kind]
+        )
         assert events[-1]["response"]["error"]["message"] == message
     else:
         assert events[0]["object"] == "chat.completion.chunk", result.text
@@ -728,11 +773,17 @@ class TestResponsesWSFirstFrameModelAuth:
         async def fake_llm_call():
             return None
 
+        authenticated_models: Final[list[str]] = []
+
+        async def record_model_auth(*, model: str, **_kwargs: object) -> None:
+            authenticated_models.append(model)
+
         with (
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
                 new_callable=AsyncMock,
-            ) as mock_model_auth,
+                side_effect=record_model_auth,
+            ),
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
                 return_value=processor,
@@ -749,7 +800,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 user_api_key_dict=MagicMock(),
             )
 
-        mock_model_auth.assert_awaited_once()
+        assert authenticated_models == ["gpt-4o-mini"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
@@ -763,7 +814,9 @@ class TestResponsesWSFirstFrameModelAuth:
 
         replayed_input = [{"type": "reasoning", "id": "encitem_abc", "encrypted_content": "litellm_enc:abc;blob"}]
         payload = {"model": "gpt-4o-mini", "input": replayed_input, "previous_response_id": "resp_prev"}
-        first_frame = {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        first_frame = (
+            {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        )
         raw_first_frame = json.dumps(first_frame)
 
         ws = MagicMock()
@@ -957,6 +1010,7 @@ class TestResponsesWSFirstFrameModelAuth:
         request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
+        empty_settings: Final[dict[str, object]] = {}
 
         with (
             patch(
@@ -973,7 +1027,7 @@ class TestResponsesWSFirstFrameModelAuth:
             ),
             patch("litellm.proxy.proxy_server.master_key", "sk-test"),
             patch("litellm.proxy.proxy_server.user_custom_auth", None),
-            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.general_settings", empty_settings),
         ):
             await _enforce_responses_ws_first_frame_model_auth(
                 request=request,
@@ -1000,7 +1054,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
 class TestReadWSModelFromFirstFrameErrors:
     @pytest.mark.asyncio
-    async def test_timeout_closes_without_error_frame(self):
+    async def test_transport_error_first_frame_closes_with_internal_error(self):
         import asyncio
 
         from litellm.proxy.response_api_endpoints.endpoints import (
@@ -1016,7 +1070,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -1106,6 +1160,33 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result == ("reasoning-group", raw)
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (None, 3600.0),
+        (60, 60.0),
+        (1200, 1200.0),
+        (7200, 7200.0),
+        (59, 3600.0),
+        (0, 3600.0),
+        (9000, 3600.0),
+        ("not-a-number", 3600.0),
+    ],
+)
+def test_responses_ws_session_limit_resolution(monkeypatch, configured, expected):
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _resolve_responses_ws_session_limit_seconds,
+    )
+
+    if configured is None:
+        monkeypatch.delitem(general_settings, "responses_websocket_session_limit_seconds", raising=False)
+    else:
+        monkeypatch.setitem(general_settings, "responses_websocket_session_limit_seconds", configured)
+
+    assert _resolve_responses_ws_session_limit_seconds() == expected
 
 
 class TestManagedResponsesSameProvider:
@@ -2385,6 +2466,27 @@ class TestResponsesInputTokens:
             {"role": "user", "content": "What is the weather in Paris?"},
         ]
         assert token_request.tools == tools
+
+    def test_item_cache_control_is_left_out_of_the_counted_messages(self):
+        response, counter = self._post_input_tokens(
+            {
+                "model": "anthropic/claude-sonnet-4-6",
+                "input": [
+                    {"role": "system", "content": "Long handbook", "cache_control": {"type": "ephemeral"}},
+                    {
+                        "role": "user",
+                        "content": "What does a reviewer do first?",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.call_args.kwargs["request"].messages == [
+            {"role": "system", "content": "Long handbook"},
+            {"role": "user", "content": "What does a reviewer do first?"},
+        ]
 
     def test_missing_model_returns_openai_400(self):
         response, counter = self._post_input_tokens({"input": "Hello"})

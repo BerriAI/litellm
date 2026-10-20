@@ -4,12 +4,13 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
@@ -72,11 +73,20 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
     value: Final = litellm_params.get(key) if litellm_params is not None else None
     return value if isinstance(value, str) else None
+
+
+def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
+    try:
+        extra_body: Final = _OBJECT_MAPPING.validate_python(optional_params.get("extra_body"))
+    except ValidationError:
+        return None
+    return extra_body.get("prompt_cache_options")
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -452,6 +462,38 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _messages_and_tools_in_cache_mark_dialect(
+        self,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        tools: Sequence["ChatCompletionToolParam"] | None,
+        prompt_cache_options: object,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+        """
+        A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
+        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
+        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
+        endpoint keeps or strips the marks exactly as before.
+        """
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+        custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider, api_base, prompt_cache_options
+        )
+        if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
+            return messages, tools
+        renamed: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if reads_breakpoints
+            else list(messages)
+        )
+        return self.remove_cache_control_flag_from_messages_and_tools(
+            model=model, messages=renamed, tools=list(tools) if tools is not None else None
+        )
+
     def _sanitized_tools_update_for_openai(
         self,
         optional_params: Mapping[str, object],
@@ -504,17 +546,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model, messages=messages, tools=optional_params.get("tools", [])
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
         if not optional_params.get("tools") and not optional_params.get("functions"):
@@ -522,7 +564,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return {
             "model": model,
-            "messages": messages,
+            "messages": transformed_messages,
             **optional_params,
             **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
@@ -535,22 +577,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=await self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            (
-                transformed_messages,
-                tools,
-            ) = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model,
-                messages=transformed_messages,
-                tools=optional_params.get("tools", []),
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
         if self.__class__._is_base_class:
             if not optional_params.get("tools") and not optional_params.get("functions"):
                 optional_params.pop("tool_choice", None)

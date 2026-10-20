@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
 import socket
 import socketserver
 import subprocess
@@ -24,6 +23,7 @@ from psycopg.types.json import Jsonb
 
 from tests.integration._support.client import eventually
 from tests.integration._support.process import _free_port as free_port
+from tests.integration._support.process import stop_process_group
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
@@ -299,18 +299,6 @@ def _gated_postgres_forwarder(port: int, target: tuple[str, int]) -> Iterator[Ca
             thread.join(timeout=10)
 
 
-def _stop_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is None:
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=30)
-
-
 def _migration_log_has_p1001_or_process_exited(output_path: Path, process: subprocess.Popen[str]) -> tuple[bool, bool]:
     p1001_logged: Final = any("P1001" in line for line in error_lines(output_path.read_text()))
     process_exited: Final = process.poll() is not None
@@ -422,7 +410,7 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(
                     open_forwarder()
                     completed_returncode: Final = process.wait(timeout=240)
                 finally:
-                    _stop_process(process)
+                    stop_process_group(process, 30)
         output: Final = output_path.read_text()
         errors: Final = error_lines(output)
         p1001_errors: Final = tuple(line for line in errors if "P1001" in line)

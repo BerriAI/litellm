@@ -1,4 +1,5 @@
 import base64
+import logging
 import mimetypes
 import re
 from collections.abc import Mapping, Sequence
@@ -18,8 +19,8 @@ from typing import (
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
-    ManagedFileRepository,
     ManagedObjectRepository,
 )
 from litellm.types.llms.openai import OpenAIFilesPurpose
@@ -27,6 +28,7 @@ from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
     from fastapi import Request
+    from opentelemetry.trace import Span
     from prisma.models import LiteLLM_ManagedObjectTable
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -102,6 +104,31 @@ class ManagedFileIdResolver(Protocol):
         provider_file_ids: Sequence[str],
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> Mapping[str, str]: ...
+
+
+@runtime_checkable
+class ManagedBatchOutputFileWriter(Protocol):
+    def get_unified_output_file_id(
+        self,
+        output_file_id: str,
+        model_id: str,
+        model_name: str | None = None,
+    ) -> str: ...
+
+    async def store_batch_output_file(
+        self,
+        *,
+        unified_file_id: str,
+        provider_file_id: str,
+        model_id: str | None,
+        model_name: str | None = None,
+        owner: "UserAPIKeyAuth",
+        litellm_parent_otel_span: "Span | None",
+        size_bytes: int | None = None,
+        fetch_provider_details: bool = True,
+    ) -> None:
+        """Register file metadata, optionally fetching provider details."""
+        ...
 
 
 def is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
@@ -1282,19 +1309,21 @@ def apply_unified_file_ids(response: "LiteLLMBatch", unified_id_by_raw_id: Mappi
 
 
 async def ensure_batch_response_managed_file_ids(
-    response,
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
-    user_api_key_dict=None,
+    response: "LiteLLMBatch",
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
     db_batch_object: object | None = None,
     unified_batch_id: str | Literal[False] | None = None,
+    *,
+    fetch_provider_details: bool = True,
 ) -> None:
-    """Normalize batch file IDs to managed unified IDs before DB persistence."""
+    """Normalize batch file IDs and register output and error file metadata."""
     await resolve_input_file_id_to_unified(response, prisma_client)
     await resolve_output_file_ids_to_unified(response, prisma_client)
 
-    if managed_files_obj is None:
+    if not isinstance(managed_files_obj, ManagedBatchOutputFileWriter):
         return
 
     model_id: Final = _model_id_for_batch_response(response, unified_batch_id)
@@ -1308,8 +1337,10 @@ async def ensure_batch_response_managed_file_ids(
     if effective_auth is None:
         return
 
-    for file_attr in ("output_file_id", "error_file_id"):
-        raw_file_id = getattr(response, file_attr, None)
+    for file_attr, raw_file_id in (
+        ("output_file_id", response.output_file_id),
+        ("error_file_id", response.error_file_id),
+    ):
         if not raw_file_id or is_base64_encoded_unified_file_id(raw_file_id):
             continue
         try:
@@ -1318,12 +1349,15 @@ async def ensure_batch_response_managed_file_ids(
                 model_id=model_id,
                 model_name=model_name,
             )
-            await managed_files_obj.store_unified_file_id(
-                file_id=new_unified_file_id,
-                file_object=None,
-                litellm_parent_otel_span=getattr(effective_auth, "parent_otel_span", None),
-                model_mappings={model_id: raw_file_id},
-                user_api_key_dict=effective_auth,
+            await managed_files_obj.store_batch_output_file(
+                unified_file_id=new_unified_file_id,
+                provider_file_id=raw_file_id,
+                model_id=model_id,
+                model_name=model_name,
+                owner=effective_auth,
+                litellm_parent_otel_span=effective_auth.parent_otel_span,
+                size_bytes=None,
+                fetch_provider_details=fetch_provider_details,
             )
             setattr(response, file_attr, new_unified_file_id)
             verbose_proxy_logger.debug("Converted batch %s %r to managed ID before DB write", file_attr, raw_file_id)

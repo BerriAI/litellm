@@ -10,19 +10,34 @@ members one at a time and leave their membership rows and the team's keys behind
 
 import os
 import time
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import Final, LiteralString
 
 import httpx
+import psutil
+import psycopg
 import pytest
-from integration._support.client import Gateway, string_value
-from integration._support.database import read_rows
+from integration._support.budget import case_timeout_seconds
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    delete_key_if_present,
+    eventually,
+    object_value,
+    string_value,
+)
+from integration._support.database import read_rows, write_rows
 from integration._support.database_relay import StatementCountingRelay, statement_counting_relay
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.scim import (
+    GROUP_SCHEMA,
+    PATCH_OP_SCHEMA,
     add_to_group,
     assert_gone,
     assert_landed,
@@ -31,10 +46,15 @@ from integration._support.scim import (
     created_team,
     delete_group,
     member_ids,
+    members,
+    membership_user_ids,
     replace_group,
     seed_users,
     team_key,
+    users_referencing,
 )
+from psycopg import sql
+from pydantic import JsonValue
 
 SMALL_PUSH: Final = 5
 LARGE_PUSH: Final = 500
@@ -45,7 +65,23 @@ UNFIXED_PUSH_SECONDS: Final = 120
 SWAP_GROUP: Final = 200
 SWAP_ROUNDS: Final = 10
 OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 2 * UNFIXED_PUSH_SECONDS)
-_UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
+CHAOS_GROUP: Final = 100
+ROLLBACK_SECONDS: Final = 90
+TEAM_ROW_SQL: Final = 'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s'
+LOCK_USER_ROW_SQL: Final = 'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s FOR UPDATE'
+LOCK_KEY_ROW_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s FOR UPDATE'
+SESSIONS_BLOCKED_BY_SQL: Final = (
+    "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
+)
+BACKENDS_BLOCKED_BY_SQL: Final = "SELECT pid FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
+CLIENT_PORTS_BLOCKED_BY_SQL: Final = (
+    "SELECT client_port FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid)) AND client_port > 0"
+)
+TRANSACTIONS_OPEN_SINCE_SQL: Final = """
+SELECT count(*)::int AS open FROM pg_stat_activity
+WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()
+  AND xact_start < %s::timestamptz
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +96,9 @@ def _measured(relay: StatementCountingRelay, send: Callable[[], httpx.Response])
     started: Final = time.perf_counter()
     response: Final = send()
     return Measured(response=response, statements=relay.statements - before, seconds=time.perf_counter() - started)
+
+
+_UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
 
 
 def _updated_at(user_id: str) -> str:
@@ -181,3 +220,260 @@ def test_two_groups_trading_rosters_in_parallel_both_land(gateway: Gateway, tmp_
             _trade_rosters(candidate, (left, right), held)
         assert_landed(candidate, left, left_users)
         assert_landed(candidate, right, right_users)
+
+
+def _int_value(rows: Sequence[Mapping[str, JsonValue]], column: str) -> int:
+    value: Final = rows[0][column]
+    assert isinstance(value, int), rows
+    return value
+
+
+@contextmanager
+def _holding_row_lock(lock_sql: LiteralString, row_id: str) -> Iterator[int]:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+        _ = holder.execute(lock_sql, (row_id,))
+        yield holder.info.backend_pid
+
+
+def _sessions_blocked_by(backend_pid: int) -> int:
+    return _int_value(read_rows(SESSIONS_BLOCKED_BY_SQL, (str(backend_pid),)), "waiting")
+
+
+def _backend_blocked_by(backend_pid: int) -> int:
+    return _int_value(read_rows(BACKENDS_BLOCKED_BY_SQL, (str(backend_pid),)), "pid")
+
+
+def _database_now() -> str:
+    return string_value(read_rows("SELECT now()::text AS now", ())[0]["now"])
+
+
+def _transactions_open_since(moment: str) -> int:
+    return _int_value(read_rows(TRANSACTIONS_OPEN_SINCE_SQL, (moment,)), "open")
+
+
+def _client_ports_blocked_by(backend_pid: int) -> frozenset[int]:
+    rows: Final = read_rows(CLIENT_PORTS_BLOCKED_BY_SQL, (str(backend_pid),))
+    return frozenset(_int_value((row,), "client_port") for row in rows)
+
+
+def _local_tcp_ports(pid: int) -> Iterator[int]:
+    worker: Final = psutil.Process(pid)
+    for process in (worker, *worker.children(recursive=True)):
+        yield from (connection.laddr.port for connection in process.net_connections(kind="tcp"))
+
+
+def _worker_holding(owned: OwnedProxy, client_ports: frozenset[int]) -> int:
+    (worker,) = tuple(pid for pid in owned.worker_pids() if client_ports & frozenset(_local_tcp_ports(pid)))
+    return worker
+
+
+def _roster_ids(team: str) -> tuple[str, ...]:
+    rows: Final = read_rows(TEAM_ROW_SQL, (team,))
+    assert len(rows) == 1, rows
+    roster: Final = rows[0]["members_with_roles"]
+    assert isinstance(roster, list), roster
+    return tuple(string_value(object_value(member)["user_id"]) for member in roster)
+
+
+def test_a_group_deleted_while_its_push_waits_on_a_member_row_waits_for_the_push_then_removes_every_trace(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+        users: Final = seed_users(scenario, SMALL_PUSH)
+        team: Final = created_team(scenario, create_group(gateway, ()))
+        with _holding_row_lock(LOCK_USER_ROW_SQL, min(users)) as holder_pid:
+            push: Final = pool.submit(replace_group, gateway, team, users)
+            _ = eventually(lambda: _sessions_blocked_by(holder_pid), lambda waiting: waiting >= 1, seconds=30)
+            push_pid: Final = _backend_blocked_by(holder_pid)
+            deleted: Final = pool.submit(delete_group, gateway, team)
+            _ = eventually(lambda: _sessions_blocked_by(push_pid), lambda waiting: waiting >= 1, seconds=30)
+            assert not push.done(), push.result().text
+            assert not deleted.done(), deleted.result().text
+        assert push.result().status_code == 200, push.result().text
+        assert deleted.result().status_code == 204, deleted.result().text
+        assert read_rows(TEAM_ROW_SQL, (team,)) == []
+        assert membership_user_ids(team) == frozenset()
+        assert users_referencing(team) == frozenset()
+
+
+@contextmanager
+def _refusing_memberships_for(user_id: str) -> Iterator[None]:
+    name: Final = sql.Identifier(f"integration_refuse_membership_{uuid.uuid4().hex}")
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        _ = connection.execute(
+            sql.SQL(
+                "CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS "
+                "$$ BEGIN RAISE EXCEPTION 'integration refused this membership write'; END $$"
+            ).format(name)
+        )
+        _ = connection.execute(
+            sql.SQL(
+                'CREATE TRIGGER {} BEFORE INSERT ON "LiteLLM_TeamMembership" FOR EACH ROW '
+                "WHEN (NEW.user_id = {}) EXECUTE FUNCTION {}()"
+            ).format(name, sql.Literal(user_id), name)
+        )
+        try:
+            yield
+        finally:
+            _ = connection.execute(sql.SQL('DROP TRIGGER {} ON "LiteLLM_TeamMembership"').format(name))
+            _ = connection.execute(sql.SQL("DROP FUNCTION {}()").format(name))
+
+
+def test_a_push_whose_membership_write_fails_answers_5xx_keeps_the_old_roster_and_a_retry_lands(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        kept: Final = seed_users(scenario, SMALL_PUSH)
+        arriving: Final = seed_users(scenario, SMALL_PUSH)
+        team: Final = created_team(scenario, create_group(gateway, kept))
+        replacement: Final = (*kept[:2], *arriving)
+        with _refusing_memberships_for(max(arriving)):
+            refused: Final = replace_group(gateway, team, replacement)
+            assert 500 <= refused.status_code < 600, refused.text
+            assert_landed(gateway, team, kept)
+        retried: Final = replace_group(gateway, team, replacement)
+        assert retried.status_code == 200, retried.text
+        assert_landed(gateway, team, replacement)
+
+
+def _five_kilobyte_member(scenario: Scenario) -> str:
+    user_id: Final = f"integration-scim-{uuid.uuid4().hex}-".ljust(5 * 1024, "x")
+    scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,))
+    return user_id
+
+
+ODD_MEMBER_VALUES: Final[Mapping[str, Callable[[Scenario, Sequence[str]], JsonValue]]] = {
+    "int": lambda _scenario, _kept: 7,
+    "list": lambda _scenario, kept: [kept[0]],
+    "empty": lambda _scenario, _kept: "",
+    "five-kilobytes": lambda scenario, _kept: _five_kilobyte_member(scenario),
+    "duplicate": lambda _scenario, kept: kept[0],
+}
+
+
+@pytest.mark.parametrize("shape", tuple(ODD_MEMBER_VALUES))
+def test_a_push_with_an_odd_member_value_never_answers_500_and_keeps_the_roster_consistent(
+    gateway: Gateway, shape: str
+) -> None:
+    with gateway.scenario() as scenario:
+        kept: Final = seed_users(scenario, SMALL_PUSH)
+        team: Final = created_team(scenario, create_group(gateway, kept))
+        odd: Final = ODD_MEMBER_VALUES[shape](scenario, kept)
+        pushed: Final = gateway.request(
+            "PUT",
+            f"/scim/v2/Groups/{team}",
+            {
+                "schemas": [GROUP_SCHEMA],
+                "id": team,
+                "displayName": f"integration-{uuid.uuid4().hex}",
+                "members": [*members(kept), {"value": odd}],
+            },
+        )
+        assert pushed.status_code < 500, pushed.text
+        roster: Final = _roster_ids(team)
+        assert len(roster) == len(frozenset(roster)), roster
+        assert frozenset(kept) <= frozenset(roster), roster
+        assert_landed(gateway, team, roster)
+        if pushed.status_code >= 400:
+            assert frozenset(roster) == frozenset(kept), (pushed.text, roster)
+
+
+@dataclass(frozen=True, slots=True)
+class PatchShape:
+    operations: Callable[[Sequence[str]], list[JsonValue]]
+    expected: Callable[[Sequence[str]], tuple[str, ...]]
+
+
+PATCH_SHAPES: Final[Mapping[str, PatchShape]] = {
+    "okta-remove-by-filter": PatchShape(
+        operations=lambda users: [{"op": "remove", "path": f'members[value eq "{users[1]}"]'}],
+        expected=lambda users: (users[0], users[2]),
+    ),
+    "entra-remove-by-value-list": PatchShape(
+        operations=lambda users: [{"op": "Remove", "path": "members", "value": [{"value": users[1]}]}],
+        expected=lambda users: (users[0], users[2]),
+    ),
+    "replace-members": PatchShape(
+        operations=lambda users: [
+            {"op": "replace", "path": "members", "value": [{"value": users[0]}, {"value": users[3]}]}
+        ],
+        expected=lambda users: (users[0], users[3]),
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", tuple(PATCH_SHAPES))
+def test_patch_member_operation_shapes_land_the_expected_roster(gateway: Gateway, shape: str) -> None:
+    with gateway.scenario() as scenario:
+        users: Final = seed_users(scenario, 4)
+        team: Final = created_team(scenario, create_group(gateway, users[:3]))
+        patched: Final = gateway.request(
+            "PATCH",
+            f"/scim/v2/Groups/{team}",
+            {"schemas": [PATCH_OP_SCHEMA], "Operations": PATCH_SHAPES[shape].operations(users)},
+        )
+        assert patched.status_code == 200, patched.text
+        assert_landed(gateway, team, PATCH_SHAPES[shape].expected(users))
+
+
+def _team_key_for(scenario: Scenario, team: str, user_id: str) -> str:
+    key: Final = string_value(scenario.gateway.post("/key/generate", {"team_id": team, "user_id": user_id})["key"])
+    scenario.cleanups.callback(delete_key_if_present, scenario.gateway, key)
+    return key
+
+
+def _push_outcome(candidate: Gateway, team: str, users: Sequence[str]) -> str:
+    try:
+        return str(replace_group(candidate, team, users).status_code)
+    except httpx.TransportError as error:
+        return type(error).__name__
+
+
+@pytest.mark.timeout(case_timeout_seconds() + 2 * graceful_stop_seconds() + UNFIXED_PUSH_SECONDS + ROLLBACK_SECONDS)
+def test_a_worker_killed_mid_push_leaves_the_old_roster_and_a_retry_lands_the_new_one(
+    gateway: Gateway, tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            workers=2,
+            client_timeout=UNFIXED_PUSH_SECONDS,
+        ) as owned,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        candidate: Final = owned.gateway
+        leaving: Final = seed_users(scenario, CHAOS_GROUP)
+        arriving: Final = seed_users(scenario, CHAOS_GROUP)
+        team: Final = created_team(scenario, create_group(candidate, leaving))
+        pinned_key: Final = _team_key_for(scenario, team, max(leaving))
+        with _holding_row_lock(LOCK_KEY_ROW_SQL, sha256(pinned_key.encode()).hexdigest()) as holder_pid:
+            push: Final = pool.submit(_push_outcome, candidate, team, arriving)
+            blocked_ports: Final = eventually(
+                lambda: _client_ports_blocked_by(holder_pid), bool, seconds=UNFIXED_PUSH_SECONDS
+            )
+            killed_at: Final = _database_now()
+            _ = owned.kill_worker(_worker_holding(owned, blocked_ports))
+        record_property("interrupted_push", push.result())
+        _ = eventually(lambda: _transactions_open_since(killed_at), lambda open: open == 0, seconds=ROLLBACK_SECONDS)
+        settled: Final = frozenset(_roster_ids(team))
+        record_property(
+            "roster_after_kill",
+            {"leaving": len(settled & frozenset(leaving)), "arriving": len(settled & frozenset(arriving))},
+        )
+        assert settled in (frozenset(leaving), frozenset(arriving)), sorted(settled)
+        assert_landed(candidate, team, sorted(settled))
+
+        retried: Final = replace_group(candidate, team, arriving)
+        assert retried.status_code == 200, retried.text
+        assert_landed(candidate, team, arriving)
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s',
+                (sha256(pinned_key.encode()).hexdigest(),),
+            )
+            == []
+        )

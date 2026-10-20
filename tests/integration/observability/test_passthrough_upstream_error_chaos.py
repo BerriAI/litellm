@@ -1,7 +1,8 @@
 import asyncio
 import json
 import re
-import signal
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -12,7 +13,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -39,6 +40,22 @@ def _chaos_reply(request: Request) -> Reply:
     if "healthy-model" in request.target:
         return Reply(status=200, chunks=_OK_CHUNKS, content_type="text/event-stream")
     return Reply(status=404, body=_NOT_FOUND_BODY)
+
+
+def _held_reply(release: threading.Event) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert release.wait(timeout=120), "Held passthrough peer was never released"
+        return _chaos_reply(request)
+
+    return respond
+
+
+def _held_connections(pid: int, port: int) -> int:
+    return sum(
+        1
+        for connection in psutil.Process(pid).net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
+    )
 
 
 def _error_information(call_id: str) -> dict[str, JsonValue]:
@@ -72,7 +89,7 @@ def _single_spend_row(call_id: str) -> None:
 
 
 async def _fire_burst(
-    base_url: str, key: str, count: int, *, tolerate_transport_errors: bool = False
+    base_url: str, key: str, count: int, *, start_index: int = 0, tolerate_transport_errors: bool = False
 ) -> tuple[_Served, ...]:
     async def one(client: httpx.AsyncClient, index: int) -> _Served:
         if index % 3 == 0:
@@ -93,7 +110,7 @@ async def _fire_burst(
 
     async with httpx.AsyncClient(base_url=base_url, timeout=30, trust_env=False) as client:
         results: Final = await asyncio.gather(
-            *(one(client, index) for index in range(count)), return_exceptions=tolerate_transport_errors
+            *(one(client, index) for index in range(start_index, start_index + count)), return_exceptions=tolerate_transport_errors
         )
     for result in results:
         assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
@@ -129,30 +146,52 @@ async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gate
                 ), response.text
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     path: Final = tmp_path / "chaos-kill.yaml"
-    with wire_server(_chaos_reply) as wire:
+    release: Final = threading.Event()
+    with wire_server(_held_reply(release)) as wire:
         config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(
+            gateway, tmp_path, {}, config=path, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        ) as owned:
             candidate: Final = owned.gateway
-            workers: Final = eventually(
-                lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 2,
-                seconds=30,
-            )
-            burst: Final = asyncio.create_task(
-                _fire_burst(str(candidate.client.base_url), candidate.key, 20, tolerate_transport_errors=True)
-            )
-            await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 5, 30)
-            victim: Final = psutil.Process(workers[0])
-            victim.suspend()
-            victim_ports: Final = frozenset(
-                connection.raddr.port for connection in victim.net_connections(kind="tcp") if connection.raddr
-            )
-            victim.send_signal(signal.SIGKILL)
-            served: Final = await burst
+            workers: Final = tuple(sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)))
+            async with asyncio.TaskGroup() as tasks:
+                try:
+                    with owned.suspended(workers[0]):
+                        seed: Final = tasks.create_task(
+                            _fire_burst(str(candidate.client.base_url), candidate.key, 1, tolerate_transport_errors=True)
+                        )
+                        await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 1, 30)
+                    with owned.suspended(workers[1]):
+                        rest: Final = tasks.create_task(
+                            _fire_burst(
+                                str(candidate.client.base_url),
+                                candidate.key,
+                                19,
+                                start_index=1,
+                                tolerate_transport_errors=True,
+                            )
+                        )
+                        await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 20, 30)
+                    peer_port: Final = int(wire.url.rsplit(":", 1)[1])
+                    held_by: Final = {pid: _held_connections(pid, peer_port) for pid in workers}
+                    assert sum(held_by.values()) == 20 and min(held_by.values()) > 0, held_by
+                    with owned.replacing_worker(max(workers, key=held_by.__getitem__)) as kill:
+                        victim: Final = kill.freeze()
+                        victim_ports: Final = frozenset(
+                            connection.raddr.port
+                            for connection in victim.net_connections(kind="tcp")
+                            if connection.raddr
+                        )
+                        kill()
+                        release.set()
+                        served: Final = (*await seed, *await rest)
+                finally:
+                    release.set()
             for item in served:
                 assert item.response.status_code in (200, 404, 500, 502), item.response.status_code
             follow_up: Final = candidate.request(

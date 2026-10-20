@@ -102,7 +102,7 @@ def test_cors_exposes_cache_key_header_to_browser_js():
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
     cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert set(LITELLM_UI_ALLOW_HEADERS) <= set(cors_middleware.kwargs["expose_headers"])
     assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
@@ -2710,7 +2710,7 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
         proxy_config=proxy_config,
     )
     where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert where == {"model_name": {"contains": "sonnet", "mode": "insensitive"}}
 
 
 @pytest.mark.asyncio
@@ -3422,26 +3422,27 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch: pyt
 
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
-    # Mock generate_key_helper_fn to capture its call arguments
-    mock_generate_key_helper = AsyncMock(
-        return_value={
+    generate_key_helper_called: Final = asyncio.Event()
+
+    async def _record_generate_key_helper(*args: object, **kwargs: object) -> dict[str, object]:
+        generate_key_helper_called.set()
+        return {
             "user_id": litellm_proxy_budget_name,
             "max_budget": 100.0,
             "budget_duration": "30d",
             "spend": 0,
             "models": [],
         }
-    )
+
+    # Mock generate_key_helper_fn to capture its call arguments
+    mock_generate_key_helper = AsyncMock(side_effect=_record_generate_key_helper)
 
     # Patch generate_key_helper_fn in proxy_server where it's being called from
     with patch("litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper):
         # Call the function under test
         ProxyStartupEvent._add_proxy_budget_to_db()
 
-        # Allow async task to complete
-        import asyncio
-
-        await asyncio.sleep(0.1)
+        assert await asyncio.wait_for(generate_key_helper_called.wait(), timeout=5)
 
         # Verify that generate_key_helper_fn was called
         mock_generate_key_helper.assert_called_once()
@@ -6305,8 +6306,15 @@ async def test_tag_cache_update_called():
         "spend": 10.0,
     }
 
+    set_cache_called: Final = asyncio.Event()
+
+    async def _record_set_cache(*args: object, **kwargs: object) -> None:
+        set_cache_called.set()
+
     with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[mock_tag_obj])) as mock_get_cache:
-        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+        with patch.object(
+            cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_record_set_cache)
+        ) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
                 token=None,
                 user_id=None,
@@ -6317,7 +6325,7 @@ async def test_tag_cache_update_called():
                 tags=["test-tag"],
             )
 
-            await asyncio.sleep(0.1)
+            assert await asyncio.wait_for(set_cache_called.wait(), timeout=5)
 
             mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
@@ -6353,10 +6361,17 @@ async def test_tag_cache_update_multiple_tags():
     async def mock_get_cache_side_effect(keys, **kwargs):
         return [{"tag:tag1": mock_tag1_obj, "tag:tag2": mock_tag2_obj}.get(key) for key in keys]
 
+    set_cache_called: Final = asyncio.Event()
+
+    async def _record_set_cache(*args: object, **kwargs: object) -> None:
+        set_cache_called.set()
+
     with patch.object(
         cache, "async_batch_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
     ) as mock_get_cache:
-        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+        with patch.object(
+            cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_record_set_cache)
+        ) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
                 token=None,
                 user_id=None,
@@ -6367,7 +6382,7 @@ async def test_tag_cache_update_multiple_tags():
                 tags=["tag1", "tag2"],
             )
 
-            await asyncio.sleep(0.1)
+            assert await asyncio.wait_for(set_cache_called.wait(), timeout=5)
 
             mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
@@ -6397,13 +6412,20 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
     cache = DualCache(default_in_memory_ttl=300)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    set_cache_called: Final = asyncio.Event()
+
+    async def _record_set_cache(*args: object, **kwargs: object) -> None:
+        set_cache_called.set()
+
     try:
         with patch.object(
             cache,
             "async_batch_get_cache",
             new=AsyncMock(return_value=[{"tag_name": "active-tag", "spend": 1.0}]),
         ):
-            with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            with patch.object(
+                cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_record_set_cache)
+            ) as mock_set_cache:
                 await litellm.proxy.proxy_server.update_cache(
                     token=None,
                     user_id=None,
@@ -6414,7 +6436,7 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
                     tags=["active-tag"],
                 )
 
-                await asyncio.sleep(0.1)
+                assert await asyncio.wait_for(set_cache_called.wait(), timeout=5)
 
                 mock_set_cache.assert_awaited_once()
                 assert mock_set_cache.call_args.kwargs["ttl"] == 300

@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.chat_completions.route_host import arguments, connection_defaults, response
+from litellm.rust_bridge.chat_completions.route_host import connection_defaults, response
 from litellm.types.utils import ModelResponse
 
 
@@ -33,12 +33,6 @@ def test_response_builds_the_public_model_response() -> None:
     assert built.choices[0].message.content == "native"
     assert built.usage is not None
     assert built.usage.total_tokens == 5
-
-
-def test_arguments_are_the_public_kwargs_view() -> None:
-    kwargs: Final = MappingProxyType({"metadata": {"user_id": "u"}})
-
-    assert arguments(kwargs) is kwargs
 
 
 @pytest.mark.parametrize(

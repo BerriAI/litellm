@@ -128,6 +128,30 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         return [*base_params, *extra_params]
 
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
+        mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
+        )
+        if not gpt_reasoning_model or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            param: value
+            for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
+            if param != "max_tokens"
+        }
+
     def _supports_reasoning(self, model: str) -> bool:
         try:
             return litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)

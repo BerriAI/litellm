@@ -33,6 +33,7 @@ fallback path (unknown model, missing model) for every limiter.
 """
 
 import sys
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -305,7 +306,9 @@ async def test_parallel_request_limiter_v1_populates_provider_when_at_rpm_limit(
     Trip the per-key RPM cap and assert the raised exception carries
     ``model`` / ``llm_provider`` resolved from ``data["model"]``.
     """
-    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 12, 0, 0)
+    )
     user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-rl-test",
         max_parallel_requests=10,
@@ -404,7 +407,9 @@ async def test_parallel_request_limiter_v1_unknown_model_falls_back():
     When ``data["model"]`` is unparseable, the resolver falls back to
     ``litellm_proxy`` — and crucially does *not* leak a secondary exception.
     """
-    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 12, 0, 0)
+    )
     user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-rl-unknown",
         max_parallel_requests=10,
@@ -438,7 +443,9 @@ async def test_parallel_request_limiter_v1_unknown_model_falls_back():
 
 @pytest.mark.asyncio
 async def test_parallel_request_limiter_v1_missing_model_falls_back():
-    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 12, 0, 0)
+    )
     user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-rl-no-model",
         max_parallel_requests=10,

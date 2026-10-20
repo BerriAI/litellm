@@ -42,6 +42,7 @@ from typing import Iterator
 import httpx
 import pytest
 from tests._master_key import MASTER_KEY
+from tests.integration._support.process import stop_child
 
 # ---------------------------------------------------------------------------
 # Skip gate
@@ -147,12 +148,7 @@ def _serve(config_path: str) -> Iterator[str]:
         _wait_for_health(base_url, proc, time.monotonic() + STARTUP_TIMEOUT_S)
         yield base_url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        stop_child(proc, grace_seconds=10)
 
 
 @pytest.fixture(scope="module")

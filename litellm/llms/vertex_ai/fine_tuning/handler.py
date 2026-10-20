@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +23,8 @@ from litellm.types.llms.vertex_ai import (
     ResponseTuningJob,
 )
 from litellm.types.utils import LiteLLMFineTuningJob
+
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -341,4 +344,4 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        return response.json()
+        return _JSON_VALUE.validate_python(response.json())

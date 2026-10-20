@@ -38,7 +38,13 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import CustomToolCallOutputItem, GenericResponseOutputItem, OutputText
+from litellm.responses.litellm_completion_transformation.tool_search import build_tool_search_call
+from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
+    GenericResponseOutputItem,
+    OutputText,
+    OutputToolSearchCall,
+)
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
@@ -88,6 +94,22 @@ class RecordingMaskingGuardrail(MockGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class ToolCallRecordingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[object] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls.extend(inputs.get("tool_calls", []))
+        return inputs
+
+
 class LastTextDroppingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -133,6 +155,40 @@ class PersimmonMaskingGuardrail(CustomGuardrail):
                     "arguments": tool_call["function"]["arguments"].replace("persimmon", "[MASKED]"),
                 },
             }
+            for tool_call in inputs.get("tool_calls", [])
+        ]
+        return {**inputs, "tool_calls": tool_calls}
+
+
+class RecordingPersimmonMaskingGuardrail(PersimmonMaskingGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[tuple[str, str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls.extend(
+            (tool_call["function"]["name"], tool_call["function"]["arguments"])
+            for tool_call in inputs.get("tool_calls", [])
+        )
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class ArgumentsRedactingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = [
+            {**tool_call, "function": {**tool_call["function"], "arguments": "[REDACTED]"}}
             for tool_call in inputs.get("tool_calls", [])
         ]
         return {**inputs, "tool_calls": tool_calls}
@@ -898,10 +954,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
         assert tool_call["index"] == 0
 
     def test_extract_tool_call_from_dict_format(self):
@@ -942,10 +995,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
 
     @pytest.mark.parametrize(
         "output_item",
@@ -1065,6 +1115,49 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert "name" not in result["output"][0]
 
     @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_a_tool_search_call(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[build_tool_search_call("srvtoolu_1", '{"query": "persimmon"}', "completed")],
+        )
+
+        result = await handler.process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [("tool_search", '{"query": "persimmon"}')]
+        search_call = result.output[0]
+        assert isinstance(search_call, OutputToolSearchCall)
+        assert search_call.arguments == {"query": "[MASKED]"}
+        assert search_call.call_id == "srvtoolu_1"
+        assert "name" not in search_call.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[build_tool_search_call("srvtoolu_1", '{"query": "persimmon"}', "completed")],
+        )
+
+        result = await OpenAIResponsesHandler().process_output_response(
+            response, ArgumentsRedactingGuardrail(guardrail_name="redact")
+        )
+
+        search_call = result.output[0]
+        assert isinstance(search_call, OutputToolSearchCall)
+        assert search_call.arguments == {}
+        assert search_call.status == "incomplete"
+        assert "persimmon" not in result.model_dump_json()
+
+    @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
         """Test processing output response containing function tool calls"""
         handler = OpenAIResponsesHandler()
@@ -1095,6 +1188,39 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
         assert exc_info.value.status_code == 400
         assert "Response blocked by guardrail" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_namespaced_function_call_reaches_output_guardrails_in_the_unchanged_tool_call_shape(self):
+        guardrail: Final = ToolCallRecordingGuardrail(guardrail_name="recorder")
+        response: Final = ResponsesAPIResponse(
+            id="resp_namespaced",
+            created_at=1764901066,
+            model="gpt-5.5",
+            object="response",
+            status="completed",
+            output=[
+                ResponseFunctionToolCall(
+                    arguments='{"city":"Paris"}',
+                    call_id="call_namespaced",
+                    name="get_weather",
+                    namespace="weather_tools",
+                    type="function_call",
+                    id="fc_namespaced",
+                    status="completed",
+                )
+            ],
+        )
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            {
+                "id": "call_namespaced",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                "index": 0,
+            }
+        ]
 
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""
@@ -1481,9 +1607,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[Any] = None,
             ) -> GenericGuardrailAPIInputs:
                 texts = inputs.get("texts", [])
-                inputs["texts"] = [
-                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
-                ]
+                inputs["texts"] = [t.replace("<TOKEN_1>", "john@example.com") for t in texts]
                 return inputs
 
         handler = OpenAIResponsesHandler()
@@ -1519,15 +1643,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             litellm_logging_obj=None,
         )
 
-        completed_chunk = next(
-            c
-            for c in result
-            if isinstance(c, dict) and c.get("type") == "response.completed"
-        )
+        completed_chunk = next(c for c in result if isinstance(c, dict) and c.get("type") == "response.completed")
         output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
-        assert (
-            output_text == "send to john@example.com"
-        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        assert output_text == "send to john@example.com", (
+            f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_pass_through_unchanged(self):
@@ -1585,7 +1705,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 "content_index": 0,
                 "part": {"type": "output_text", "text": "hello world"},
             },
-            {"type": "response.output_item.done", "output_index": 0, "item": {**item, "content": [dict(c) for c in content]}},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {**item, "content": [dict(c) for c in content]},
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -1646,15 +1770,29 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": '{"fruit":'},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "delta": '{"fruit":',
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "delta": ' "persimmon"}',
+            },
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_123",
                 "output_index": 0,
                 "arguments": '{"fruit": "persimmon"}',
             },
-            {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": item('{"fruit": "persimmon"}', "completed"),
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -1759,8 +1897,18 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
             {"type": "response.custom_tool_call_input.delta", "item_id": "ctc_1", "output_index": 0, "delta": "echo "},
-            {"type": "response.custom_tool_call_input.delta", "item_id": "ctc_1", "output_index": 0, "delta": "persimmon"},
-            {"type": "response.custom_tool_call_input.done", "item_id": "ctc_1", "output_index": 0, "input": "echo persimmon"},
+            {
+                "type": "response.custom_tool_call_input.delta",
+                "item_id": "ctc_1",
+                "output_index": 0,
+                "delta": "persimmon",
+            },
+            {
+                "type": "response.custom_tool_call_input.done",
+                "item_id": "ctc_1",
+                "output_index": 0,
+                "input": "echo persimmon",
+            },
             {"type": "response.output_item.done", "output_index": 0, "item": item("echo persimmon", "completed")},
             {
                 "type": "response.completed",
@@ -1858,6 +2006,131 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert completed_event.response.output[0].name == "exec"
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_a_tool_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        def search_call(arguments: str, status: Literal["in_progress", "completed"]) -> OutputToolSearchCall:
+            return build_tool_search_call("srvtoolu_1", arguments, status)
+
+        handler = OpenAIResponsesHandler()
+        added = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(**search_call("", "in_progress").model_dump()),
+        )
+        done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=2,
+            item=BaseLiteLLMOpenAIResponseObject(**search_call('{"query": "persimmon"}', "completed").model_dump()),
+        )
+        completed = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=1,
+                model="claude-sonnet-5-5",
+                object="response",
+                status="completed",
+                output=[search_call('{"query": "persimmon"}', "completed")],
+            ),
+        )
+
+        await handler.process_output_streaming_response(
+            responses_so_far=[added, done, completed],
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert added.item.model_dump()["arguments"] == {}
+        assert done.item.model_dump()["arguments"] == {"query": "[MASKED]"}
+        assert isinstance(completed.response.output[0], OutputToolSearchCall)
+        assert completed.response.output[0].arguments == {"query": "[MASKED]"}
+        assert "name" not in done.item.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
+        def search_call(arguments: dict, status: str) -> dict:
+            return {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": None,
+                "arguments": arguments,
+                "execution": "server",
+                "status": status,
+            }
+
+        def function_call(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_item.added", "output_index": 0, "item": search_call({}, "in_progress")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": search_call({"paths": ["persimmon"]}, "completed"),
+            },
+            {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": '{"fruit": "persimmon"}',
+            },
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": function_call('{"fruit": "persimmon"}', "completed"),
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "gpt-5.6",
+                    "output": [
+                        search_call({"paths": ["persimmon"]}, "completed"),
+                        function_call('{"fruit": "persimmon"}', "completed"),
+                    ],
+                },
+            },
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[1]["item"]["arguments"] == {"paths": ["[MASKED]"]}
+        assert events[3]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[4]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[6]["response"]["output"][0]["arguments"] == {"paths": ["[MASKED]"]}
+        assert events[6]["response"]["output"][1]["arguments"] == '{"fruit": "[MASKED]"}'
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_custom_tool_call_rewrite_without_matching_events_fails_closed(self):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1893,19 +2166,43 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": dict(reasoning)},
             {"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning)},
-            {"type": "response.output_item.added", "output_index": 0, "item": {**message, "status": "in_progress", "content": []}},
-            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Looking that up"},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**message, "status": "in_progress", "content": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Looking that up",
+            },
             {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": [dict(text)]}},
             {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": '{"fruit":'},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": '{"fruit":',
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": ' "persimmon"}',
+            },
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_1",
                 "output_index": 1,
                 "arguments": '{"fruit": "persimmon"}',
             },
-            {"type": "response.output_item.done", "output_index": 1, "item": function_call('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": function_call('{"fruit": "persimmon"}', "completed"),
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -2303,9 +2600,7 @@ class TestGetStructuredMessages:
         }
         result = handler.get_structured_messages(data)
         assert result is not None
-        has_system = any(
-            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
-        )
+        has_system = any(isinstance(msg, dict) and msg.get("role") == "system" for msg in result)
         assert has_system, f"Expected system message from instructions, got: {result}"
 
     def test_should_return_none_when_no_input(self):
@@ -2405,9 +2700,7 @@ class StructuredRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -2453,9 +2746,7 @@ class ToolOutputRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_tool = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "tool")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -2472,9 +2763,7 @@ class DroppingRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten[:-1]}
 
 
@@ -2519,6 +2808,21 @@ class TestStructuredMessagesWriteBack:
 
         assert [_texts(item) for item in result["input"]] == [[COMPRESSED_MARKER]]
         assert "instructions" not in result
+
+    @pytest.mark.asyncio
+    async def test_rows_the_guardrail_left_alone_keep_their_cache_control_past_the_provider_cap(self):
+        handler = OpenAIResponsesHandler()
+        ephemeral = {"type": "ephemeral"}
+        marked_turns = [{"role": "user", "content": f"turn {index}", "cache_control": ephemeral} for index in range(4)]
+        data = {
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "input": [{"role": "user", "content": "memo " * 400, "cache_control": ephemeral}, *marked_turns],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert _texts(result["input"][0]) == [COMPRESSED_MARKER]
+        assert result["input"][1:] == marked_turns
 
     @pytest.mark.asyncio
     async def test_developer_item_preserved_verbatim_by_row_patch(self):
@@ -2817,6 +3121,20 @@ class TestPerMessageRewriteWriteBack:
     is otherwise rejected by name instead of sent unrewritten."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cache_control", [{"type": "ephemeral", "ttl": "30m"}, {"type": "persistent"}], ids=["ttl-30m", "unknown-type"]
+    )
+    async def test_an_item_mark_no_chat_row_can_hold_still_lets_the_guardrail_run(self, cache_control: dict):
+        guardrail = _per_message_redactor()
+        marked_item = {"role": "user", "content": "Look up " + SSN + " for me.", "cache_control": cache_control}
+        data = {"model": "gemini/gemini-2.5-flash", "input": [marked_item]}
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["input"] == [{**marked_item, "content": "Look up " + REDACTED_SSN + " for me."}]
+
+    @pytest.mark.asyncio
     async def test_structured_rows_land_on_instructions_and_tool_output(self):
         guardrail = _per_message_redactor()
         data = _tool_replay_request()
@@ -3034,9 +3352,7 @@ class SystemRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system")
-        rewritten = [
-            {**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -3196,6 +3512,44 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         )
 
         assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    async def test_scanning_tools_with_malformed_flags_leaves_them_for_the_route_to_judge(self):
+        data: Final = _codex_request("hi")
+        data["tools"][0]["defer_loading"] = "false"
+        data["tools"][1]["tools"][0]["allowed_callers"] = "direct"
+        data["tools"][2]["defer_loading"] = 1
+        data["tools"].append({"type": "tool_search", "execution": ""})
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == expected_tools
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == [
+            "get_weather",
+            "mcp__confluence__confluence_get_page",
+            "mcp__confluence__confluence_search",
+            "apply_patch",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
+        data: Final = _codex_request("hi")
+        data["tools"] = [{"type": "tool_search"}, {**data["tools"][0], "defer_loading": True}]
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        scanned: Final[list[list[dict]]] = []
+
+        def keep_functions(tools):
+            scanned.append(copy.deepcopy(tools))
+            return [tool for tool in tools if tool["type"] == "function"]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=keep_functions, guardrail_name="test")
+        )
+
+        assert result["tools"] == expected_tools
+        assert [tool["type"] for tool in scanned[0]] == ["function"]
 
     @pytest.mark.asyncio
     async def test_appending_guardrail_keeps_namespace_and_adds_tool(self):
@@ -3411,9 +3765,7 @@ class TestBuildBlockSseChunks:
             {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
         )
         yielded = [
-            OutputItemAddedEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
-            ),
+            OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
                 item_id="msg_live",
@@ -3627,7 +3979,11 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
             "delta": '{"city":',
         }
         function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city":'}
-        terminal = {"type": terminal_type, "sequence_number": 2, "response": {"id": "resp_1", "output": [function_call]}}
+        terminal = {
+            "type": terminal_type,
+            "sequence_number": 2,
+            "response": {"id": "resp_1", "output": [function_call]},
+        }
         mid_stream_key = handler.get_streaming_scan_key([arguments_delta])
         ended_key = handler.get_streaming_scan_key([arguments_delta, terminal])
         assert ended_key.stream_ended is True
@@ -3661,7 +4017,13 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         added = {
             "type": "response.output_item.added",
             "sequence_number": 1,
-            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": ""},
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": "",
+            },
         }
         arguments_delta = {
             "type": "response.function_call_arguments.delta",
@@ -3686,7 +4048,11 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         arguments = json.dumps({"city": city})
         pending = {"type": "function_call", "id": item_id, "call_id": "call_" + item_id, "name": "get_weather"}
         return (
-            {"type": "response.output_item.added", "sequence_number": sequence_number, "item": {**pending, "arguments": ""}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": sequence_number,
+                "item": {**pending, "arguments": ""},
+            },
             {
                 "type": "response.function_call_arguments.delta",
                 "sequence_number": sequence_number + 1,
@@ -3710,7 +4076,9 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended(released))
         assert ended_key.stream_ended is True
         assert ended_key.texts == ("hi",)
-        cities = tuple(city for fingerprint in ended_key.tool_calls for city in ("Paris", "Rome") if city in fingerprint)
+        cities = tuple(
+            city for fingerprint in ended_key.tool_calls for city in ("Paris", "Rome") if city in fingerprint
+        )
         assert cities == ("Paris", "Rome"), ended_key
 
     def test_released_stream_as_ended_keys_a_message_whose_item_already_finished(self):
@@ -3720,7 +4088,9 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
             "sequence_number": 1,
             "item": {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "hi"}]},
         }
-        ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended((self._delta(0, "hi"), message_done)))
+        ended_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended((self._delta(0, "hi"), message_done))
+        )
         assert ended_key.stream_ended is True
         assert ended_key.texts == ("hi",)
 

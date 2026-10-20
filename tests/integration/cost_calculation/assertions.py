@@ -62,20 +62,25 @@ def assert_breakdown(
             assert (header is None and omitted_component_allowed) or (
                 header is not None and approx_equal(float(header), expected_component)
             ), f"{case_name}: {header_name} {header} != expected {expected_component}"
-    if response is not None and expected.cost_header and response_content_type == "application/json" and any(
-        component is not None
-        for component in (
-            expected.cache_read_cost,
-            expected.cache_creation_cost,
-            expected.reasoning_cost,
-            expected.tool_usage_cost,
+    if (
+        response is not None
+        and expected.cost_header
+        and response_content_type == "application/json"
+        and any(
+            component is not None
+            for component in (
+                expected.cache_read_cost,
+                expected.cache_creation_cost,
+                expected.reasoning_cost,
+                expected.tool_usage_cost,
+            )
         )
     ):
         input_header: str | None = response.headers.get("x-litellm-response-cost-input")
         output_header: str | None = response.headers.get("x-litellm-response-cost-output")
-        expected_input_header: float = expected.input_cost - (
-            expected.cache_read_cost or 0.0
-        ) - (expected.cache_creation_cost or 0.0)
+        expected_input_header: float = (
+            expected.input_cost - (expected.cache_read_cost or 0.0) - (expected.cache_creation_cost or 0.0)
+        )
         assert input_header is not None and approx_equal(float(input_header), expected_input_header), (
             f"{case_name}: x-litellm-response-cost-input {input_header} != expected {expected_input_header}"
         )

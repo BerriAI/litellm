@@ -10,7 +10,7 @@ from litellm.rust_bridge.public_call import NativeCall
 REQUEST: Final = NativeCall(
     args=(),
     kwargs={"req_format": "markdown"},
-    bound={
+    base={
         "model": "mistral/mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "https://example.com/file.pdf"},
         "api_key": "test-key",
@@ -18,7 +18,6 @@ REQUEST: Final = NativeCall(
         "timeout": None,
         "custom_llm_provider": None,
         "extra_headers": None,
-        **{"req_format": "markdown"},
     },
 )
 
@@ -53,7 +52,7 @@ def test_rust_ocr_response_retains_provider_native_response():
 def test_map_failure_builds_public_error_from_upstream_status_and_headers() -> None:
     error: Final = RustUpstreamError(429, '{"message": "slow down"}', (("retry-after", "7"),))
 
-    public_error: Final = map_failure(error, REQUEST.bound, "mistral")
+    public_error: Final = map_failure(error, REQUEST.resolved, "mistral")
 
     assert isinstance(public_error, litellm.RateLimitError)
     assert public_error.status_code == 429
@@ -66,7 +65,7 @@ def test_map_failure_builds_public_error_from_upstream_status_and_headers() -> N
 def test_map_failure_maps_upstream_401_to_authentication_error() -> None:
     error: Final = RustUpstreamError(401, '{"message": "Unauthorized"}', ())
 
-    public_error: Final = map_failure(error, REQUEST.bound, "mistral")
+    public_error: Final = map_failure(error, REQUEST.resolved, "mistral")
 
     assert isinstance(public_error, litellm.AuthenticationError)
     assert public_error.status_code == 401
@@ -77,7 +76,7 @@ def test_map_failure_maps_upstream_401_to_authentication_error() -> None:
 def test_map_failure_leaves_non_upstream_errors_unwrapped() -> None:
     error: Final = RuntimeError("bridge exploded")
 
-    public_error: Final = map_failure(error, REQUEST.bound, "mistral")
+    public_error: Final = map_failure(error, REQUEST.resolved, "mistral")
 
     assert not isinstance(public_error, UpstreamFailure)
     assert isinstance(public_error, litellm.APIConnectionError)
@@ -86,4 +85,4 @@ def test_map_failure_leaves_non_upstream_errors_unwrapped() -> None:
 
 def test_map_failure_reports_invalid_request_format_as_unsupported_params() -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `req_format`: 'markdown'"):
-        raise map_failure(RustFormatError(), REQUEST.bound, "mistral")
+        raise map_failure(RustFormatError(), REQUEST.resolved, "mistral")

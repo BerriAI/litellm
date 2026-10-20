@@ -1,13 +1,6 @@
-"""One locked transaction brings a team's roster to a target set or applies a member delta, whatever its size.
-
-The SCIM group endpoints write through here. Each member of a group push used to go through
-/team/member_add or /team/member_delete on its own, so a 500-member group was thousands of
-statements and outlasted the edge in front of the proxy.
-"""
-
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -19,13 +12,20 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._uuid import uuid
 from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
-    delete_cache_key_objects,
+    await_inflight_team_membership_load,
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
-    invalidate_team_member_spend_state,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_local,
+    evict_shared,
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
@@ -34,7 +34,11 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _emit_team_members_metric,  # pyright: ignore[reportPrivateUsage]  # same gauge /team/member_add moves
     _schedule_team_membership_audit_log,  # pyright: ignore[reportPrivateUsage]  # same audit row /team/member_add writes
 )
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    DETACH_TEAM_FROM_USERS_SQL,
+    TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 
@@ -44,14 +48,7 @@ if TYPE_CHECKING:
 
     from litellm.repositories.prisma_protocols import TableActions
 
-_SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
-_DETACH_TEAM_SQL: Final = (
-    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
-    " WHERE user_id = ANY($2::text[])"
-)
-_LOCK_MEMBER_ROWS_SQL: Final = (
-    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE'
-)
+ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
@@ -90,6 +87,10 @@ class MembersMissing:
 RosterSyncOutcome = RosterSync | TeamGone | MembersMissing
 
 
+class _TeamDeletedBeforeRosterWrite(Exception):
+    pass
+
+
 class _MembershipData(TypedDict):
     team_id: ReadOnly[str]
     user_id: ReadOnly[str]
@@ -113,11 +114,11 @@ class _Removal:
     jwt_mapping_cache_keys: tuple[str, ...]
 
 
-def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+def team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return tx.litellm_teamtable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
-def _user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+def user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
     return tx.litellm_usertable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
@@ -207,7 +208,7 @@ async def _add_members(
 ) -> tuple[Member, ...] | MembersMissing:
     if not user_ids:
         return ()
-    rows: Final = await find_many_in(_user_tx_db(tx), "user_id", user_ids)
+    rows: Final = await find_many_in(user_tx_db(tx), "user_id", user_ids)
     email_of: Final = MappingProxyType({row.user_id: row.user_email for row in rows})
     missing: Final = tuple(user_id for user_id in user_ids if user_id not in email_of)
     if missing:
@@ -221,7 +222,7 @@ async def _add_members(
         skip_duplicates=True,
     )
     await update_many_in(
-        _user_tx_db(tx),
+        user_tx_db(tx),
         "user_id",
         user_ids,
         data={"teams": {"push": [team.team_id]}},
@@ -244,7 +245,7 @@ async def _remove_members(
     jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
         hashed_tokens=tuple(key.token for key in keys), prisma_client=prisma_client
     )
-    await tx.execute_raw(_DETACH_TEAM_SQL, team_id, list(user_ids))
+    await tx.execute_raw(DETACH_TEAM_FROM_USERS_SQL, team_id, list(user_ids))
     await delete_many_in(
         _membership_tx_db(tx), "user_id", user_ids, atomicity="caller_transaction", where={"team_id": team_id}
     )
@@ -269,27 +270,33 @@ async def _settle_caches(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
+    _ = await asyncio.gather(
+        *(await_inflight_team_membership_load(user_id=user_id, team_id=team.team_id) for user_id in changed_user_ids)
+    )
+    deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
+    evicted: Final = (
+        *deleted_tokens,
+        *removal.jwt_mapping_cache_keys,
+        *_member_cache_keys(team.team_id, changed_user_ids),
+    )
+    evict_local(cache_keys=evicted, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=evicted, cache=user_api_key_cache)
+    if proxy_logging_obj is not None:
+        await evict_shared(cache_keys=deleted_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
     await delete_cache_team_object(
         team_id=team.team_id,
         team_alias=team.team_alias,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    await delete_cache_key_objects(
-        hashed_tokens=tuple(key.token for key in removal.deleted_keys),
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    await evict_and_broadcast(cache_keys=removal.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
-    await evict_and_broadcast(cache_keys=changed_user_ids, user_api_key_cache=user_api_key_cache)
-    await asyncio.gather(
-        *(
-            invalidate_team_member_spend_state(
-                user_id=user_id, team_id=team.team_id, user_api_key_cache=user_api_key_cache
-            )
-            for user_id in changed_user_ids
-        )
-    )
+    await broadcast_evictions(cache_keys=evicted)
+
+
+def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
+    for user_id in user_ids:
+        yield user_id
+        yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
+        yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
 
 async def sync_team_roster(
@@ -306,42 +313,43 @@ async def sync_team_roster(
     The roster, every member's ``teams`` array, the membership rows and the removed
     members' team keys change together or not at all, so a failure leaves nothing
     half-applied for the caller's retry to trip over. ``TeamGone`` means the team row
-    went away before the lock was taken; ``MembersMissing`` means a user the plan adds
-    has no row, and nothing was written. A delta naming nobody changes nothing, so it
-    reads the team from the writer without the lock or a transaction, and a plan already
-    matching the roster writes nothing and leaves every cache entry in place. Every user
-    row the plan touches is locked in id order before the first write, so two groups
-    trading members never wait on each other in opposite orders.
+    went away before the lock was taken or before the roster write, and ``MembersMissing``
+    means a user the plan adds has no row. Neither writes anything. A delta naming nobody
+    changes nothing, so it reads the team from the writer without the lock or a transaction,
+    and a plan already matching the roster writes nothing and leaves every cache entry in
+    place. Every user row the plan touches is locked through ``USER_ROWS_LOCK_SQL`` before
+    the first write.
     """
     if _changes_nothing(plan):
         return await _unchanged_roster(prisma_client, team_id)
-    async with prisma_client.tx(timeout=_SYNC_TX_TIMEOUT) as tx:
-        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        team_row: Final = await _team_tx_db(tx).find_unique(where={"team_id": team_id})
-        if team_row is None:
-            return TeamGone(team_id=team_id)
-        team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        roster: Final = tuple(team.members_with_roles)
-        roster_ids: Final = frozenset(member.user_id for member in roster if member.user_id is not None)
-        to_add, to_remove = _planned_changes(plan, roster_ids)
-        if not to_add and not to_remove:
-            return RosterSync(team=team, added=frozenset(), removed=frozenset())
-        await tx.query_raw(_LOCK_MEMBER_ROWS_SQL, sorted(to_add | to_remove))
-        added: Final = await _add_members(tx, team, sorted(to_add), user_api_key_dict, litellm_proxy_admin_name)
-        if isinstance(added, MembersMissing):
-            return added
-        removal: Final = await _remove_members(tx, prisma_client, team_id, sorted(to_remove), user_api_key_dict)
-        after: Final = (*(member for member in roster if member.user_id not in to_remove), *added)
-        written: Final = await _team_tx_db(tx).update(
-            where={"team_id": team_id},
-            data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
-        )
+    try:
+        async with prisma_client.tx(timeout=ROSTER_TX_TIMEOUT) as tx:
+            await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+            team_row: Final = await team_tx_db(tx).find_unique(where={"team_id": team_id})
+            if team_row is None:
+                return TeamGone(team_id=team_id)
+            team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+            roster: Final = tuple(team.members_with_roles)
+            roster_ids: Final = frozenset(member.user_id for member in roster if member.user_id is not None)
+            to_add, to_remove = _planned_changes(plan, roster_ids)
+            if not to_add and not to_remove:
+                return RosterSync(team=team, added=frozenset(), removed=frozenset())
+            await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(to_add | to_remove))
+            added: Final = await _add_members(tx, team, sorted(to_add), user_api_key_dict, litellm_proxy_admin_name)
+            if isinstance(added, MembersMissing):
+                return added
+            removal: Final = await _remove_members(tx, prisma_client, team_id, sorted(to_remove), user_api_key_dict)
+            after: Final = (*(member for member in roster if member.user_id not in to_remove), *added)
+            written: Final = await team_tx_db(tx).update(
+                where={"team_id": team_id},
+                data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
+            )
+            if written is None:
+                raise _TeamDeletedBeforeRosterWrite
+    except _TeamDeletedBeforeRosterWrite:
+        return TeamGone(team_id=team_id)
 
-    synced: Final = (
-        LiteLLM_TeamTable.model_validate(written.model_dump())
-        if written is not None
-        else team.model_copy(update={"members_with_roles": list(after)})
-    )
+    synced: Final = LiteLLM_TeamTable.model_validate(written.model_dump())
     if removal.deleted_keys:
         KeyManagementEventHooks.create_key_deleted_audit_logs(
             keys_being_deleted=removal.deleted_keys,

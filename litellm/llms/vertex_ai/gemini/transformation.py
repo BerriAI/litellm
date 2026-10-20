@@ -57,7 +57,9 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
+    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
+    gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
 )
@@ -69,7 +71,6 @@ _GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
-GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -197,13 +198,7 @@ def _apply_gemini_metadata(
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
-        gemini_video_metadata: Final = {}
-        if "fps" in video_metadata:
-            gemini_video_metadata["fps"] = video_metadata["fps"]
-        if "start_offset" in video_metadata:
-            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
-        if "end_offset" in video_metadata:
-            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
+        gemini_video_metadata: Final = gemini_video_metadata_from_openai(video_metadata)
         if gemini_video_metadata:
             part_dict["video_metadata"] = gemini_video_metadata
 

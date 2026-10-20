@@ -22,4 +22,4 @@ def convert_usage(usage_data: Mapping[str, int]) -> Usage:
 
 
 def get_api_base(api_base: str | None = None) -> str | None:
-    return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+    return (api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL).rstrip("/")

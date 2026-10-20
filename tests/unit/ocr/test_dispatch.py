@@ -72,13 +72,13 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.bound["model"] == "mistral/mistral-ocr-latest"
-    assert request.bound["document"] is document
-    assert request.bound["api_key"] == "test-key"
-    assert request.bound["api_base"] == "https://example.invalid"
-    assert request.bound["timeout"] is timeout
-    assert request.bound["custom_llm_provider"] == "mistral"
-    assert request.bound["extra_headers"] is extra_headers
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
+    assert request.resolved["api_key"] == "test-key"
+    assert request.resolved["api_base"] == "https://example.invalid"
+    assert request.resolved["timeout"] is timeout
+    assert request.resolved["custom_llm_provider"] == "mistral"
+    assert request.resolved["extra_headers"] is extra_headers
     assert request.kwargs == kwargs
     assert request.kwargs["pages"] is pages
     assert call_args is args
@@ -119,8 +119,8 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.bound["model"] == "mistral/mistral-ocr-latest"
-    assert request.bound["document"] is document
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
     assert request.kwargs == kwargs
     assert call_args is args
     assert call_kwargs is kwargs
@@ -271,7 +271,7 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
     finally:
         NATIVE_OCR.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
 
 
 @pytest.mark.asyncio
@@ -297,4 +297,4 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
     finally:
         NATIVE_AOCR.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]

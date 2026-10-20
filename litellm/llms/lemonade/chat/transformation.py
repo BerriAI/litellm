@@ -2,10 +2,12 @@
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,6 +22,10 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
 
 
 class LemonadeChatConfig(OpenAILikeChatConfig):
@@ -55,7 +61,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         response_format: dict | None = None,
         tools: list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -104,8 +110,8 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 f"Failed to fetch models from Lemonade. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        model_list: Final = response.json().get("data", [])
-        return ["lemonade/" + model["id"] for model in model_list]
+        model_list: Final = _JSON_OBJECTS.validate_python(_JSON_DICT.validate_python(response.json()).get("data", []))
+        return ["lemonade/" + _STR.validate_python(model["id"]) for model in model_list]
 
     @staticmethod
     def _get_positive_int(value: Any) -> int | None:
@@ -188,10 +194,11 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             verbose_logger.debug("LemonadeError: Could not get model info.")
             return self._get_default_model_info(model)
 
-        max_input_tokens: Final = self._get_context_window(model_info)
-        max_output_tokens: Final = self._get_positive_int(model_info.get("max_output_tokens"))
-        max_tokens: Final = self._get_positive_int(model_info.get("max_tokens"))
-        provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
+        model_info_fields: Final = _JSON_DICT.validate_python(model_info)
+        max_input_tokens: Final = self._get_context_window(model_info_fields)
+        max_output_tokens: Final = self._get_positive_int(model_info_fields.get("max_output_tokens"))
+        max_tokens: Final = self._get_positive_int(model_info_fields.get("max_tokens"))
+        provider_specific_entry: Final = self._get_provider_specific_entry(model_info_fields)
 
         model_info_response: Final = self._get_default_model_info(model)
         model_info_response.update(

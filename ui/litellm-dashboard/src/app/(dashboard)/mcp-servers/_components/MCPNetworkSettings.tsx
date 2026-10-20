@@ -14,7 +14,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { DeprecationBanner } from "@/components/DeprecationBanner";
 import { toast } from "@/lib/toast";
 import {
   getGeneralSettingsCall,
@@ -317,7 +316,6 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
 
   return (
     <div className="space-y-6 p-4">
-      <DeprecationBanner featureName="MCP Network Settings and the internal-network-only flag" />
       <div>
         <p className="text-lg font-semibold">Private IP Ranges</p>
         <p className="mt-1 text-sm text-muted-foreground">

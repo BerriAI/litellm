@@ -22,9 +22,9 @@ from ..chat.transformation import BaseConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.proxy._types import UserAPIKeyAuth as _UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth as _UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
@@ -134,6 +134,9 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
+
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code)
 
     @abstractmethod
     def transform_delete_file_request(

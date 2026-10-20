@@ -223,6 +223,7 @@ class _OAuthCredentialAccessToken(TypedDict):
 
 class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     identity_binding_proof: ReadOnly[str]
+    cimd_client_id: ReadOnly[str]
     type: str
     refresh_token: str
     expires_at: str
@@ -533,6 +534,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
             value=client_private_key,
             new_encryption_key=encryption_key,
         )
+    id_jag_resource_client_secret: Final = credentials.get("id_jag_resource_client_secret")
+    if id_jag_resource_client_secret is not None:
+        credentials["id_jag_resource_client_secret"] = encrypt_value_helper(  # rebind-ok: encrypt before persist
+            value=id_jag_resource_client_secret,
+            new_encryption_key=encryption_key,
+        )
     # AWS SigV4 credential fields
     aws_access_key_id: Final = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
@@ -819,6 +826,7 @@ def decrypt_credentials(
         "client_id",
         "client_secret",
         "client_private_key",
+        "id_jag_resource_client_secret",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
@@ -1765,6 +1773,7 @@ async def store_user_oauth_credential(
     scopes: list[str] | None = None,
     skip_byok_guard: bool = False,
     identity_binding_proof: str | None = None,
+    cimd_client_id: str | None = None,
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
 
@@ -1782,12 +1791,13 @@ async def store_user_oauth_credential(
         "access_token": access_token,
         "connected_at": datetime.now(timezone.utc).isoformat(),
         **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
+        **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
     }
     if refresh_token:
         payload["refresh_token"] = refresh_token
     if expires_at:
         payload["expires_at"] = expires_at
-    if scopes:
+    if scopes is not None:
         payload["scopes"] = scopes
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
@@ -2063,6 +2073,7 @@ async def refresh_user_oauth_token(
             auth_method=getattr(server, "token_endpoint_auth_method", None),
             client_id=client_id,
             client_secret=client_secret,
+            cimd_client_id=cred.get("cimd_client_id"),
         )
         token_data: Final[dict[str, str]] = {
             "grant_type": "refresh_token",
@@ -2119,9 +2130,7 @@ async def refresh_user_oauth_token(
     new_refresh_token: Final[str | None] = body.get("refresh_token") or refresh_token
 
     raw_scope: Final = body.get("scope")
-    scopes: list[str] | None = (raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None) or cred.get(
-        "scopes"
-    )
+    scopes: Final = raw_scope.split() if isinstance(raw_scope, str) else cred.get("scopes")
 
     await store_user_oauth_credential(
         prisma_client=prisma_client,
@@ -2132,6 +2141,7 @@ async def refresh_user_oauth_token(
         expires_in=expires_in,
         scopes=scopes,
         identity_binding_proof=binding_proof,
+        cimd_client_id=cred.get("cimd_client_id"),
         skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
     )
 
