@@ -1,5 +1,6 @@
 import datetime
 import json
+import threading
 from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final
@@ -393,6 +394,50 @@ class TestRouterEmbeddingBatchLimit:
                 )
             assert route.call_count == 0
         assert failures == [(excinfo.value, True)]
+
+    @pytest.mark.asyncio
+    async def test_async_rejection_logs_each_failure_hook_once_before_raising(self) -> None:
+        hook_events: Final[list[str]] = []
+        legacy_callback_threads: Final[list[int]] = []
+        legacy_callback_ran: Final = threading.Event()
+
+        class BothHooks(CustomLogger):
+            def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                hook_events.append("sync")
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                hook_events.append("async")
+
+        def legacy_failure_callback(kwargs, completion_response, start_time, end_time) -> None:
+            legacy_callback_threads.append(threading.get_ident())
+            legacy_callback_ran.set()
+
+        both_hooks: Final = BothHooks()
+        logging_obj: Final = LitellmLogging(
+            model="embed",
+            messages=[],
+            stream=False,
+            call_type="aembedding",
+            start_time=_LOGGING_START,
+            litellm_call_id="embed-batch-logged-once",
+            function_id="embed-batch-logged-once",
+            dynamic_failure_callbacks=[legacy_failure_callback, both_hooks],
+            dynamic_async_failure_callbacks=[both_hooks],
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": {}, "proxy_server_request": {}}
+        router: Final = _embedding_router(
+            provider_model="openai/text-embedding-3-small",
+            api_base=_OPENAI_EMBED_BASE,
+            max_embedding_batch_size=2,
+            deployment_id="embed-batch-capped",
+        )
+
+        with pytest.raises(litellm.BadRequestError, match="3 inputs"):
+            await router.aembedding(model="embed", input=["one", "two", "three"], litellm_logging_obj=logging_obj)
+
+        assert legacy_callback_ran.wait(timeout=5)
+        assert legacy_callback_threads == [threading.get_ident()]
+        assert hook_events == ["async"]
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio

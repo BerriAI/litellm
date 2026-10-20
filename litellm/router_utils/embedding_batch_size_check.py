@@ -1,5 +1,6 @@
 """Validate the number of inputs in a single embeddings request."""
 
+import traceback
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -9,6 +10,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 
 import litellm
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
+from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -143,11 +145,27 @@ def deployments_when_none_admits_embedding_batch(
     return [deployment for deployment in deployments if _embedding_batch_limit(deployment) == largest_limit]
 
 
-def flag_rejected_before_provider_call(logging_obj: "LiteLLMLoggingObj") -> None:
-    """Mark the request as never reaching a provider, so deployment health metrics skip its failure"""
+def _mark_litellm_params(logging_obj: "LiteLLMLoggingObj", *keys: str) -> None:
     litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
-    if isinstance(litellm_params, dict):
-        litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
+    if not isinstance(litellm_params, dict):
+        return
+    for key in keys:
+        litellm_params[key] = True
+
+
+def log_rejection_before_provider_call(logging_obj: "LiteLLMLoggingObj", error: Exception) -> None:
+    """Mark the request as never reaching a provider, so deployment health metrics skip its failure, then log it"""
+    _mark_litellm_params(logging_obj, PROXY_REJECTED_BEFORE_ROUTING_KEY)
+    logging_obj.failure_handler(error, "".join(traceback.format_exception(error)))
+
+
+async def async_log_rejection_before_provider_call(logging_obj: "LiteLLMLoggingObj", error: Exception) -> None:
+    """Log it like an async provider failure: sync handlers inline, before a fallback swaps the deployment they read,
+    and the call marked async, so a logger with both hooks records it once"""
+    _mark_litellm_params(logging_obj, PROXY_REJECTED_BEFORE_ROUTING_KEY, CallTypes.aembedding.value)
+    traceback_text: Final = "".join(traceback.format_exception(error))
+    logging_obj.failure_handler(error, traceback_text)
+    await logging_obj.async_failure_handler(error, traceback_text)
 
 
 def clear_rejected_before_provider_call(logging_obj: "LiteLLMLoggingObj") -> None:

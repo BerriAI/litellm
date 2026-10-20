@@ -239,12 +239,13 @@ from litellm.router_utils.cooldown_handlers import (
     set_cooldown_deployments,
 )
 from litellm.router_utils.embedding_batch_size_check import (
+    async_log_rejection_before_provider_call,
     clear_rejected_before_provider_call,
     deployments_admitting_embedding_batch,
     deployments_when_none_admits_embedding_batch,
     embedding_batch_too_large_error,
     embedding_deployment_selection,
-    flag_rejected_before_provider_call,
+    log_rejection_before_provider_call,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -6888,8 +6889,7 @@ class Router:
             logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
             if batch_error is not None:
                 if isinstance(logging_obj, LiteLLMLogging):
-                    flag_rejected_before_provider_call(logging_obj)
-                    logging_obj.failure_handler(batch_error, "".join(traceback.format_exception(batch_error)))
+                    log_rejection_before_provider_call(logging_obj, batch_error)
                 raise batch_error
             if isinstance(logging_obj, LiteLLMLogging):
                 clear_rejected_before_provider_call(logging_obj)
@@ -6979,12 +6979,7 @@ class Router:
             logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
             if batch_error is not None:
                 if isinstance(logging_obj, LiteLLMLogging):
-                    flag_rejected_before_provider_call(logging_obj)
-                    await logging_obj.dispatch_failure_handlers(
-                        exception=batch_error,
-                        traceback_exception="".join(traceback.format_exception(batch_error)),
-                        prefer_async_handlers=True,
-                    )
+                    await async_log_rejection_before_provider_call(logging_obj, batch_error)
                 raise batch_error
             if isinstance(logging_obj, LiteLLMLogging):
                 clear_rejected_before_provider_call(logging_obj)
