@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +10,12 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.caching.redis_cache import (
+    RedisCache,
+    RedisCircuitBreakerOpenError,
+    _redis_circuit_breaker_guard,
+    _redis_circuit_breaker_guard_sync,
+)
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -59,6 +65,224 @@ async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_
         assert mock_async_batch_get_cache.call_count == 2
         assert "shared_a" not in dual_cache.last_redis_batch_access_time
         assert "shared_b" not in dual_cache.last_redis_batch_access_time
+
+
+def _redis_answering_in_turn(
+    *answers: tuple[asyncio.Event | None, Mapping[str, object] | BaseException],
+) -> MagicMock:
+    """A Redis double whose n-th batch read waits for the n-th answer's event, if it has one, then answers."""
+    redis: Final = MagicMock(spec=RedisCache)
+    answers_in_turn: Final = iter(answers)
+
+    async def _batch_get(key_list: Sequence[str], parent_otel_span: object = None) -> Mapping[str, object]:
+        release, answer = next(answers_in_turn)
+        if release is not None:
+            await release.wait()
+        if isinstance(answer, BaseException):
+            raise answer
+        return {key: answer.get(key) for key in key_list}
+
+    redis.async_batch_get_cache = AsyncMock(side_effect=_batch_get)
+    return redis
+
+
+async def _idle() -> None:
+    """Let every task run until it waits on something only the test releases."""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
+def _outcome(read: "asyncio.Future[object]") -> object:
+    if not read.done():
+        return "still waiting"
+    return "cancelled" if read.cancelled() else read.result()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_batch_reads_of_a_key_redis_holds_all_get_its_value_from_one_redis_read():
+    """Regression test for #44916: the readers that found the key reserved by the first reader's Redis read
+    answered None while that read was in flight, though Redis held the value."""
+    release: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((release, {"held": 99}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+
+    reads: Final = asyncio.gather(*(cache.async_batch_get_cache(keys=["held"]) for _ in range(50)))
+    await _idle()
+    release.set()
+
+    assert (await reads, redis.async_batch_get_cache.await_count) == ([[99]] * 50, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "ttl", "leader_outcome", "next_read"),
+    [
+        pytest.param(ConnectionError("redis is down"), None, None, ([99], 2), id="redis-error"),
+        pytest.param(RedisCircuitBreakerOpenError("breaker is open"), None, [None], ([99], 2), id="circuit-open"),
+        # A cancelled read keeps its reservation, as it did before readers waited for it
+        pytest.param(asyncio.CancelledError(), None, "cancelled", ([None], 1), id="cancelled"),
+        # The backfill stores the value in memory before it fails on the TTL, so the next read finds it there
+        pytest.param({"k": 99}, "not-a-number", None, ([99], 1), id="backfill-error"),
+    ],
+)
+async def test_readers_of_a_redis_read_that_fails_are_released_at_once_with_the_miss_they_got_before(
+    answer: Mapping[str, object] | BaseException,
+    ttl: str | None,
+    leader_outcome: object,
+    next_read: tuple[object, int],
+):
+    release: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((release, answer), (None, {"k": 99}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    leader: Final = asyncio.create_task(cache.async_batch_get_cache(["k"], ttl=ttl))
+    waiter: Final = asyncio.create_task(cache.async_batch_get_cache(["k"]))
+    await _idle()
+    assert _outcome(waiter) == "still waiting"
+
+    release.set()
+    await _idle()
+    assert (_outcome(leader), _outcome(waiter)) == (leader_outcome, [None])
+
+    next_reader: Final = asyncio.create_task(cache.async_batch_get_cache(["k"]))
+    await _idle()
+    assert (_outcome(next_reader), redis.async_batch_get_cache.await_count) == next_read
+
+
+@pytest.mark.asyncio
+async def test_a_batch_read_waits_only_for_its_keys_another_read_is_fetching_and_reads_or_throttles_the_rest():
+    in_flight: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((None, {}), (in_flight, {"in-flight": 1}), (None, {"due": 2}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    assert await cache.async_batch_get_cache(["recent-miss"]) == [None]
+    await cache.async_set_cache("zero", 0, local_only=True)
+
+    leader: Final = asyncio.create_task(cache.async_batch_get_cache(["zero", "in-flight"]))
+    await _idle()
+    batch: Final = asyncio.create_task(cache.async_batch_get_cache(["in-flight", "zero", "due", "gone", "recent-miss"]))
+    await _idle()
+    # The batch's own Redis read has finished, so reading one of its keys is not held up while the batch waits
+    gone: Final = asyncio.create_task(cache.async_batch_get_cache(["gone"]))
+    await _idle()
+    assert (
+        _outcome(batch),
+        _outcome(gone),
+        [call.args[0] for call in redis.async_batch_get_cache.await_args_list],
+    ) == ("still waiting", [None], [["recent-miss"], ["in-flight"], ["due", "gone"]])
+
+    in_flight.set()
+    await _idle()
+    assert (_outcome(leader), _outcome(batch)) == ([0, 1], [1, 0, 2, None, None])
+
+
+@pytest.mark.asyncio
+async def test_a_redis_read_is_waited_for_only_until_its_throttle_window_closes_and_never_after_it_ends():
+    stuck: Final = asyncio.Event()
+    own: Final = asyncio.Event()
+    newer: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((stuck, {"x": 7}), (own, {"j": 1}), (newer, {"k": 99}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    clock: Final = MagicMock(return_value=1_000.0)
+
+    with patch.object(time, "time", clock):
+        stuck_read: Final = asyncio.create_task(cache.async_batch_get_cache(["k", "x"]))
+        await _idle()
+        clock.return_value = 1_009.0
+        late_joiner: Final = asyncio.create_task(cache.async_batch_get_cache(["j", "k"]))
+        await _idle()
+        clock.return_value = 1_010.0
+        own.set()
+        await _idle()
+        assert (_outcome(stuck_read), _outcome(late_joiner)) == ("still waiting", [1, None])
+
+        # The stuck read's window has closed, so this read goes to Redis itself and keeps its own, newer answer
+        fresh_read: Final = asyncio.create_task(cache.async_batch_get_cache(["k", "x"]))
+        await _idle()
+        stuck.set()
+        await _idle()
+        fresh_peer: Final = asyncio.create_task(cache.async_batch_get_cache(["k"]))
+        await _idle()
+        newer.set()
+        await _idle()
+        await cache.async_delete_cache("k")
+        after_delete: Final = await cache.async_batch_get_cache(["k"])
+
+    assert (_outcome(stuck_read), _outcome(fresh_read), _outcome(fresh_peer), after_delete) == (
+        [None, 7],
+        [99, None],
+        [99],
+        [None],
+    )
+    assert redis.async_batch_get_cache.await_count == 3
+
+
+def test_a_redis_read_in_flight_is_waited_for_only_by_throttled_redis_readers_on_its_event_loop():
+    release: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((release, {"k": 99}), (None, {"k": 99}), (None, {"due": 2}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    reading_loop: Final = asyncio.new_event_loop()
+    other_loop: Final = asyncio.new_event_loop()
+    try:
+        leader: Final = reading_loop.create_task(cache.async_batch_get_cache(["k"]))
+        peer: Final = reading_loop.create_task(cache.async_batch_get_cache(["k"]))
+        local: Final = reading_loop.create_task(cache.async_batch_get_cache(["k"], local_only=True))
+        reading_loop.run_until_complete(_idle())
+        on_other_loop: Final = other_loop.create_task(cache.async_batch_get_cache(["k"]))
+        other_loop.run_until_complete(_idle())
+        unthrottled: Final = reading_loop.create_task(cache.async_batch_get_cache(["k"], throttle_redis=False))
+        reading_loop.run_until_complete(_idle())
+        hit_and_due: Final = reading_loop.create_task(cache.async_batch_get_cache(["k", "due"]))
+        reading_loop.run_until_complete(_idle())
+        assert tuple(map(_outcome, (peer, local, on_other_loop, unthrottled, hit_and_due))) == (
+            "still waiting",
+            [None],
+            [None],
+            [99],
+            [99, 2],
+        )
+
+        release.set()
+        reading_loop.run_until_complete(_idle())
+        assert (_outcome(leader), _outcome(peer)) == ([99], [99])
+    finally:
+        reading_loop.close()
+        other_loop.close()
+    assert redis.async_batch_get_cache.await_count == 3
+
+
+def _ignore_tasks_destroyed_while_pending(loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+    """Report every event loop error but the notice that a task the test abandoned was collected while pending."""
+    if context.get("message") != "Task was destroyed but it is pending!":
+        loop.default_exception_handler(context)
+
+
+def test_a_redis_read_left_pending_on_a_closed_event_loop_ends_without_an_error(caplog: pytest.LogCaptureFixture):
+    """Closing an event loop without cancelling its tasks leaves a Redis read, and the peer waiting on it, pending
+    until garbage collection closes their coroutines. Nobody on that loop can be woken, so that must log no error."""
+    never: Final = asyncio.Event()
+    redis: Final = _redis_answering_in_turn((never, {}), (None, {"k": 7}))
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    clock: Final = MagicMock(return_value=1_000.0)
+    abandoned_loop: Final = asyncio.new_event_loop()
+    abandoned_loop.set_exception_handler(_ignore_tasks_destroyed_while_pending)
+    fresh_loop: Final = asyncio.new_event_loop()
+    try:
+        with patch.object(time, "time", clock), caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            reads: Final = (cache.async_batch_get_cache(["k"]), cache.async_batch_get_cache(["k"]))
+            for read in reads:
+                abandoned_loop.create_task(read)
+            abandoned_loop.run_until_complete(_idle())
+            abandoned_loop.close()
+            for read in reads:  # as garbage collection would, the leader first while its peer still waits on it
+                read.close()
+            # The abandoned read keeps its reservation, so the next read goes to Redis once its throttle window closes
+            clock.return_value = 1_010.0
+            next_read: Final = fresh_loop.run_until_complete(cache.async_batch_get_cache(["k"]))
+    finally:
+        abandoned_loop.close()
+        fresh_loop.close()
+
+    errors: Final = [r.getMessage() for r in caplog.records if r.name == "LiteLLM" and r.levelno >= logging.ERROR]
+    assert (errors, next_read) == ([], [7])
 
 
 def _redis_mock_for_sync_batch(redis_result: dict) -> MagicMock:

@@ -14,7 +14,7 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from threading import Lock
+from threading import RLock
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -49,6 +49,15 @@ class LimitedSizeOrderedDict(OrderedDict):
         super().__setitem__(key, value)
 
 
+@dataclass(frozen=True, slots=True)
+class _SharedRedisRead:
+    """The Redis read an ``async_batch_get_cache`` call issued for the keys it reserved, which readers of those keys on
+    the same event loop wait for until ``deadline`` at the latest, when the read's throttle window closes."""
+
+    values: asyncio.Future[Mapping[str, object]]
+    deadline: float
+
+
 @dataclass(frozen=True)
 class PendingBatchRead:
     """A batch read that has consulted the in-memory tier and reserved its Redis keys, but not hit Redis yet."""
@@ -57,6 +66,8 @@ class PendingBatchRead:
     result: list[object | None]
     redis_keys: list[str]
     previous_access_times: dict[str, float | None]
+    shared_read: _SharedRedisRead | None = None
+    joined_reads: tuple[tuple[str, _SharedRedisRead], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +110,10 @@ class DualCache(BaseCache):
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(max_size=default_max_redis_batch_cache_size)
-        self._last_redis_batch_access_time_lock = Lock()
+        # Re-entrant: a batch read reserves its keys (taking this lock) while holding it to share its Redis read, and the
+        # garbage collector may finalize an abandoned batch read, whose cleanup takes it, on a thread that holds it.
+        self._last_redis_batch_access_time_lock = RLock()
+        self._shared_redis_reads: Final[dict[str, _SharedRedisRead]] = {}  # mutable-ok: guarded by the lock above
         self.redis_batch_cache_expiry = (
             default_redis_batch_cache_expiry or litellm.default_redis_batch_cache_expiry or 10
         )
@@ -346,8 +360,56 @@ class DualCache(BaseCache):
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
 
+    def _share_redis_batch_read(
+        self,
+        keys: list[str],  # mutable-ok: PendingBatchRead.keys is a list
+        result: list[object | None],  # mutable-ok: PendingBatchRead.result is a list
+    ) -> PendingBatchRead:
+        """Reserve the keys whose throttled Redis reads are due and share the read for them with this event loop,
+        joining the reads other calls on this loop have in flight for the missed keys that are not due."""
+        loop: Final = asyncio.get_running_loop()
+        current_time: Final = time.time()
+        with self._last_redis_batch_access_time_lock:
+            redis_keys, previous_access_times = self._reserve_redis_batch_keys(current_time, keys, result)
+            joined_reads: Final = (
+                tuple(
+                    (key, read)
+                    for key, value, read in zip(keys, result, map(self._shared_redis_reads.get, keys))
+                    if value is None
+                    and key not in previous_access_times
+                    and read is not None
+                    and read.values.get_loop() is loop
+                )
+                if self._shared_redis_reads
+                else ()
+            )
+            deadline: Final = current_time + self.redis_batch_cache_expiry
+            shared_read: Final = _SharedRedisRead(loop.create_future(), deadline) if redis_keys else None
+            if shared_read is not None:
+                self._shared_redis_reads.update(dict.fromkeys(redis_keys, shared_read))
+        return PendingBatchRead(keys, result, redis_keys, previous_access_times, shared_read, joined_reads)
+
+    def _settle_shared_redis_read(self, pending: PendingBatchRead, result: Sequence[object]) -> None:
+        """Hand the readers waiting on ``pending``'s Redis read what it returned for its keys, nothing if it failed."""
+        shared_read: Final = pending.shared_read
+        if shared_read is None:
+            return
+        with self._last_redis_batch_access_time_lock:
+            for key in pending.redis_keys:
+                if self._shared_redis_reads.get(key) is shared_read:
+                    del self._shared_redis_reads[key]
+        # A closed loop never runs its waiters again, and waking them there would raise
+        if not shared_read.values.get_loop().is_closed():
+            shared_read.values.set_result(dict(zip(pending.keys, result)))
+
     async def _prepare_batch_get(
-        self, keys: list[str], local_only: bool, throttle_redis: bool = True, **kwargs: object
+        self,
+        keys: list[str],
+        local_only: bool,
+        throttle_redis: bool = True,
+        *,
+        share_redis_reads: bool = False,
+        **kwargs: object,
     ) -> PendingBatchRead:
         result: list[object | None] = [None] * len(keys)
         if self.in_memory_cache is not None:
@@ -359,6 +421,8 @@ class DualCache(BaseCache):
         redis_keys: list[str] = []
         previous_access_times: dict[str, float | None] = {}
         if None in result and self.redis_cache is not None and local_only is False:
+            if throttle_redis and share_redis_reads:
+                return self._share_redis_batch_read(keys, result)
             if throttle_redis:
                 redis_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
             else:
@@ -398,6 +462,25 @@ class DualCache(BaseCache):
         redis_result: Final = None if declared.result is None else await declared.result
         return await self._apply_batch_get(declared.pending, redis_result)
 
+    async def _complete_batch_get(
+        self, pending: PendingBatchRead, parent_otel_span: Span | None, kwargs: Mapping[str, object]
+    ) -> list[object | None]:  # mutable-ok: async_batch_get_cache returns this list to its callers
+        # Only hit Redis for keys memory could not serve and enough time has passed since last access.
+        if not pending.redis_keys or self.redis_cache is None:
+            return pending.result
+        try:
+            redis_result: Final = await self.redis_cache.async_batch_get_cache(
+                pending.redis_keys, parent_otel_span=parent_otel_span
+            )
+        except Exception as e:
+            # Do not throttle subsequent callers if the Redis read fails.
+            self._rollback_redis_batch_key_reservations(pending.previous_access_times)
+            if isinstance(e, RedisCircuitBreakerOpenError):
+                verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
+                return pending.result
+            raise
+        return await self._apply_batch_get(pending, redis_result, **kwargs)
+
     async def async_batch_get_cache(
         self,
         keys: list,
@@ -407,24 +490,30 @@ class DualCache(BaseCache):
         **kwargs,
     ):
         """With ``throttle_redis`` False every key memory cannot serve is read from Redis, exactly as a per-key
-        ``async_get_cache`` would read it, instead of skipping keys that missed within ``redis_batch_cache_expiry``."""
+        ``async_get_cache`` would read it, instead of skipping keys that missed within ``redis_batch_cache_expiry``.
+
+        A throttled key that another call on this event loop is reading from Redis gets what that call returned instead
+        of a miss. The wait ends when that read does, or at the latest when its throttle window closes."""
         try:
-            pending: Final = await self._prepare_batch_get(keys, local_only, throttle_redis, **kwargs)
-            # Only hit Redis for keys memory could not serve and enough time has passed since last access.
-            if not pending.redis_keys or self.redis_cache is None:
+            pending: Final = await self._prepare_batch_get(
+                keys, local_only, throttle_redis, share_redis_reads=True, **kwargs
+            )
+            if not pending.redis_keys and not pending.joined_reads:  # nothing to read from Redis or to wait for
                 return pending.result
             try:
-                redis_result: Final = await self.redis_cache.async_batch_get_cache(
-                    pending.redis_keys, parent_otel_span=parent_otel_span
-                )
-            except Exception as e:
-                # Do not throttle subsequent callers if the Redis read fails.
-                self._rollback_redis_batch_key_reservations(pending.previous_access_times)
-                if isinstance(e, RedisCircuitBreakerOpenError):
-                    verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
-                    return pending.result
+                result: Final = await self._complete_batch_get(pending, parent_otel_span, kwargs)
+            except BaseException:
+                self._settle_shared_redis_read(pending, ())
                 raise
-            return await self._apply_batch_get(pending, redis_result, **kwargs)
+            self._settle_shared_redis_read(pending, result)
+            if not pending.joined_reads:
+                return result
+            for joined_read in {read for _, read in pending.joined_reads}:
+                await asyncio.wait((joined_read.values,), timeout=joined_read.deadline - time.time())
+            shared: Final = {
+                key: read.values.result().get(key) for key, read in pending.joined_reads if read.values.done()
+            }
+            return [shared.get(key) if value is None else value for key, value in zip(pending.keys, result)]
         except Exception as e:
             log_redis_failure(
                 verbose_logger,
