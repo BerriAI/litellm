@@ -22,6 +22,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 
+from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -4194,7 +4195,7 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         "custom_llm_provider": "openai",
     }
     deployment: Final = SimpleNamespace(
-        litellm_params=SimpleNamespace(model=f"openai/{model}", custom_llm_provider="openai", api_base=None),
+        litellm_params=LiteLLM_Params(model=f"openai/{model}", custom_llm_provider="openai", api_base=None),
         model_name="batch-group",
     )
     prisma: Final = MagicMock()
