@@ -16,7 +16,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
@@ -29,16 +28,9 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.native.messages import execute_messages
 from litellm.native.route_plan import NativeChat, NativeResponses, native_messages_config, plan_messages_route
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.router_utils.reasoning_effort_capability import (
-    RequestedReasoningEffort,
-    deployment_reasoning_effort_levels,
-    keeps_effort,
-    model_group_from_metadata,
-    resolve_deployment_reasoning_effort,
-    with_adaptive_thinking_as_effort,
-)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -57,7 +49,7 @@ from ..safeguards import (
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
+from .utils import mock_response, prepare_native_messages
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -90,48 +82,6 @@ async def _with_native_safeguard_results(
 
 def _native_safeguards_evaluator(kwargs: Mapping[str, object], messages: object) -> SafeguardsEvaluator | None:
     return request_safeguards_evaluator(kwargs, _SAFEGUARD_MESSAGES.validate_python(messages))
-
-
-def _with_output_config(params: Mapping[str, object], output_config: RequestedReasoningEffort) -> Mapping[str, object]:
-    rest: Final = {key: value for key, value in params.items() if key != "output_config"}
-    return rest if output_config is None else {**rest, "output_config": output_config}
-
-
-def _with_deployment_output_effort(
-    params: Mapping[str, object],
-    *,
-    model: str,
-    custom_llm_provider: str,
-    kwargs: Mapping[str, object],
-    drop_params: bool,
-) -> Mapping[str, object]:
-    deployment_model_info: Final = kwargs.get("model_info")
-
-    def resolve(requested: RequestedReasoningEffort) -> RequestedReasoningEffort:
-        return resolve_deployment_reasoning_effort(
-            requested,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            deployment_model_info=deployment_model_info,
-            model_group=model_group_from_metadata(kwargs.get("litellm_metadata"), kwargs.get("metadata")),
-            drop_params=drop_params,
-        ).value
-
-    def translate(source: Mapping[str, object]) -> Mapping[str, object]:
-        return with_adaptive_thinking_as_effort(
-            source, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
-        )
-
-    requested_output: Final = as_str_mapping(params.get("output_config"))
-    caller_output: Final = None if requested_output is None else resolve(requested_output)
-    caller_params: Final = params if requested_output is None else _with_output_config(params, caller_output)
-    if deployment_reasoning_effort_levels(deployment_model_info) is None:
-        return caller_params
-    if requested_output is not None and keeps_effort(requested_output, caller_output):
-        return _with_output_config(translate(params), caller_output)
-    translated: Final = translate(caller_params)
-    budget_output: Final = as_str_mapping(translated.get("output_config"))
-    return translated if budget_output is None else _with_output_config(translated, resolve(budget_output))
 
 
 async def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:
@@ -658,7 +608,6 @@ def anthropic_messages_handler(
             **kwargs,
         )
 
-    anthropic_messages_provider_config: Final = route.config
     if custom_llm_provider is None:
         raise ValueError(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
@@ -671,23 +620,11 @@ def anthropic_messages_handler(
     if marked_tools is not None:
         AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
     local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
-    anthropic_messages_optional_request_params: Final = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars,
-            model=model,
-            drop_params=litellm_params.get("drop_params") is True,
-            custom_llm_provider=custom_llm_provider,
-        )
-    )
-    resolved_api_base: Final = (
-        dynamic_api_base
-        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
-        else api_base
-    )
     safeguard_kwargs: Final = (
         _SAFEGUARD_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
     )
-    native_response: Final = base_llm_http_handler.anthropic_messages_handler(
+    native_response: Final = execute_messages(
+        http_handler=base_llm_http_handler,
         model=model,
         messages=cast(  # cast-ok: anthropic messages are dicts at runtime
             "list[dict[str, object]]",
@@ -695,30 +632,23 @@ def anthropic_messages_handler(
                 cast(Sequence[object], messages)  # cast-ok: anthropic payloads arrive as untyped dicts
             ),
         ),
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(
-            _with_deployment_output_effort(
-                anthropic_messages_optional_request_params,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: router kwargs arrive untyped
-                drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
-            )
-        ),
-        _is_async=is_async,
-        client=client,
+        provider_config=route.config,
+        request_params=local_vars,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=resolved_api_base,
+        api_base=api_base,
+        dynamic_api_base=dynamic_api_base,
+        client=client,
+        is_async=is_async,
         stream=stream,
-        kwargs=kwargs,
+        request_kwargs=kwargs,
     )
     if safeguard_kwargs is None or not isinstance(native_response, Coroutine):
         return native_response
     return _with_native_safeguard_results(
         native_response,
-        partial(_proxy_classifies, model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config),
+        partial(_proxy_classifies, model, safeguard_kwargs.get("safeguards"), route.config),
         partial(_native_safeguards_evaluator, safeguard_kwargs, messages),
     )

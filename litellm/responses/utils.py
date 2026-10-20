@@ -31,7 +31,9 @@ from litellm.types.utils import (
 )
 
 
-def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
+def _apply_nested_drop_params(
+    params: dict[str, object], additional_drop_params: Sequence[str] | None
+) -> dict[str, object]:
     nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
     return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
 
@@ -173,7 +175,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def merge_client_forwarded_headers(
         extra_headers: dict[str, object] | None,
-        client_headers: dict[str, str] | None,
+        client_headers: Mapping[str, str] | None,
     ) -> dict[str, object] | None:
         """
         Merge headers forwarded by the proxy (`headers` kwarg, set when
@@ -194,8 +196,8 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _check_valid_arg(
-        supported_params: list[str] | None,
-        non_default_params: dict,
+        supported_params: Sequence[str] | None,
+        non_default_params: Mapping[str, object],
         drop_params: bool | None,
         custom_llm_provider: str | None,
         model: str,
@@ -220,7 +222,7 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: list[str] | None = None,
+        allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
         declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
@@ -246,7 +248,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=supported_params + (allowed_openai_params or []),
+            supported_params=[*supported_params, *(allowed_openai_params or ())],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -275,7 +277,7 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=allowed_openai_params or [],
+            allowed_openai_params=list(allowed_openai_params or ()),
         )
 
     @staticmethod
