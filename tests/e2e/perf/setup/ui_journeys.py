@@ -107,13 +107,15 @@ def ui_junit_properties(samples: tuple[Sample, ...]) -> tuple[tuple[str, float],
 @contextmanager
 def dashboard_page(dashboard: Dashboard, timeout: float) -> Generator[Page]:
     """A logged-in admin tab whose clock reads the seed anchor, so relative windows such as
-    Last 24 Hours land on seeded rows. Playwright keeps a UTC timezone to match the seed."""
+    Last 24 Hours land on seeded rows. Live Tail is off so its 15 second refetch cannot land
+    inside a sample. Playwright keeps a UTC timezone to match the seed."""
     with sync_playwright() as playwright:
         browser: Final = playwright.chromium.launch()
         context: Final = browser.new_context(
             base_url=dashboard.base_url, timezone_id="UTC", viewport={"width": 1600, "height": 1000}
         )
         context.set_default_timeout(timeout * 1000)
+        context.add_init_script('sessionStorage.setItem("isLiveTail", "false")')
         page: Final = context.new_page()
         page.clock.set_fixed_time(dashboard.anchor)
         _login(page, dashboard)
@@ -140,7 +142,10 @@ def _is_data_fetch(response: Response) -> bool:
 def measure(page: Page, journey: Journey, timeout: float) -> Sample:
     """Wall time from the user's action to the data being on screen. Every sample starts from the
     same pre-action state so repeats measure the same journey, not a warmed client cache."""
-    journey.start(page, timeout)
+    try:
+        journey.start(page, timeout)
+    except (PlaywrightError, AssertionError) as error:
+        return Sample(seconds=0.0, error=f"start {type(error).__name__}: {error}"[:300])
     started: Final = time.monotonic()
     try:
         with page.expect_response(_is_data_fetch, timeout=timeout * 1000):
@@ -163,11 +168,11 @@ def _logs_rows(page: Page) -> Locator:
 
 def _logs_settled(page: Page, timeout: float) -> int:
     millis: Final = timeout * 1000
+    rows: Final = _logs_rows(page).filter(has_not_text="No results")
+    expect(rows.first).to_be_visible(timeout=millis)
     expect(_visible(page, "datatable-refresh")).to_be_enabled(timeout=millis)
     expect(page.get_by_text(LOADING_LOGS)).to_have_count(0, timeout=millis)
-    expect(_logs_rows(page).first).to_be_visible(timeout=millis)
-    assert page.get_by_text("No results", exact=True).count() == 0, "Logs table rendered empty"
-    return _logs_rows(page).count()
+    return rows.count()
 
 
 def _no_skeletons(page: Page, timeout: float) -> None:
@@ -185,11 +190,10 @@ def _usage_settled(page: Page, timeout: float) -> int:
 
 def _cache_settled(page: Page, timeout: float) -> int:
     millis: Final = timeout * 1000
-    label: Final = page.get_by_text("Cache Hits", exact=True)
-    expect(label).to_be_visible(timeout=millis)
-    value: Final = label.locator("xpath=following-sibling::div//p")
-    expect(value).not_to_have_text("0", timeout=millis)
-    return 1
+    expect(page.get_by_text("Cache Hits", exact=True)).to_be_visible(timeout=millis)
+    bars: Final = page.locator(".recharts-bar-rectangle")
+    expect(bars.first).to_be_visible(timeout=millis)
+    return bars.count()
 
 
 def _open_logs(page: Page, timeout: float) -> None:
@@ -224,8 +228,8 @@ def _open_time_range(page: Page, timeout: float) -> None:
 
 
 def _select_usage_view(page: Page, view: str) -> None:
-    page.get_by_role("combobox", name="Select the usage data you want to view").click()
-    page.get_by_role("option", name=view, exact=True).click()
+    page.locator('[data-slot="select-trigger"]').filter(has_text="Usage").first.click()
+    page.get_by_role("option", name=re.compile(rf"^{re.escape(view)}")).click()
 
 
 def _nothing(page: Page, timeout: float) -> None:

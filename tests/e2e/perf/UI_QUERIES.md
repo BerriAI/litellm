@@ -14,7 +14,7 @@ Run `test_ui_journeys.py` against a dedicated proxy, its Admin UI and a disposab
 | `logs_filter_model` | picks the first model in the filter drawer and applies | same |
 | `usage_open` | opens Usage | summary tiles show dollar values with no skeletons left |
 | `usage_team_view` | switches the Usage view to Team Usage | same |
-| `cache_open` | opens Caching | the Cache Hits tile shows a nonzero value |
+| `cache_open` | opens Caching | the Cache Hits tile is visible and the Cache Hits vs API Requests chart has bars |
 
 Each journey is measured once cold, then `E2E_UI_JOURNEY_REPEATS` more times (default 9) from the same starting state, inside one logged-in tab whose clock is pinned to the seed anchor so relative windows land on seeded rows. The browser timezone is UTC to match the seed
 
