@@ -712,7 +712,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         optional_params: dict,
         model: str,
         param: str,
-        value: Any,
+        value: object,
         drop_params: bool,
         output_key: str,
     ) -> None:
@@ -1788,6 +1788,21 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    filtered: Final = [
+        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**message, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
+
+
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
 ) -> list[Any]:
@@ -1822,18 +1837,11 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
 def _is_empty_text_block(block: object) -> bool:
@@ -1921,18 +1929,15 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
-        if new_content == content:
-            out.append(m)
-        else:
-            out.append({**m, "content": new_content})
-    return out
+    return [_sanitize_tool_use_ids_in_message(message) for message in messages]
+
+
+def _sanitize_tool_use_ids_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    new_content: Final = [_sanitize_tool_use_id_content_block(block) for block in content]
+    return message if new_content == content else {**message, "content": new_content}
 
 
 class _ReplayedSearchQuery(LiteLLMBaseModel):

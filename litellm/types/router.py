@@ -323,6 +323,8 @@ class ModelInfo(MirroredPricingParams):
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
 
+    max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -411,6 +413,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -982,6 +985,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
+    supported_endpoints: tuple[str, ...] | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -1329,6 +1333,18 @@ class ConsumedRequestTagsStamp:
 
     model_group: str
     tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BaggageMappedTagsStamp:
+    """Request tags added by baggage mappings, which classify spend and budgets but never select deployments.
+
+    The serving deployment's own tags are kept beside them, so a mapped tag that the deployment also carries
+    still picks that deployment's guardrail mode.
+    """
+
+    tags: tuple[str, ...]
+    serving_deployment_tags: tuple[str, ...] = ()
 
 
 @runtime_checkable

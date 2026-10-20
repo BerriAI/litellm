@@ -1645,6 +1645,7 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
@@ -1854,6 +1855,9 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = get_env_float(
 SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", 300.0)
 SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", 30.0)
 SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
+SPEND_LOG_SIZE_CHECK_JOB_NAME: Final = "spend_log_size_check"
+SPEND_LOG_SIZE_CHECK_INTERVAL: Final = os.getenv("SPEND_LOG_SIZE_CHECK_INTERVAL", "1d")
+SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES: Final = get_env_int("SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES", 10)
 SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
     "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
 )
@@ -1975,6 +1979,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups",
     "public_model_groups_links",
     "cost_discount_config",
+    "apply_search_free_tier",
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",

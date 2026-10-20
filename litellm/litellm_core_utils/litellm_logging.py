@@ -1960,6 +1960,8 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        self.model_call_details.pop("response_cost_failure_debug_information", None)
+
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
@@ -2009,7 +2011,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self._custom_pricing_for(priced_result)
+        custom_pricing: Final = self.custom_pricing_for(priced_result)
 
         prompt: Final = self._prompt_for_cost_calculation()
 
@@ -2120,15 +2122,17 @@ class Logging(LiteLLMLoggingBaseClass):
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
-        had_failure_debug_info: Final = debug_key in self.model_call_details
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
             cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
             return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
-            if not had_failure_debug_info:
+            if previous_failure_debug_info is None:
                 self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
 
     def _record_zero_cost_diagnostic(
         self,
@@ -2182,7 +2186,7 @@ class Logging(LiteLLMLoggingBaseClass):
             model=model,
             completion_response=result,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=self._custom_pricing_for(result),
+            custom_pricing=self.custom_pricing_for(result),
             base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),
             region_name=_resolve_mantle_region_for_cost(
@@ -2207,7 +2211,7 @@ class Logging(LiteLLMLoggingBaseClass):
             usage=usage,
         )
 
-    def _custom_pricing_for(self, result: object) -> bool:
+    def custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
@@ -7243,7 +7247,7 @@ def get_standard_logging_object_payload(
         # Fall back to the actual deployment model set by the router in metadata.
         if base_model is None:
             base_model = metadata.get("deployment")
-        custom_pricing: Final = use_custom_pricing_for_model(litellm_params=litellm_params)
+        custom_pricing: Final = logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
