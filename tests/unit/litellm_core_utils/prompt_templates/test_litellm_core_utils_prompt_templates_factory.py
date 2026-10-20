@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -4130,44 +4130,42 @@ def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
     assert [m["role"] for m in result] == ["user", "assistant"]
 
 
-def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
-    """
-    Anthropic rejects a `thinking` block whose `thinking` text is empty, even
-    when it carries a valid-looking signature, with:
-        400 messages.N.content.M.thinking: each thinking block must contain thinking
-    This shape is reachable via cross-provider replay of a `thinking_blocks`
-    history item (see PR #36033), so `is_unsignable_thinking_block()` must
-    also check the thinking text, not just the signature.
-    """
+@pytest.mark.parametrize(
+    "assistant_message",
+    (
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"},
+                {"type": "text", "text": "4"},
+            ],
+        },
+    ),
+    ids=("thinking_blocks", "inline_content"),
+)
+def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(
+    assistant_message: ChatCompletionAssistantMessage,
+) -> None:
+    """``display: omitted`` returns signed thinking blocks with empty text, and they
+    must reach the next turn unchanged."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
 
-    messages = [
-        {"role": "user", "content": "What's 2+2?"},
-        {
-            "role": "assistant",
-            "content": "4",
-            "thinking_blocks": [
-                {
-                    "type": "thinking",
-                    "thinking": "",
-                    "signature": "sig_abc123_looks_valid",
-                }
-            ],
-        },
-    ]
-
     result = anthropic_messages_pt(
-        messages=messages,
-        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What's 2+2?"}, assistant_message],
+        model="claude-opus-5-5",
         llm_provider="anthropic",
     )
 
     assistant_msg = result[1]
     assert isinstance(assistant_msg["content"], list)
-    content_types = [block.get("type") for block in assistant_msg["content"]]
-    assert "thinking" not in content_types, "empty-text thinking block must be dropped even though it has a signature"
+    assert assistant_msg["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}
 
 
 def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
@@ -4281,29 +4279,31 @@ def test_anthropic_messages_pt_drops_unsigned_thinking_block():
     assert "thinking" not in content_types, "unsigned thinking block must still be dropped"
 
 
-def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
+def test_anthropic_messages_pt_drops_unsigned_empty_thinking_block():
     """
-    Edge case: a `thinking` field that is present but whitespace-only (e.g.
-    a single trailing newline forwarded from another provider's empty
-    reasoning summary) is functionally empty and Anthropic's API will still
-    reject it with "each thinking block must contain thinking". We treat it
-    the same as a fully empty string and drop the block.
-
-    The check lives in the shared `is_unsignable_thinking_block` helper, which
-    `_drop_unsignable_thinking_blocks` calls standalone, so the whitespace-aware
-    test has to hold there rather than only at the factory call site.
+    An empty block without a signature is the shape Claude Code replays after a
+    non-Anthropic turn, and Anthropic rejects it, so only the missing signature
+    decides whether a block is dropped.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        is_unsignable_thinking_block,
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
     )
 
-    whitespace_only_block = {
-        "type": "thinking",
-        "thinking": "   \n\t  ",
-        "signature": "sig_abc123_looks_valid",
-    }
+    result = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What's 2+2?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, {"type": "text", "text": "4"}],
+            },
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
 
-    assert is_unsignable_thinking_block(whitespace_only_block) is True
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    assert [block.get("type") for block in assistant_msg["content"]] == ["text"]
 
 
 _CONTENT_LESS_USER_MESSAGES: Final = ({"role": "user"}, {"role": "user", "content": None})

@@ -14,8 +14,9 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -24,6 +25,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+from litellm.llms.base_llm.anthropic_messages.transformation import (  # noqa: E402  # sys.path must be patched before importing litellm
+    BaseAnthropicMessagesConfig,
+)
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
@@ -1332,6 +1336,12 @@ class TestPassthroughAuthToken:
         assert url == "https://custom.example.com/v1/messages"
 
 
+_BOUND_THINKING_ERROR: Final = (
+    "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."
+)
+_NULL_SIGNATURE_ERROR: Final = "messages.1.content.0.thinking.signature.str: Input should be a valid string"
+
+
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid thinking blocks in replayed history:
     invalid encrypted signatures, and blocks with empty thinking text."""
@@ -1422,11 +1432,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert is_empty_unsigned_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
         assert is_empty_unsigned_thinking_block("not a dict") is False
 
-    def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
+    def test_strip_empty_content_blocks_drops_empty_unsigned_thinking_blocks(self):
         """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
-        empty (even signed) thinking block keeps its tool_use blocks and loses
-        the poison; whitespace-only counts as empty; a non-empty thinking block
-        and redacted_thinking are untouched."""
+        empty, unsigned thinking block keeps its tool_use blocks and loses the
+        poison; whitespace-only counts as empty; a non-empty thinking block and
+        redacted_thinking are untouched."""
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
         )
@@ -1436,7 +1446,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {"role": "user", "content": "weather?"},
             {
                 "role": "assistant",
-                "content": [{"type": "thinking", "thinking": "", "signature": "sig_abc"}, tu],
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, tu],
             },
             {
                 "role": "assistant",
@@ -1454,6 +1464,36 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert [b["type"] for b in out[2]["content"]] == ["thinking", "redacted_thinking"]
         assert out[2]["content"][0]["thinking"] == "real plan"
         assert len(msgs[1]["content"]) == 2
+
+    def test_strip_empty_content_blocks_keeps_signed_empty_thinking_blocks(self):
+        """A thinking block with empty text and a signature is the default
+        response shape of Claude Opus 4.8 / Fable 5 / Fable 5.1 (thinking.display
+        omitted): the signature IS the preserved reasoning, Anthropic accepts it
+        on input and binds it to its prefix. Dropping it silently discards the
+        model's reasoning on every replayed turn and leaves preserved-thinking
+        enforcement (thinking.block_binding) nothing to check. The message and
+        block order must survive untouched."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
+        signed = {"type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkD"}
+        msgs = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": [signed, tu]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": "sunny"}]},
+            {
+                "role": "assistant",
+                "content": [signed, {"type": "text", "text": ""}, {"type": "text", "text": "Sunny."}],
+            },
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 4
+        assert out[1] is msgs[1]
+        assert [b["type"] for b in out[3]["content"]] == ["thinking", "text"]
+        assert out[3]["content"][0] is signed
+        assert out[3]["content"][1]["text"] == "Sunny."
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1966,6 +2006,49 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+    @pytest.mark.parametrize(
+        ("thinking", "error_message", "expected"),
+        (
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _BOUND_THINKING_ERROR,
+                False,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _NULL_SIGNATURE_ERROR,
+                True,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+                _BOUND_THINKING_ERROR,
+                True,
+            ),
+            ({"type": "adaptive"}, _BOUND_THINKING_ERROR, True),
+        ),
+        ids=("error", "error_on_unrelated_bad_block", "drop_block", "unbound"),
+    )
+    def test_anthropic_messages_retry_honors_thinking_block_binding(
+        self, thinking: Mapping[str, object], error_message: str, expected: bool
+    ) -> None:
+        from litellm.llms.anthropic.pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        req: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp: Final = httpx.Response(
+            400,
+            request=req,
+            text=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": error_message}}),
+        )
+        err: Final = httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        should_retry = AnthropicMessagesConfig().should_retry_anthropic_messages_on_http_error(
+            err, {}, request_body={"model": "claude-opus-5-5", "thinking": thinking}
+        )
+
+        assert should_retry is expected
 
 
 class TestClaudeOpus48AdaptiveThinking:
@@ -4090,6 +4173,117 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     )
 
     assert optional_params["thinking"] == expected_thinking
+
+
+LEGACY_THINKING_WITH_BLOCK_BINDING: Final = MappingProxyType(
+    {
+        "type": "enabled",
+        "budget_tokens": 2048,
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "future_key": 1,
+    }
+)
+ADAPTIVE_THINKING_WITH_BLOCK_BINDING: Final = MappingProxyType(
+    {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_thinking"),
+    (
+        ("claude-opus-4-8", "anthropic", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("invoke/us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("converse/us.anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("mantle/anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("claude_platform/claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
+        ("databricks-claude-opus-4-8", "databricks", {"type": "adaptive"}),
+    ),
+    ids=(
+        "anthropic",
+        "azure_ai",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "bedrock_mantle",
+        "bedrock_claude_platform",
+        "vertex_ai",
+        "databricks",
+    ),
+)
+def test_chat_legacy_thinking_translation_carries_only_block_binding_where_supported(
+    model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
+) -> None:
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        thinking=dict(LEGACY_THINKING_WITH_BLOCK_BINDING),
+    )
+
+    assert optional_params["thinking"] == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_thinking"),
+    (
+        ("claude-opus-4-8", "anthropic", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("mantle/anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("anthropic.claude-opus-4-8", "bedrock_mantle", {"type": "adaptive"}),
+        ("claude_platform/claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
+    ),
+    ids=(
+        "anthropic",
+        "azure_ai",
+        "bedrock_invoke",
+        "bedrock_mantle",
+        "bedrock_mantle_provider",
+        "bedrock_claude_platform",
+        "vertex_ai",
+    ),
+)
+def test_messages_legacy_thinking_translation_carries_only_block_binding_where_supported(
+    model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
+) -> None:
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    assert config is not None
+
+    assert _thinking_sent_for_legacy_messages_request(config, model) == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+def test_openai_compatible_messages_passthrough_keeps_legacy_thinking_without_block_binding() -> None:
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+
+    assert _thinking_sent_for_legacy_messages_request(OpenAILikeAnthropicMessagesConfig(), "claude-opus-4-8") == {
+        "type": "adaptive"
+    }
+
+
+def _thinking_sent_for_legacy_messages_request(config: BaseAnthropicMessagesConfig, model: str) -> object:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "thinking": dict(LEGACY_THINKING_WITH_BLOCK_BINDING),
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    ).get("thinking")
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

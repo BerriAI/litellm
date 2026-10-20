@@ -29,7 +29,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         self,
         model: str,
         messages: list[dict[str, Any]],
-        api_key: str,
+        api_key: str | None,
         api_base: str,
         litellm_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -79,6 +79,15 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 api_key=api_key,
                 litellm_params=litellm_params,
             )
+            if not {"x-api-key", "Authorization"} & headers.keys():
+                raise AnthropicError(
+                    status_code=401,
+                    message=(
+                        f"No Azure AI API key or Entra ID credential is set for model {model}, so tokens can't be "
+                        "counted. Set api_key or an Entra ID credential on the deployment, or AZURE_AI_API_KEY or "
+                        "AZURE_API_KEY in the proxy environment."
+                    ),
+                )
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)

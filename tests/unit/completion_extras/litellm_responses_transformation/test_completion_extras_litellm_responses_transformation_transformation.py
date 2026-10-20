@@ -5020,3 +5020,61 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    first: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_first",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+        }
+    )
+    second_annotation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Second",
+        "url": "https://example.com/second",
+    }
+    second: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_second",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Second message.", "annotations": [second_annotation]}],
+        }
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (first, second, function_call)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "First message.Second message."
+    assert choices[0].message.annotations == [
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
+    ]
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [call.model_dump(exclude_none=True) for call in tool_calls] == [
+        {
+            "id": "fc_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+            "index": 0,
+        }
+    ]

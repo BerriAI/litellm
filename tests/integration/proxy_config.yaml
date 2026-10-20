@@ -24,6 +24,8 @@ model_list:
       model: anthropic/claude-opus-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+    model_info:
+      token_count_framing: 0
   - model_name: anthropic/claude-sonnet-4-6
     litellm_params:
       model: anthropic/claude-sonnet-4-6
