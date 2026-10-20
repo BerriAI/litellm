@@ -3690,8 +3690,18 @@ async def test_decision_hosts_preserve_drex_model_routing_credentials_and_return
     }
 
 
+@pytest.mark.parametrize(
+    "unpriced_row",
+    (
+        pytest.param({}, id="empty"),
+        pytest.param(
+            {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": None},
+            id="metadata_and_null_rate",
+        ),
+    ),
+)
 async def test_a_returned_model_registered_without_prices_is_billed_at_the_requested_model(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    unpriced_row: dict[str, object], monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
     monkeypatch.setitem(
@@ -3699,7 +3709,7 @@ async def test_a_returned_model_registered_without_prices_is_billed_at_the_reque
         "typesafe/jev-test-alias",
         {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
     )
-    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", {})
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", unpriced_row)
     respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json={**_RESPONSE, "model": "jev-test-unpriced"})
 
     response: Final = await litellm.asystemone(
