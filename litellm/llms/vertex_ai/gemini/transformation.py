@@ -1192,18 +1192,16 @@ def transform_request_body(
 
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-        if "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model):
-            request_litellm_params: Final = cast(
-                Mapping[str, object], litellm_params
-            )  # cast-ok: untyped shared signature
+        drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model)
+        if drops_top_k:
+            request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model,
                 param="top_k",
-                drop_params=drops_unsupported_params(request_litellm_params.get("drop_params")),
+                drop_params=drops_unsupported_params(request_params.get("drop_params")),
             )
-            del optional_params["top_k"]
-
-        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
+        config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
+        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
