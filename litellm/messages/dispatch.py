@@ -6,9 +6,10 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
+from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -99,16 +100,30 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     return Target.CHAT_COMPLETIONS
 
 
-_FEATURES: Final[Mapping[Feature, Callable[[NativeCall], bool]]] = MappingProxyType(
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
-        Feature.SAFEGUARDS_CLASSIFIER: lambda request: native_route_classifies(
-            str(request.resolved["model"]), request.resolved.get("safeguards")
-        ),
+        **detectors.COMMON,
+        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
+        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
+    }
+)
+
+_ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **_FEATURES,
+        Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
+        Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
+        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
     }
 )
 
 
-def _context(request: NativeCall) -> RouteContext:
+def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
     requested_model: Final = str(request.resolved["model"])
     model, provider = _resolved(request)
     return RouteContext(
@@ -116,20 +131,20 @@ def _context(request: NativeCall) -> RouteContext:
         provider=provider,
         model=requested_model,
         target=_target(request, model, provider),
-        features=frozenset(feature for feature, detected in _FEATURES.items() if detected(request)),
+        features=detectors.detected(features, request),
     )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _FEATURES),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _ASYNC_FEATURES),
 )
 
 
