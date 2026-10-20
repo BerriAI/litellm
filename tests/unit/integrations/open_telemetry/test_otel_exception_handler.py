@@ -3,10 +3,13 @@ that fail after auth but before the route handler runs (e.g. /model/new
 TypeError or RequestValidationError)."""
 
 import asyncio
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.proxy._types import ProxyException
@@ -141,19 +144,22 @@ def test_openai_exception_handler_stamps_structured_error_on_span(
     assert server_span.status.description == msg
 
 
-def test_validation_handler_puts_the_error_message_on_the_span_status(wired_otel, server_span_factory):
-    path = "/team/new"
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
-    exc = RequestValidationError(
+def test_validation_handler_puts_the_error_message_on_the_span_status(
+    wired_otel: InMemorySpanExporter, server_span_factory: Callable[[str], object]
+) -> None:
+    path: Final = "/team/new"
+    request: Final = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    exc: Final = RequestValidationError(
         errors=[{"type": "float_parsing", "loc": ("body", "max_budget"), "msg": "Input should be a valid number"}]
     )
 
-    response = asyncio.run(otel_request_validation_exception_handler(request, exc))
+    response: Final = asyncio.run(otel_request_validation_exception_handler(request, exc))
 
     assert response.status_code == 422
-    server_span = get_server_span(wired_otel)
-    assert "Input should be a valid number" in server_span.status.description
-    assert server_span.status.description == server_span.attributes.get(ErrorAttributes.ERROR_MESSAGE)
+    server_span: Final = get_server_span(wired_otel)
+    description: Final = server_span.status.description or ""
+    assert "Input should be a valid number" in description
+    assert description == server_span.attributes.get(ErrorAttributes.ERROR_MESSAGE)
 
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):
