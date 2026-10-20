@@ -298,7 +298,7 @@ async def test_sdk_messages_stream_handles_dicts_and_bytes(
     assert (ep.usage.input_tokens, ep.usage.output_tokens) == (4, 9)
 
 
-async def chunks_of(chunks: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+async def chunks_of(chunks: list[dict[str, object]]) -> AsyncIterator[dict[str, object]]:
     for chunk in chunks:
         yield chunk
 
@@ -358,9 +358,9 @@ async def chunks_of(chunks: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any
     ids=["messages", "chat", "responses"],
 )
 async def test_sdk_stream_cost_prices_cached_prompt_tokens_like_litellm(
-    monkeypatch: pytest.MonkeyPatch, path: str, sdk: tuple[Any, str], chunks: list[dict[str, Any]]
+    monkeypatch: pytest.MonkeyPatch, path: str, sdk: tuple[object, str], chunks: list[dict[str, object]]
 ) -> None:
-    async def fake_sdk(**kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    async def fake_sdk(**kwargs: object) -> AsyncIterator[dict[str, object]]:
         return chunks_of(chunks)
 
     monkeypatch.setattr(litellm, "cost_per_token", REAL_COST_PER_TOKEN)
@@ -404,7 +404,7 @@ def anthropic_cached_sse() -> bytes:
     ).encode()
 
 
-async def anthropic_cached_message(**kwargs: Any) -> dict[str, Any]:
+async def anthropic_cached_message(**kwargs: object) -> dict[str, object]:
     return {"type": "message", "content": [], "usage": ANTHROPIC_CACHED_USAGE}
 
 
