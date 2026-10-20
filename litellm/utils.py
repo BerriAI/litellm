@@ -844,7 +844,7 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
-def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
+def is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
     """
     Check if the target model is a Gemini or Vertex AI Gemini model.
     """
@@ -911,15 +911,17 @@ def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -
     return msg_copy
 
 
-def _remove_thought_signatures_from_messages(messages: list, thought_signature_separator: str) -> list:
+def remove_thought_signatures_from_messages(
+    messages: Sequence[object], thought_signature_separator: str
+) -> list[object]:
     """
     Remove thought signatures from tool call IDs in all messages.
     """
-    processed_messages: Final = []
+    processed_messages: Final[list[object]] = []
 
     for msg in messages:
         # Handle Pydantic models (convert to dict)
-        if hasattr(msg, "model_dump"):
+        if isinstance(msg, BaseModel):
             msg_dict = msg.model_dump()
         elif isinstance(msg, dict):
             msg_dict = msg.copy()
@@ -1276,7 +1278,7 @@ def function_setup(
             # Gemini models embed thought signatures in tool call IDs. When sending
             # messages with tool calls to non-Gemini providers, we need to remove these
             # signatures to ensure compatibility.
-            if isinstance(messages, list) and len(messages) > 0:
+            if call_type == CallTypes.anthropic_messages.value and isinstance(messages, list) and len(messages) > 0:
                 try:
                     from litellm.litellm_core_utils.get_llm_provider_logic import (
                         get_llm_provider,
@@ -1300,11 +1302,11 @@ def function_setup(
                             pass
 
                     # Only process if target is NOT a Gemini model
-                    if not _is_gemini_model(model, custom_llm_provider):
+                    if not is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug("Removing thought signatures from tool call IDs for non-Gemini model")
 
                         # Process messages to remove thought signatures
-                        processed_messages: Final = _remove_thought_signatures_from_messages(
+                        processed_messages: Final = remove_thought_signatures_from_messages(
                             messages, THOUGHT_SIGNATURE_SEPARATOR
                         )
 

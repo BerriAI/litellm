@@ -48,6 +48,7 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.utils import Rules, function_setup, remove_thought_signatures_from_messages
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -92,6 +93,99 @@ def preserve_litellm_completion_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
+
+
+def _tool_signature_history(signature: str) -> list[AllMessageValues]:
+    """Return a signed tool call and its matching result."""
+    signed_id: Final = f"call_lookup__thought__{signature}"
+    return [
+        {"role": "user", "content": "Look up the value."},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": signed_id, "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": signed_id, "content": "73"},
+    ]
+
+
+def test_signature_cleanup_preserves_pydantic_message_fields() -> None:
+    """Pydantic messages retain every field except the encoded ID suffix."""
+    message: Final = litellm.Message(
+        role="assistant",
+        content="Checking",
+        tool_calls=[
+            {
+                "id": "call_lookup__thought__signature",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }
+        ],
+    )
+    expected: Final = litellm.Message(
+        role="assistant",
+        content="Checking",
+        tool_calls=[{"id": "call_lookup", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+    )
+    assert remove_thought_signatures_from_messages(messages=(message,), thought_signature_separator="__thought__") == [
+        expected.model_dump()
+    ]
+    assert message.tool_calls is not None
+    assert message.tool_calls[0].id == "call_lookup__thought__signature"
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("alias", ("default-model", "gemini-alias"))
+@pytest.mark.parametrize("backend", ("gemini/gemini-4-argon", "openai/gpt-6.1-sol"))
+@pytest.mark.asyncio
+async def test_tool_signatures_follow_the_resolved_backend(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, alias: str, backend: str
+) -> None:
+    """Proxy aliases preserve Gemini signatures and strip them for other backends."""
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    signature: Final = base64.b64encode(b"reasoning-state").decode()
+    messages: Final = _tool_signature_history(signature=signature)
+    original_messages: Final = copy.deepcopy(messages)
+    logging_obj, request = function_setup(
+        original_function="acompletion" if asynchronous else "completion",
+        rules_obj=Rules(),
+        start_time=datetime(2026, 1, 1),
+        model=alias,
+        litellm_call_id="signature-regression",
+        messages=messages,
+    )
+    route: Final = respx_mock.post().respond(
+        200,
+        json=(
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "73"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1, "totalTokenCount": 11},
+            }
+            if backend.startswith("gemini/")
+            else {
+                "id": "response",
+                "model": backend.removeprefix("openai/"),
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "73"}, "finish_reason": "stop"}],
+            }
+        ),
+    )
+    router: Final = litellm.Router(
+        model_list=[{"model_name": alias, "litellm_params": {"model": backend, "api_key": "test-key"}}],
+        num_retries=0,
+    )
+    response: Final = (
+        await router.acompletion(**request, litellm_logging_obj=logging_obj)
+        if asynchronous
+        else router.completion(**request, litellm_logging_obj=logging_obj)
+    )
+    payload: Final = json.loads(route.calls.last.request.content)
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "73"
+    if backend.startswith("gemini/"):
+        assert payload["contents"][1]["parts"][0]["thoughtSignature"] == signature
+    else:
+        assert payload["messages"][1]["tool_calls"][0]["id"] == "call_lookup"
+        assert payload["messages"][2]["tool_call_id"] == "call_lookup"
+    assert messages == original_messages
 
 
 @pytest.fixture

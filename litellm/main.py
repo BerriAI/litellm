@@ -51,8 +51,10 @@ from litellm.utils import (
     filter_out_litellm_params,
     get_litellm_params,
     get_optional_params,
+    is_gemini_model,
     peek_reasoning_summary_aliases,
     reasoning_effort_with_summary_alias,
+    remove_thought_signatures_from_messages,
     strip_reasoning_summary_aliases_from_optional_params,
 )
 
@@ -214,6 +216,7 @@ from .litellm_core_utils.prompt_templates.common_utils import (
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,
@@ -5661,6 +5664,15 @@ def completion(
                 else None
             ),
         )
+
+        if not is_gemini_model(model=model, custom_llm_provider=custom_llm_provider):
+            messages = cast(  # rebind-ok: dispatch uses normalized history # cast-ok: only string IDs change
+                "list[AllMessageValues]",
+                remove_thought_signatures_from_messages(
+                    messages=cast("Sequence[object]", messages),  # cast-ok: completion accepts a list of messages
+                    thought_signature_separator=THOUGHT_SIGNATURE_SEPARATOR,
+                ),
+            )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
