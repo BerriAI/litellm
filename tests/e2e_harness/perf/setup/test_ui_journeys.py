@@ -6,6 +6,7 @@ import pytest
 from setup.ui_journeys import (
     UI_JOURNEY_LIMITS,
     Sample,
+    error_code,
     assert_within_ceiling,
     database_failures,
     journeys,
@@ -142,3 +143,13 @@ def test_slow_journey_fails_its_ceiling() -> None:
         assert_within_ceiling("logs_open_24h", (*fast[:8], Sample(seconds=25, rows=25), Sample(seconds=25, rows=25)))
     with pytest.raises(AssertionError, match=r"logs_open_24h p50 11\.0s over 10s"):
         assert_within_ceiling("logs_open_24h", tuple(Sample(seconds=11, rows=25) for _ in range(3)))
+
+
+def test_failed_data_request_status_becomes_the_error_code() -> None:
+    gateway_error: Final = Sample(seconds=0.4, error="AssertionError: Locator expected to be enabled", status=500)
+    slow: Final = Sample(seconds=60.0, error="timeout", status=200, request="GET /spend/logs/ui")
+    hung: Final = Sample(seconds=700.0, error="wall_clock TimeoutError: logs_next_page exceeded its 660s wall clock")
+    assert (error_code(gateway_error), error_code(slow), error_code(hung)) == ("http_500", "timeout", "wall_clock")
+    metrics: Final = dict(ui_junit_properties((gateway_error, slow, hung)))
+    assert metrics["perf_ui_error_http_500"] == 1 and metrics["perf_ui_error_wall_clock"] == 1
+    assert "perf_ui_error_ui" not in metrics
