@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import time
 import uuid as uuid_module
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from functools import partial
 from typing import Final, Literal, cast
 
@@ -293,6 +293,14 @@ def create_file(
         raise e
 
 
+async def _await_retrieved_file(pending: Awaitable[FileObject | OpenAIFileObject]) -> FileObject | OpenAIFileObject:
+    return await pending
+
+
+async def _await_deleted_file(pending: Awaitable[object]) -> object:
+    return await pending
+
+
 @client
 async def afile_retrieve(
     file_id: str,
@@ -325,7 +333,7 @@ async def afile_retrieve(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _await_retrieved_file(init_response)
         else:
             response = init_response
 
@@ -505,7 +513,7 @@ async def afile_delete(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _await_deleted_file(init_response)
         else:
             response = init_response
 

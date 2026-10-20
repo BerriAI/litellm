@@ -165,6 +165,7 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _bind_submitted_oauth_client(
@@ -339,7 +340,7 @@ def _decrypt_env_vars_on_returned_row(row: object) -> None:
         return
     if isinstance(env_vars, str):
         try:
-            env_vars = json.loads(env_vars)
+            env_vars = _DECODED_JSON.validate_python(json.loads(env_vars))
         except (json.JSONDecodeError, TypeError):
             return
         if not isinstance(env_vars, list):

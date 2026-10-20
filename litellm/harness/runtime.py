@@ -12,7 +12,7 @@ import inspect
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -331,11 +331,15 @@ async def _put_end(queue: asyncio.Queue[Event | _End], end: _End) -> None:
     queue.put_nowait(end)
 
 
+async def _await_decision(pending: Awaitable[object]) -> object:
+    return await pending
+
+
 async def call_approval_handler(handler: ApprovalHandler, approval: Approval) -> None:
     """Run on_approval (sync in a worker thread, or async) and resolve approval."""
     try:
         if inspect.iscoroutinefunction(handler):
-            decision: object = await handler(approval)
+            decision: object = await _await_decision(handler(approval))
         else:
             decision = await asyncio.to_thread(handler, approval)
             if inspect.isawaitable(decision):

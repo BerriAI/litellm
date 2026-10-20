@@ -449,10 +449,10 @@ class KeyManagementEventHooks:
 
         try:
             from litellm.proxy import proxy_server as proxy_server_module
+            from litellm.proxy.proxy_server import prisma_client
         except ImportError:
             return None
 
-        prisma_client: Final = getattr(proxy_server_module, "prisma_client", None)
         user_api_key_cache: Final = getattr(proxy_server_module, "user_api_key_cache", None)
 
         if prisma_client is None or user_api_key_cache is None:

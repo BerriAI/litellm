@@ -1140,7 +1140,7 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed: Final = safe_json_loads(worker_config, default=None)
+    parsed: Final[JsonValue] = safe_json_loads(worker_config, default=None)
     if isinstance(parsed, dict):
         return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
@@ -8517,8 +8517,12 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        response: _ConfigParamValueRow | None
         for section, response in zip(sections, responses):
-            if response is None or (param_value := getattr(response, "param_value", None)) is None:
+            if response is None:
+                continue
+            param_value: JsonValue = getattr(response, "param_value", None)
+            if param_value is None:
                 continue
 
             verbose_proxy_logger.debug(
@@ -8545,7 +8549,10 @@ class ProxyConfig:
         self, prisma_client: PrismaClient, row: object, environment_before_db: Mapping[str, str], read: int
     ) -> None:
         current: Final = await self._environment_row_not_behind_the_applied_one(prisma_client, row)
-        if current is None or (param_value := getattr(current, "param_value", None)) is None:
+        if current is None:
+            return
+        param_value: Final[object] = getattr(current, "param_value", None)
+        if param_value is None:
             return
         self._apply_db_environment_variables(param_value, _config_row_revision(current), environment_before_db, read)
 

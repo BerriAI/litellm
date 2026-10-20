@@ -40,6 +40,11 @@ class _RunwayMLTask(TypedDict, total=False):
     failureCode: ReadOnly[str]
 
 
+def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
+    task: Final[_RunwayMLTask] = response.json()
+    return task
+
+
 class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
     """
     Configuration for RunwayML image generation models.
@@ -238,7 +243,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             response = client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayMLTask = response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -287,7 +292,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             response = await client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayMLTask = response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -333,7 +338,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         }
         """
         try:
-            response_data: _RunwayMLTask = raw_response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -363,7 +368,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # Update response_data with polled result
-        response_data = raw_response.json()
+        response_data = _parse_runway_task(raw_response)
 
         verbose_logger.debug("RunwayML polling complete, transforming to OpenAI format")
 
@@ -393,7 +398,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         We need to poll the task until it completes (status SUCCEEDED) using async polling.
         """
         try:
-            response_data: _RunwayMLTask = raw_response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -423,7 +428,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # Update response_data with polled result
-        response_data = raw_response.json()
+        response_data = _parse_runway_task(raw_response)
 
         verbose_logger.debug("RunwayML polling complete (async), transforming to OpenAI format")
 

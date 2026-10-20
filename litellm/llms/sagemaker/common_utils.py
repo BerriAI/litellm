@@ -1,3 +1,4 @@
+import builtins
 import codecs
 import functools
 import json
@@ -32,6 +33,14 @@ class _SageMakerChunkData(TypedDict, total=False):
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerMessagesChunkData(TypedDict, total=False):
     choices: ReadOnly[Required[list[Mapping[str, object]]]]
+
+
+class _SageMakerPayloadPart(TypedDict, total=False):
+    bytes: ReadOnly[builtins.bytes]
+
+
+class _SageMakerStreamEvent(TypedDict, total=False):
+    chunk: ReadOnly[_SageMakerPayloadPart]
 
 
 class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
@@ -345,7 +354,7 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict: Final = event.to_response_dict()
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final[_SageMakerStreamEvent] = self.parser.parse(response_dict, response_stream_shape)
         body: Final = response_dict.get("body")
 
         if response_dict["status_code"] != 200:

@@ -12,6 +12,7 @@ Ref: https://docs.perplexity.ai/api-reference/responses-post
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -20,6 +21,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
@@ -103,7 +106,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """Check for Perplexity's status:'failed' on HTTP 200 before delegating to base."""
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raw_response_json = None
 

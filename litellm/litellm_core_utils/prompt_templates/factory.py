@@ -3086,8 +3086,12 @@ def anthropic_messages_pt(
 def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
     ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
     if strip:
-        ext_list = [e.strip() for e in ext_list]
+        ext_list = list(_stripped(ext_list))
     return ext_list
+
+
+def _stripped(values: Iterable[str]) -> Iterator[str]:
+    return (value.strip() for value in values)
 
 
 def contains_tag(tag: str, string: str) -> bool:

@@ -407,6 +407,27 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
+def _run_responses_deployment_hook(
+    *,
+    model: str,
+    request_input: str | ResponseInputParam,
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    litellm_params: GenericLiteLLMParams,
+) -> Mapping[str, object]:
+    return run_async_function(
+        async_pre_call_deployment_hook,
+        {
+            **dict(litellm_params),
+            **optional_params,
+            "model": model,
+            "input": request_input,
+            "custom_llm_provider": custom_llm_provider,
+        },
+        CallTypes.responses.value,
+    )
+
+
 def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
@@ -2637,16 +2658,12 @@ class BaseLLMHTTPHandler:
                 litellm_params,
             )
 
-        modified_kwargs: Final = run_async_function(
-            async_pre_call_deployment_hook,
-            {
-                **dict(litellm_params),
-                **response_api_optional_request_params,
-                "model": model,
-                "input": input,
-                "custom_llm_provider": custom_llm_provider,
-            },
-            CallTypes.responses.value,
+        modified_kwargs: Final = _run_responses_deployment_hook(
+            model=model,
+            request_input=input,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
         )
         if modified_kwargs is None:
             return (

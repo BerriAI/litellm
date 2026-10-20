@@ -168,7 +168,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final[Mapping[str, object]] = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
@@ -272,7 +272,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final[Mapping[str, object]] = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
     def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:

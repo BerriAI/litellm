@@ -108,8 +108,7 @@ def _prepend_upstream_choice_extras(
     choice.__pydantic_fields_set__.update(upstream_extras)
 
 
-def _holds_only_scalars(model: BaseModel) -> bool:
-    fields: Final[Iterator[tuple[str, object]]] = iter(model)
+def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
     return all(value is None or isinstance(value, (str, int, float, bool)) for _, value in fields)
 
 
@@ -940,8 +939,8 @@ class CustomStreamWrapper:
             or ("function_call" in completion_obj and completion_obj["function_call"] is not None)
             or (
                 "tool_calls" in model_response.choices[0].delta
-                and model_response.choices[0].delta["tool_calls"] is not None
-                and len(model_response.choices[0].delta["tool_calls"]) > 0
+                and model_response.choices[0].delta.tool_calls is not None
+                and len(model_response.choices[0].delta.tool_calls) > 0
             )
             or (
                 "function_call" in model_response.choices[0].delta

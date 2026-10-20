@@ -1629,14 +1629,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not line.startswith("data:"):
             return line
         try:
-            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
-                line[len("data:") :].strip()
-            )
+            data: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
         except json.JSONDecodeError:
             return line
-        if not isinstance(data, dict):
+        event: Final = as_str_mapping(data)
+        if not isinstance(event, dict):
             return line
-        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
+        rewritten: Final = _rewritten_event(event, rewrite_event)
         return line if rewritten is data else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:

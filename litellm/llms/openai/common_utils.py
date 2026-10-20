@@ -23,13 +23,14 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -134,6 +135,16 @@ class OpenAIError(BaseLLMException):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
@@ -152,7 +163,7 @@ def drop_params_from_unprocessable_entity_error(
     """
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json: Final = e.response.json()
+        error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
         error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:

@@ -1,10 +1,11 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -31,6 +32,18 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_JSON_VALUES: Final = TypeAdapter(Iterable[object])
+_USAGE_METADATA: Final = TypeAdapter(dict[str, object])
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GeminiImageEditConfig(BaseImageEditConfig):
@@ -125,7 +138,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _json_body(raw_response)
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -133,25 +146,29 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        candidates: Final = response_json.get("candidates", [])
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        candidates: Final = payload.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
-        for candidate in candidates:
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            for part in parts:
-                inline_data = part.get("inlineData")
-                if inline_data and inline_data.get("data"):
+        for candidate in _JSON_VALUES.validate_python(candidates):
+            content = _JSON_OBJECT.validate_python(candidate).get("content", {})
+            parts = _JSON_OBJECT.validate_python(content).get("parts", [])
+            for part in _JSON_VALUES.validate_python(parts):
+                inline_data = _JSON_OBJECT.validate_python(part).get("inlineData")
+                image_data = _JSON_OBJECT.validate_python(inline_data).get("data") if inline_data else None
+                if image_data:
                     data_list.append(
                         ImageObject(
-                            b64_json=inline_data["data"],
+                            b64_json=image_data,
                             url=None,
                         )
                     )
 
         model_response.data = cast(list[OpenAIImage], data_list)
-        if "usageMetadata" in response_json:
-            model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
+        if "usageMetadata" in payload:
+            model_response.usage = transform_gemini_image_usage(
+                _USAGE_METADATA.validate_python(payload["usageMetadata"])
+            )
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:

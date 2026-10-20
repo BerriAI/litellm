@@ -4194,7 +4194,7 @@ def get_optional_params_embeddings(
 
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
-    custom_llm_provider = passed_params.pop("custom_llm_provider", None)
+    passed_params.pop("custom_llm_provider", None)
     special_params: Final = passed_params.pop("kwargs")
 
     passed_params.pop("drop_params", None)
@@ -4232,7 +4232,7 @@ def get_optional_params_embeddings(
     provider_config: BaseEmbeddingConfig | None = None
 
     optional_params = {}
-    if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
+    if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
@@ -10816,18 +10816,12 @@ def extract_duration_from_srt_or_vtt(srt_or_vtt_content: str) -> float | None:
     # Regular expression to match timestamps in the format "hh:mm:ss,ms" or "hh:mm:ss.ms"
     timestamp_pattern: Final = r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
 
-    timestamps: Final[Sequence[tuple[str, str, str, str]]] = re.findall(timestamp_pattern, srt_or_vtt_content)
-
-    if not timestamps:
-        return None
+    timestamps: Final = re.finditer(timestamp_pattern, srt_or_vtt_content)
 
     # Convert timestamps to seconds and find the max (end time)
-    durations: Final = []
-    match: tuple[str, str, str, str]
-    for match in timestamps:
-        hours, minutes, seconds, milliseconds = map(int, match)
-        total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
-        durations.append(total_seconds)
+    durations: Final = [
+        int(match[1]) * 3600 + int(match[2]) * 60 + int(match[3]) + int(match[4]) / 1000.0 for match in timestamps
+    ]
 
     return max(durations) if durations else None
 

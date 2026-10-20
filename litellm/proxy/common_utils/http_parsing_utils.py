@@ -164,7 +164,7 @@ def coerce_numeric_form_fields(
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = orjson.loads(body)
+        parsed: Final = _DECODED_JSON.validate_python(orjson.loads(body))
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:

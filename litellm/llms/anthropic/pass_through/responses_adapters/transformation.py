@@ -242,7 +242,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _summary_part_text(part: object) -> str:
         if isinstance(part, Mapping):
-            mapping: Final = cast(Mapping[str, Any], part)  # cast-ok: summary parts are untyped provider json
+            mapping: Final = cast(Mapping[str, object], part)  # cast-ok: summary parts are untyped provider json
             return str(mapping.get("text") or "")
         return str(getattr(part, "text", None) or "")
 
@@ -471,7 +471,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """Convert Anthropic tool definitions to Responses API function tools."""
         result: Final[list[dict[str, object]]] = []
         for tool in tools:
-            tool_dict = cast(dict[str, Any], tool)
+            tool_dict = cast(Mapping[str, object], tool)
             tool_type = tool_dict.get("type", "")
             tool_name = tool_dict.get("name", "")
             # web_search tool
@@ -674,7 +674,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             output_config = anthropic_request.get("output_config")
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
-                output_config=cast(dict[str, Any] | None, output_config),
+                output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
                 drop_params=drop_params,
             )

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -31,6 +32,10 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
+
+
+class _VertexImagenPredictResponse(TypedDict, total=False):
+    predictions: ReadOnly[Sequence[object]]
 
 
 class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
@@ -206,7 +211,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final[_VertexImagenPredictResponse] = raw_response.json()
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",

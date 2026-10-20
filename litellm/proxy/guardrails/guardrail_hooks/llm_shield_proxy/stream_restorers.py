@@ -10,6 +10,8 @@ from typing import (
     TypeAlias,
 )
 
+from pydantic import TypeAdapter
+
 from .payload import (
     JsonBody,
     MutableRequest,
@@ -23,6 +25,8 @@ from .payload import (
     rehydrate_slots,
     write_field,
 )
+
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 ANTHROPIC_DELTA_FIELDS: Final = MappingProxyType({"text_delta": "text", "input_json_delta": "partial_json"})
 
@@ -173,7 +177,7 @@ class AnthropicSSERestorer:
             return block
         line: Final = lines[data_lines[0]]
         try:
-            parsed: Final[object] = json.loads(line[len("data:") :])
+            parsed: Final = _OPAQUE_VALUE.validate_python(json.loads(line[len("data:") :]))
         except ValueError:
             return block
         event: Final = as_object(parsed)

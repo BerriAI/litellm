@@ -90,6 +90,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 _DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1682,7 +1683,7 @@ async def validate_blocked_words_file(request: dict[str, str]):
         if not file_content:
             return {"valid": False, "error": "No file content provided"}
 
-        data: Final = yaml.safe_load(file_content)
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_content))
 
         if not isinstance(data, dict) or "blocked_words" not in data:
             return {

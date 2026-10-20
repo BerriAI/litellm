@@ -33,6 +33,21 @@ DEFAULT_HOME_PATH: Final = os.path.join(os.path.expanduser("~"), ".aicore")
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+class AICoreDeployment(TypedDict):
+    configurationId: ReadOnly[str]
+    scenarioId: ReadOnly[str]
+    deploymentUrl: ReadOnly[str]
+    createdAt: ReadOnly[str]
+
+
+class AICoreDeploymentList(TypedDict, total=False):
+    resources: ReadOnly[Sequence[AICoreDeployment]]
+
+
+class AICoreConfiguration(TypedDict):
+    executableId: ReadOnly[str]
+
+
 def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
@@ -195,7 +210,7 @@ def resolve_resource_group(sources: list[Source]) -> str | None:
 
 def _parse_service_key_once(
     service_key: str | dict | None,
-) -> dict[str, object] | None:
+) -> object:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
 
@@ -207,7 +222,7 @@ def _parse_service_key_once(
         return service_key
     if isinstance(service_key, str):
         try:
-            return json.loads(service_key)
+            return _DECODED_JSON.validate_python(json.loads(service_key))
         except json.JSONDecodeError:
             verbose_logger.warning("SAP service key is a string but not valid JSON. Skipping this source.")
             return None
@@ -217,7 +232,7 @@ def _parse_service_key_once(
     return None
 
 
-def _resolve_credential_from_service_key(service_key: str | dict | None, cv: CredentialsValue) -> str | None:
+def _resolve_credential_from_service_key(service_key: object, cv: CredentialsValue) -> str | None:
     if service_key is None:
         return None
     val: Final = _str_or_none(_get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)))
@@ -252,14 +267,16 @@ def fetch_credentials(
     """
     config: Final = init_conf(profile)
 
-    service_key = _parse_service_key_once(service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR))
+    parsed_service_key: Final = _parse_service_key_once(
+        service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR)
+    )
     vcap_service: Final = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources: Final = [
         Source("kwargs", lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source(
             "service key",
-            lambda cv: _resolve_credential_from_service_key(service_key, cv),
+            lambda cv: _resolve_credential_from_service_key(parsed_service_key, cv),
         ),
         Source(
             "environment variables",

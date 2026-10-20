@@ -4197,6 +4197,7 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
@@ -4741,7 +4742,7 @@ def _complete_petals(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
     if stream is True:  ## [BETA]
         # Fake streaming for petals
-        resp_string: Final = model_response["choices"][0]["message"]["content"]
+        resp_string: Final = _OPAQUE_VALUE_ADAPTER.validate_python(model_response["choices"][0]["message"]["content"])
         return CustomStreamWrapper(
             resp_string,
             model,
@@ -7886,7 +7887,6 @@ def text_completion(
             tokenizer: Final = get_encoding("p50k_base")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
-                responses: Final = [None for x in prompt]  # init responses
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
@@ -7903,16 +7903,16 @@ def text_completion(
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)
                     text_completion_response["model"] = response.get("model", None)
-                    return response["choices"][0]
+                    return response.choices[0]
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     completed_futures: Final = [
                         executor.submit(process_prompt, i, individual_prompt)
                         for i, individual_prompt in enumerate(prompt)
                     ]
-                    for i, future in enumerate(concurrent.futures.as_completed(completed_futures)):
-                        responses[i] = future.result()
-                    text_completion_response.choices = responses
+                    text_completion_response.choices = [
+                        future.result() for future in concurrent.futures.as_completed(completed_futures)
+                    ]
 
                 return text_completion_response
     # else:

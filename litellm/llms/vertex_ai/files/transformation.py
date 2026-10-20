@@ -5,7 +5,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -15,6 +15,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -30,6 +31,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
@@ -93,6 +95,7 @@ _JSONL_NEWLINE: Final = b"\n"
 _BATCH_OUTPUT_FIRST_ROW_PEEK_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PASSTHROUGH_MANAGED_GCS_PREFIX: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}passthrough/"
 _RAW_UPLOAD_CHUNK_BYTES: Final = 1024 * 1024
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -824,7 +827,7 @@ def _iter_openai_jsonl_entries(
 
 def _load_openai_jsonl_row(lineno: int, line: str) -> object:
     try:
-        return json.loads(line)
+        return _DECODED_JSON.validate_python(json.loads(line))
     except json.JSONDecodeError as e:
         raise VertexAIError(
             status_code=400,
@@ -964,7 +967,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _get_gcs_object_name_from_batch_jsonl(
         self,
-        openai_jsonl_content: list[dict[str, Any]],
+        openai_jsonl_content: Sequence[Mapping[str, object]],
         deployment_model: str | None = None,
     ) -> str:
         """
@@ -982,8 +985,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         `projects/../locations/../endpoints/<id>` batch job model instead of a
         nonexistent publisher model.
         """
-        first_entry: Final = openai_jsonl_content[0]
-        body_model: Final = first_entry["body"].get("model") if isinstance(first_entry.get("body"), dict) else None
+        body: Final = openai_jsonl_content[0].get("body")
+        body_fields: Final = as_str_mapping(body)
+        body_model: Final = body_fields.get("model") if body_fields is not None and isinstance(body, dict) else None
         jsonl_model: Final = body_model if isinstance(body_model, str) else ""
         raw_model: Final = deployment_model.removeprefix("vertex_ai/") if deployment_model else jsonl_model
         return _managed_batch_object_name(raw_model, passthrough=False)

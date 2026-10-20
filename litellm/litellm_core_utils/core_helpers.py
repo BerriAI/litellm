@@ -631,11 +631,14 @@ def preserve_upstream_non_openai_attributes(
         for key in candidate_keys
     )
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
-        for key, value in candidate_values:
-            setattr(model_response, key, value)
+        _assign_attributes(model_response, candidate_values)
         return
-    for key, value in original_chunk.model_dump(include=frozenset(candidate_keys)).items():
-        setattr(model_response, key, value)
+    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+
+
+def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+    for key, value in values:
+        setattr(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -761,6 +764,10 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
+    return _filter_exceptions_from_params(data, max_depth)
+
+
+def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
     if max_depth <= 0:
         return data
 
@@ -782,7 +789,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(v, max_depth - 1)
+                filtered = _filter_exceptions_from_params(v, max_depth - 1)
                 if filtered is not None:
                     result[k] = filtered
             except Exception:
@@ -796,7 +803,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(item, max_depth - 1)
+                filtered = _filter_exceptions_from_params(item, max_depth - 1)
                 if filtered is not None:
                     result_list.append(filtered)
             except Exception:

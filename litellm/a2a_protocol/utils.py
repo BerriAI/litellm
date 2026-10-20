@@ -84,7 +84,7 @@ class A2ARequestUtils:
         Returns:
             The message object/dict or None
         """
-        params: Final = getattr(request, "params", None)
+        params: Final[object] = getattr(request, "params", None)
         if params is None:
             return None
         return getattr(params, "message", None)

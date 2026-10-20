@@ -892,7 +892,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 {**_hidden_params, "additional_headers": _additional_headers},
             )
 
-            return await super().async_post_call_success_hook(data, user_api_key_dict, response)
+            await super().async_post_call_success_hook(data, user_api_key_dict, response)
 
 
 PROXY_MaxParallelRequestsHandler: Final = _PROXY_MaxParallelRequestsHandler

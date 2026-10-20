@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -68,7 +68,7 @@ class AporiaGuardrail(CustomGuardrail):
     async def prepare_aporia_request(
         self, new_messages: List[dict], response_string: Optional[str] = None
     ) -> dict:
-        data: dict[str, Any] = {}
+        data: dict[str, object] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:

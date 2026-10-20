@@ -45,6 +45,11 @@ class _EventModelClass(Protocol):
     def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
 
 
+class _FieldDefaultCarrier(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
 class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     _SUPPORTED_OPTIONAL_PARAMS: list[str] = [
         # Doc-listed knobs
@@ -431,6 +436,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return annotation
 
     @staticmethod
+    def _field_default(field: _FieldDefaultCarrier) -> object:
+        return field.default
+
+    @staticmethod
     def _fill_missing_fields(chunk: Mapping[str, object], event_model: object | None) -> Mapping[str, object]:
         """
         Heuristically fill missing required fields with safe defaults based on the
@@ -451,7 +460,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 continue
 
             # Explicit default or factory
-            field_default: object = field.default
+            field_default: object = VolcEngineResponsesAPIConfig._field_default(field)
             if field_default is not pyd_fields.PydanticUndefined and field_default is not None:
                 patched[name] = field_default
                 continue

@@ -551,6 +551,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_REDACTED_RESULT: Final = TypeAdapter(object)
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -1714,7 +1715,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.exception(
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
-            original_response = redact_message_input_output_from_logging(
+            redact_message_input_output_from_logging(
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
                 result=original_response,
             )
@@ -1941,10 +1942,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details.pop("response_cost_failure_debug_information", None)
 
-        if cache_hit is None:
-            cache_hit = self.model_call_details.get("cache_hit", False)
+        resolved_cache_hit: Final = self.model_call_details.get("cache_hit", False) if cache_hit is None else cache_hit
 
-        if cache_hit is True:
+        if resolved_cache_hit is True:
             return 0.0
 
         if is_unbilled_non_inference_call(
@@ -1996,7 +1996,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         model_value: Final = litellm_model_name or self.model
         cost_cache_hit_value: Final = (
-            self.model_call_details.get("cache_hit", False) if cache_hit is None else cache_hit
+            self.model_call_details.get("cache_hit", False) if resolved_cache_hit is None else resolved_cache_hit
         )
         cost_cache_hit: Final[bool | None] = cast(  # cast-ok: callback metadata is caller-provided
             bool | None, cost_cache_hit_value
@@ -2375,8 +2375,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
-        usage: Final = self.model_call_details.pop("combined_usage_object", None)
-        response_cost: Final = self.model_call_details.pop("response_cost", None)
+        usage: Final = self._model_call_details_view.get("combined_usage_object")
+        response_cost: Final = self._model_call_details_view.get("response_cost")
+        self.model_call_details.pop("combined_usage_object", None)
+        self.model_call_details.pop("response_cost", None)
         if isinstance(usage, Usage):
             self.model_call_details["failed_attempts_usage"] = (
                 *self.model_call_details.get("failed_attempts_usage", ()),
@@ -3170,9 +3172,11 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             ## REDACT MESSAGES ##
-            result = redact_message_input_output_from_logging(
-                model_call_details=call_details,
-                result=result,
+            result = _REDACTED_RESULT.validate_python(
+                redact_message_input_output_from_logging(
+                    model_call_details=call_details,
+                    result=result,
+                )
             )
             ## LOGGING HOOK ##
             hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
@@ -3438,7 +3442,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 print_verbose("S3Logger Logger: Got Stream Event - Completed Stream Response")
                                 s3Logger.log_event(
                                     kwargs=call_details,
-                                    response_obj=call_details["complete_streaming_response"],
+                                    response_obj=call_details_view["complete_streaming_response"],
                                     start_time=start_time,
                                     end_time=end_time,
                                     print_verbose=print_verbose,
@@ -3754,9 +3758,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
         )
 
-        result = redact_message_input_output_from_logging(
-            model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
-            result=result,
+        result = _REDACTED_RESULT.validate_python(
+            redact_message_input_output_from_logging(
+                model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
+                result=result,
+            )
         )
 
         ## LOGGING HOOK ##
@@ -4094,9 +4100,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
             result: object = None  # result sent to all loggers, init this to None incase it's not created
 
-            result = redact_message_input_output_from_logging(
-                model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
-                result=result,
+            result = _REDACTED_RESULT.validate_python(
+                redact_message_input_output_from_logging(
+                    model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
+                    result=result,
+                )
             )
             self.mark_logging_complete(event_type="sync_failure")
             for callback in callbacks:

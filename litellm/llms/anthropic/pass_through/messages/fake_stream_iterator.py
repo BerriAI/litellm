@@ -9,8 +9,8 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from litellm.llms.anthropic.pass_through.messages.utils import anthropic_message_delta
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -136,8 +136,7 @@ class FakeAnthropicMessagesStreamIterator:
         """Convert the non-streaming response to streaming chunks"""
         chunks: Final = []
 
-        # Cast response to dict for easier access
-        response_dict: Final = cast(dict[str, Any], self.response)
+        response_dict: Final[Mapping[str, object]] = self.response
 
         # 1. message_start event
         usage: Final = self.response.get("usage")
@@ -160,9 +159,8 @@ class FakeAnthropicMessagesStreamIterator:
         chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
 
         # 2-4. For each content block, send start/delta/stop events
-        content_blocks: Final = response_dict.get("content", [])
-        for index, block in enumerate(content_blocks):
-            block_dict = cast(dict[str, Any], block)
+        content_blocks: Final = cast(Sequence[Mapping[str, object]], response_dict.get("content", []))
+        for index, block_dict in enumerate(content_blocks):
             chunks.extend(self._create_content_block_chunks(block_dict, index))
 
         # 5. message_delta event (with final usage and stop_reason)

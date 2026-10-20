@@ -13,6 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
@@ -2693,7 +2694,7 @@ async def user_api_key_auth_builder(
                     and valid_token.last_refreshed_at is not None
                     and team_obj.last_refreshed_at > valid_token.last_refreshed_at
                 ):
-                    team_obj_dict: Final = team_obj.__dict__
+                    team_obj_dict: Final[Mapping[str, object]] = MappingProxyType(team_obj.__dict__)
 
                     for k, v in team_obj_dict.items():
                         field_name = f"team_{k}"

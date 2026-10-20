@@ -158,7 +158,7 @@ class ModelsManagementClient:
         model_id: str | None = None,
         model_name: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 

@@ -5,6 +5,7 @@ from itertools import filterfalse
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -1361,7 +1362,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _is_unstreamed_empty_message(self, item: object) -> bool:
         if getattr(item, "type", None) != "message" or self._message_output_index is not None:
             return False
-        return not any(getattr(part, "text", None) for part in getattr(item, "content", None) or ())
+        return not any(getattr(part, "text", None) for part in attribute_items(item, "content"))
 
     def _emit_terminal_response_event(
         self, litellm_model_response: ModelResponse

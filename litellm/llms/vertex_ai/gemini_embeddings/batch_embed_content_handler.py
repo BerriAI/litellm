@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,6 +34,11 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+class _GeminiFileResource(TypedDict, total=False):
+    mimeType: ReadOnly[str]
+    uri: ReadOnly[str]
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -74,7 +80,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
+                file_data: _GeminiFileResource = response.json()
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),
@@ -111,7 +117,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
+                file_data: _GeminiFileResource = response.json()
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),

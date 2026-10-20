@@ -1527,7 +1527,7 @@ def _grammar_branches(node: Mapping[str, object]) -> int:
     if properties is None:
         return 0
     optional: Final = len(_optional_property_names(node))
-    return 2**optional * (len(properties) - optional + 1)
+    return (1 << optional) * (len(properties) - optional + 1)
 
 
 def _optional_property_names(node: Mapping[str, object]) -> frozenset[str]:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -39,6 +40,7 @@ from litellm.types.utils import (
 )
 
 _CALLBACK_VAR_MASKER: Final = SensitiveDataMasker()
+_LOADED_CALLBACK: Final = TypeAdapter(object)
 # Compound names that are credential-bearing but don't contain any of the
 # default sensitive segments (so SensitiveDataMasker won't flag them).
 _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
@@ -389,9 +391,11 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(
                     _loaded_callback_or_raise(
                         entry=callback,
-                        loaded=get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
+                        loaded=_LOADED_CALLBACK.validate_python(
+                            get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            )
                         ),
                     )
                 )
@@ -408,9 +412,11 @@ def initialize_callbacks_on_proxy(
         litellm.callbacks = [
             _loaded_callback_or_raise(
                 entry=value,
-                loaded=get_instance_fn(
-                    value=value,
-                    config_file_path=config_file_path,
+                loaded=_LOADED_CALLBACK.validate_python(
+                    get_instance_fn(
+                        value=value,
+                        config_file_path=config_file_path,
+                    )
                 ),
             )
         ]

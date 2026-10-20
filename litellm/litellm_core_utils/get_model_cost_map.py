@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_DECODED_JSON: Final = TypeAdapter(object)
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
@@ -313,7 +314,7 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
 
 def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
     try:
-        parsed: Final[object] = json.loads(content)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(content))
     except ValueError as e:
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
@@ -382,7 +383,8 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
         )
     if response.is_error:
         return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
-    return _classify_fetch_content(response.content, url, response.headers.get("etag"))
+    etag_values: Final = response.headers.get_list("etag")
+    return _classify_fetch_content(response.content, url, ", ".join(etag_values) if etag_values else None)
 
 
 def _next_retry_wait(

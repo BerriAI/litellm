@@ -181,7 +181,7 @@ def _delete_nested_value_custom(
 
 
 def delete_nested_value(
-    data: dict[str, Any],
+    data: dict[str, object],
     path: str,
     depth: int = 0,
     max_depth: int = 20,

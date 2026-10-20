@@ -16,7 +16,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.openai.common_utils import OpenAIError, get_openai_credentials
+from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
@@ -197,7 +197,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             if result is not None:
                 return TokenCountResponse.model_validate(
                     {
-                        "total_tokens": result.get("input_tokens", 0),
+                        "total_tokens": decoded_json_object(result).get("input_tokens", 0),
                         "request_model": request_model,
                         "model_used": model_to_use,
                         "tokenizer_type": "openai_api",

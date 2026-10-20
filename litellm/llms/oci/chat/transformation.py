@@ -188,6 +188,7 @@ def _normalize_tool_choice(selected_params: dict) -> None:
 _TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
 _TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
@@ -700,7 +701,7 @@ class OCIChatConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
 
         if not isinstance(response_json, dict):
             raise OCIError(

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime
 
 import anyio
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _RequestData: TypeAlias = dict[str, object]
 
@@ -183,7 +186,7 @@ def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) 
             return item.get("id")
         if isinstance(item, str):
             try:
-                obj = json.loads(item.strip())
+                obj = _DECODED_JSON.validate_python(json.loads(item.strip()))
                 if isinstance(obj, dict) and "id" in obj:
                     return obj.get("id")
             except (json.JSONDecodeError, TypeError):

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -40,6 +41,8 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class MCPOAuth2TokenCache(InMemoryCache):
@@ -160,7 +163,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"failed with status {exc.response.status_code}"
             ) from exc
 
-        body: Final = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
 
         if not isinstance(body, dict):
             raise ValueError(

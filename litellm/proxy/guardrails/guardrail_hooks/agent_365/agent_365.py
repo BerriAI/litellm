@@ -63,6 +63,7 @@ _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 _AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
@@ -343,7 +344,7 @@ class Agent365Guardrail(CustomGuardrail):
         latency_ms: float,
     ) -> dict:  # mutable-ok: returns the request data dict per hook contract
         try:
-            parsed_verdict: Final = response.json()
+            parsed_verdict: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError:
             return self._handle_unavailable(
                 data=data,
@@ -486,7 +487,7 @@ class Agent365Guardrail(CustomGuardrail):
                 response=response,
             )
         try:
-            parsed_body: Final = response.json()
+            parsed_body: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError as exc:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-JSON body") from exc
         if not isinstance(parsed_body, dict):

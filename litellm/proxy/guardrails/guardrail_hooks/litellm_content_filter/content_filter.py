@@ -806,7 +806,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             with open(file_path, "r") as f:
-                data: Final = yaml.safe_load(f)
+                data: Final = _DECODED_ARGUMENTS.validate_python(yaml.safe_load(f))
 
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError("Invalid format: file must contain 'blocked_words' key with list of words")

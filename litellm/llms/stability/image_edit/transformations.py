@@ -6,10 +6,12 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
@@ -28,6 +30,13 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _StabilityImageEditResponse(TypedDict, total=False):
+    image: ReadOnly[str]
+    finish_reason: ReadOnly[str]
+    seed: ReadOnly[int]
+    errors: ReadOnly[Sequence[str]]
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -259,7 +268,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final[_StabilityImageEditResponse] = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",

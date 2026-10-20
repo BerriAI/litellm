@@ -175,7 +175,7 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Optional[Dict[str, Any]] = None
+argilla_transformation_object: Mapping[str, str] | None = None
 _async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -333,7 +333,7 @@ in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
-proxy_auth: Optional[Any] = None
+proxy_auth: _ProxyAuthHandlerType | None = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -503,7 +503,7 @@ skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
-public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
+public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
@@ -2284,6 +2284,10 @@ if TYPE_CHECKING:
         LiteLLM_UpperboundKeyGenerateParams,
     )
     from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
+    from collections.abc import Awaitable
+    from litellm.types.utils import ModelResponse as _ModelResponseType
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as _CustomStreamWrapperType
+    from litellm.proxy_auth import ProxyAuthHandler as _ProxyAuthHandlerType
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -2307,7 +2311,7 @@ if TYPE_CHECKING:
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
-    acreate: Callable[..., Any]
+    acreate: Callable[..., Awaitable[_ModelResponseType | _CustomStreamWrapperType]]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
@@ -2605,8 +2609,10 @@ def __getattr__(name: str) -> Any:
             cancel_run,
             delete_run,
         )
+        from types import MappingProxyType
 
-        return locals()[name]
+        evals_exports: Final[Mapping[str, object]] = MappingProxyType(locals())
+        return evals_exports[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

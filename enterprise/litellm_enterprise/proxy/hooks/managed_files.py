@@ -2652,7 +2652,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 # Continue with other files even if one fails
                 continue
 
-    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+    def _get_content_type_from_file_object(self, file_object: object) -> str:
         """
         Determine content type from file object.
 

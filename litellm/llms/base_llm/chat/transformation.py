@@ -428,7 +428,7 @@ class BaseConfig(ABC):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         pass
 
     def get_model_response_iterator_for_request(
@@ -513,7 +513,7 @@ class BaseConfig(ABC):
     def apply_assembled_streaming_response_metadata(
         self,
         response: "ModelResponse",
-        chunks: list[Any],
+        chunks: list[object],
     ) -> None:
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return

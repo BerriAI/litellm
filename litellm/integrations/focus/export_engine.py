@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, Final, SupportsFloat, SupportsIndex, SupportsInt, cast
+from collections.abc import Callable, Mapping
+from typing import Final, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 import polars as pl
 
@@ -24,7 +24,7 @@ class FocusExportEngine:
         provider: str,
         export_format: str,
         prefix: str,
-        destination_config: dict[str, Any] | None = None,
+        destination_config: Mapping[str, object] | None = None,
     ) -> None:
         self.provider = provider
         self.export_format = export_format
@@ -77,7 +77,7 @@ class FocusExportEngine:
             return FocusParquetSerializer()
         raise NotImplementedError(f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'.")
 
-    async def dry_run_export_usage_data(self, limit: int | None) -> dict[str, Any]:
+    async def dry_run_export_usage_data(self, limit: int | None) -> dict[str, object]:
         data: Final = await self.database.get_usage_data(limit=limit)
         normalized: Final = self.transformer.transform(data)
 

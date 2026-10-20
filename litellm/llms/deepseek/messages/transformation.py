@@ -2,8 +2,10 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from collections.abc import Sequence
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -11,6 +13,24 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+
+_TOOL_LIST: Final = TypeAdapter(list[object])
+_TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
+
+
+def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
+    if not isinstance(tool, dict):
+        return None
+    fields: Final = _TOOL_FIELDS.validate_python(tool)
+    if fields.get("type") == "custom":
+        fields.pop("type", None)
+        return fields
+    return None
+
+
+def _sanitized_tool(tool: object) -> object:
+    stripped: Final = _custom_tool_without_type(tool)
+    return tool if stripped is None else stripped
 
 
 class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -95,19 +115,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         return f"{base_url}/v1/messages"
 
     @staticmethod
-    def _sanitize_tools_for_deepseek(tools: Any) -> object:
+    def _sanitize_tools_for_deepseek(tools: object) -> object:
         if not isinstance(tools, list):
             return tools
 
-        sanitized_tools: Final = []
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type") == "custom":
-                sanitized_tool = dict(tool)
-                sanitized_tool.pop("type", None)
-                sanitized_tools.append(sanitized_tool)
-            else:
-                sanitized_tools.append(tool)
-        return sanitized_tools
+        return [_sanitized_tool(tool) for tool in _TOOL_LIST.validate_python(tools)]
 
     def transform_anthropic_messages_request(
         self,

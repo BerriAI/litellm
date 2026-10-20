@@ -6,9 +6,11 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -17,6 +19,14 @@ from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import VercelAIGatewayException
+
+
+class _VercelAIGatewayModel(TypedDict):
+    id: ReadOnly[str]
+
+
+class _VercelAIGatewayModelList(TypedDict):
+    data: ReadOnly[Sequence[_VercelAIGatewayModel]]
 
 
 class VercelAIGatewayConfig(OpenAIGPTConfig):
@@ -98,5 +108,5 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        models: Final[_VercelAIGatewayModelList] = response.json()
+        return [model["id"] for model in models["data"]]

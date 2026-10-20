@@ -20,6 +20,7 @@ from litellm.constants import (
     OPEN_SANDBOX_POLL_INTERVAL,
     OPEN_SANDBOX_READY_TIMEOUT,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
@@ -41,6 +42,13 @@ MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUE: Final = TypeAdapter(object)
+
+
+def _decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -320,7 +328,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             headers=headers,
             params={"use_server_proxy": use_server_proxy},
         )
-        data: Final = response.json()
+        data: Final = _decoded_json_object(_JSON_VALUE.validate_python(response.json()))
         endpoint: Final = data.get("endpoint")
         if not endpoint:
             raise ValueError(f"OpenSandbox did not return an execd endpoint for {sandbox_id}")
@@ -491,7 +499,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if not data:
             return None
         try:
-            parsed: Final = json.loads(data)
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(data))
         except json.JSONDecodeError:
             return None
         if not isinstance(parsed, dict):

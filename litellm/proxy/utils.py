@@ -1246,7 +1246,8 @@ def _timed_out_reading_from_provider(exception: Exception) -> bool:
 
 def _client_disconnected(exception: Exception) -> bool:
     """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
-    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+    status_code: Final[object] = getattr(exception, "status_code", None)
+    return status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
 def _provider_billed_the_failure(exception: Exception) -> bool:

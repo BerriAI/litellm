@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +40,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _DETECTOR_CATEGORY_PHRASES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -402,7 +405,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 json=request,
                 timeout=self.timeout,
             )
-            verbose_proxy_logger.debug("Lakera AI v2 guard response: %s", response.json())
+            verbose_proxy_logger.debug(
+                "Lakera AI v2 guard response: %s", _DECODED_JSON.validate_python(response.json())
+            )
             lakera_response = LakeraAIResponse(**response.json())
             return lakera_response, masked_entity_count
         except Exception as e:

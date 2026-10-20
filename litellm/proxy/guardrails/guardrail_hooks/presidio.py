@@ -85,6 +85,7 @@ class _PresidioAnonymizeResponse(TypedDict):
 _PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None]] = TypeAdapter(
     _PresidioAnonymizeResponse | None
 )
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
@@ -1595,10 +1596,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if line.startswith("data: ") and line != "data: [DONE]":
                 raw_json = line[6:]
                 try:
-                    event = json.loads(raw_json)
+                    event = _DECODED_JSON.validate_python(json.loads(raw_json))
                     delta = event.get("delta") if isinstance(event, dict) else None
                     if (
-                        isinstance(delta, dict)
+                        isinstance(event, dict)
+                        and isinstance(delta, dict)
                         and event.get("type") == "content_block_delta"
                         and delta.get("type") == "text_delta"
                         and isinstance(delta.get("text"), str)

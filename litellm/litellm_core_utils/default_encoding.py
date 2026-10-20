@@ -48,5 +48,5 @@ for attempt in range(_max_retries):
             # Last attempt, re-raise the exception
             raise
         # Exponential backoff with jitter to reduce collision probability
-        delay = _retry_delay * (2**attempt) + random.uniform(0, 0.1)
+        delay = _retry_delay * (2.0**attempt) + random.uniform(0, 0.1)
         time.sleep(delay)

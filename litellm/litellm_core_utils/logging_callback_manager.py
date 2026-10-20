@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 import litellm
@@ -15,6 +15,10 @@ else:
     _custom_logger_compatible_callbacks_literal = str
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
+
+
+def _instance_attributes(target: object) -> Mapping[str, object]:
+    return vars(target)
 
 
 class LoggingCallbackManager:
@@ -329,7 +333,7 @@ class LoggingCallbackManager:
         key_parts: Final = [type(custom_logger).__name__]
 
         # Add only fundamental type instance variables to the key
-        for attr_name, attr_value in vars(custom_logger).items():
+        for attr_name, attr_value in _instance_attributes(custom_logger).items():
             if not attr_name.startswith("_"):  # Skip private attributes
                 if isinstance(attr_value, (str, bool, int)):
                     key_parts.append(f"{attr_name}={attr_value}")

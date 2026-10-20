@@ -894,7 +894,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not line.startswith("data: "):
                 continue
             try:
-                data = json.loads(line[6:])
+                data = _DECODED_ARGUMENTS.validate_python(json.loads(line[6:]))
             except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(data, dict):

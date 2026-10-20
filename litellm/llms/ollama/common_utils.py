@@ -12,6 +12,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OllamaResponseIdNormalizer:
@@ -151,7 +152,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         try:
             resp: Final = httpx.get(f"{base}/api/tags", headers=headers)
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _DECODED_JSON.validate_python(resp.json())
             # Expecting a dict with a 'models' list
             models_list = []
             if isinstance(data, dict) and "models" in data and isinstance(data["models"], list):

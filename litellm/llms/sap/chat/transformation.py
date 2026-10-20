@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -185,11 +185,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final[AICoreDeploymentList] = client.get(
+            f"{self.base_url}/lm/deployments", headers=self.headers
+        ).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
+                cfg: AICoreConfiguration = client.get(
                     f"{self.base_url}/lm/configurations/{dep['configurationId']}",
                     headers=self.headers,
                 ).json()

@@ -2994,8 +2994,11 @@ def _batch_prompt_cost(
     )
 
 
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+
+
 def _attribute_value(obj: object, name: str) -> object:
-    return getattr(obj, name)
+    return _ATTRIBUTE_VALUE.validate_python(getattr(obj, name))
 
 
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:

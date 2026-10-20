@@ -921,8 +921,9 @@ def get_request_route(request: Request) -> str:
         scope: Final = request.scope
         if not isinstance(scope, dict):
             return str(request.url.path)
-        raw_path: Final[str] = str(scope.get("path", request.url.path))
-        root_path: Final[str] = str(scope.get("app_root_path", scope.get("root_path", ""))).rstrip("/")
+        scope_fields: Final[Mapping[str, object]] = MappingProxyType(scope)
+        raw_path: Final[str] = str(scope_fields.get("path", request.url.path))
+        root_path: Final[str] = str(scope_fields.get("app_root_path", scope_fields.get("root_path", ""))).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
         # Strip root_path only when it matches whole path segments — guarding
@@ -1517,8 +1518,15 @@ def get_model_rate_limit_from_metadata(
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit", "model_itpm_limit", "model_otpm_limit"],
 ) -> dict[str, int] | None:
-    if getattr(user_api_key_dict, metadata_accessor_key):
-        return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
+    metadata: Final = (
+        user_api_key_dict.team_metadata
+        if metadata_accessor_key == "team_metadata"
+        else user_api_key_dict.organization_metadata
+        if metadata_accessor_key == "organization_metadata"
+        else user_api_key_dict.project_metadata
+    )
+    if metadata:
+        return metadata.get(rate_limit_key)
     return None
 
 
