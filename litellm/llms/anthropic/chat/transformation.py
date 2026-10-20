@@ -3166,7 +3166,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
         if split_answer is not None:
-            return litellm.Message(content=json.dumps(split_answer))
+            return litellm.Message(content=json.dumps(split_answer, ensure_ascii=False))
         try:
             payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
@@ -3175,7 +3175,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if response_format_schema is not None:
             return litellm.Message(
                 content=json.dumps(
-                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME),
+                    ensure_ascii=False,
                 )
             )
         # a lot of the times the `values` key is not present in the tool response

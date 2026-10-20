@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VertexAIError(Exception):
@@ -112,7 +113,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        sanitize_vertex_anthropic_output_params(data, model)
+        sanitize_vertex_anthropic_output_params(
+            data, model, drop_params=_LITELLM_PARAMS.validate_python(litellm_params).get("drop_params") is True
+        )
 
         tools: Final = optional_params.get("tools")
         tool_search_used: Final = self.is_tool_search_used(tools)
