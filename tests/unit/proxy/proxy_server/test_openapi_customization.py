@@ -14,13 +14,16 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import threading
 from types import SimpleNamespace
 from typing import Final
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import BaseModel, GetJsonSchemaHandler
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from litellm.proxy.proxy_server import (
     _generate_stable_operation_id,
@@ -36,7 +39,7 @@ from litellm.proxy.proxy_server import (
 
 from .conftest import normalize
 
-LIVELINESS_ANSWERS_DURING_A_COLD_BUILD: Final = 5
+UNBLOCK_TIMEOUT_SECONDS: Final = 5
 
 # ---------------------------------------------------------------------------
 # _generate_stable_operation_id
@@ -288,21 +291,30 @@ def test_get_openapi_schema_missing_app_attribute_raises_error(monkeypatch):
         get_openapi_schema()
 
 
-async def _liveliness_statuses(client: httpx.AsyncClient, until: asyncio.Future[httpx.Response]) -> AsyncIterator[int]:
-    while not until.done():
-        yield (await client.get("/health/liveliness")).status_code
-        await asyncio.sleep(0.05)
+async def test_a_request_is_answered_while_a_cold_openapi_json_builds(monkeypatch: pytest.MonkeyPatch):
+    build_started: Final = threading.Event()
+    liveliness_answered: Final = threading.Event()
+    build_saw_the_answer: Final = threading.Event()
 
+    class HoldsTheDocsBuild(BaseModel):
+        @classmethod
+        def __get_pydantic_json_schema__(cls, schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+            build_started.set()
+            if liveliness_answered.wait(UNBLOCK_TIMEOUT_SECONDS):
+                build_saw_the_answer.set()
+            return handler(schema)
 
-async def test_requests_keep_being_answered_while_a_cold_openapi_json_builds(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(app, "openapi_schema", None)
+    monkeypatch.setattr(app.router, "routes", [*app.router.routes])
+    app.add_api_route("/holds-the-docs-build", lambda: None, response_model=HoldsTheDocsBuild)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
         docs_request: Final = asyncio.ensure_future(client.get("/openapi.json"))
-        statuses: Final = tuple([status async for status in _liveliness_statuses(client, docs_request)])
+        await asyncio.to_thread(build_started.wait, UNBLOCK_TIMEOUT_SECONDS)
+        liveliness: Final = await client.get("/health/liveliness")
+        liveliness_answered.set()
         docs: Final = await docs_request
 
-    assert (docs.status_code, set(statuses)) == (200, {200})
-    assert len(statuses) >= LIVELINESS_ANSWERS_DURING_A_COLD_BUILD
+    assert (liveliness.status_code, docs.status_code, build_saw_the_answer.is_set()) == (200, 200, True)
 
 
 # ---------------------------------------------------------------------------
