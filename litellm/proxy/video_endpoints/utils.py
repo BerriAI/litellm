@@ -116,15 +116,31 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
     return creating_group
 
 
+def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:
+    """The group a create asked for when a router fallback served it from a deployment outside that group."""
+    if requested_model is None or llm_router is None or not isinstance(response, VideoObject):
+        return None
+    deployment_id: Final = id_safe_name(response.hidden_params.get("model_id"))
+    deployment: Final = llm_router.get_deployment(model_id=deployment_id) if deployment_id else None
+    if deployment is None:
+        return None
+    creating_group: Final = deployment.model_info.team_public_model_name or deployment.model_name
+    if llm_router.resolve_served_model_name(requested_model, creating_group) == creating_group:
+        return None
+    return requested_model
+
+
 def encode_video_id_in_response(
     response: object,
     fallback_provider: object,
     fallback_model_id: object,
     polled_video: DecodedVideoId | None = None,
+    requested_model: str | None = None,
 ) -> object:
     """
     Stamps the provider, model and the deployment that answered into a returned video id. A poll of an existing
-    video (`polled_video`) answered without a routed deployment keeps the deployment its id already named.
+    video (`polled_video`) answered without a routed deployment keeps the deployment its id already named, and
+    every returned id keeps the group a router fallback was serving (`requested_model`).
     """
     if not isinstance(response, VideoObject) or not response.id:
         return response
@@ -133,6 +149,9 @@ def encode_video_id_in_response(
     hidden_params: Final = response.hidden_params
     routed_deployment_id: Final = id_safe_name(hidden_params.get("model_id"))
     deployment_id: Final = routed_deployment_id or (polled_video or decoded).get("deployment_id")
+    kept_requested_model: Final = (
+        id_safe_name(requested_model) or decoded.get("requested_model") or (polled_video or {}).get("requested_model")
+    )
     model_id: Final = decoded.get("model_id") or id_safe_name(fallback_model_id) or routed_deployment_id
     provider: Final = (
         id_safe_name(decoded.get("custom_llm_provider"))
@@ -141,7 +160,11 @@ def encode_video_id_in_response(
     )
     if not model_id or not provider:
         return response
-    if model_id == decoded.get("model_id") and deployment_id == decoded.get("deployment_id"):
+    if (
+        model_id == decoded.get("model_id")
+        and deployment_id == decoded.get("deployment_id")
+        and kept_requested_model == decoded.get("requested_model")
+    ):
         return response
 
     restamped_id: Final = encode_video_id_with_provider(
@@ -150,5 +173,6 @@ def encode_video_id_in_response(
         model_id=model_id,
         served_model=decoded.get("served_model"),
         deployment_id=deployment_id,
+        requested_model=kept_requested_model,
     )
     return response.model_copy(update={"id": restamped_id})

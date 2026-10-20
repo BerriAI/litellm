@@ -892,3 +892,84 @@ async def test_pinned_video_status_logs_the_requested_model_group(
     assert keys == {"Bearer key-b"}
     assert isinstance(standard_logging_object, dict)
     assert standard_logging_object["model_group"] == model
+
+
+def _ordered_chat_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat-ordered",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": key, "order": order},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id, key, order in (("dep-primary", "key-a", 1), ("dep-backup", "key-b", 2))
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_video_id_in_a_chat_body_never_overrides_deployment_order() -> None:
+    router: Final = _ordered_chat_router()
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "chat-ordered", deployment_id="dep-backup")
+
+    chats: Final = [
+        await router.acompletion(
+            model="chat-ordered", messages=list(ROUTING_MESSAGES), mock_response="ok", video_id=video_id
+        )
+        for _ in range(4)
+    ]
+    responses: Final = [
+        await router.aresponses(model="chat-ordered", input="route this request", mock_response="ok", video_id=video_id)
+        for _ in range(4)
+    ]
+
+    assert {chat._hidden_params["model_id"] for chat in chats} == {"dep-primary"}
+    assert {response._hidden_params["model_id"] for response in responses} == {"dep-primary"}
+
+
+@pytest.mark.asyncio
+async def test_video_lookup_404_never_cools_down_the_deployment_that_answered(respx_mock: respx.MockRouter) -> None:
+    respx_mock.get("https://api.openai.com/v1/videos/video_gone").respond(
+        404, json={"error": {"code": "NotFound", "message": "Video not found"}}
+    )
+    router: Final = Router(
+        model_list=[_sora_deployment("sora", "key-a", "dep-a"), _sora_deployment("sora", "key-b", "dep-b")],
+        num_retries=0,
+        allowed_fails=1,
+    )
+    video_id: Final = encode_video_id_with_provider("video_gone", "openai", "sora", deployment_id="dep-b")
+
+    for _ in range(3):
+        with pytest.raises(litellm.NotFoundError):
+            await router.avideo_status(model="sora", video_id=video_id)
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
+
+
+@pytest.mark.asyncio
+async def test_chat_404_still_cools_down_the_deployment(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        404, json={"error": {"code": "NotFound", "message": "Deployment not found"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "key-a"},
+                "model_info": {"id": "dep-chat"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "key-b"},
+                "model_info": {"id": "dep-chat-b"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=1,
+    )
+
+    for _ in range(3):
+        with contextlib.suppress(litellm.NotFoundError, litellm.RateLimitError):
+            await router.acompletion(model="chat", messages=list(ROUTING_MESSAGES))
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-chat", "dep-chat-b"], parent_otel_span=None)

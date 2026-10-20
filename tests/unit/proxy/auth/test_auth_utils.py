@@ -1498,6 +1498,54 @@ def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not
     )
 
 
+def _sora_fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-pair", "sora-backup", "sora-other")
+        ],
+        fallbacks=[{"sora-pair": ["sora-backup"]}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("general_settings", "requested_model", "expected"),
+    [
+        ({"enforce_fallback_model_access": False}, "sora-pair", "sora-pair"),
+        ({}, "sora-pair", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, "sora-other", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, None, "sora-backup"),
+    ],
+    ids=["opt-out-fallback", "enforced", "opt-out-no-fallback-relation", "opt-out-no-requested-model"],
+)
+def test_get_model_from_request_checks_a_fallback_served_video_by_the_requested_group_only_under_the_opt_out(
+    monkeypatch: pytest.MonkeyPatch, general_settings: dict[str, object], requested_model: str | None, expected: str
+) -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw",
+        provider="azure",
+        model_id="sora-2",
+        deployment_id="dep-sora-backup",
+        requested_model=requested_model,
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=_sora_fallback_router(),
+        )
+        == expected
+    )
+
+
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
 
 

@@ -39,6 +39,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
+from litellm.types.videos.main import DecodedVideoId
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
@@ -1998,12 +1999,10 @@ def _extract_models_from_managed_resource_id(
             )
 
             if resource_id_field == "video_id":
-                from litellm.proxy.video_endpoints.utils import video_model_group
-
                 decoded_video: Final = decode_video_id_with_provider(resource_id)
                 _append_model_candidates(
                     candidates=candidates,
-                    value=video_model_group(decoded_video, llm_router) or decoded_video.get("model_id"),
+                    value=_video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")
@@ -2015,6 +2014,27 @@ def _extract_models_from_managed_resource_id(
             verbose_proxy_logger.debug("Unable to extract model from managed video/character ID: %s", str(e))
 
     return _dedupe_model_candidates(candidates)
+
+
+def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None) -> str | None:
+    """
+    The group a key must be allowed to call to use a video: the creating deployment's group, or, while router
+    fallbacks skip model access checks, the group whose router fallback created it.
+    """
+    from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.proxy.video_endpoints.utils import video_model_group
+
+    creating_group: Final = video_model_group(decoded_video, llm_router)
+    requested_model: Final = decoded_video.get("requested_model")
+    if llm_router is None or creating_group is None or requested_model is None:
+        return creating_group
+    if router_fallback_access_check.is_enforced():
+        return creating_group
+    fallback_groups: Final = frozenset(
+        fallback_target_model_name(target) for target in get_all_fallbacks(requested_model, llm_router)
+    )
+    return requested_model if creating_group in fallback_groups else creating_group
 
 
 def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:

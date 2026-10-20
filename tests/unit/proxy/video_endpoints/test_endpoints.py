@@ -147,6 +147,7 @@ def harness():
         side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )
     router.resolve_model_name_from_model_id = resolve_model
+    router.get_deployment.return_value = None
 
     read_body = AsyncMock(return_value={})
     batch_to_bytesio = AsyncMock(return_value=[b"filebytes"])

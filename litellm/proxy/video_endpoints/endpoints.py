@@ -24,6 +24,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
+    fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
     video_model_group,
@@ -123,10 +124,12 @@ async def video_generation(
             version=version,
         )
     else:
+        requested_model: Final = routable_model_name(requested.model, llm_router, requested.custom_llm_provider)
         return encode_video_id_in_response(
             response=generated,
             fallback_provider=requested.custom_llm_provider,
-            fallback_model_id=routable_model_name(requested.model, llm_router, requested.custom_llm_provider),
+            fallback_model_id=requested_model,
+            requested_model=fallback_requested_model(requested_model, generated, llm_router),
         )
 
 
@@ -523,6 +526,7 @@ async def video_remix(
             fallback_provider=custom_llm_provider,
             fallback_model_id=model_id_from_decoded
             or routable_model_name(requested.model, llm_router, custom_llm_provider),
+            requested_model=decoded.get("requested_model"),
         )
 
 
@@ -841,6 +845,7 @@ async def video_edit(
             fallback_provider=custom_llm_provider,
             fallback_model_id=model_id_from_decoded
             or routable_model_name(requested.model, llm_router, custom_llm_provider),
+            requested_model=decoded.get("requested_model"),
         )
 
 
@@ -943,4 +948,5 @@ async def video_extension(
             fallback_provider=custom_llm_provider,
             fallback_model_id=model_id_from_decoded
             or routable_model_name(requested.model, llm_router, custom_llm_provider),
+            requested_model=decoded.get("requested_model"),
         )

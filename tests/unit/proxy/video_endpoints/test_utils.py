@@ -26,6 +26,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
+    fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
     video_model_group,
@@ -318,6 +319,33 @@ def test_encode_video__a_poll_takes_the_deployment_that_answered_else_keeps_the_
     assert out.id == encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=returned_deployment)
 
 
+def test_encode_video__a_poll_keeps_the_group_a_fallback_create_was_serving() -> None:
+    polled_id: Final = encode_video_id_with_provider(
+        "video_raw", "azure", "sora-2", deployment_id="dep-backup", requested_model="sora-pair"
+    )
+    video: Final = _video(encode_video_id_with_provider("video_raw", "azure", "sora-2"))
+
+    out: Final = encode_video_id_in_response(
+        video, fallback_provider=None, fallback_model_id=None, polled_video=decode_video_id_with_provider(polled_id)
+    )
+
+    assert isinstance(out, VideoObject)
+    assert out.id == polled_id
+
+
+def test_encode_video__a_remix_of_a_fallback_video_keeps_its_requested_group() -> None:
+    video: Final = _video(
+        encode_video_id_with_provider("video_new", "azure", "sora-2"), hidden_params={"model_id": "dep-backup"}
+    )
+
+    out: Final = encode_video_id_in_response(
+        video, fallback_provider=None, fallback_model_id=None, requested_model="sora-pair"
+    )
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id).get("requested_model") == "sora-pair"
+
+
 def test_encode_video__id_already_naming_the_routed_deployment_is_unchanged() -> None:
     original_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="deployment-1")
     video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
@@ -505,6 +533,43 @@ def test_video_model_group__names_a_team_model_by_its_public_name() -> None:
     )
 
     assert video_model_group(_decoded("sora-2", "dep-team"), router) == "team-sora"
+
+
+def _fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-pair", "sora-backup")
+        ],
+        model_group_alias={"sora-alias": "sora-pair"},
+        fallbacks=[{"sora-pair": ["sora-backup"]}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "answering_deployment", "expected"),
+    [
+        ("sora-pair", "dep-sora-backup", "sora-pair"),
+        ("sora-pair", "dep-sora-pair", None),
+        ("sora-alias", "dep-sora-pair", None),
+        ("sora-pair", None, None),
+        (None, "dep-sora-backup", None),
+    ],
+    ids=["fallback-served", "served-by-own-group", "served-by-alias-target", "unrouted", "no-requested-model"],
+)
+def test_fallback_requested_model__names_the_asked_group_only_when_another_group_served_the_create(
+    requested_model: str | None, answering_deployment: str | None, expected: str | None
+) -> None:
+    video: Final = _video(
+        encode_video_id_with_provider("video_raw", "azure", "sora-2"),
+        hidden_params={} if answering_deployment is None else {"model_id": answering_deployment},
+    )
+
+    assert fallback_requested_model(requested_model, video, _fallback_router()) == expected
 
 
 def test_video_model_group__is_none_without_a_router() -> None:
