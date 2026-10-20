@@ -12,7 +12,8 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER, ProxyModelNotFoundError, route_request
+from litellm.types.router import RouterGeneralSettings
 
 
 @pytest.mark.parametrize(
@@ -1367,6 +1368,46 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
     assert fallback.call_count == 1, [str(call.request.url) for call in respx_mock.calls]
     assert "router_settings_override" not in json.loads(fallback.calls.last.request.content)
     assert response.choices[0].message.content == "hi", response
+
+
+@pytest.mark.parametrize(
+    "router_only_setting",
+    [
+        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
+        pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_keeps_router_only_override_settings_out_of_pass_through_provider_body(
+    monkeypatch: pytest.MonkeyPatch, router_only_setting: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {
+        "model": "openai/gpt-pass-through",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": router_only_setting,
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-pass-through")
+        )
+        await (await route_request(data, router, None, "acompletion"))
+
+    assert set(router_only_setting).isdisjoint(JSON_OBJECT_ADAPTER.validate_json(upstream.calls.last.request.content))
 
 
 @pytest.mark.parametrize(

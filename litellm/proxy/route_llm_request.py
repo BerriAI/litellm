@@ -49,6 +49,9 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = (
     "routing_strategy",
     "enable_tag_filtering",
 )
+_ROUTER_ONLY_SETTINGS: Final = frozenset(
+    ("context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
+)
 
 
 def _route_user_config_request(data: dict, route_type: str):
@@ -695,14 +698,26 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     if "user_config" in data and data["user_config"] is None:
         data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
     user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
-    if router_settings_override is not None:
-        data.update(
+    router_settings_from_override: Final = MappingProxyType(
+        {
+            key: router_settings_override[key]
+            for key in _PER_REQUEST_ROUTER_SETTINGS
+            if router_settings_override.get(key) is not None
+            and key not in data
+            and (user_config is None or key not in user_config)
+        }
+        if router_settings_override is not None
+        else {}
+    )
+    data.update(router_settings_from_override)
+    router_only_settings_from_override: Final = _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+
+    def direct_litellm_kwargs() -> Mapping[str, object]:
+        return MappingProxyType(
             {
-                key: router_settings_override[key]
-                for key in _PER_REQUEST_ROUTER_SETTINGS
-                if router_settings_override.get(key) is not None
-                and key not in data
-                and (user_config is None or key not in user_config)
+                key: value
+                for key, value in JSON_OBJECT_ADAPTER.validate_python(data).items()
+                if key not in router_only_settings_from_override
             }
         )
 
@@ -719,7 +734,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
     elif (
         route_type == "acompletion"
@@ -778,7 +793,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     # If we can't get deployment creds, continue without them
                     pass
 
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",
@@ -829,7 +844,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "aingest",
         ] and (data.get("model") is None or data.get("model") == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
         if "model" not in data:
             raise ProxyMissingRequiredParamError(
@@ -868,7 +883,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**data)
+                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
             elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
                 return getattr(llm_router, f"{route_type}")(**data)
             elif data["model"] in llm_router.deployment_names:
@@ -920,7 +935,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
-                    return getattr(litellm, f"{route_type}")(**data)
+                    return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
             elif _is_a2a_agent_model(data.get("model", "")):
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
@@ -932,7 +947,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 # Fall through to raise exception below if result is None
 
     elif user_model is not None or route_type == "allm_passthrough_route":
-        return getattr(litellm, f"{route_type}")(**data)
+        return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
