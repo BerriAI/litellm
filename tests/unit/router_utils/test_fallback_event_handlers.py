@@ -1265,6 +1265,43 @@ async def test_a_stored_fallback_target_cannot_carry_an_openai_federation_field(
         )
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"model": "mistral-backup", "api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+        {"model": "mistral-backup", "litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"},
+    ],
+    ids=["inline_reference", "credential_holding_a_reference"],
+)
+@pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_make_the_proxy_read_an_oidc_api_key(monkeypatch, target: dict):
+    """A stored key or team fallback is merged into kwargs ahead of the call, so it could otherwise point the
+    proxy's own token file at a host the fallback picks."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_values={"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                credential_info={"custom_llm_provider": "mistral"},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="oidc/"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[target],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
 @pytest.mark.asyncio
 async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
     """Checked before the per-target loop on purpose: inside it, the refusal would be caught as
