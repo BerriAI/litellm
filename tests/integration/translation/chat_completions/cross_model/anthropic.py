@@ -11,6 +11,7 @@ from integration.translation.chat_completions.bases.anthropic import (
     CLAUDE_HAIKU_5_5_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
     CLAUDE_OPUS_5_TEST_CASE,
+    CLAUDE_SONNET_5_5_TEST_CASE,
 )
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
@@ -2091,6 +2092,355 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens_details": {
             "cached_tokens": 0,
             "text_tokens": 1180,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEXT: Final = (
+    "The bug is that `retries_remaining` in `src/retry.py` returns `limit + attempts` instead of "
+    "`max(0, limit - attempts)`, so it can return too many retries and can't be clamped at zero. The only other "
+    "caller is `src/worker.py` line 12 (`retries_remaining(3, attempts)`), and `tests/test_retry.py::test_retries_remaining` "
+    "fails with `assert 4 == 2` for `retries_remaining(3, 1)`."
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "anthropic/claude-sonnet-5-5"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers=CLAUDE_OPUS_5_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "model": "claude-sonnet-5-5",
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-sonnet-5-5",
+        "id": "msg_011CgDcA1vnTwnTPTcJv9Lb7",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01RK8oPY5AnH3K4R8LfPXPTi",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+                "caller": {"type": "direct"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_013REgHECA7Rceip3FrejMEy",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1184,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "anthropic/claude-sonnet-5-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "caller": {"type": "direct"},
+                            "function": {
+                                "arguments": '{"query": "retries_remaining"}',
+                                "name": "search_code",
+                            },
+                            "id": "toolu_01RK8oPY5AnH3K4R8LfPXPTi",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "caller": {"type": "direct"},
+                            "function": {
+                                "arguments": '{"path": "tests/test_retry.py"}',
+                                "name": "run_tests",
+                            },
+                            "id": "toolu_013REgHECA7Rceip3FrejMEy",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request,
+        CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_litellm_response,
+    ),
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "model": "claude-sonnet-5-5",
+        "messages": [
+            *list_value(ANTHROPIC_AGENT_REQUEST["messages"]),
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01RK8oPY5AnH3K4R8LfPXPTi",
+                        "name": "search_code",
+                        "input": {"query": "retries_remaining"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_013REgHECA7Rceip3FrejMEy",
+                        "name": "run_tests",
+                        "input": {"path": "tests/test_retry.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01RK8oPY5AnH3K4R8LfPXPTi",
+                        "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = '
+                        'retries_remaining(3, attempts)"}]}',
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_013REgHECA7Rceip3FrejMEy",
+                        "content": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - '
+                        'assert 4 == 2"}',
+                    },
+                    {
+                        "type": "text",
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences.",
+                    },
+                ],
+            },
+        ],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-sonnet-5-5",
+        "id": "msg_011CgDcZdb2JGywm8DnwxFvn",
+        "content": [{"type": "text", "text": CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEXT}],
+        "stop_reason": "end_turn",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1492,
+            "output_tokens": 155,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "anthropic/claude-sonnet-5-5",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEXT,
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 155,
+            "prompt_tokens": 1492,
+            "total_tokens": 1647,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 155},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1492,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_request={
+        **CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_provider_request,
+        "stream": True,
+    },
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "type": "message_start",
+                "message": {
+                    **ANTHROPIC_AGENT_RESPONSE,
+                    "model": "claude-sonnet-5-5",
+                    "id": "msg_011CgDcC8agu11ruKbps6qFH",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {
+                        **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+                        "input_tokens": 1184,
+                        "output_tokens": 16,
+                        "service_tier": "standard",
+                        "inference_geo": "global",
+                        "speed": "standard",
+                    },
+                    "diagnostics": None,
+                },
+            },
+            event="message_start",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_01LmCacjLUDXcY139vPTCceR",
+                    "name": "search_code",
+                    "input": {},
+                    "caller": {"type": "direct"},
+                },
+            },
+            event="content_block_start",
+        ),
+        SSEFrame(data={"type": "ping"}, event="ping"),
+        *(
+            SSEFrame(
+                data={
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json},
+                },
+                event="content_block_delta",
+            )
+            for partial_json in ("", '{"query', '": "ret', "ries_re", "maining", '"}')
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 0}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_011cyQH4o1bcDJYsWQoLSzGT",
+                    "name": "run_tests",
+                    "input": {},
+                    "caller": {"type": "direct"},
+                },
+            },
+            event="content_block_start",
+        ),
+        *(
+            SSEFrame(
+                data={
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json},
+                },
+                event="content_block_delta",
+            )
+            for partial_json in ("", '{"path"', ': "test', "s/test_", "retry.p", 'y"}')
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 1}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "tool_use",
+                    "stop_sequence": None,
+                    "stop_details": None,
+                    "container": None,
+                },
+                "usage": {
+                    "input_tokens": 1184,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 105,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+            event="message_delta",
+        ),
+        SSEFrame(data={"type": "message_stop"}, event="message_stop"),
+    ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01LmCacjLUDXcY139vPTCceR", "toolu_011cyQH4o1bcDJYsWQoLSzGT")
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
             "cache_write_tokens": 0,
             "cache_creation_tokens": 0,
             "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
