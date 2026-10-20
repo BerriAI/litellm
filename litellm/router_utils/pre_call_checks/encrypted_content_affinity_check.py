@@ -40,7 +40,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from functools import cache
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger, Span
@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_RETRY_SKIPPED_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -87,6 +88,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _retry_skipped_deployment_ids(value: object) -> frozenset[str]:
+        try:
+            return frozenset(_RETRY_SKIPPED_DEPLOYMENT_IDS_ADAPTER.validate_python(value))
+        except ValidationError:
+            return frozenset()
+
+    @staticmethod
+    def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+        try:
+            model_info: Final = _REQUEST_KWARGS_ADAPTER.validate_python(deployment.get("model_info"))
+        except ValidationError:
+            return None
+        model_id: Final = model_info.get("id")
+        return model_id if isinstance(model_id, str) else None
 
     @staticmethod
     def has_model_group_affinity_enabled(
@@ -345,12 +362,25 @@ class EncryptedContentAffinityCheck(CustomLogger):
         typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
-        target_order: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs).get("_target_order")
-        candidates: Final = (
+        validated_request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs)
+        target_order: Final = validated_request_kwargs.get("_target_order")
+        order_candidates: Final = (
             get_order_filtered_deployments(typed_healthy_deployments, target_order=target_order)
             if isinstance(target_order, int)
             else typed_healthy_deployments
         )
+        retry_skipped_value: Final = validated_request_kwargs.get("_retry_skipped_deployment_ids")
+        retry_skipped_deployment_ids: Final = self._retry_skipped_deployment_ids(retry_skipped_value)
+        untried_candidates: Final = (
+            [
+                deployment
+                for deployment in order_candidates
+                if self._deployment_id(deployment) not in retry_skipped_deployment_ids
+            ]
+            if retry_skipped_deployment_ids
+            else order_candidates
+        )
+        candidates: Final = untried_candidates or order_candidates
 
         # Signal to the response post-processor that encrypted item IDs should be
         # encoded in the output of this request.  Only set the flag when
