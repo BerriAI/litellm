@@ -9973,28 +9973,133 @@ def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices
 
 @pytest.mark.parametrize("rate", (0.0, 0.001))
 @pytest.mark.parametrize("cache_field", ("cache_read_input_token_cost", "cache_creation_input_token_cost"))
+@pytest.mark.parametrize("has_base_rates", (False, True))
+@pytest.mark.parametrize("persist_across_reloads", (False, True))
+@pytest.mark.parametrize("profile_prefix", ("us", "global"))
+@pytest.mark.parametrize("provider", (None, "bedrock"))
 def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
-    _local_model_cost_map: None, rate: float, cache_field: str
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    rate: float,
+    cache_field: str,
+    has_base_rates: bool,
+    persist_across_reloads: bool,
+    profile_prefix: str,
+    provider: str | None,
 ) -> None:
-    model: Final = "openai.gpt-6-sol"
-    litellm.register_model({model: {cache_field: rate}}, persist_across_reloads=False)
+    import litellm.utils as model_utils
+    from litellm.cost_calculator import pricing_entry_for_cost_calc
+
+    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    model: Final = "openai.cache-overlay-test"
+    profile: Final = f"{profile_prefix}.{model}"
+    catalog: Final = {
+        **litellm.model_cost,
+        model: {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            **({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02} if has_base_rates else {}),
+        },
+        profile: {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "input_cost_per_token": 0.02,
+            "output_cost_per_token": 0.04,
+            "cache_read_input_token_cost": 0.005,
+            "cache_creation_input_token_cost": 0.025,
+        },
+    }
+    profile_before: Final = dict(catalog[profile])
+    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+    model_utils._invalidate_model_cost_lowercase_map()
+    litellm.register_model({model: {cache_field: rate}}, persist_across_reloads=persist_across_reloads)
     response: Final = ModelResponse(
         model=model,
         usage=Usage(
-            prompt_tokens=5,
-            completion_tokens=0,
-            total_tokens=5,
+            prompt_tokens=15,
+            completion_tokens=3,
+            total_tokens=18,
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 cached_tokens=5 if cache_field == "cache_read_input_token_cost" else 0
             ),
             cache_creation_input_tokens=5 if cache_field == "cache_creation_input_token_cost" else 0,
         ),
     )
-    expected: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="bedrock")
-    assert expected == pytest.approx(5 * rate)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="cache-overlay",
+        function_id="cache-overlay",
+    )
+    logging_obj.model_call_details["model_id"] = profile
+    expected: Final = 10 * 0.02 + 3 * 0.04 + 5 * rate
     assert completion_cost(
         completion_response=response,
-        model=model,
-        custom_llm_provider="bedrock",
-        optional_params={"model_id": f"us.{model}"},
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider=provider,
+        optional_params={"model_id": profile},
     ) == pytest.approx(expected)
+    entry: Final = pricing_entry_for_cost_calc(
+        f"bedrock/converse/{model}", response, provider, False, None, None, None, logging_obj
+    )
+    assert entry is not None
+    assert entry[1]["input_cost_per_token"] == 0.02
+    assert entry[1]["output_cost_per_token"] == 0.04
+    assert entry[1][cache_field] == rate
+    assert litellm.model_cost[profile] == profile_before
+
+    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.reapply_runtime_model_cost_registrations()
+    expected_after_reload: Final = (
+        10 * 0.02 + 3 * 0.04 + 5 * (rate if persist_across_reloads else catalog[profile][cache_field])
+    )
+    assert completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider=provider,
+        optional_params={"model_id": profile},
+    ) == pytest.approx(expected_after_reload)
+
+
+@pytest.mark.parametrize("profile", ("us.openai.missing-profile-test", "us.openai.unpriced-profile-test"))
+def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import litellm.utils as model_utils
+
+    model: Final = "openai.registered-cache-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+            },
+            "us.openai.unpriced-profile-test": {"litellm_provider": "bedrock", "mode": "chat"},
+        },
+    )
+    model_utils._invalidate_model_cost_lowercase_map()
+    litellm.register_model({model: {"cache_read_input_token_cost": 0.001}}, persist_across_reloads=False)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=15,
+            completion_tokens=3,
+            total_tokens=18,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        ),
+    )
+    assert completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": profile},
+    ) == pytest.approx(10 * 0.01 + 3 * 0.02 + 5 * 0.001)
