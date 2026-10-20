@@ -3108,6 +3108,15 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
 
 
+def test_streamed_json_mode_answer_keyed_by_a_required_only_name_is_kept_whole():
+    required_only_schema = {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]}
+    encoded = json.dumps({"payload": {"id": "abc", "rows": 3}})
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), required_only_schema)
+
+    assert "".join(contents) == encoded
+
+
 def _json_tool_block_events(index: int, encoded: str) -> tuple[dict[str, object], ...]:
     return (
         {

@@ -104,17 +104,17 @@ def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatS
     next_key: Final = _STRING_VALUE_THEN_KEY.match(string_value_start)
     if next_key is None:
         return "undecided"
-    return "pass_through" if next_key.group(1) in schema.property_names else "hold"
+    return "pass_through" if next_key.group(1) in schema.declared_names else "hold"
 
 
 def _is_a_label(text: str, schema: ResponseFormatSchema, tool_name: str) -> bool:
-    return text in schema.property_names or text == tool_name
+    return text in schema.declared_names or text == tool_name
 
 
 def _label_verdict(label: str, next_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     if _is_a_label(label, schema, tool_name):
         return "hold"
-    return "pass_through" if next_key in schema.property_names else "undecided"
+    return "pass_through" if next_key in schema.declared_names else "undecided"
 
 
 def _leading_labels_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -159,9 +159,9 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "hold"
         if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
             return "undecided"
-    if first_key.group(1) == "values" and "values" not in schema.property_names:
+    if first_key.group(1) == "values" and "values" not in schema.declared_names:
         return "hold"
-    if first_key.group(1) in schema.property_names or not schema.property_names:
+    if first_key.group(1) in schema.declared_names or not schema.declared_names:
         return "pass_through"
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 

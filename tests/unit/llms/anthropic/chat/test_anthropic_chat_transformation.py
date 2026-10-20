@@ -7882,6 +7882,12 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"summary": "likes tea"},
             id="tool_name_envelope_on_a_schema_allowing_extra_keys",
         ),
+        pytest.param(
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]},
+            {"payload": {"id": "abc", "rows": 3}},
+            {"payload": {"id": "abc", "rows": 3}},
+            id="key_listed_only_in_required",
+        ),
     ],
 )
 def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
