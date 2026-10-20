@@ -17,10 +17,9 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     - International: https://api.minimax.io/v1
     - China: https://api.minimaxi.com/v1
 
-    Supported models:
-    - MiniMax-M2.1
-    - MiniMax-M2.1-lightning
-    - MiniMax-M2
+    Current models (legacy model IDs remain routable):
+    - MiniMax-M3.1-Flash
+    - MiniMax-M3
     """
 
     @staticmethod
@@ -83,10 +82,11 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split and thinking to the list of supported params.
+        Add the model's native reasoning controls to the supported params.
         """
-        base_params: Final = super().get_supported_openai_params(model=model)
-        additional_params: Final = ["reasoning_split"]
+        is_flash: Final = model.removeprefix("minimax/") == "MiniMax-M3.1-Flash"
+        base_params: Final[list[str]] = super().get_supported_openai_params(model)  # mutable-ok: base returns a list
+        additional_params: Final = ["reasoning_effort"] if is_flash else ["reasoning_split"]
 
         # Add thinking parameter if model supports reasoning
         try:
@@ -95,4 +95,4 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         except Exception:
             pass
 
-        return base_params + additional_params
+        return [param for param in (*base_params, *additional_params) if param != "service_tier" or not is_flash]

@@ -20,6 +20,46 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("offers Flash first while retaining MiniMax media and compatibility metadata", () => {
+    const models = getProviderModels(Providers.MiniMax, BUNDLED_MODEL_MAP);
+    expect(models.filter((model) => /MiniMax-M/.test(model))).toEqual([
+      "minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3",
+    ]);
+    expect(models).toContain("minimax/MiniMax-H3");
+    expect(BUNDLED_MODEL_MAP["minimax/MiniMax-M2.1"]).toBeDefined();
+    expect(getPlaceholder(Providers.MiniMax)).toBe("minimax/MiniMax-M3.1-Flash");
+  });
+
+  it("keeps custom MiniMax registrations selectable", () => {
+    expect(getProviderModels(Providers.MiniMax, {
+      "minimax/custom-model": { litellm_provider: "minimax", mode: "chat" },
+    })).toEqual(["minimax/custom-model"]);
+  });
+
+  it("uses the verified gateway route IDs and keeps gateway metadata separate", () => {
+    expect(getProviderModels(Providers.Openrouter, BUNDLED_MODEL_MAP)).toEqual([
+      "openrouter/minimax/minimax-m3.1-flash:free", "openrouter/minimax/minimax-m3",
+    ]);
+    const models = getProviderModels("FireworksAI" as Providers, BUNDLED_MODEL_MAP);
+    expect(models.filter((model) => /minimax/i.test(model))).toEqual([
+      "fireworks_ai/accounts/fireworks/models/minimax-m3p1-flash",
+      "fireworks_ai/accounts/fireworks/models/minimax-m3", "fireworks_ai/minimax-m3",
+    ]);
+  });
+
+  it.each([
+    [Providers.Openrouter, "openrouter", "openrouter/minimax/minimax-m2.1", "openrouter/minimax/minimax-m3.1-flash:free"],
+    ["FireworksAI" as Providers, "fireworks_ai", "fireworks_ai/accounts/fireworks/models/minimax-m2p1", "fireworks_ai/accounts/fireworks/models/minimax-m3p1-flash"],
+  ])("filters legacy MiniMax text choices from %s without hiding other providers", (provider, id, oldModel, flashModel) => {
+    const modelMap = {
+      "other-model": { litellm_provider: id, mode: "chat" },
+      [oldModel]: { litellm_provider: id, mode: "chat" },
+      [flashModel]: { litellm_provider: id, mode: "chat" },
+    };
+    expect(getProviderModels(provider as Providers, modelMap)).toEqual(["other-model", flashModel]);
+    expect(modelMap[oldModel]).toEqual({ litellm_provider: id, mode: "chat" });
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
@@ -674,9 +714,10 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels("SAGEMAKER" as Providers, modelMap)).toEqual(["sagemaker-base"]);
     });
 
-    it("should populate MiniMax's bundled models from the real cost map", () => {
+    it("should populate current MiniMax text and nontext models from the real cost map", () => {
       const minimaxModels = Object.keys(BUNDLED_MODEL_MAP).filter(
-        (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "minimax",
+        (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "minimax" &&
+          (BUNDLED_MODEL_MAP[key]?.mode !== "chat" || ["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"].includes(key)),
       );
       expect(minimaxModels.length).toBeGreaterThan(0);
 

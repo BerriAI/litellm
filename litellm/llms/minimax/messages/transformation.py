@@ -5,6 +5,7 @@ MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's 
 from typing import Any, Final  # noqa: TID251  # override below must mirror the legacy base signature
 
 import litellm
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -18,10 +19,9 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     - International: https://api.minimax.io/anthropic
     - China: https://api.minimaxi.com/anthropic
 
-    Supported models:
-    - MiniMax-M2.1
-    - MiniMax-M2.1-lightning
-    - MiniMax-M2
+    Current models (legacy model IDs remain routable):
+    - MiniMax-M3.1-Flash
+    - MiniMax-M3
     """
 
     @property
@@ -30,6 +30,35 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    @staticmethod
+    def _translate_reasoning_effort_to_anthropic(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: base hook updates the outgoing request in place
+        max_tokens: int | None,
+        custom_llm_provider: str,
+    ) -> None:
+        if model.removeprefix("minimax/") == "MiniMax-M3":
+            optional_params.pop("reasoning_effort", None)
+            return
+        effort: Final = optional_params.get("reasoning_effort")
+        if model.removeprefix("minimax/") == "MiniMax-M3.1-Flash" and effort is not None:
+            if effort not in ("low", "medium", "high", "xhigh", "max"):
+                raise AnthropicError(
+                    message="MiniMax-M3.1-Flash requires low, medium, high, xhigh or max effort",
+                    status_code=400,
+                )
+            optional_params.pop("reasoning_effort")
+            optional_params.setdefault("thinking", {"type": "adaptive"})
+            output_config: Final = optional_params.get("output_config")
+            if isinstance(output_config, dict):
+                optional_params["output_config"] = {"effort": effort, **output_config}  # rebind-ok: base hook out-param
+            else:
+                optional_params["output_config"] = {"effort": effort}  # rebind-ok: base hook out-param
+            return
+        AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(  # pyright: ignore[reportUnknownMemberType]  # inherited hook uses a bare dict; this override supplies a typed request
+            model, optional_params, max_tokens, custom_llm_provider
+        )
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

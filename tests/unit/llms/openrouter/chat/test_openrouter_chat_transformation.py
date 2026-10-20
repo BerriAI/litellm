@@ -16,6 +16,33 @@ from litellm.llms.openrouter.chat.transformation import (
 )
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [("minimax/minimax-m3.1-flash:free", effort, effort) for effort in (None, "low", "medium", "high", "xhigh", "max")]
+    + [("anthropic/claude-opus-4.6", "max", "xhigh"), ("minimax/minimax-m3", None, None)],
+)
+def test_openrouter_flash_effort_reaches_transport(model: str, effort: str | None, expected_effort: str | None) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert body["model"] == model
+        assert body.get("reasoning_effort") == expected_effort
+        assert "thinking" not in body
+        assert "output_config" not in body
+        assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+        return httpx.Response(200, json={
+            "id": "test-chat", "object": "chat.completion", "created": 0, "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        response: Final = litellm.completion(
+            model=f"openrouter/{model}", messages=[{"role": "user", "content": "Hi"}],
+            reasoning_effort=effort, api_key="test-key", client=HTTPHandler(client=client),
+        )
+    assert response.choices[0].message.content == "ok"
+
+
 class TestOpenRouterChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
         handler = OpenRouterChatCompletionStreamingHandler(
