@@ -107,23 +107,28 @@ _GEMINI_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": "Count t
 
 
 def _runtime_count_body(prompt: str, include_system_and_tools: bool = False) -> dict[str, JsonValue]:
-    converse: dict[str, JsonValue] = {
+    tool: Final = _SDK_TOOLS[0]
+    converse: Final[dict[str, JsonValue]] = {
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        **(
+            {
+                "system": [{"text": _SYSTEM}],
+                "toolConfig": {
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": tool["name"],
+                                "description": tool["description"],
+                                "inputSchema": {"json": tool["input_schema"]},
+                            }
+                        }
+                    ]
+                },
+            }
+            if include_system_and_tools
+            else {}
+        ),
     }
-    if include_system_and_tools:
-        tool: Final = _SDK_TOOLS[0]
-        converse["system"] = [{"text": _SYSTEM}]
-        converse["toolConfig"] = {
-            "tools": [
-                {
-                    "toolSpec": {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "inputSchema": {"json": tool["input_schema"]},
-                    }
-                }
-            ]
-        }
     return {"input": {"converse": converse}}
 
 
@@ -555,9 +560,7 @@ def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, ma
         assert mantle.drain() == ()
 
 
-def test_google_count_tokens_forwards_system_and_tools_to_mantle(
-    counting_proxy: OwnedProxy, mantle_port: int
-) -> None:
+def test_google_count_tokens_forwards_system_and_tools_to_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     system_text: Final = "Use the provided tool"
     tool_schema: Final = {"type": "object", "properties": {"location": {"type": "string"}}}
@@ -725,14 +728,20 @@ def test_model_the_runtime_counts_never_reaches_mantle(counting_proxy: OwnedProx
             "model_used": _count_model_source(_SONNET)["litellm_count_model"],
             "tokenizer_type": "bedrock_api",
             "count_source": "token_count_model",
-        "original_response": {"input_tokens": _RUNTIME_COUNT},
+            "original_response": {"input_tokens": _RUNTIME_COUNT},
             "error": False,
             "error_message": None,
             "status_code": None,
         }, detailed.text
         assert _runtime_count_requests(runtime) == (
-            (f"/model/{_SONNET}/count-tokens", _runtime_count_body("Count this message", include_system_and_tools=True)),
-            (f"/model/{_SONNET}/count-tokens", _runtime_count_body("Count this message", include_system_and_tools=True)),
+            (
+                f"/model/{_SONNET}/count-tokens",
+                _runtime_count_body("Count this message", include_system_and_tools=True),
+            ),
+            (
+                f"/model/{_SONNET}/count-tokens",
+                _runtime_count_body("Count this message", include_system_and_tools=True),
+            ),
         )
         assert mantle.drain() == ()
 
@@ -1195,9 +1204,7 @@ def test_messages_count_tokens_errors_when_mantle_is_unreachable(counting_proxy:
         assert len(_runtime_count_targets(runtime)) == 1
 
 
-def test_messages_count_tokens_errors_when_mantle_never_answers(
-    counting_proxy: OwnedProxy, mantle_port: int
-) -> None:
+def test_messages_count_tokens_errors_when_mantle_never_answers(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     held: Final[SimpleQueue[str]] = SimpleQueue()
     release: Final = threading.Event()
