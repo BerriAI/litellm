@@ -1,18 +1,21 @@
+import asyncio
 import datetime
 import json
 import os
 import sys
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine, Mapping
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -877,3 +880,108 @@ def test_sync_bridge_raises_the_litellm_rate_limit_error_for_an_upstream_429(
             monkeypatch,
             httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}),
         )
+
+
+class _SuccessRowRecorder(CustomLogger):
+    call_types: tuple[str, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types = (*self.call_types, str(kwargs.get("call_type")))
+
+
+_PARKED_COMPLETION: Final = TypeAdapter(tuple[object])
+
+
+async def _release(parked: Coroutine[object, object, object]) -> None:
+    await parked
+
+
+async def _settled_rows(recorder: _SuccessRowRecorder) -> tuple[str, ...]:
+    for _ in range(200):
+        if recorder.call_types:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    return recorder.call_types
+
+
+async def _bridged_stream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> tuple[AsyncGenerator[bytes, None], _SuccessRowRecorder]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-native-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    recorder: Final = _SuccessRowRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY)
+    )
+    stream: Final = await _untyped_bridge()(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        stream=True,
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(stream, AsyncGenerator)
+    return cast(AsyncGenerator[bytes, None], stream), recorder  # cast-ok: the bridge streams SSE frames as bytes
+
+
+async def _read_through_message_stop(stream: AsyncIterator[bytes]) -> None:
+    async for frame in stream:
+        if frame.startswith(b"event: message_stop"):
+            return
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_logs_one_row_when_the_client_stream_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, _messages_logging_obj(stream=True))
+
+    await _read_through_message_stop(stream)
+    rows_while_the_client_stream_is_open: Final = await _settled_rows(recorder)
+    remaining: Final[list[bytes]] = [frame async for frame in stream]
+
+    assert rows_while_the_client_stream_is_open == ()
+    assert remaining == []
+    assert await _settled_rows(recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_still_logs_when_the_client_leaves_after_message_stop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, _messages_logging_obj(stream=True))
+
+    await _read_through_message_stop(stream)
+    await stream.aclose()
+
+    assert await _settled_rows(recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_holds_its_row_for_the_proxy_end_of_stream_guardrails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    logging_obj: Final = _messages_logging_obj(stream=True)
+
+    async def release(*held: object) -> None:
+        return None
+
+    setattr(logging_obj, "_on_deferred_stream_complete", release)  # noqa: B010  # the proxy arms this slot dynamically
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, logging_obj)
+
+    frames: Final = [frame async for frame in stream]
+    rows_before_release: Final = await _settled_rows(recorder)
+    held: Final[object] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+
+    assert frames[-1].startswith(b"event: message_stop")
+    assert rows_before_release == ()
+    (parked,) = _PARKED_COMPLETION.validate_python(held)
+    assert asyncio.iscoroutine(parked)
+    await _release(parked)
+    assert recorder.call_types == ("anthropic_messages",)

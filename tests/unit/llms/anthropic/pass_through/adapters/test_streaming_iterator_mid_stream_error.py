@@ -19,9 +19,9 @@ import json
 import os
 import sys
 import threading
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from datetime import datetime
-from collections.abc import Callable
-from typing import List, Optional
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,11 +37,12 @@ from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _mid_stream_error_sse_event,
 )
+from litellm.llms.anthropic.pass_through.held_stream_completion import HeldStreamCompletion
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.types.utils import Delta, StreamingChoices
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 
-def _make_chunk(delta: Delta, finish_reason: Optional[str] = None) -> MagicMock:
+def _make_chunk(delta: Delta, finish_reason: str | None = None) -> MagicMock:
     chunk = MagicMock()
     chunk.choices = [
         StreamingChoices(finish_reason=finish_reason, index=0, delta=delta, logprobs=None)
@@ -55,7 +56,7 @@ class _AsyncStreamThenRaise:
     """Yields the given chunks, then raises ``exc`` (mimics a provider stream
     that terminates mid-response)."""
 
-    def __init__(self, items: List[MagicMock], exc: BaseException):
+    def __init__(self, items: list[MagicMock], exc: BaseException):
         self._it = iter(items)
         self._exc = exc
 
@@ -75,7 +76,7 @@ def _parse_sse(raw: bytes) -> tuple[str, dict]:
     return event_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: "))
 
 
-async def _drain_sse(wrapper: AnthropicStreamWrapper) -> List[bytes]:
+async def _drain_sse(wrapper: AnthropicStreamWrapper) -> list[bytes]:
     return [event async for event in wrapper.async_anthropic_sse_wrapper()]
 
 
@@ -318,3 +319,51 @@ async def test_mid_stream_error_emits_error_event_without_logging_obj():
     events = await _drain_sse(_failing_wrapper(None))
 
     assert _parse_sse(events[-1])[0] == "error"
+
+
+class _AsyncSuccessRecorder(CustomLogger):
+    calls: tuple[object, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.calls = (*self.calls, response_obj)
+
+
+class _CompletesThenRaises:
+    def __init__(self, exc: Exception, held: HeldStreamCompletion) -> None:
+        self._exc: Final = exc
+        self._held: Final = held
+
+    def __iter__(self) -> Iterator[ModelResponseStream]:
+        return iter(())
+
+    def __aiter__(self) -> AsyncIterator[ModelResponseStream]:
+        return self._chunks()
+
+    async def _chunks(self) -> AsyncIterator[ModelResponseStream]:
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="partial"))])
+        self._held.take(litellm.ModelResponse())
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_fails_after_the_executor_completed_logs_no_success_row():
+    success_recorder: Final = _AsyncSuccessRecorder()
+    async_recorder: Final = _AsyncFailureRecorder()
+    logging_obj: Final = _make_logging_obj("fails-after-complete", async_recorder, _SyncFailureRecorder())
+    logging_obj.dynamic_async_success_callbacks = [success_recorder]
+    held: Final = HeldStreamCompletion(logging_obj)
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_CompletesThenRaises(_bedrock_drop(), held),
+        model="bedrock-converse-sonnet-4-6",
+        litellm_logging_obj=logging_obj,
+        held_completion=held,
+    )
+
+    events: Final = await _drain_sse(wrapper)
+    await asyncio.sleep(0.2)
+
+    assert _parse_sse(events[-1])[0] == "error"
+    assert [str(exc) for exc in async_recorder.exceptions] == ["ConverseStream ended without messageStop"]
+    assert success_recorder.calls == ()
