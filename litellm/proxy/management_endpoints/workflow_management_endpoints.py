@@ -23,8 +23,6 @@ try:
     from prisma.errors import UniqueViolationError
 except ImportError:
     UniqueViolationError = None
-from pydantic import BaseModel
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -38,6 +36,7 @@ from litellm.repositories.table_repositories import (
     WorkflowMessageRepository,
     WorkflowRunRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
@@ -76,7 +75,7 @@ _EVENT_STATUS_MAP: Final[Mapping[str, str]] = {
 # ---------------------------------------------------------------------------
 
 
-class WorkflowRunCreateRequest(BaseModel):
+class WorkflowRunCreateRequest(LiteLLMBaseModel):
     workflow_type: str
     input: Mapping[str, object] | None = None
     metadata: Mapping[str, object] | None = None
@@ -85,19 +84,19 @@ class WorkflowRunCreateRequest(BaseModel):
 WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed"]
 
 
-class WorkflowRunUpdateRequest(BaseModel):
+class WorkflowRunUpdateRequest(LiteLLMBaseModel):
     status: WorkflowRunStatus | None = None
     output: Mapping[str, object] | None = None
     metadata: Mapping[str, object] | None = None
 
 
-class WorkflowEventCreateRequest(BaseModel):
+class WorkflowEventCreateRequest(LiteLLMBaseModel):
     event_type: str
     step_name: str
     data: Mapping[str, object] | None = None
 
 
-class WorkflowMessageCreateRequest(BaseModel):
+class WorkflowMessageCreateRequest(LiteLLMBaseModel):
     role: str
     content: str
     session_id: str | None = None
@@ -146,6 +145,34 @@ class _MessageCreateData(TypedDict, total=False):
     content: str
     sequence_number: int
     session_id: str
+
+
+class _EventTable(Protocol):
+    async def create(self, *, data: _EventCreateData) -> object: ...
+
+
+class _RunTable(Protocol):
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> object: ...
+
+
+class _WorkflowTx(Protocol):
+    @property
+    def litellm_workflowevent(self) -> _EventTable: ...
+
+    @property
+    def litellm_workflowrun(self) -> _RunTable: ...
+
+
+async def _append_event_in_tx(
+    tx: _WorkflowTx, run_id: str, event_data: _EventCreateData, new_status: str | None
+) -> object:
+    event: Final = await tx.litellm_workflowevent.create(data=event_data)
+    if new_status:
+        await tx.litellm_workflowrun.update(
+            where={"run_id": run_id},
+            data={"status": new_status},
+        )
+    return event
 
 
 # ---------------------------------------------------------------------------
@@ -388,12 +415,7 @@ async def append_workflow_event(
                 event_data["data"] = _json(data.data)
 
             async with prisma_client.db.tx() as tx:
-                event: object = await tx.litellm_workflowevent.create(data=event_data)
-                if new_status:
-                    await tx.litellm_workflowrun.update(
-                        where={"run_id": run_id},
-                        data={"status": new_status},
-                    )
+                event: object = await _append_event_in_tx(tx, run_id, event_data, new_status)
 
             return event
 

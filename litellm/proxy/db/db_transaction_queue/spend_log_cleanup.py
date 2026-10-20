@@ -1,11 +1,12 @@
 import asyncio
+import re
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -20,6 +21,7 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     RunOutcome,
     SpendLogCleanupMetrics,
@@ -27,16 +29,191 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     RemainingTimeoutMs,
     SpendLogsPartitionManager,
+    bounded_tx,
+    trusted_sql,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 
 StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reached", "aborted"]
+
+_SIZE_RE: Final = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)I?B?\s*$", re.IGNORECASE)
+_SIZE_UNITS: Final = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+
+
+def size_in_bytes(value: str | int) -> int:
+    """
+    Parse a storage size such as '180GB', '512 MiB' or '1.5TB' into bytes; a bare int is bytes already.
+
+    Units are powers of 1024, the same convention pg_size_pretty uses, so the number an operator reads
+    off `SELECT pg_size_pretty(pg_total_relation_size(...))` is the number they can put in the config.
+    """
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(f"size must be positive, got {value}")
+        return value
+    match: Final = _SIZE_RE.match(value)
+    if match is None:
+        raise ValueError(f"invalid size {value!r}, expected a number with a unit such as '180GB'")
+    size: Final = int(float(match.group(1)) * _SIZE_UNITS[match.group(2).upper()])
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {value!r}")
+    return size
+
+
+@dataclass(frozen=True, slots=True)
+class StorageProbe:
+    """
+    What the catalog says about the spend-log tables, read without scanning them.
+
+    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
+    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    tuples, autovacuum later turns them into free space that new rows reuse, and only VACUUM FULL or pg_repack
+    hands the bytes back to the filesystem. Neither dead tuples nor free space are live data, and Postgres
+    tracks only the former (`n_dead_tup`, zeroed by vacuum), so the size rule keeps its own count of the
+    reclaimable bytes, see `SizeCleanupState`. `inserted_total` and `deleted_total` are the cumulative
+    `n_tup_ins` and `n_tup_del` counters that count is driven by.
+    """
+
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+    inserted_total: int
+    deleted_total: int
+
+    @property
+    def stats_are_stale(self) -> bool:
+        """No row counters at all while the files hold data: the statistics were reset, e.g. by a crash."""
+        return self.allocated_bytes > 0 and self.live_rows + self.dead_rows == 0
+
+
+class SizeCleanupState(LiteLLMBaseModel):
+    """
+    The size rule's running count of reclaimable bytes, kept in LiteLLM_Config between checks.
+
+    `reclaimable_bytes` is the space inside the files that holds no live row: the bytes of every row deleted
+    since the count started (by this job or anyone else, from `n_tup_del`), less the free space new rows have
+    since been written into (bytes inserted beyond what the files grew by), less what a VACUUM FULL handed back.
+    Live bytes are `allocated_bytes - reclaimable_bytes`, whether or not autovacuum has run yet. `bytes_per_row`
+    converts rows to bytes and is refreshed from live bytes over live rows on every check.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    allocated_bytes: int
+    reclaimable_bytes: int
+    bytes_per_row: float
+    inserted_total: int
+    deleted_total: int
+
+
+def advance_size_state(state: SizeCleanupState | None, probe: StorageProbe) -> SizeCleanupState:
+    """
+    Roll the reclaimable count forward to what the catalog shows now.
+
+    Without a prior state, or after the cumulative counters went backwards (a statistics reset), the count
+    starts from the dead rows Postgres still knows about, at the files' average bytes per row. A probe with no
+    row counters at all (`stats_are_stale`) cannot seed anything: the prior count is carried forward, and with
+    no prior count the files are taken as fully reclaimable so nothing is deleted on its say-so.
+    """
+    if probe.stats_are_stale:
+        return SizeCleanupState(
+            allocated_bytes=probe.allocated_bytes,
+            reclaimable_bytes=probe.allocated_bytes
+            if state is None
+            else min(probe.allocated_bytes, state.reclaimable_bytes),
+            bytes_per_row=1.0 if state is None else state.bytes_per_row,
+            inserted_total=probe.inserted_total,
+            deleted_total=probe.deleted_total,
+        )
+    if state is None or probe.inserted_total < state.inserted_total or probe.deleted_total < state.deleted_total:
+        seed_bytes_per_row: Final = probe.allocated_bytes / max(probe.live_rows + probe.dead_rows, 1)
+        return SizeCleanupState(
+            allocated_bytes=probe.allocated_bytes,
+            reclaimable_bytes=min(probe.allocated_bytes, round(probe.dead_rows * seed_bytes_per_row)),
+            bytes_per_row=max(seed_bytes_per_row, 1.0),
+            inserted_total=probe.inserted_total,
+            deleted_total=probe.deleted_total,
+        )
+    growth: Final = probe.allocated_bytes - state.allocated_bytes
+    bytes_deleted: Final = (probe.deleted_total - state.deleted_total) * state.bytes_per_row
+    free_space_refilled: Final = max(
+        0.0, (probe.inserted_total - state.inserted_total) * state.bytes_per_row - max(0, growth)
+    )
+    returned_to_filesystem: Final = max(0, -growth)
+    reclaimable: Final = min(
+        probe.allocated_bytes,
+        max(0, round(state.reclaimable_bytes + bytes_deleted - free_space_refilled - returned_to_filesystem)),
+    )
+    live_bytes: Final = probe.allocated_bytes - reclaimable
+    return SizeCleanupState(
+        allocated_bytes=probe.allocated_bytes,
+        reclaimable_bytes=reclaimable,
+        bytes_per_row=max(live_bytes / probe.live_rows, 1.0) if probe.live_rows > 0 else state.bytes_per_row,
+        inserted_total=probe.inserted_total,
+        deleted_total=probe.deleted_total,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SpendLogStorage:
+    """What the spend-log tables weigh at one point: the files on disk and the live bytes inside them."""
+
+    allocated_bytes: int
+    reclaimable_bytes: int
+    bytes_per_row: float
+    live_rows: int
+
+    @property
+    def estimated_live_bytes(self) -> int:
+        return max(0, self.allocated_bytes - self.reclaimable_bytes)
+
+    def after_deleting(self, rows: int, allocated_bytes: int) -> "SpendLogStorage":
+        """
+        The same storage once `rows` more rows are gone and the files measure `allocated_bytes`.
+
+        Files that grew while the pass only deleted (a visibility map or free space map fork a DELETE creates,
+        an index page split) hold no live row, so the growth counts as reclaimable; rows inserted meanwhile are
+        taken back out at the next check from n_tup_ins.
+        """
+        return SpendLogStorage(
+            allocated_bytes=allocated_bytes,
+            reclaimable_bytes=min(
+                allocated_bytes,
+                round(
+                    self.reclaimable_bytes + rows * self.bytes_per_row + max(0, allocated_bytes - self.allocated_bytes)
+                ),
+            ),
+            bytes_per_row=self.bytes_per_row,
+            live_rows=max(0, self.live_rows - rows),
+        )
+
+    def to_state(self, inserted_total: int, deleted_total: int) -> SizeCleanupState:
+        return SizeCleanupState(
+            allocated_bytes=self.allocated_bytes,
+            reclaimable_bytes=self.reclaimable_bytes,
+            bytes_per_row=self.bytes_per_row,
+            inserted_total=inserted_total,
+            deleted_total=deleted_total,
+        )
+
+
+Cutoff: TypeAlias = datetime | str
+"""Rows strictly older than this are expired: a timestamp, or an ISO calendar day for tables keyed by day"""
+
+
+def _cutoff_cast(cutoff: Cutoff) -> str:
+    return "timestamptz" if isinstance(cutoff, datetime) else "text"
+
+
+def _cutoff_text(cutoff: Cutoff) -> str:
+    return cutoff.isoformat() if isinstance(cutoff, datetime) else cutoff
 
 
 @dataclass(frozen=True, slots=True)
 class TableCleanupResult:
     """Outcome of pruning one table, so the caller can report why a run ended."""
 
+    table_name: str
     rows_deleted: int
     stop_reason: StopReason
 
@@ -63,13 +240,64 @@ def _record_run_batch(rows_deleted: int) -> None:
         progress.record_batch(rows_deleted)
 
 
-class _RemainingRow(BaseModel):
+class _RemainingRow(LiteLLMBaseModel):
     """One row of the capped outstanding-rows probe, validated out of prisma's untyped result."""
 
     remaining: int
 
 
 _REMAINING_ROWS: Final = TypeAdapter(list[_RemainingRow])
+
+
+class _StorageRow(LiteLLMBaseModel):
+    """One row of the storage probe, validated out of prisma's untyped result."""
+
+    model_config = ConfigDict(frozen=True)
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+    inserted_total: int
+    deleted_total: int
+
+
+_STORAGE_ROWS: Final = TypeAdapter(list[_StorageRow])
+
+
+class _SizeStateRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    state_json: str
+
+
+_SIZE_STATE_ROWS: Final = TypeAdapter(list[_SizeStateRow])
+SPEND_LOG_SIZE_CLEANUP_STATE_PARAM: Final = "spend_logs_size_cleanup_state"
+_LOAD_SIZE_STATE_SQL: Final = 'SELECT param_value::text AS state_json FROM "LiteLLM_Config" WHERE param_name = $1'
+_SAVE_SIZE_STATE_SQL: Final = """
+    INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES ($1, $2::jsonb)
+    ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value
+    """
+
+
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+
+# Partition children are counted with their parent: a partitioned parent has no storage of its own.
+_STORAGE_SQL: Final = """
+    SELECT coalesce(sum(pg_total_relation_size(s.relid)), 0)::bigint AS allocated_bytes,
+           coalesce(sum(s.n_live_tup), 0)::bigint AS live_rows,
+           coalesce(sum(s.n_dead_tup), 0)::bigint AS dead_rows,
+           coalesce(sum(s.n_tup_ins), 0)::bigint AS inserted_total,
+           coalesce(sum(s.n_tup_del), 0)::bigint AS deleted_total
+    FROM pg_stat_user_tables s
+    WHERE s.schemaname = current_schema()
+      AND (
+        s.relname = ANY($1::text[])
+        OR s.relid IN (
+          SELECT i.inhrelid FROM pg_inherits i
+          JOIN pg_class p ON p.oid = i.inhparent
+          JOIN pg_namespace n ON n.oid = p.relnamespace
+          WHERE p.relname = ANY($1::text[]) AND n.nspname = current_schema()
+        )
+      )
+    """
 
 SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_batch_size",
@@ -228,6 +456,58 @@ class SpendLogCleanup:
         self.retention_seconds = self._retention_seconds_for("maximum_spend_logs_retention_period")
         return self.retention_seconds is not None
 
+    async def _probe_storage(self, prisma_client: PrismaClient, deadline: float) -> StorageProbe | None:
+        """Read what the spend-log tables weigh from the catalog, or None when the probe fails or has no budget."""
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("measure_storage", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                rows: Final = _STORAGE_ROWS.validate_python(
+                    await tx.query_raw(trusted_sql(_STORAGE_SQL), list(_SPEND_LOG_TABLES))
+                )
+        except Exception as e:  # noqa: BLE001 - a failed measurement skips the size pass, it must not fail the run
+            verbose_proxy_logger.warning("Could not measure spend-log storage: %s: %s", type(e).__name__, e)
+            return None
+        if not rows:
+            return None
+        row: Final = rows[0]
+        return StorageProbe(
+            allocated_bytes=row.allocated_bytes,
+            live_rows=row.live_rows,
+            dead_rows=row.dead_rows,
+            inserted_total=row.inserted_total,
+            deleted_total=row.deleted_total,
+        )
+
+    async def _load_size_state(self, prisma_client: PrismaClient, deadline: float) -> SizeCleanupState | None:
+        """The reclaimable count saved by the last check, or None on the first check or when it cannot be read."""
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("load_size_state", "LiteLLM_Config"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                rows: Final = _SIZE_STATE_ROWS.validate_python(
+                    await tx.query_raw(trusted_sql(_LOAD_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM)
+                )
+            return SizeCleanupState.model_validate_json(rows[0].state_json) if rows else None
+        except Exception as e:  # noqa: BLE001 - an unreadable count restarts from the catalog, it must not fail the run
+            verbose_proxy_logger.warning("Could not read the spend-log size cleanup state: %s: %s", type(e).__name__, e)
+            return None
+
+    async def _save_size_state(self, prisma_client: PrismaClient, deadline: float, state: SizeCleanupState) -> None:
+        timeout_ms: Final = max(self._timeout_ms(deadline), 1000)
+        try:
+            async with db_span("save_size_state", "LiteLLM_Config"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                await tx.execute_raw(
+                    trusted_sql(_SAVE_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM, state.model_dump_json()
+                )
+        except Exception as e:  # noqa: BLE001 - a lost save costs one re-seed from the catalog, it must not fail the run
+            verbose_proxy_logger.warning("Could not save the spend-log size cleanup state: %s: %s", type(e).__name__, e)
+
     def _timeout_ms(self, deadline: float) -> int:
         """
         The per-statement bound in milliseconds: the batch timeout, or whatever
@@ -277,7 +557,7 @@ class SpendLogCleanup:
         return remaining
 
     async def _execute_delete_batch(
-        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: datetime, deadline: float
+        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: Cutoff, table_name: str, deadline: float
     ) -> int | None:
         """
         Run one delete batch under a Postgres statement and lock timeout.
@@ -293,14 +573,18 @@ class SpendLogCleanup:
         fault, so the caller stops instead of retrying.
         """
         timeout_ms: Final = self._timeout_ms(deadline)
-        async with prisma_client.db.tx() as tx:
-            await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
-            await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
-            deleted_result: Final = await tx.execute_raw(delete_sql, cutoff_date, self.batch_size)
-        return deleted_result if isinstance(deleted_result, int) else None
+        async with db_span("cleanup_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
+            await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            await tx.execute_raw(trusted_sql(f"SET LOCAL lock_timeout = {timeout_ms}"))
+            deleted_result: Final = await tx.execute_raw(trusted_sql(delete_sql), cutoff_date, self.batch_size)
+        return (
+            deleted_result
+            if isinstance(deleted_result, int)  # pyright: ignore[reportUnnecessaryIsInstance]  # driver may return None
+            else None
+        )
 
     async def _count_remaining(
-        self, prisma_client: PrismaClient, cutoff_date: datetime, table_name: str, time_column: str, deadline: float
+        self, prisma_client: PrismaClient, cutoff_date: Cutoff, table_name: str, time_column: str, deadline: float
     ) -> int | None:
         """
         Count expired rows still outstanding, stopping at a cap.
@@ -313,15 +597,16 @@ class SpendLogCleanup:
         count_sql: Final = f"""
             SELECT count(*)::int AS remaining FROM (
                 SELECT 1 FROM "{table_name}"
-                WHERE "{time_column}" < $1::timestamptz
+                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
                 LIMIT $2
             ) capped
             """
+        timeout_ms: Final = self._timeout_ms(deadline)
         try:
-            async with prisma_client.db.tx() as tx:
-                await tx.execute_raw(f"SET LOCAL statement_timeout = {self._timeout_ms(deadline)}")
+            async with db_span("count_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 rows: Final = _REMAINING_ROWS.validate_python(
-                    await tx.query_raw(count_sql, cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
+                    await tx.query_raw(trusted_sql(count_sql), cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
                 )
         except Exception as e:  # noqa: BLE001 - an observability probe must never fail the cleanup run
             verbose_proxy_logger.warning("Could not count remaining %s rows: %s", table_name, e)
@@ -331,7 +616,7 @@ class SpendLogCleanup:
     async def _delete_old_rows_batched(
         self,
         prisma_client: PrismaClient,
-        cutoff_date: datetime,
+        cutoff_date: Cutoff,
         table_name: str,
         key_columns: tuple[str, ...],
         time_column: str,
@@ -349,7 +634,7 @@ class SpendLogCleanup:
             DELETE FROM "{table_name}"
             WHERE ({key_list}) IN (
                 SELECT {key_list} FROM "{table_name}"
-                WHERE "{time_column}" < $1::timestamptz
+                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
                 LIMIT $2
             )
             """
@@ -376,7 +661,9 @@ class SpendLogCleanup:
             # Find rows and delete them in one go without fetching to application
             batch_started_at = time.monotonic()
             try:
-                batch_result = await self._execute_delete_batch(prisma_client, delete_sql, cutoff_date, deadline)
+                batch_result = await self._execute_delete_batch(
+                    prisma_client, delete_sql, cutoff_date, table_name, deadline
+                )
             except Exception as batch_exc:
                 if time.monotonic() >= deadline:
                     # The statement timeout was clamped to the budget that was
@@ -405,7 +692,7 @@ class SpendLogCleanup:
                     run_count,
                     consecutive_failures,
                     self.batch_size,
-                    cutoff_date.isoformat(),
+                    _cutoff_text(cutoff_date),
                     total_deleted,
                     type(batch_exc).__name__,
                     batch_exc,
@@ -453,7 +740,7 @@ class SpendLogCleanup:
     async def _finish_table(
         self,
         prisma_client: PrismaClient,
-        cutoff_date: datetime,
+        cutoff_date: Cutoff,
         table_name: str,
         time_column: str,
         rows_deleted: int,
@@ -472,11 +759,11 @@ class SpendLogCleanup:
         from the last run that finished inside its budget.
         """
         if time.monotonic() >= deadline:
-            return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+            return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
         remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, time_column, deadline)
         if remaining is not None:
             SpendLogCleanupMetrics.set_rows_remaining(table_name, remaining)
-        return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+        return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
 
     async def _delete_old_logs(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
@@ -528,6 +815,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_autorouter_daily_rows(
+        self, prisma_client: PrismaClient, cutoff_day: str, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_day,
+            table_name="LiteLLM_AutoRouterDailySpend",
+            key_columns=("date", "api_key", "user_id", "router_name", "router_type"),
+            time_column="date",
+            deadline=deadline,
+        )
+
     async def _delete_old_health_check_rows(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
     ) -> TableCleanupResult:
@@ -537,6 +836,18 @@ class SpendLogCleanup:
             table_name="LiteLLM_HealthCheckTable",
             key_columns=("health_check_id",),
             time_column="checked_at",
+            deadline=deadline,
+        )
+
+    async def _delete_old_daily_tag_spend_rows(
+        self, prisma_client: PrismaClient, cutoff_day: str, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_day,
+            table_name="LiteLLM_DailyTagSpend",
+            key_columns=("id",),
+            time_column="date",
             deadline=deadline,
         )
 
@@ -571,7 +882,9 @@ class SpendLogCleanup:
             )
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
-        logs_result: Final = await self._delete_old_logs(prisma_client, cutoff_date, deadline)
+        logs_result: Final = await self._delete_old_logs(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+        )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
         index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
@@ -597,16 +910,20 @@ class SpendLogCleanup:
             except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
                 verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
         sessions_result: Final = await self._delete_old_autorouter_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 3)
         )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
-            prisma_client, session_cutoff, deadline
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
         )
         verbose_proxy_logger.info(
             "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
         )
-        return (sessions_result, user_sessions_result)
+        days_result: Final = await self._delete_old_autorouter_daily_rows(
+            prisma_client, session_cutoff.date().isoformat(), deadline
+        )
+        verbose_proxy_logger.info("Deleted %s expired auto-router daily rollup rows", days_result.rows_deleted)
+        return (sessions_result, user_sessions_result, days_result)
 
     async def _clean_health_checks(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
@@ -620,6 +937,18 @@ class SpendLogCleanup:
             health_checks_result.rows_deleted,
         )
         return (health_checks_result,)
+
+    async def _clean_daily_tag_spend(
+        self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
+    ) -> tuple[TableCleanupResult, ...]:
+        """
+        Prune per-day tag spend rows whose ISO day sorts before the horizon day; the horizon day itself is kept.
+        """
+        horizon: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
+        cutoff_day: Final = horizon.date().isoformat()
+        result: Final = await self._delete_old_daily_tag_spend_rows(prisma_client, cutoff_day, deadline)
+        verbose_proxy_logger.info("Deleted %s expired daily tag spend rows", result.rows_deleted)
+        return (result,)
 
     @staticmethod
     def _run_outcome(results: tuple[TableCleanupResult, ...]) -> RunOutcome:
@@ -637,6 +966,17 @@ class SpendLogCleanup:
         if "batch_cap_reached" in reasons:
             return "batch_cap_reached"
         return "completed"
+
+    @staticmethod
+    def _log_run_summary(outcome: RunOutcome, results: tuple[TableCleanupResult, ...], elapsed_seconds: float) -> None:
+        per_table: Final = ", ".join(
+            f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
+        )
+        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]"
+        if outcome == "completed":
+            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table)
+            return
+        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table)
 
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
@@ -657,10 +997,14 @@ class SpendLogCleanup:
                 "maximum_autorouter_session_retention_period"
             )
             health_check_retention_seconds: Final = self._retention_seconds_for("maximum_health_check_retention_period")
+            daily_tag_spend_retention_seconds: Final = self._retention_seconds_for(
+                "maximum_daily_tag_spend_retention_period"
+            )
             if (
                 not delete_spend_logs
                 and autorouter_retention_seconds is None
                 and health_check_retention_seconds is None
+                and daily_tag_spend_retention_seconds is None
             ):
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
                 return
@@ -692,6 +1036,7 @@ class SpendLogCleanup:
                 int(delete_spend_logs and self.retention_seconds is not None)
                 + int(autorouter_retention_seconds is not None)
                 + int(health_check_retention_seconds is not None)
+                + int(daily_tag_spend_retention_seconds is not None)
             )
 
             spend_log_results: Final = (
@@ -702,8 +1047,13 @@ class SpendLogCleanup:
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
             )
-            remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
-                health_check_retention_seconds is not None
+            remaining_groups_after_spend_logs: Final = (
+                int(autorouter_retention_seconds is not None)
+                + int(health_check_retention_seconds is not None)
+                + int(daily_tag_spend_retention_seconds is not None)
+            )
+            remaining_groups_after_sessions: Final = int(health_check_retention_seconds is not None) + int(
+                daily_tag_spend_retention_seconds is not None
             )
             session_results: Final = (
                 await self._clean_session_rollup(
@@ -718,15 +1068,21 @@ class SpendLogCleanup:
                 await self._clean_health_checks(
                     prisma_client,
                     health_check_retention_seconds,
-                    deadline,
+                    self._group_deadline(deadline, remaining_groups_after_sessions),
                 )
                 if health_check_retention_seconds is not None
                 else ()
             )
-
-            SpendLogCleanupMetrics.record_run(
-                self._run_outcome(spend_log_results + session_results + health_check_results)
+            daily_tag_spend_results: Final = (
+                await self._clean_daily_tag_spend(prisma_client, daily_tag_spend_retention_seconds, deadline)
+                if daily_tag_spend_retention_seconds is not None
+                else ()
             )
+
+            results: Final = spend_log_results + session_results + health_check_results + daily_tag_spend_results
+            outcome: Final = self._run_outcome(results)
+            SpendLogCleanupMetrics.record_run(outcome)
+            self._log_run_summary(outcome, results, time.monotonic() - run_started_at)
 
         except asyncio.CancelledError:
             verbose_proxy_logger.error(

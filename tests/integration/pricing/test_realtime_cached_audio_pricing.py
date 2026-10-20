@@ -92,7 +92,7 @@ def cached_audio_response_done() -> RealtimeResponse:
     )
 
 
-async def _one_realtime_turn(proxy_url: str, key: str, model: str) -> dict[str, JsonValue]:
+async def one_realtime_turn(proxy_url: str, key: str, model: str) -> dict[str, JsonValue]:
     async with websockets.connect(
         f"{proxy_url.replace('http://', 'ws://').replace('https://', 'wss://')}/v1/realtime?model={model}",
         additional_headers={"Authorization": f"Bearer {key}"},
@@ -115,7 +115,7 @@ def test_realtime_cached_audio_tokens_bill_at_audio_cache_read_rate_not_full_aud
         model: Final = scenario.model(
             model=f"openai/{MODEL}", api_key=scenario_id, api_base=gateway.upstream_url.rstrip("/")
         )
-        session: Final = asyncio.run(_one_realtime_turn(os.environ["INTEGRATION_PROXY_URL"].rstrip("/"), key, model))
+        session: Final = asyncio.run(one_realtime_turn(os.environ["INTEGRATION_PROXY_URL"].rstrip("/"), key, model))
         assert session.get("type") == "session.created", session
         rows: Final = eventually(
             lambda: read_rows(

@@ -4,15 +4,15 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddProviderForm from "./add_provider_form";
-import { DiscountConfig } from "./types";
 import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
 
 const DEFAULT_PROPS = {
-  discountConfig: {} as DiscountConfig,
   selectedProvider: undefined,
   newDiscount: "",
+  modelPattern: "",
   onProviderChange: vi.fn(),
   onDiscountChange: vi.fn(),
+  onModelPatternChange: vi.fn(),
   onAddProvider: vi.fn(),
 };
 
@@ -69,6 +69,20 @@ describe("AddProviderForm", () => {
 
     await user.type(screen.getByPlaceholderText("5"), "5");
     expect(onDiscountChange).toHaveBeenCalledWith("15");
+  });
+
+  it("should render the model pattern input field", () => {
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} />);
+    expect(screen.getByPlaceholderText("claude-*")).toBeInTheDocument();
+  });
+
+  it("should report the edited model pattern as the user types", async () => {
+    const onModelPatternChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} onModelPatternChange={onModelPatternChange} />);
+
+    await user.type(screen.getByPlaceholderText("claude-*"), "g");
+    expect(onModelPatternChange).toHaveBeenCalledWith("g");
   });
 
   it("should show the percent sign next to the discount input", () => {

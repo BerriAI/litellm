@@ -24,6 +24,7 @@ from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
+from e2e_metadata import step
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
@@ -69,6 +70,7 @@ class FileUploadForm(BaseModel):
     purpose: str = "batch"
     target_model_names: str | None = None
     custom_llm_provider: str | None = None
+    passthrough: bool | None = None
 
 
 # ---------- Result types ----------
@@ -376,10 +378,16 @@ class ProxyErrorDetail(BaseModel):
     message: str
     type: str
     code: str
+    param: str | None = None
 
 
 class _ProxyErrorBody(BaseModel):
     error: ProxyErrorDetail
+
+
+def proxy_error(body: str) -> ProxyErrorDetail:
+    """The proxy's own error envelope (`{"error": {message, type, param, code}}`) parsed off a rejected call."""
+    return _ProxyErrorBody.model_validate_json(body).error
 
 
 def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
@@ -466,20 +474,70 @@ def get[R: BaseModel](
     return classify(resp, response_type)
 
 
+@step("GET the external URL {url}")
 def get_external[R: BaseModel](
     url: str,
     *,
     response_type: type[R],
     headers: BaseModel | None = None,
     timeout: float = 30.0,
+    ca_bundle: str | None = None,
 ) -> Result[R]:
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
     Unlike the transport wrappers there is no proxy base url and no proxy auth; the
-    response still gets the same tagged-union classification as every other call."""
+    response still gets the same tagged-union classification as every other call.
+    `ca_bundle` is a PEM path for a server the default trust store does not cover."""
     try:
         resp = requests.get(
             url,
             headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
+            timeout=timeout,
+            verify=ca_bundle if ca_bundle is not None else True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return classify(resp, response_type)
+
+
+def get_text_external(
+    url: str,
+    *,
+    headers: BaseModel | None = None,
+    timeout: float = 30.0,
+    ca_bundle: str | None = None,
+) -> str | NetworkError:
+    """GET an absolute URL outside the proxy whose body is plain text (e.g. a pod log), not JSON.
+    A non-2xx status is reported as a NetworkError so the caller can fail loudly. JSON is accepted too so an API
+    that answers an error as a JSON document (the Kubernetes Status on a pod log) returns that error instead of a 406."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"Accept": "text/plain, application/json", **(_headers(headers) if headers is not None else {})},
+            timeout=timeout,
+            verify=ca_bundle if ca_bundle is not None else True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    if not (200 <= resp.status_code < 300):
+        return NetworkError(message=f"{resp.status_code} from {url}: {resp.text[:300]}")
+    return resp.text
+
+
+def post_external[R: BaseModel](
+    url: str,
+    *,
+    json: BaseModel,
+    response_type: type[R],
+    headers: BaseModel | None = None,
+    timeout: float = 30.0,
+) -> Result[R]:
+    """POST JSON to an absolute URL outside the proxy (e.g. a mock server's control
+    route), classified the same way as every other call."""
+    try:
+        resp = requests.post(
+            url,
+            headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
+            json=wire_body(json),
             timeout=timeout,
         )
     except requests.RequestException as exc:

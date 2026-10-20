@@ -120,6 +120,7 @@ class AzureContainerConfig(BaseContainerConfig):
         self,
         headers: dict,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """Azure uses api-key header instead of Bearer token."""
         import litellm
@@ -213,7 +214,7 @@ Run the container API tests:
 
 ```bash
 cd /Users/ishaanjaffer/github/litellm
-python -m pytest tests/test_litellm/containers/ -v
+python -m pytest tests/unit/containers/ -v
 ```
 
 Test via proxy:

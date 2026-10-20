@@ -1,5 +1,6 @@
 use crate::error::Error;
-use crate::model_info::{FallbackGeneralizations, FallbackRule, ModelInfo};
+use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::model_info::ModelInfo;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -14,19 +15,9 @@ pub struct Provenance {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
-    pub backup_model_count: usize,
+    pub reference_model_count: usize,
     pub min_model_count: usize,
-    pub min_backup_ratio: f64,
-}
-
-impl IntegrityLimits {
-    pub fn python_defaults(backup_model_count: usize) -> Self {
-        Self {
-            backup_model_count,
-            min_model_count: 50,
-            min_backup_ratio: 0.5,
-        }
-    }
+    pub min_reference_ratio: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,16 +90,11 @@ impl Catalog {
                 }
                 _ => {}
             }
-            let Value::Object(ref object) = value else {
+            let Value::Object(mut fields) = value else {
                 return Err(Error::EntryNotObject { model: name });
             };
-            let info = ModelInfo::deserialize(object)?;
-            let Value::Object(mut fields) = value else {
-                unreachable!("value checked is_object above")
-            };
-            if let Some(aliases) = fields.remove("aliases")
-                && !aliases.is_null()
-            {
+            let info = ModelInfo::deserialize(&fields)?;
+            if let Some(aliases) = fields.remove("aliases") {
                 match aliases {
                     Value::Array(names) => alias_lists.push((name.clone(), names)),
                     _ => alias_issues.push(AliasIssue::InvalidList {
@@ -161,7 +147,9 @@ impl Catalog {
     }
 
     pub fn validate(&self, limits: IntegrityLimits) -> Result<(), Error> {
-        if !limits.min_backup_ratio.is_finite() || !(0.0..=1.0).contains(&limits.min_backup_ratio) {
+        if !limits.min_reference_ratio.is_finite()
+            || !(0.0..=1.0).contains(&limits.min_reference_ratio)
+        {
             return Err(Error::InvalidRatio);
         }
         let actual = self.entries.len();
@@ -171,13 +159,13 @@ impl Catalog {
                 minimum: limits.min_model_count,
             });
         }
-        if limits.backup_model_count > 0
-            && (actual as f64) < (limits.backup_model_count as f64) * limits.min_backup_ratio
+        if limits.reference_model_count > 0
+            && (actual as f64) < (limits.reference_model_count as f64) * limits.min_reference_ratio
         {
             return Err(Error::Shrunk {
                 actual,
-                backup: limits.backup_model_count,
-                ratio: limits.min_backup_ratio,
+                reference: limits.reference_model_count,
+                ratio: limits.min_reference_ratio,
             });
         }
         Ok(())
