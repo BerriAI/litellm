@@ -6,6 +6,10 @@ Chat in VS Code with every model your [LiteLLM AI Gateway](https://docs.litellm.
 
 The model list comes from the gateway's `GET /model_group/info` endpoint, scoped to the virtual key you configure, so the picker shows exactly the chat models that key can use. Each model carries its input and output price per 1M tokens in the picker and in the Language Models editor, and its context limits come from the gateway too, so VS Code sizes prompts correctly. A model whose gateway entry lists `supported_reasoning_efforts` gets a Reasoning Effort submenu in the picker's Configure Model menu, and the chosen effort is sent as `reasoning_effort` on every request to that model. Requests go to `POST /v1/chat/completions` on the gateway as streaming chat completions with tools and images passed through, so routing, fallbacks, guardrails, and spend tracking all apply as usual
 
+## Session grouping
+
+Every request the extension sends carries an `x-litellm-session-id` header that is stable for the lifetime of one VS Code chat conversation and unique across conversations. The LiteLLM proxy groups requests by this header, so all turns of a chat session show up as a single conversation in the dashboard's spend logs instead of one entry per request. No configuration is needed
+
 ## Setup
 
 1. Install the extension

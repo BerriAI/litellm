@@ -25,6 +25,7 @@ export interface GatewayClient {
     config: GatewayConfig,
     params: ChatCompletionCreateParamsStreaming,
     signal: AbortSignal,
+    headers?: Record<string, string>,
   ): Promise<AsyncIterable<ChatCompletionChunk>>;
 }
 
@@ -101,11 +102,11 @@ export const createGatewayClient = (fetchImpl: typeof fetch = fetch): GatewayCli
     const parsed = parseModelGroups(await response.json());
     return parsed.kind === "ok" ? parsed : { kind: "invalid_response", reason: parsed.reason };
   },
-  streamChatCompletion(config, params, signal) {
+  streamChatCompletion(config, params, signal, headers) {
     const client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: openAiBaseUrl(config.baseUrl),
-      defaultHeaders: { "User-Agent": USER_AGENT },
+      defaultHeaders: { "User-Agent": USER_AGENT, ...headers },
       fetch: fetchImpl,
       maxRetries: 0,
     });
