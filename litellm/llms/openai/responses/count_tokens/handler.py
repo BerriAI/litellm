@@ -6,7 +6,7 @@ Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
