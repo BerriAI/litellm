@@ -1,6 +1,8 @@
+import asyncio
 import datetime as real_datetime
 import smtplib
 import traceback
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -2303,6 +2305,195 @@ def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_
     assert after_usage == before_usage
     assert before["response_cost"] > 0
     assert after["response_cost"] == before["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_dropped_stream_failure_attribution_reaches_terminal_spend_row() -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    model: Final = "deployment-model"
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-attribution",
+        function_id="fn-lit145-attribution",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-id"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": request_start,
+    }
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-attribution",
+            created=1742056047,
+            model=model,
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+    exception: Final = httpx.ReadError("connection dropped")
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(exception)
+    await wrapper.wait_for_failure_logging(timeout=10)
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=exception,
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    assert row["model_id"] == "deployment-id"
+    assert row["custom_llm_provider"] == "openai"
+    assert row["model"] == model
+
+
+class _ReplaceSharedFailurePayload(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logging_obj: Logging | None = None
+        self.replaced: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from litellm.types.utils import StandardLoggingPayload
+
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        logging_obj: Final = self.logging_obj
+        if logging_obj is None:
+            return
+        replacement: Final = TypeAdapter(StandardLoggingPayload).validate_python(
+            {
+                **payload,
+                "model_id": "newer-deployment-id",
+                "custom_llm_provider": "newer-provider",
+                "model": "newer-model",
+            }
+        )
+        logging_obj.model_call_details = {
+            **logging_obj.model_call_details,
+            "standard_logging_object": replacement,
+        }
+        self.replaced.set()
+
+
+@pytest.mark.asyncio
+async def test_dropped_stream_failure_does_not_overwrite_newer_terminal_payload() -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    model: Final = "deployment-model"
+    recorder: Final = _ReplaceSharedFailurePayload()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-identity",
+        function_id="fn-lit145-identity",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    recorder.logging_obj = logging_obj
+    initial_payload: Final = {
+        "model_id": "older-deployment-id",
+        "custom_llm_provider": "older-provider",
+        "model": "older-model",
+    }
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-id"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": request_start,
+        "standard_logging_object": initial_payload,
+    }
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-identity",
+            created=1742056047,
+            model=model,
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
+    await wrapper.wait_for_failure_logging(timeout=10)
+    await asyncio.wait_for(recorder.replaced.wait(), timeout=10)
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=httpx.ReadError("connection dropped"),
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    assert row["model_id"] == "newer-deployment-id"
+    assert row["custom_llm_provider"] == "newer-provider"
+    assert row["model"] == "newer-model"
 
 
 def test_a_timed_out_attempt_from_the_group_a_fallback_left_is_still_billed():

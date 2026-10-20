@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
@@ -2378,6 +2378,20 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt: Final = copy.copy(self)
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
+
+    def dispatch_attempt_failure_handlers(
+        self, exception: Exception, traceback_exception: str
+    ) -> Coroutine[None, None, None]:
+        shared_payload: Final = self.model_call_details.get("standard_logging_object")
+        attempt: Final = self.attempt_scoped_copy()
+
+        async def dispatch() -> None:
+            await attempt.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
+            attempt_payload: Final = attempt.model_call_details.get("standard_logging_object")
+            if attempt_payload is not None and self.model_call_details.get("standard_logging_object") is shared_payload:
+                self.model_call_details["standard_logging_object"] = attempt_payload
+
+        return dispatch()
 
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its

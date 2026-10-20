@@ -86,12 +86,9 @@ class PassThroughStreamingHandler:
             raw_bytes=raw_bytes,
             stream_context=stream_context,
         )
-        attempt_logging_obj: Final = litellm_logging_obj.attempt_scoped_copy()
         try:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=attempt_logging_obj.dispatch_failure_handlers(
-                    exception, traceback.format_exc(), prefer_async_handlers=True
-                )
+                async_coroutine=litellm_logging_obj.dispatch_attempt_failure_handlers(exception, traceback.format_exc())
             )
         except Exception as e:
             verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)

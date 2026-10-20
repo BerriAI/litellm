@@ -2394,9 +2394,8 @@ class CustomStreamWrapper:
         if self.logging_obj is None:
             return
         self._record_partial_usage_for_failure()
-        attempt_logging_obj: Final = self.logging_obj.attempt_scoped_copy()
         self._failure_logging = asyncio.create_task(
-            attempt_logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
+            self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)
         )
 
     async def wait_for_failure_logging(self, timeout: float) -> None:
