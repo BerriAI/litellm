@@ -523,6 +523,265 @@ def test_strip_sse_data_from_chunk():
     assert CustomStreamWrapper.strip_sse_data_from_chunk(None) is None
 
 
+def _continuous_usage_fixture_chunks() -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="a"))],
+            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        ),
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[StreamingChoices(index=0, delta=Delta(content="b"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_forwards_running_counts(logging_obj: Logging, sync_mode: bool) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=_continuous_usage_fixture_chunks()),
+        model="stream-usage-test",
+        logging_obj=logging_obj,
+        custom_llm_provider="hosted_vllm",
+        stream_options={"include_usage": True, "continuous_usage_stats": True},
+    )
+    collected: Final = tuple(wrapper) if sync_mode else tuple([chunk async for chunk in wrapper])
+    content_chunks: Final = tuple(chunk for chunk in collected if chunk.choices and chunk.choices[0].delta.content)
+
+    assert tuple(chunk.choices[0].delta.content for chunk in content_chunks) == ("a", "b")
+    assert tuple(getattr(chunk, "usage", None) for chunk in content_chunks) == (
+        Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+    )
+    expected_final_usage: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=2),
+    )
+    assert collected[-1].usage == expected_final_usage
+    assert tuple(getattr(chunk, "usage", None) for chunk in collected) == (
+        Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        None,
+        expected_final_usage,
+    )
+
+
+def _continuous_usage_stream(
+    logging_obj: Logging,
+    chunks: tuple[ModelResponseStream, ...],
+    stream_options: dict[str, bool] | None,
+) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="stream-usage-test",
+        logging_obj=logging_obj,
+        custom_llm_provider="hosted_vllm",
+        stream_options=stream_options,
+    )
+
+
+async def _continuous_usage_collected(wrapper: CustomStreamWrapper, sync_mode: bool) -> tuple[ModelResponseStream, ...]:
+    return tuple(wrapper) if sync_mode else tuple([chunk async for chunk in wrapper])
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize(
+    ("stream_options", "include_final"),
+    (
+        (None, False),
+        ({"include_usage": True}, True),
+        ({"include_usage": True, "continuous_usage_stats": False}, True),
+        ({"include_usage": False, "continuous_usage_stats": True}, False),
+        ({"continuous_usage_stats": True}, False),
+    ),
+)
+@pytest.mark.asyncio
+async def test_continuous_usage_default_contract(
+    logging_obj: Logging, sync_mode: bool, stream_options: dict[str, bool] | None, include_final: bool
+) -> None:
+    wrapper: Final = _continuous_usage_stream(logging_obj, _continuous_usage_fixture_chunks(), stream_options)
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    content: Final = tuple(chunk for chunk in collected if chunk.choices and chunk.choices[0].delta.content)
+    assert tuple(getattr(chunk, "usage", None) for chunk in content) == (None, None)
+    assert getattr(collected[-1], "usage", None) == (
+        Usage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=2),
+        )
+        if include_final
+        else None
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_preserves_zero_counts(logging_obj: Logging, sync_mode: bool) -> None:
+    chunks: Final = _continuous_usage_fixture_chunks()
+    zero: Final = chunks[0].model_copy(
+        update={
+            "choices": [StreamingChoices(index=0, delta=Delta(role="assistant", content=""))],
+            "usage": Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        }
+    )
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, (zero, *chunks[1:]), {"include_usage": True, "continuous_usage_stats": True}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    assert getattr(collected[0], "usage", None) == Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_does_not_invent_intermediate_counts(logging_obj: Logging, sync_mode: bool) -> None:
+    chunks: Final = tuple(chunk.model_copy(update={"usage": None}) for chunk in _continuous_usage_fixture_chunks()[:2])
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, chunks, {"include_usage": True, "continuous_usage_stats": True}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    content: Final = tuple(chunk for chunk in collected if chunk.choices and chunk.choices[0].delta.content)
+    assert tuple(getattr(chunk, "usage", None) for chunk in content) == (None, None)
+    assert collected[-1].usage is not None
+    assert collected[-1].usage.total_tokens == (
+        collected[-1].usage.prompt_tokens + collected[-1].usage.completion_tokens
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_only_chunk_is_visible(logging_obj: Logging, sync_mode: bool) -> None:
+    chunks: Final = _continuous_usage_fixture_chunks()
+    progress: Final = chunks[-1].model_copy(
+        update={"usage": Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)}
+    )
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, (chunks[0], progress, *chunks[1:]), {"include_usage": True, "continuous_usage_stats": True}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    assert collected[1].choices == [StreamingChoices(index=0, delta=Delta())]
+    assert getattr(collected[1], "usage", None) == Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+    assert len(collected) == 5
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("content", (None, ""))
+@pytest.mark.parametrize("completion_tokens", (0, 1))
+@pytest.mark.parametrize("continuous", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_empty_choice_is_visible(
+    logging_obj: Logging, sync_mode: bool, content: str | None, completion_tokens: int, continuous: bool
+) -> None:
+    chunks: Final = _continuous_usage_fixture_chunks()
+    progress: Final = chunks[0].model_copy(
+        update={
+            "choices": [StreamingChoices(index=0, delta=Delta(content=content))],
+            "usage": Usage(prompt_tokens=10, completion_tokens=completion_tokens, total_tokens=10 + completion_tokens),
+        }
+    )
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, (chunks[0], progress, *chunks[1:]), {"include_usage": True, "continuous_usage_stats": continuous}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    assert len(collected) == (5 if continuous else 4)
+    if continuous:
+        assert collected[1].choices == [StreamingChoices(index=0, delta=Delta(content=content))]
+        assert getattr(collected[1], "usage", None) == Usage(
+            prompt_tokens=10, completion_tokens=completion_tokens, total_tokens=10 + completion_tokens
+        )
+    else:
+        assert collected[1].choices[0].delta.content == "b"
+        assert getattr(collected[1], "usage", None) is None
+    assert collected[-1].usage.total_tokens == 12
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_keeps_final_trailer_contract(logging_obj: Logging, sync_mode: bool) -> None:
+    chunks: Final = _continuous_usage_fixture_chunks()
+    late: Final = chunks[-1].model_copy(update={"usage": Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)})
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, (*chunks[:2], late), {"include_usage": True, "continuous_usage_stats": True}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    assert len(collected) == 4
+    assert collected[-2].choices[0].finish_reason == "stop"
+    assert collected[-1].usage == Usage(
+        prompt_tokens=10,
+        completion_tokens=3,
+        total_tokens=13,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=3),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_preserves_details_and_choices(logging_obj: Logging, sync_mode: bool) -> None:
+    chunks: Final = _continuous_usage_fixture_chunks()
+    detailed: Final = chunks[0].model_copy(
+        update={
+            "choices": [
+                StreamingChoices(index=0, delta=Delta(role="assistant", content="a")),
+                StreamingChoices(index=1, delta=Delta(content="other")),
+            ],
+            "usage": Usage(
+                prompt_tokens=10,
+                completion_tokens=1,
+                total_tokens=11,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=1),
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=4),
+            ),
+        }
+    )
+    default_wrapper: Final = _continuous_usage_stream(logging_obj, (detailed, *chunks[1:]), {"include_usage": True})
+    default_first: Final = next(default_wrapper) if sync_mode else await anext(default_wrapper)
+    await default_wrapper.aclose()
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, (detailed, *chunks[1:]), {"include_usage": True, "continuous_usage_stats": True}
+    )
+    collected: Final = await _continuous_usage_collected(wrapper, sync_mode)
+    assert collected[0].choices == [
+        StreamingChoices(index=0, delta=Delta(role="assistant", content="a")),
+        StreamingChoices(index=1, delta=Delta(content="other")),
+    ]
+    assert collected[0].choices == default_first.choices
+    assert getattr(collected[0], "usage", None) == Usage(
+        prompt_tokens=10,
+        completion_tokens=1,
+        total_tokens=11,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=1),
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=4),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_is_available_before_completion(logging_obj: Logging, sync_mode: bool) -> None:
+    wrapper: Final = _continuous_usage_stream(
+        logging_obj, _continuous_usage_fixture_chunks(), {"include_usage": True, "continuous_usage_stats": True}
+    )
+    first: Final = next(wrapper) if sync_mode else await anext(wrapper)
+    assert first.choices[0].delta.content == "a"
+    assert getattr(first, "usage", None) == Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+    await wrapper.aclose()
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_streaming_handler_with_usage(
