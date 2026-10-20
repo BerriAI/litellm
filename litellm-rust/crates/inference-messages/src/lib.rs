@@ -1,3 +1,4 @@
+mod chat;
 mod common_utils;
 mod constants;
 mod handler;
@@ -13,6 +14,7 @@ use litellm_inference::{caching::CallCache, context::CallContext};
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
+pub use chat::ChatCompletions;
 pub use litellm_inference::RouteError as Error;
 pub use types::{
     MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,

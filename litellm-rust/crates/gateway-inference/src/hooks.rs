@@ -20,6 +20,7 @@ use litellm_gateway_hooks::{
     StreamFormat, StreamUsage, Usage,
 };
 use litellm_inference_chat::stream::ReportedUsage;
+use litellm_llms::anthropic::adapters::transformation::UpstreamReport;
 use litellm_router::Attempt;
 use serde_json::{Map, Value};
 
@@ -265,6 +266,7 @@ impl Tracking {
             }
         }
         let reported = response.extensions().get::<ReportedUsage>().cloned();
+        let upstream = response.extensions().get::<UpstreamReport>().cloned();
         let streaming = response
             .headers()
             .get(CONTENT_TYPE)
@@ -289,6 +291,7 @@ impl Tracking {
             status: response.status().as_u16(),
             meter,
             reported,
+            upstream,
             started,
             first_byte: None,
             ended: false,
@@ -338,6 +341,9 @@ struct Finish {
     meter: Meter,
     /// The usage a translated chat stream ended with, sent to the client or not.
     reported: Option<ReportedUsage>,
+    /// What the provider behind a translated Messages answer reported. When present it is the
+    /// only usage, so a stream cut off before the provider sent its usage records none.
+    upstream: Option<UpstreamReport>,
     /// The response text for observers that read it. Copied, not kept as chunks: each chunk is a
     /// slice of the upstream connection's read buffer, and holding it would hold that buffer for
     /// the rest of the stream.
@@ -362,17 +368,25 @@ impl Finish {
     }
 
     /// The usage the response reported, with its cost when the deployment is priced by the
-    /// model its response names, which only a chat completion carries.
+    /// model its response names, which a chat completion or a translated Messages answer
+    /// carries.
     fn usage_and_cost(&self) -> (Option<Usage>, Option<f64>) {
         let by_model = self.pipeline.prices().prices_by_response_model()
-            && self.route == Route::ChatCompletions;
-        let (usage, model) = match &self.meter {
-            Meter::Off => (None, None),
-            Meter::Stream(meter) => match self.reported.as_ref().and_then(reported_usage) {
+            && (self.route == Route::ChatCompletions || self.upstream.is_some());
+        let (usage, model) = match (&self.meter, &self.upstream) {
+            (Meter::Off, _) => (None, None),
+            (_, Some(upstream)) => {
+                let reported = upstream.get();
+                let usage = reported
+                    .usage
+                    .and_then(|usage| Usage::from_anthropic(&serde_json::to_value(usage).ok()?));
+                (usage, by_model.then_some(reported.model).flatten())
+            }
+            (Meter::Stream(meter), None) => match self.reported.as_ref().and_then(reported_usage) {
                 Some(usage) => (Some(usage), None),
                 None => (meter.usage(), meter.model().map(str::to_owned)),
             },
-            Meter::Body(body) => {
+            (Meter::Body(body), None) => {
                 let model = by_model.then(|| body_model(body)).flatten();
                 (body_usage(self.route, body), model)
             }
