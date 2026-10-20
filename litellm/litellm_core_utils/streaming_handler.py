@@ -2007,10 +2007,14 @@ class CustomStreamWrapper:
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
-                    self._last_returned_hidden_params = processed_chunk.hidden_params
+                    finish_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                        dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                    )
                     usage = _reported_total_usage(chunks=self.chunks)
-                    if usage is not None:
-                        self._last_returned_hidden_params["usage"] = usage
+                    if usage is None:
+                        self._last_returned_hidden_params = finish_chunk_hidden_params
+                    else:
+                        finish_chunk_hidden_params["usage"] = usage
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2289,9 +2293,10 @@ class CustomStreamWrapper:
                 processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
                     dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
                 )
-                self._last_returned_hidden_params = processed_chunk_hidden_params
                 usage: Final = _reported_total_usage(chunks=self.chunks)
-                if usage is not None:
+                if usage is None:
+                    self._last_returned_hidden_params = processed_chunk_hidden_params
+                else:
                     processed_chunk_hidden_params["usage"] = usage
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring

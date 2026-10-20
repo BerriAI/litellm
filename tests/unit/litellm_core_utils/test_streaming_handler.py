@@ -2871,6 +2871,57 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
     assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
+@pytest.mark.asyncio
+async def test_stream_with_provider_usage_hands_that_usage_to_the_last_chunk(
+    logging_obj: Logging, sync_mode: bool, ends_with_finish_chunk: bool
+) -> None:
+    model: Final = "gpt-4o"
+    reported: Final = Usage(prompt_tokens=30, completion_tokens=12, total_tokens=42)
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-with-usage",
+        created=1741037890,
+        model=model,
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="Hello there"),
+                finish_reason=None if ends_with_finish_chunk else "stop",
+            )
+        ],
+        **({} if ends_with_finish_chunk else {"usage": reported}),
+    )
+    finish_chunk: Final = ModelResponseStream(
+        id="chatcmpl-with-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+        usage=reported,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[content_chunk, finish_chunk] if ends_with_finish_chunk else [content_chunk]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+
+    yielded: Final = (
+        [(chunk, chunk._hidden_params.get("usage")) for chunk in wrapper]
+        if sync_mode
+        else [(chunk, chunk._hidden_params.get("usage")) async for chunk in wrapper]
+    )
+
+    last_chunk, usage_when_yielded = yielded[-1]
+    assert usage_when_yielded is not None
+    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == (30, 12)
+    usage_after_drain: Final = last_chunk._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == (30, 12)
+
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
     """Test that aclose() delegates to the underlying completion_stream's aclose()"""
