@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     speech_media_type_from_audio_bytes,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
@@ -68,11 +68,29 @@ _GEMINI_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
 )
 
 
+_DEFAULT_GEMINI_TTS_VOICE: Final = "Kore"
+
+
+class _GeminiCloudTtsInput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str | None = None
+    ssml: str | None = None
+    prompt: str | None = None
+
+
+class _GeminiCloudTtsAudioConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    audioEncoding: str = ""
+    sampleRateHertz: int | None = None
+
+
 class _GeminiCloudTtsRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    input: VertexTextToSpeechInput
-    audioConfig: VertexTextToSpeechAudioConfig
+    input: _GeminiCloudTtsInput
+    audioConfig: _GeminiCloudTtsAudioConfig
 
 
 def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate: int) -> float | None:
@@ -160,6 +178,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         voice: str | dict[str, object] | None,
         model: str | None = None,
+        drop_params: bool = False,
     ) -> tuple[str | None, dict | None]:
         """
         Map voice to Vertex AI format.
@@ -175,7 +194,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             - voice_dict: Vertex AI format dict with languageCode and name
         """
         if model is not None and self._is_gemini_tts_model(model):
-            return self._map_gemini_tts_voice_to_vertex_format(model=model, voice=voice)
+            return self._map_gemini_tts_voice_to_vertex_format(model=model, voice=voice, drop_params=drop_params)
 
         if voice is None:
             return None, None
@@ -236,12 +255,43 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 return mapping
         return None
 
-    def _extract_gemini_tts_speaker_configs(
-        self,
-        voice: Mapping[str, object],
-    ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
+    @staticmethod
+    def _resolve_gemini_tts_voice_name(model: str, voice_name: str, drop_params: bool) -> str:
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 
+        gemini_voice_name: Final = OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)
+        if "-" not in gemini_voice_name:
+            return gemini_voice_name
+        if drop_params:
+            return _DEFAULT_GEMINI_TTS_VOICE
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} speaks Gemini voices such as {_DEFAULT_GEMINI_TTS_VOICE}, and {voice_name} is a Cloud "
+                "Text-to-Speech voice. Use a Gemini voice, or set drop_params to use the default Gemini voice."
+            ),
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    @staticmethod
+    def _reject_malformed_gemini_tts_speaker(model: str, drop_params: bool) -> None:
+        if drop_params:
+            return
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} needs each entry of speaker_voice_configs to name a speaker and a voice, as speaker with "
+                "voice_config.prebuilt_voice_config.voice_name, or speakerAlias with speakerId."
+            ),
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    def _extract_gemini_tts_speaker_configs(
+        self,
+        model: str,
+        voice: Mapping[str, object],
+        drop_params: bool,
+    ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
@@ -260,12 +310,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         try:
             validated_speaker_configs: Final = _SPEAKER_CONFIG_ITEMS.validate_python(raw_speaker_configs, strict=True)
         except ValidationError:
+            self._reject_malformed_gemini_tts_speaker(model, drop_params)
             return []
         speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
             list[VertexTextToSpeechSpeakerVoiceConfig]
         ] = []
         for raw_item in validated_speaker_configs:
             if (raw_config := as_str_mapping(raw_item)) is None:
+                self._reject_malformed_gemini_tts_speaker(model, drop_params)
                 continue
             speaker_alias = self._get_str_value(
                 raw_config,
@@ -288,13 +340,15 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                             "voiceName",
                             "voice_name",
                         )
-            if speaker_alias is not None and speaker_id is not None:
-                speaker_configs.append(
-                    {
-                        "speakerAlias": speaker_alias,
-                        "speakerId": OPENAI_TO_GEMINI_TTS_VOICES.get(speaker_id.lower(), speaker_id),
-                    }
-                )
+            if speaker_alias is None or speaker_id is None:
+                self._reject_malformed_gemini_tts_speaker(model, drop_params)
+                continue
+            speaker_configs.append(
+                {
+                    "speakerAlias": speaker_alias,
+                    "speakerId": self._resolve_gemini_tts_voice_name(model, speaker_id, drop_params),
+                }
+            )
         return speaker_configs
 
     def _extract_gemini_tts_voice_name(
@@ -324,17 +378,20 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         voice: str | Mapping[str, object] | None,
+        drop_params: bool = False,
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
-        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
-
         if voice is None:
-            return None, {"languageCode": self.DEFAULT_LANGUAGE_CODE, "modelName": model}
+            return None, {
+                "languageCode": self.DEFAULT_LANGUAGE_CODE,
+                "modelName": model,
+                "name": _DEFAULT_GEMINI_TTS_VOICE,
+            }
 
         if isinstance(voice, str):
             return voice, {
                 "languageCode": self.DEFAULT_LANGUAGE_CODE,
                 "modelName": model,
-                "name": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice),
+                "name": self._resolve_gemini_tts_voice_name(model, voice, drop_params),
             }
 
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
@@ -344,7 +401,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             or self.DEFAULT_LANGUAGE_CODE
         )
         model_name: Final = model
-        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(voice)
+        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, voice, drop_params)
         if speaker_configs:
             return None, {
                 "languageCode": language_code,
@@ -358,12 +415,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             return None, {
                 "languageCode": language_code,
                 "modelName": model_name,
-                "name": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name),
+                "name": self._resolve_gemini_tts_voice_name(model, voice_name, drop_params),
             }
         return None, {
             **voice,
             "languageCode": language_code,
             "modelName": model_name,
+            "name": _DEFAULT_GEMINI_TTS_VOICE,
         }
 
     @staticmethod
@@ -415,6 +473,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 model=model,
                 voice=voice,
                 optional_params=optional_params,
+                drop_params=drops_unsupported_params(kwargs.get("drop_params")),
                 kwargs=kwargs,
             )
         )
@@ -489,6 +548,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(
             voice=voice,
             model=model,
+            drop_params=drop_params or litellm.drop_params is True,
         )
         if voice_dict is not None:
             mapped_params["vertex_voice_dict"] = voice_dict
@@ -578,8 +638,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 model=model,
                 llm_provider="vertex_ai",
             )
-        vertex_location: Final = litellm_params.get("vertex_location")
-        if not isinstance(vertex_location, str) or vertex_location == "global":
+        location: Final = litellm_params.get("vertex_location")
+        vertex_location: Final = location if isinstance(location, str) else self.get_default_vertex_location()
+        if vertex_location == "global":
             return self.TTS_API_URL
         cloud_tts_location: Final = _GEMINI_CLOUD_TTS_LOCATIONS.get(vertex_location)
         if cloud_tts_location is None:
@@ -777,13 +838,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             input_data: Final = request.input
             audio_config: Final = request.audioConfig
             container_duration: Final = calculate_request_duration(binary_data)
-            sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
+            sample_rate: Final = audio_config.sampleRateHertz or 24000
             duration: Final = (
                 container_duration
                 if container_duration is not None
-                else _fallback_gemini_tts_audio_duration(
-                    binary_data, audio_config.get("audioEncoding", ""), sample_rate
-                )
+                else _fallback_gemini_tts_audio_duration(binary_data, audio_config.audioEncoding, sample_rate)
             )
             if duration is None:
                 verbose_logger.warning(
@@ -791,7 +850,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 )
                 return binary_response
             input_text: Final = " ".join(
-                value for value in (input_data.get("text"), input_data.get("ssml"), input_data.get("prompt")) if value
+                value for value in (input_data.text, input_data.ssml, input_data.prompt) if value
             )
             prompt_tokens: Final = litellm.token_counter(model=model, text=input_text)
             audio_tokens: Final = math.ceil(duration * 25)

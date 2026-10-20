@@ -297,45 +297,59 @@ class TestVertexAITextToSpeechConfig:
             "name": "Kore",
         }
 
-    def test_gemini_tts_ignores_incomplete_speaker_entries(self):
+    @pytest.mark.parametrize(
+        "speaker_voice_configs",
+        (
+            [None, {"speakerAlias": "Katie", "speakerId": "Leda"}],
+            [{"speakerAlias": "Ryan"}, {"speakerAlias": "Katie", "speakerId": "Leda"}],
+            [
+                {"speaker": "Ryan", "voice_config": {"prebuilt_voice_config": {"name": "Umbriel"}}},
+                {"speakerAlias": "Katie", "speakerId": "Leda"},
+            ],
+            "invalid",
+        ),
+    )
+    def test_gemini_tts_malformed_speaker_entry_is_a_bad_request(self, speaker_voice_configs: object):
         config: Final = VertexAITextToSpeechConfig()
-        voice: Final = {
-            "multiSpeakerVoiceConfig": {
-                "speakerVoiceConfigs": [
-                    None,
-                    {"speakerAlias": "Ryan"},
-                    {"speakerAlias": "Katie", "speakerId": "Leda"},
-                ]
-            }
-        }
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="speaker_voice_configs"):
+            config.map_openai_params(
+                model="gemini-3.1-flash-tts-preview",
+                optional_params={"response_format": "mp3"},
+                voice={"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": speaker_voice_configs}},
+            )
+
+    def test_gemini_tts_malformed_speaker_entry_is_dropped_with_drop_params(self):
+        config: Final = VertexAITextToSpeechConfig()
 
         _, optional_params = config.map_openai_params(
             model="gemini-3.1-flash-tts-preview",
             optional_params={"response_format": "mp3"},
-            voice=voice,
+            voice={
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [
+                        {"speakerAlias": "Ryan", "speakerId": "Umbriel"},
+                        {"speakerAlias": "Katie"},
+                    ]
+                }
+            },
+            drop_params=True,
         )
 
         assert optional_params["vertex_voice_dict"]["multiSpeakerVoiceConfig"] == {
-            "speakerVoiceConfigs": [{"speakerAlias": "Katie", "speakerId": "Leda"}]
+            "speakerVoiceConfigs": [{"speakerAlias": "Ryan", "speakerId": "Umbriel"}]
         }
-
-    def test_gemini_tts_ignores_non_list_speaker_entries(self):
-        config: Final = VertexAITextToSpeechConfig()
-
-        assert (
-            config._extract_gemini_tts_speaker_configs({"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": "invalid"}})
-            == []
-        )
 
     @pytest.mark.parametrize(
         ("voice", "expected_name"),
         [
             ({"speechConfig": {"voice": "Kore"}}, "Kore"),
             ({"speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}}, "Kore"),
-            ({"speechConfig": {"voiceConfig": {}}}, None),
+            ({"speechConfig": {"voiceConfig": {}}}, "Kore"),
+            ({"languageCode": "en-US"}, "Kore"),
         ],
     )
-    def test_gemini_tts_nested_voice_mapping(self, voice: dict[str, object], expected_name: str | None):
+    def test_gemini_tts_nested_voice_mapping(self, voice: dict[str, object], expected_name: str):
         config: Final = VertexAITextToSpeechConfig()
 
         _, optional_params = config.map_openai_params(
@@ -344,12 +358,7 @@ class TestVertexAITextToSpeechConfig:
             voice=voice,
         )
 
-        mapped_voice: Final = optional_params["vertex_voice_dict"]
-        if expected_name is None:
-            assert mapped_voice["speechConfig"]["voiceConfig"] == {}
-            assert "name" not in mapped_voice
-        else:
-            assert mapped_voice["name"] == expected_name
+        assert optional_params["vertex_voice_dict"]["name"] == expected_name
 
     @pytest.mark.parametrize(
         "voice",
@@ -1558,7 +1567,69 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_without_voice_keeps_the_gemini_m
     )
 
     sent: Final = json.loads(route.calls[0].request.content)
-    assert sent["voice"] == {"languageCode": "en-US", "modelName": "gemini-3.1-flash-tts-preview"}
+    assert sent["voice"] == {"languageCode": "en-US", "modelName": "gemini-3.1-flash-tts-preview", "name": "Kore"}
+
+
+@pytest.mark.parametrize("voice", ("en-US-Studio-O", "en-US-Neural2-F"))
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_cloud_tts_voice(
+    voice: str, respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=f"{voice} is a Cloud Text-to-Speech voice"):
+        await litellm.aspeech(
+            model="vertex_ai/gemini-3.1-flash-tts-preview",
+            input="Say hello",
+            voice=voice,
+            response_format="mp3",
+            vertex_credentials=_AUTHORIZED_USER,
+            vertex_location="global",
+        )
+
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_drop_params_swaps_a_cloud_tts_voice_for_a_gemini_voice(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Say hello",
+        voice="en-US-Studio-O",
+        response_format="mp3",
+        drop_params=True,
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+    )
+
+    assert json.loads(route.calls[0].request.content)["voice"]["name"] == "Kore"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_without_a_location_uses_the_vertex_default_region(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post("https://us-texttospeech.googleapis.com/v1/text:synthesize").mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Say hello",
+        voice="Kore",
+        response_format="mp3",
+        vertex_credentials=_AUTHORIZED_USER,
+    )
+
+    assert route.called
 
 
 @pytest.mark.asyncio
@@ -1582,6 +1653,31 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_instructions_as_the_style_
 
     sent: Final = json.loads(route.calls[0].request.content)
     assert sent["input"] == {"text": "Have a wonderful day", "prompt": "Read this slowly and calmly"}
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_with_a_numeric_speaking_rate_returns_billed_audio(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    result: Final = await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Hello there",
+        voice="Kore",
+        response_format="mp3",
+        audioConfig={"audioEncoding": "MP3", "speakingRate": 1.25},
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+    )
+
+    assert json.loads(route.calls[0].request.content)["audioConfig"]["speakingRate"] == 1.25
+    assert result.content == audio_bytes
+    assert result.usage is not None
+    assert result.usage.completion_tokens > 0
 
 
 @pytest.mark.parametrize(

@@ -115,6 +115,33 @@ def test_gemini_structured_speech_config_maps_openai_voice_names(speech_config: 
     }
 
 
+@pytest.mark.parametrize(
+    "speaker",
+    (
+        {"speakerAlias": "Ryan", "speakerId": "alloy"},
+        {"speaker_alias": "Ryan", "speaker_id": "alloy"},
+    ),
+)
+def test_gemini_speech_config_accepts_cloud_tts_speaker_entries(speaker: Mapping[str, object]) -> None:
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [speaker, {"speaker": "Katie", "voice_config": {"voice_name": "Leda"}}]
+        }
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {
+                    "speaker": "Ryan",
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}},
+                },
+                {"speaker": "Katie", "voiceConfig": {"voiceName": "Leda"}},
+            ]
+        }
+    }
+
+
 def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
     speech_config: Final = {
         "speech_config": {
