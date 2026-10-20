@@ -102,6 +102,13 @@ class TeamMemberPermissionChecks:
             )
 
     @staticmethod
+    def is_route_granted_to_team_members(team_table: LiteLLM_TeamTableCachedObj, route: str) -> bool:
+        granted_routes: Final = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(
+            TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team_table)
+        )
+        return RouteChecks.check_route_access(route=route, allowed_routes=granted_routes)
+
+    @staticmethod
     def does_team_member_have_permissions_for_endpoint(
         team_member_role: Literal["admin", "user"] | None,
         team_table: LiteLLM_TeamTableCachedObj,
@@ -118,12 +125,10 @@ class TeamMemberPermissionChecks:
         if team_member_role == "admin":
             return True
 
-        _team_member_permissions: Final = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_table=team_table,
-        )
-        team_member_permissions = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(_team_member_permissions)
-
-        if not RouteChecks.check_route_access(route=route, allowed_routes=team_member_permissions):
+        if not TeamMemberPermissionChecks.is_route_granted_to_team_members(team_table=team_table, route=route):
+            team_member_permissions: Final = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(
+                TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team_table)
+            )
             raise ProxyException(
                 message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}. To create keys for this team, please ask your proxy admin to check the team member permission settings and update the settings to allow team member users to create keys.",
                 type=ProxyErrorTypes.team_member_permission_error,

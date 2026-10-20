@@ -5343,6 +5343,52 @@ async def team_member_me(
     )
 
 
+async def _set_team_blocked(
+    team_id: str,
+    blocked: bool,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "prisma_models.LiteLLM_TeamTable":
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise Exception("No DB Connected.")
+
+    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": team_id})
+    if existing_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={team_id}"},
+        )
+
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
+
+    record: Final = await _team_db(prisma_client).update(
+        where={"team_id": team_id},
+        data={"blocked": blocked},
+        include=_TEAM_UPDATE_INCLUDE,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={team_id}"},
+        )
+
+    await refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return record.model_copy(update=dict.fromkeys(_TEAM_UPDATE_INCLUDE))
+
+
 @router.post("/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def block_team(
@@ -5372,30 +5418,7 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise Exception("No DB Connected.")
-
-    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
-    if existing_team is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    # Verify caller has access to manage this team
-    if not await get_team_access().allows(
-        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-    ):
-        team_access_denied()
-
-    record: Final = await _team_db(prisma_client).update(
-        where={"team_id": data.team_id},
-        data={"blocked": True},
-    )
-
-    return record
+    return await _set_team_blocked(team_id=data.team_id, blocked=True, user_api_key_dict=user_api_key_dict)
 
 
 @router.post("/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
@@ -5421,30 +5444,7 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise Exception("No DB Connected.")
-
-    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
-    if existing_team is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    # Verify caller has access to manage this team
-    if not await get_team_access().allows(
-        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-    ):
-        team_access_denied()
-
-    record: Final = await _team_db(prisma_client).update(
-        where={"team_id": data.team_id},
-        data={"blocked": False},
-    )
-
-    return record
+    return await _set_team_blocked(team_id=data.team_id, blocked=False, user_api_key_dict=user_api_key_dict)
 
 
 @router.get(

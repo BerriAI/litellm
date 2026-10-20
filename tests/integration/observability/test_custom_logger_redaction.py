@@ -28,7 +28,7 @@ INSTRUCTIONS: Final = "Reply in French. redaction-instructions-canary"
 BRIDGED: Final = "bridged-redaction-canary"
 USAGE_DEPLOYMENT: Final = f"redaction-usage-{uuid.uuid4().hex}"
 REDACT: Final = {"x-litellm-enable-message-redaction": "true"}
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 
 def _provider(request: Request) -> Reply:

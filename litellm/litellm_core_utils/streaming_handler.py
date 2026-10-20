@@ -15,6 +15,8 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -22,7 +24,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, stored_attribute
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -45,7 +47,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
-from ..exceptions import OpenAIError
+from ..exceptions import OpenAIError, Timeout
 from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
@@ -86,6 +88,40 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _prepend_upstream_choice_extras(
+    choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
+) -> None:
+    if not extra_keys:
+        return
+    upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
+    choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
+    choice.__pydantic_fields_set__.update(upstream_extras)
+
+
+def _holds_only_scalars(model: BaseModel) -> bool:
+    fields: Final[Iterator[tuple[str, object]]] = iter(model)
+    return all(value is None or isinstance(value, (str, int, float, bool)) for _, value in fields)
+
+
+def _delta_from_upstream(upstream_delta: BaseModel | None) -> Delta | None:
+    if upstream_delta is None:
+        return Delta()
+    try:
+        return Delta(**dict(iter(upstream_delta)))
+    except Exception:
+        return None
+
+
+def _is_transport_timeout(error: BaseException) -> bool:
+    return isinstance(error, httpx.TimeoutException) or (
+        isinstance(error, Timeout) and isinstance(error.__cause__, httpx.TimeoutException)
+    )
+
+
+def _skips_stream_fallback(status_code: int | None) -> bool:
+    return status_code is not None and 400 <= status_code < 500 and status_code != 429
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -242,6 +278,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._openai_handler_receives_chat_chunks = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
@@ -779,7 +816,10 @@ class CustomStreamWrapper:
             raise e
 
     def model_response_creator(
-        self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None
+        self,
+        chunk: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
+        delta: Delta | None = None,
     ) -> ModelResponseStream:
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
@@ -792,7 +832,11 @@ class CustomStreamWrapper:
             if chunk:
                 args.update({k: v for k, v in chunk.items() if k != "stream"})
 
-        model_response: Final = ModelResponseStream(**args)
+        model_response: Final = (
+            ModelResponseStream(**args)
+            if delta is None
+            else ModelResponseStream(**args, choices=[StreamingChoices(delta=delta)])
+        )
         if self.response_id is not None:
             model_response.id = self.response_id
         elif model_response.id:
@@ -933,6 +977,39 @@ class CustomStreamWrapper:
             model_response.choices[0].delta = Delta(**_initial_delta)
         return model_response
 
+    def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
+        if (
+            not self._openai_handler_receives_chat_chunks
+            or not isinstance(chunk, ChatCompletionChunk)
+            or not chunk.choices
+        ):
+            return None
+        upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
+            ChoiceDelta | None,
+            chunk.choices[0].delta,
+        )
+        if (
+            upstream_delta is None
+            or upstream_delta.function_call is not None
+            or upstream_delta.tool_calls is not None
+            or self._has_any_special_delta_attributes(upstream_delta)
+        ):
+            return None
+        return _delta_from_upstream(upstream_delta)
+
+    def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
+        delta: Final = model_response.choices[0].delta
+        if self.sent_first_chunk is False:
+            delta.role = "assistant"
+            self.sent_first_chunk = True
+            return
+        if not _holds_only_scalars(delta):
+            self.strip_role_from_delta(model_response)
+            return
+        delta.role = None
+        if "provider_specific_fields" not in delta.model_fields_set:
+            delta.provider_specific_fields = None
+
     def _has_special_delta_content(self, model_response: ModelResponseStream) -> bool:
         """
         Check if the delta contains special content types (tool_calls, function_call, audio, or image).
@@ -965,11 +1042,11 @@ class CustomStreamWrapper:
         """
         return self.strip_role_from_delta(model_response)
 
-    def _has_special_delta_attribute(self, delta, attribute_name: str) -> bool:
+    def _has_special_delta_attribute(self, delta: object, attribute_name: str) -> bool:
         """
         Check if delta has a specific attribute and it's not None.
         """
-        return delta is not None and getattr(delta, attribute_name, None) is not None
+        return delta is not None and stored_attribute(delta, attribute_name) is not None
 
     def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
         """
@@ -977,7 +1054,7 @@ class CustomStreamWrapper:
         """
         setattr(target_delta, attribute_name, getattr(source_delta, attribute_name))
 
-    def _has_any_special_delta_attributes(self, delta) -> bool:
+    def _has_any_special_delta_attributes(self, delta: object) -> bool:
         """
         Check if delta has any special attributes (audio, image).
         """
@@ -1001,6 +1078,7 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
         response_obj: dict[str, Any],
+        plain_delta_created: bool = False,
     ):
         from litellm.litellm_core_utils.core_helpers import (
             preserve_upstream_non_openai_attributes,
@@ -1020,32 +1098,66 @@ class CustomStreamWrapper:
                 original_chunk: Final = response_obj.get("original_chunk", None)
                 if original_chunk:
                     if len(original_chunk.choices) > 0:
-                        choices: Final = []
-                        for choice in original_chunk.choices:
-                            try:
-                                if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()
-                                    choice_json.pop(
-                                        "finish_reason", None
-                                    )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    choices.append(StreamingChoices(**choice_json))
-                            except Exception:
-                                choices.append(StreamingChoices())
-                        setattr(model_response, "choices", choices)
+                        original_chunk_for_reuse: Final[object] = cast(  # cast-ok: runtime type-check before access
+                            object,
+                            original_chunk,
+                        )
+                        upstream_choice: Final = (
+                            original_chunk_for_reuse.choices[0]
+                            if plain_delta_created
+                            and isinstance(original_chunk_for_reuse, ChatCompletionChunk)
+                            and len(original_chunk_for_reuse.choices) == 1
+                            else None
+                        )
+                        upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
+                            ChoiceDelta | None,
+                            getattr(upstream_choice, "delta", None),
+                        )
+                        upstream_choice_extra_keys: Final = frozenset(
+                            (upstream_choice.__pydantic_extra__ or {}) if upstream_choice is not None else ()
+                        )
+                        can_reuse_choice: Final = (
+                            upstream_choice is not None
+                            and upstream_delta is not None
+                            and "enhancements" not in upstream_choice_extra_keys
+                            and upstream_choice.logprobs is None
+                            and _holds_only_scalars(upstream_delta)
+                        )
+                        if can_reuse_choice and upstream_choice is not None:
+                            model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
+                            model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                            _prepend_upstream_choice_extras(
+                                model_response.choices[0],
+                                upstream_choice,
+                                upstream_choice_extra_keys - {"message"},
+                            )
+                        else:
+                            choices: Final = []
+                            for choice in original_chunk.choices:
+                                try:
+                                    if isinstance(choice, BaseModel):
+                                        choice_json = choice.model_dump()
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        choices.append(StreamingChoices(**choice_json))
+                                except Exception:
+                                    choices.append(StreamingChoices())
+                            setattr(model_response, "choices", choices)
                     else:
                         return
                     model_response.system_fingerprint = original_chunk.system_fingerprint
                     setattr(
                         model_response,
                         "citations",
-                        getattr(original_chunk, "citations", None),
+                        stored_attribute(original_chunk, "citations"),
                     )
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
                         original_chunk=original_chunk,
                     )
 
-                    model_response = self.strip_role_from_delta(model_response)
+                    self._set_role_on_fresh_delta(model_response)
                     if verbose_logger.isEnabledFor(logging.DEBUG):
                         verbose_logger.debug(
                             "model_response.choices[0].delta: %s",
@@ -1394,6 +1506,8 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
+            if isinstance(chunk, ChatCompletionChunk):
+                self._openai_handler_receives_chat_chunks = True
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -1458,8 +1572,11 @@ class CustomStreamWrapper:
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model
+        prebuilt_delta: Final = self._prebuilt_plain_delta(chunk)
+        plain_delta_created: bool = prebuilt_delta is not None  # rebind-ok: the first chunk builds its delta below
         model_response = self.model_response_creator(
-            hidden_params=_provider_hidden_params(chunk, self._provider_response_model)
+            hidden_params=_provider_hidden_params(chunk, self._provider_response_model),
+            delta=prebuilt_delta,
         )
         response_obj: dict[str, Any] = {}
         try:
@@ -1483,7 +1600,7 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 if hasattr(original_chunk, "id"):
                     model_response = self.set_model_id(original_chunk.id, model_response)
-                if hasattr(original_chunk, "provider_specific_fields"):
+                if stored_attribute(original_chunk, "provider_specific_fields") is not None:
                     model_response = self.copy_model_response_level_provider_specific_fields(
                         original_chunk, model_response
                     )
@@ -1535,16 +1652,10 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta()
                     elif self._has_any_special_delta_attributes(delta):
                         self._handle_special_delta_attributes(delta, model_response)
-                    else:
-                        try:
-                            delta = (
-                                dict()
-                                if original_chunk.choices[0].delta is None
-                                else dict(original_chunk.choices[0].delta)
-                            )
-                            model_response.choices[0].delta = Delta(**delta)
-                        except Exception:
-                            model_response.choices[0].delta = Delta()
+                    elif prebuilt_delta is None:
+                        plain_delta: Final = _delta_from_upstream(delta)
+                        model_response.choices[0].delta = plain_delta if plain_delta is not None else Delta()
+                        plain_delta_created = plain_delta is not None  # rebind-ok: the first chunk builds its delta
                 else:
                     if self.send_stream_usage is True:
                         model_response.choices = []
@@ -1571,6 +1682,7 @@ class CustomStreamWrapper:
                 completion_obj=completion_obj,
                 model_response=model_response,
                 response_obj=response_obj,
+                plain_delta_created=plain_delta_created,
             )
             return result
 
@@ -2384,6 +2496,8 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+        So is a transport read timeout, which maps to a 408 Timeout, including
+        one an inner Responses stream already mapped for the chat bridge.
 
         An error an inner stream already wrapped (the chat-to-Responses bridge
         consumes a Responses stream) is rebuilt around the provider exception
@@ -2448,9 +2562,9 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
-            raise mapped_exception
-        if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
+        if not _is_transport_timeout(e) and (
+            _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+        ):
             raise mapped_exception
 
         raise MidStreamFallbackError(

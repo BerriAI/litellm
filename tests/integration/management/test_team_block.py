@@ -1,13 +1,20 @@
+import itertools
+import threading
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import httpx
 import pytest
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-from tests.integration._support.client import Gateway, string_value
+from tests.integration._support.client import Gateway, eventually, held, string_value
 from tests.integration._support.database import read_rows
+
+IN_FLIGHT_CALLERS_PER_PROXY: Final = 8
+BLOCK_CYCLES: Final = 4
+PROBES_PER_PROXY: Final = 6
 
 
 class _ObservedRequest(BaseModel):
@@ -35,11 +42,20 @@ class _ErrorResponse(BaseModel):
     error: _ProxyError
 
 
+class _Message(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    content: str
+
+
+class _ChatBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    messages: tuple[_Message, ...]
+
+
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -59,6 +75,87 @@ def _models(client: httpx.Client) -> tuple[str, ...]:
     return tuple(string_value(request.body["model"]) for request in observations.requests)
 
 
+def _texts(client: httpx.Client) -> tuple[str, ...]:
+    response: Final = client.get("/__observations")
+    assert response.status_code == 200, response.text
+    observations: Final = _Observations.model_validate_json(response.text)
+    return tuple(
+        message.content
+        for message in itertools.chain.from_iterable(
+            _ChatBody.model_validate(request.body).messages for request in observations.requests
+        )
+    )
+
+
+def _keep_calling(proxy: Gateway, model: str, key: str, stop: threading.Event) -> tuple[int, ...]:
+    return tuple(
+        _chat(proxy, model, key, f"in flight {uuid.uuid4().hex}").status_code
+        for _ in itertools.takewhile(lambda _: not stop.is_set(), itertools.count())
+    )
+
+
+def _statuses_on_fresh_connections(proxies: tuple[Gateway, ...], model: str, key: str, marker: str) -> tuple[int, ...]:
+    return tuple(
+        proxy.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"{marker} {uuid.uuid4().hex}"}]},
+            key=key,
+            headers={"connection": "close"},
+        ).status_code
+        for proxy in proxies * PROBES_PER_PROXY
+    )
+
+
+def _block_while_team_traffic_is_in_flight(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client, model: str, key: str, team: str
+) -> tuple[httpx.Response, tuple[int, ...]]:
+    stop: Final = threading.Event()
+    with ThreadPoolExecutor(max_workers=2 * IN_FLIGHT_CALLERS_PER_PROXY) as pool:
+        callers: Final = tuple(
+            pool.submit(_keep_calling, proxy, model, key, stop)
+            for proxy in (gateway, peer) * IN_FLIGHT_CALLERS_PER_PROXY
+        )
+        try:
+            eventually(
+                lambda: len(_models(upstream)), lambda served: served >= 4 * IN_FLIGHT_CALLERS_PER_PROXY, seconds=30
+            )
+            blocked: Final = gateway.request("POST", "/team/block", {"team_id": team})
+        finally:
+            stop.set()
+        statuses: Final = tuple(itertools.chain.from_iterable(caller.result() for caller in callers))
+    return blocked, statuses
+
+
+def _block_and_unblock_under_team_traffic(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client, model: str, key: str, team: str, cycle: int
+) -> None:
+    upstream.delete("/__observations").raise_for_status()
+    blocked, in_flight = _block_while_team_traffic_is_in_flight(gateway, peer, upstream, model, key, team)
+    assert blocked.status_code == 200, blocked.text
+    assert in_flight.count(200) >= 4 * IN_FLIGHT_CALLERS_PER_PROXY, repr(in_flight)
+    assert set(in_flight) <= {200, 401}, repr(in_flight)
+
+    marker: Final = f"after block {cycle} {uuid.uuid4().hex}"
+    refused: Final = held(
+        lambda: _statuses_on_fresh_connections((gateway, peer), model, key, marker),
+        lambda statuses: set(statuses) == {401},
+        holding=5,
+        seconds=15,
+    )
+    assert refused == (401,) * (2 * PROBES_PER_PROXY), repr(refused)
+    leaked: Final = tuple(text for text in _texts(upstream) if text.startswith(marker))
+    assert leaked == (), repr(leaked)
+
+    unblocked: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
+    assert unblocked.status_code == 200, unblocked.text
+    eventually(
+        lambda: _statuses_on_fresh_connections((gateway, peer), model, key, f"after unblock {cycle}"),
+        lambda statuses: set(statuses) == {200},
+        seconds=15,
+    )
+
+
 def test_team_block_and_unblock_update_endpoint_info_and_db_state(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
@@ -74,6 +171,7 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -96,6 +194,7 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
         assert _ErrorResponse.model_validate_json(cold_denied.text).error.type == "auth_error", cold_denied.text
         after_cold_denied: Final = _models(upstream)
         assert after_cold_denied == (), repr(after_cold_denied)
+        upstream.delete("/__observations").raise_for_status()
 
         unblocked_response: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
         assert unblocked_response.status_code == 200, unblocked_response.text
@@ -125,8 +224,6 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
 def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: SLP-605 /team/unblock does not restore warmed team-key access after blocked auth is cached")
-
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
         model: Final = scenario.model(model=f"openai/{provider_model}")
@@ -139,6 +236,7 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -148,6 +246,7 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
         assert _ErrorResponse.model_validate_json(cold_denied.text).error.type == "auth_error", cold_denied.text
         after_cold_denied: Final = _models(upstream)
         assert after_cold_denied == (), repr(after_cold_denied)
+        upstream.delete("/__observations").raise_for_status()
 
         unblocked_response: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
         assert unblocked_response.status_code == 200, unblocked_response.text
@@ -163,8 +262,6 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
 def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: SLP-605 blocking a team does not refresh warmed team-key auth state")
-
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
         model: Final = scenario.model(model=f"openai/{provider_model}")
@@ -177,6 +274,7 @@ def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -198,8 +296,6 @@ def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
 def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: SLP-605 a peer proxy that cached the team before /team/block admits a never-seen team key")
-
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
         model: Final = scenario.model(model=f"openai/{provider_model}")
@@ -210,6 +306,7 @@ def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model,), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -224,3 +321,45 @@ def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
         assert peer_denied.status_code == 401, peer_denied.text
         assert _ErrorResponse.model_validate_json(peer_denied.text).error.type == "auth_error", peer_denied.text
         assert after_block == (), repr(after_block)
+
+
+def test_a_team_model_alias_still_routes_on_both_proxies_after_block_and_unblock(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        provider_model: Final = f"team-block-{uuid.uuid4().hex}"
+        model: Final = scenario.model(model=f"openai/{provider_model}")
+        alias: Final = f"alias-{uuid.uuid4().hex}"
+        team: Final = scenario.team(models=[model], model_aliases={alias: model})
+        key: Final = scenario.key(team_id=team, models=[model])
+
+        warmed: Final = tuple(
+            _chat(proxy, alias, key, f"team alias warm {uuid.uuid4().hex}").status_code for proxy in (gateway, peer)
+        )
+        assert warmed == (200, 200), repr(warmed)
+        assert _models(upstream) == (provider_model, provider_model)
+        upstream.delete("/__observations").raise_for_status()
+
+        blocked: Final = gateway.request("POST", "/team/block", {"team_id": team})
+        assert blocked.status_code == 200, blocked.text
+        unblocked: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
+        assert unblocked.status_code == 200, unblocked.text
+
+        after_unblock: Final = _statuses_on_fresh_connections((gateway, peer), alias, key, "team alias after unblock")
+        assert after_unblock == (200,) * (2 * PROBES_PER_PROXY), repr(after_unblock)
+        assert _models(upstream) == (provider_model,) * (2 * PROBES_PER_PROXY)
+
+
+def test_a_block_issued_while_team_traffic_is_in_flight_holds_on_every_worker(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        provider_model: Final = f"team-block-{uuid.uuid4().hex}"
+        model: Final = scenario.model(
+            model=f"openai/{provider_model}", input_cost_per_token=0.000001, output_cost_per_token=0.000002
+        )
+        team: Final = scenario.team(models=[model])
+        key: Final = scenario.key(team_id=team)
+
+        for cycle in range(BLOCK_CYCLES):
+            _block_and_unblock_under_team_traffic(gateway, peer, upstream, model, key, team, cycle)

@@ -15,6 +15,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
@@ -59,6 +60,25 @@ class AlwaysFailGuardrail(CustomGuardrail):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
         raise HTTPException(status_code=400, detail="Content policy violation")
+
+
+class UnappliableRewriteGuardrail(CustomGuardrail):
+    """Raises the error an endpoint translation raises for a rewrite it cannot apply."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+        )
+        self.calls = 0
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        raise UnappliableRequestRewrite(self.guardrail_name)
 
 
 class HttpStatusGuardrail(CustomGuardrail):
@@ -793,6 +813,38 @@ async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content(monke
     assert result.step_results[0].outcome == "error"
     assert result.step_results[0].action_taken == "next"
     assert result.step_results[1].outcome == "pass"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "on_fail, on_error",
+    [("block", "allow"), ("next", "block"), ("allow", "block"), ("allow", "allow"), ("next", "next"), ("next", None)],
+)
+async def test_unappliable_rewrite_blocks_whatever_on_fail_and_on_error_say(monkeypatch, on_fail, on_error):
+    """
+    A rewrite the endpoint cannot apply blocks the pipeline, so no on_fail or on_error action sends the original request on.
+    """
+    rewriter = UnappliableRewriteGuardrail("rewriter")
+    later = AlwaysPassGuardrail("later-step")
+    monkeypatch.setattr(litellm, "callbacks", [rewriter, later])
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[
+            PipelineStep(guardrail="rewriter", on_pass="next", on_fail=on_fail, on_error=on_error),
+            PipelineStep(guardrail="later-step", on_pass="allow", on_fail="block"),
+        ],
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "card 4111 1111 1111 1111"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="rewrite-policy",
+    )
+
+    assert rewriter.calls == 1
+    assert later.calls == 0
+    assert result.terminal_action == "block"
+    assert result.step_results[0].action_taken == "block"
+    assert isinstance(result.original_exception, UnappliableRequestRewrite)
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")

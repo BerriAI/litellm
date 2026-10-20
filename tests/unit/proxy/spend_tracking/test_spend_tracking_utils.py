@@ -14,7 +14,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
@@ -47,6 +47,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -74,6 +78,89 @@ def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     )
     metadata = json.loads(payload["metadata"])
     return metadata["additional_usage_values"]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "litellm_metadata", "expected"),
+    [
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {},
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.1",
+                "pod_count": 3,
+                "selection": "round_robin",
+            },
+        ),
+        (
+            {},
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.2",
+                    "pod_count": 3,
+                    "selection": "session_affinity",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.2",
+                "pod_count": 3,
+                "selection": "session_affinity",
+            },
+        ),
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.3",
+                    "pod_count": 3,
+                    "selection": "session_affinity_retry",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.3",
+                "pod_count": 3,
+                "selection": "session_affinity_retry",
+            },
+        ),
+    ],
+)
+def test_get_logging_payload_includes_kubernetes_pod_routing(
+    metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert json.loads(payload["metadata"])[KUBERNETES_POD_ROUTING_KEY] == expected
+    assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
@@ -4725,6 +4812,29 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     )
 
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
+
+
+@pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
+def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_id(forged_marker):
+    """A failed call logs its raw request body as kwargs, so a body field named like the settlement
+    marker must not give the failure row the id a background response's billing row owns."""
+    request_body: Final = {
+        "model": "gpt-5.4-mini",
+        "input": "hi",
+        SETTLES_BACKGROUND_RESPONSE_KWARG: forged_marker,
+        "litellm_call_id": "call-failed",
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+    }
+    failed_at: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    row: Final = get_logging_payload(
+        kwargs=request_body,
+        response_obj=Exception("upstream rejected the request"),
+        start_time=failed_at,
+        end_time=failed_at,
+    )
+
+    assert row["request_id"] == "call-failed"
 
 
 def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():

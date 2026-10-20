@@ -128,14 +128,56 @@ def _chain_digest(digest: bytes, unit: bytes) -> bytes:
     return hashlib.sha256(digest + unit).digest()
 
 
+def _tool_carries_cache_mark(tool: ChatCompletionToolParam) -> bool:
+    tool_map: Final = cast(  # cast-ok: TypedDict.get rejects keys the type does not declare
+        Mapping[str, object], tool
+    )
+    if _carries_cache_mark(tool_map):
+        return True
+    function: Final = tool_map.get("function")
+    return isinstance(function, dict) and _carries_cache_mark(
+        cast(Mapping[str, object], function)  # cast-ok: function is a plain JSON dict
+    )
+
+
+def _unmarked_tool(tool: JsonValue) -> JsonValue:
+    if not isinstance(tool, dict):
+        return tool
+    return {
+        key: (_unmarked(value) if key == "function" else value) for key, value in tool.items() if key not in _MARK_KEYS
+    }
+
+
+def _pin_cache_key(digest: bytes) -> str:
+    return f"deployment:{digest.hex()}:prompt_caching"
+
+
 def _seed(tools: Sequence[ChatCompletionToolParam] | None) -> bytes:
-    if tools is None:
+    if not tools:
         return hashlib.sha256(b"").digest()
     return hashlib.sha256(
         _canonical_bytes(
-            _TOOLS_ADAPTER.validate_python(to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64"))
+            tuple(
+                _unmarked_tool(tool)
+                for tool in _TOOLS_ADAPTER.validate_python(
+                    to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64")
+                )
+            )
         )
     ).digest()
+
+
+def _tool_boundary_position(tools: Sequence[ChatCompletionToolParam] | None) -> tuple[PrefixPosition, ...]:
+    if not tools:
+        return ()
+    last_marked: Final = max(
+        (index for index, tool in enumerate(tools) if _tool_carries_cache_mark(tool)),
+        default=None,
+    )
+    if last_marked is None:
+        return ()
+    digest: Final = _seed(tools[: last_marked + 1])
+    return (PrefixPosition(cache_key=_pin_cache_key(digest), position=0),)
 
 
 def _positions_of(
@@ -149,7 +191,7 @@ def _positions_of(
         for run_type, previous in zip(run_types, (None, *run_types[:-1]))
     )
     return tuple(
-        PrefixPosition(cache_key=f"deployment:{digest.hex()}:prompt_caching", position=position)
+        PrefixPosition(cache_key=_pin_cache_key(digest), position=position)
         for digest, position in zip(digests, positions)
     )
 
@@ -181,8 +223,16 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
     return tuple(entry.cache_key for entry in reversed(positions) if entry.position > oldest_probed_position)
 
 
+def _carrier_mark(carrier: Mapping[str, JsonValue], key: str) -> JsonValue | None:
+    function: Final = carrier.get("function")
+    nested: Final = function.get(key) if isinstance(function, dict) else None
+    return carrier.get(key, nested)
+
+
 def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
-    return _mark_pin_ttl_seconds(carrier) if isinstance(carrier, Mapping) else None
+    if not isinstance(carrier, Mapping):
+        return None
+    return _mark_pin_ttl_seconds({key: _carrier_mark(carrier, key) for key in _MARK_KEYS})
 
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
@@ -293,6 +343,22 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def prepend_system_prompt(
+        messages: list[AllMessageValues],  # mutable-ok: callers pass the request messages list through
+        system: object,
+    ) -> list[AllMessageValues]:  # mutable-ok: callers bind the result back into list-typed slots
+        if not isinstance(system, (str, list)) or not system:
+            return messages
+        first: Final = cast(  # cast-ok: every AllMessageValues member is a dict
+            Mapping[str, object], messages[0] if messages else {}
+        )
+        if first.get("role") == "system" and first.get("content") == system:
+            return messages
+        return cast(  # cast-ok: the prepended system message is a plain dict the AllMessageValues union covers
+            list[AllMessageValues], [{"role": "system", "content": system}, *messages]
+        )
+
+    @staticmethod
     def prefix_positions(
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
@@ -310,16 +376,17 @@ class PromptCachingCache:
         already replaced by their size placeholder, so a request carrying the raw image bytes
         derives the same keys the write side stored.
         """
+        boundary: Final = _tool_boundary_position(tools)
         if not messages:
-            return ()
-        return _positions_of(_readable_prefix(messages), tools)
+            return boundary
+        return (*boundary, *_positions_of(_readable_prefix(messages), tools))
 
     @staticmethod
     async def async_prefix_positions(
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
     ) -> tuple[PrefixPosition, ...]:
-        if not messages:
+        if not messages and not _tool_boundary_position(tools):
             return ()
         return await offload_token_count(PromptCachingCache.prefix_positions)(messages, tools)
 
