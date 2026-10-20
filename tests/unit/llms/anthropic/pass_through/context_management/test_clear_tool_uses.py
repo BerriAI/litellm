@@ -5,6 +5,7 @@ Unit tests for the in-gateway `clear_tool_uses_20250919` polyfill editor.
 from copy import deepcopy
 from itertools import chain
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,6 +13,7 @@ import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import _run_polyfill_if_enabled
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
+    PolyfillResult,
     apply_context_management,
 )
 from litellm.llms.anthropic.pass_through.context_management.constants import (
@@ -491,7 +493,7 @@ async def _malformed_spec_error(edits: list[dict[str, object]]) -> AnthropicCont
         ("clear_tool_inputs", "get_weather"),
     ],
 )
-async def test_malformed_fields_are_a_400_even_below_the_trigger(field, value):
+async def test_malformed_fields_are_a_400_even_below_the_trigger(field: str, value: object) -> None:
     error = await _malformed_spec_error(
         [{"type": "clear_tool_uses_20250919", "trigger": {"type": "tool_uses", "value": 99}, field: value}]
     )
@@ -508,7 +510,9 @@ async def test_malformed_fields_are_a_400_even_below_the_trigger(field, value):
         ("clear_tool_inputs", 5, "clear_tool_inputs.bool: Input should be a valid boolean, unable to interpret input"),
     ],
 )
-async def test_malformed_field_400_names_the_edit_and_field_as_the_api_does(field, value, message):
+async def test_malformed_field_400_names_the_edit_and_field_as_the_api_does(
+    field: str, value: object, message: str
+) -> None:
     # api.anthropic.com, measured 2026-10-19, answers these four with these messages for the edit at index 1.
     error = await _malformed_spec_error(
         [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919", field: value}]
@@ -525,42 +529,42 @@ _VALID_EDIT: Final = {
 _MALFORMED_EDIT: Final = {**_VALID_EDIT, "exclude_tools": "get_weather"}
 
 
-async def test_drop_params_skips_only_the_malformed_edit():
-    async def run(drop_invalid_edits: bool):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("exclude_tools", "get_weather"), ("clear_at_least", {"type": "input_tokens", "value": "1200"})],
+)
+async def test_drop_params_drops_only_the_malformed_field(field: str, value: object) -> None:
+    async def run(drop_invalid_edits: bool) -> PolyfillResult | None:
         return await _run_polyfill_if_enabled(
             model=MODEL,
             messages=_make_history(n_pairs=3),
             tools=None,
             system=None,
-            context_management_spec={"edits": [_VALID_EDIT, _MALFORMED_EDIT]},
+            context_management_spec={"edits": [{**_VALID_EDIT, field: value, "clear_tool_inputs": True}]},
             litellm_metadata={},
             additional_drop_params=None,
             llm_router=None,
             drop_invalid_edits=drop_invalid_edits,
         )
 
-    with pytest.raises(AnthropicContextManagementError, match=r"^context_management\.edits\.1\."):
+    with pytest.raises(
+        AnthropicContextManagementError, match=rf"^context_management\.edits\.0\.clear_tool_uses_20250919\.{field}"
+    ):
         await run(drop_invalid_edits=False)
     result: Final = await run(drop_invalid_edits=True)
     assert result is not None
     assert _cleared_ids(result.messages) == {"toolu_00", "toolu_01"}
-    assert [edit["type"] for edit in result.applied_edits] == ["clear_tool_uses_20250919"]
+    assert _tool_inputs(result.messages) == {"toolu_00": {}, "toolu_01": {}, "toolu_02": {"location": "City2"}}
 
 
-class _RecordingRouter:
-    def __init__(self) -> None:
-        self.models: list[object] = []
-
-    async def acompletion(self, **kwargs: object) -> object:
-        self.models.append(kwargs.get("model"))
-        raise RuntimeError("summary model unavailable")
-
-
-async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(monkeypatch):
+async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.proxy_server import general_settings
 
     monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "summary-model")
-    router: Final = _RecordingRouter()
+    router: Final = MagicMock()
+    router.acompletion = AsyncMock(side_effect=RuntimeError("summary model unavailable"))
     with pytest.raises(AnthropicContextManagementError):
         await apply_context_management(
             model=MODEL,
@@ -575,11 +579,13 @@ async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(m
             },
             llm_router=router,
         )
-    assert router.models == []
+    router.acompletion.assert_not_awaited()
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "cleared"), [("yes", True), ("true", True), (1, True), ("no", False)])
-def test_clear_tool_inputs_reads_boolean_strings_and_numbers_like_the_api(clear_tool_inputs, cleared):
+def test_clear_tool_inputs_reads_boolean_strings_and_numbers_like_the_api(
+    clear_tool_inputs: object, cleared: bool
+) -> None:
     new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=_make_history(n_pairs=3),
@@ -597,7 +603,7 @@ def test_clear_tool_inputs_reads_boolean_strings_and_numbers_like_the_api(clear_
 
 
 @pytest.mark.parametrize(("trigger_value", "triggers"), [(2, False), (1, True)])
-def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value, triggers):
+def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value: int, triggers: bool) -> None:
     messages = [{"role": "user", "content": "Plan a trip."}]
     for i, name in enumerate(["search", "get_weather", "search", "get_weather"]):
         messages.extend(_make_pair(f"toolu_{i:02d}", f"Result {i}: " + "x" * 200, name=name))
@@ -617,7 +623,9 @@ def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value, triggers
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])
-def test_tool_uses_trigger_counts_tiny_results_only_when_their_inputs_are_cleared(clear_tool_inputs, triggers):
+def test_tool_uses_trigger_counts_tiny_results_only_when_their_inputs_are_cleared(
+    clear_tool_inputs: bool, triggers: bool
+) -> None:
     messages = _make_history(n_pairs=3)
     messages[2]["content"][0]["content"] = "ok"
     _, applied = apply_clear_tool_uses_20250919(

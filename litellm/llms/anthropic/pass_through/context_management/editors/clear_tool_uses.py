@@ -5,11 +5,13 @@
 count, unless ``clear_tool_inputs`` covers their tool: then their input can still be cleared, and the API counts and
 clears them like any other. Clearing goes oldest first in batches that free at least ``clear_at_least`` tokens,
 counting the result and any input it clears, and leaves an incomplete last batch, so the cleared prefix only grows
-between requests and each batch costs one prompt-cache miss. ``clear_tool_uses_spec_error`` answers a malformed field
-the way the API's 400 does, so the dispatcher can reject or drop the edit before any editor runs.
+between requests and each batch costs one prompt-cache miss. ``check_clear_tool_uses_spec`` answers a malformed field
+the way the API's 400 does, so the dispatcher can reject the edit, or drop only its malformed fields, before any editor
+runs.
 """
 
 from collections.abc import Mapping, Sequence, Set
+from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -79,18 +81,29 @@ def _parse(adapter: TypeAdapter[T], value: object) -> T | None:
         return None
 
 
-def clear_tool_uses_spec_error(edit_spec: Mapping[str, object], index: int) -> AnthropicContextManagementError | None:
-    """The API's 400 for the first malformed field of ``edits[index]``, or None when every field is well formed."""
+@dataclass(frozen=True, slots=True)
+class CheckedEdit:
+    edit: dict[str, object]
+    error: AnthropicContextManagementError | None
+
+
+def check_clear_tool_uses_spec(edit_spec: dict[str, object], index: int) -> CheckedEdit:
+    """``edits[index]`` without its malformed fields, with the API's 400 for the first one, or None when there is none."""
     try:
         _ClearToolUsesFields.model_validate(edit_spec)
     except ValidationError as error:
-        first: Final = error.errors(include_url=False)[0]
+        details: Final = error.errors(include_url=False)
+        malformed: Final = frozenset(detail["loc"][0] for detail in details)
+        first: Final = details[0]
         location: Final = ".".join(map(str, ("edits", index, CLEAR_TOOL_USES_EDIT_TYPE, *first["loc"])))
-        return AnthropicContextManagementError(
-            status_code=400,
-            message=f"context_management.{location}: {_API_MESSAGES.get(first['type'], first['msg'])}",
+        return CheckedEdit(
+            edit={key: value for key, value in edit_spec.items() if key not in malformed},
+            error=AnthropicContextManagementError(
+                status_code=400,
+                message=f"context_management.{location}: {_API_MESSAGES.get(first['type'], first['msg'])}",
+            ),
         )
-    return None
+    return CheckedEdit(edit=edit_spec, error=None)
 
 
 def _input_tools(clear_tool_inputs: bool | tuple[str, ...] | None) -> ToolNames:
@@ -291,7 +304,7 @@ def apply_clear_tool_uses_20250919(
     system: str | list[dict[str, object]] | None,
     edit_spec: ClearToolUsesEditSpec,
 ) -> tuple[list[dict[str, object]], AppliedEdit | None]:
-    """Apply clear_tool_uses to an edit ``clear_tool_uses_spec_error`` passed; return (messages, AppliedEdit or None)."""
+    """Apply clear_tool_uses to an edit ``check_clear_tool_uses_spec`` returned; return (messages, AppliedEdit or None)."""
     fields: Final = _ClearToolUsesFields.model_validate(edit_spec)
     clear_at_least: Final = 0 if fields.clear_at_least is None else fields.clear_at_least.value
     exclude_tools: Final = frozenset(fields.exclude_tools or ())
