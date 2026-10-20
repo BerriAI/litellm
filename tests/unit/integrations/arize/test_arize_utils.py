@@ -1,5 +1,6 @@
 import json
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final, Optional
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 
@@ -1016,7 +1017,7 @@ def test_arize_emits_response_cost():
     assert attrs["llm.response.cost"] == 0.0012345  # legacy key still emitted
 
 
-_PRICE_LOOKUP_FAILED = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
 
 
 @pytest.mark.parametrize(
@@ -1033,18 +1034,26 @@ _PRICE_LOOKUP_FAILED = {"error_str": "This model isn't mapped yet. model=openai/
             0.0,
             id="unpriced-cache-hit",
         ),
+        pytest.param({"response_cost": "not-a-number"}, None, id="malformed-cost"),
+        pytest.param(
+            {"response_cost": 0.002, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            0.002,
+            id="unpriced-with-billed-guardrail-fee",
+        ),
     ],
 )
-def test_arize_cost_attrs_tell_unpriced_call_from_free_call(cost_fields, expected_cost):
-    span = TracerProvider().get_tracer(__name__).start_span("litellm_request")
-    kwargs = {
+def test_arize_cost_attrs_tell_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
+    span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+    kwargs: Final = {
         "model": "unpriced-model",
         "messages": [{"role": "user", "content": "hi"}],
         "standard_logging_object": {"model_parameters": {}, "metadata": {}, "call_type": "completion", **cost_fields},
         "optional_params": {},
         "litellm_params": {"custom_llm_provider": "openai"},
     }
-    response_obj = ModelResponse(
+    response_obj: Final = ModelResponse(
         usage={"total_tokens": 30, "completion_tokens": 20, "prompt_tokens": 10},
         choices=[Choices(message={"role": "assistant", "content": "ok"})],
         model="unpriced-model",

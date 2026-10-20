@@ -2,6 +2,7 @@
 legacy dual-emit, hierarchy, error status, and idempotency. Needs the OTel SDK."""
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -23,7 +24,7 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter, attribute_budget, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
-from litellm.integrations.otel.mappers import LangfuseMapper  # noqa: E402
+from litellm.integrations.otel.mappers import LangfuseMapper  # noqa: E402  # after the opentelemetry importorskip
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
@@ -92,7 +93,7 @@ def test_llm_call_span_cost_breakdown():
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
 
 
-_PRICE_LOOKUP_FAILED = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
 
 
 @pytest.mark.parametrize(
@@ -111,22 +112,24 @@ _PRICE_LOOKUP_FAILED = {"error_str": "This model isn't mapped yet. model=openai/
         ),
     ],
 )
-def test_llm_call_span_tells_unpriced_call_from_free_call(cost_fields, expected_cost):
+def test_llm_call_span_tells_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
     engine, exporter = _engine()
-    data = LLMCallSpanData.from_standard_logging_payload(_payload(**cost_fields))
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_payload(**cost_fields))
 
     engine.emit(SpanRole.LLM_CALL, data)
 
     (span,) = exporter.get_finished_spans()
     assert span.attributes.get(f"{LiteLLM.COST_PREFIX}total") == expected_cost
-    langfuse_cost_details = LangfuseMapper().map(data).get("langfuse.observation.cost_details")
-    langfuse_cost = json.loads(langfuse_cost_details)["total"] if langfuse_cost_details is not None else None
+    langfuse_cost_details: Final = LangfuseMapper().map(data).get("langfuse.observation.cost_details")
+    langfuse_cost: Final = json.loads(langfuse_cost_details)["total"] if langfuse_cost_details is not None else None
     assert langfuse_cost == expected_cost
 
 
-def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span():
+def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span() -> None:
     engine, exporter = _engine()
-    payload = _payload(
+    payload: Final = _payload(
         response_cost=0.002,
         response_cost_failure_debug_info=_PRICE_LOOKUP_FAILED,
         cost_breakdown={"guardrail_cost": 0.002, "total_cost": 0.002},
