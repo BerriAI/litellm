@@ -513,12 +513,24 @@ async def test_chunked_plain_body_labeled_gzip_reaches_the_app_in_the_chunks_sen
 
 
 @pytest.mark.asyncio
-async def test_client_disconnect_mid_body_ends_the_request_without_a_response():
-    compressed: Final = gzip.compress(REQUEST_JSON, mtime=0)
-    client_messages: Final[list[Message]] = [
-        {"type": "http.request", "body": compressed[:10], "more_body": True},
-        {"type": "http.disconnect"},
-    ]
+@pytest.mark.parametrize(
+    "client_messages",
+    [
+        pytest.param([{"type": "http.disconnect"}], id="before-the-body"),
+        pytest.param(
+            [{"type": "http.request", "body": GZIP_MAGIC, "more_body": True}, {"type": "http.disconnect"}],
+            id="after-a-short-first-chunk",
+        ),
+        pytest.param(
+            [
+                {"type": "http.request", "body": gzip.compress(REQUEST_JSON, mtime=0)[:10], "more_body": True},
+                {"type": "http.disconnect"},
+            ],
+            id="mid-body",
+        ),
+    ],
+)
+async def test_client_disconnect_ends_the_request_without_a_response(client_messages: list[Message]):
     sent: Final[list[Message]] = []
     app_calls: Final[list[Scope]] = []
 
@@ -533,6 +545,72 @@ async def test_client_disconnect_mid_body_ends_the_request_without_a_response():
     )
 
     assert (app_calls, sent) == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_chunked_compressed_body_past_the_cap_gets_a_413_without_reading_the_rest():
+    compressed: Final = gzip.compress(random.Random(0).randbytes(2 * MIB), mtime=0)
+    chunk_size: Final = 64 * 1024
+    chunks: Final = [compressed[start : start + chunk_size] for start in range(0, len(compressed), chunk_size)]
+    client_messages: Final[list[Message]] = [
+        *({"type": "http.request", "body": chunk, "more_body": True} for chunk in chunks[:-1]),
+        {"type": "http.request", "body": chunks[-1], "more_body": False},
+    ]
+    sent: Final[list[Message]] = []
+    app_calls: Final[list[Scope]] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        app_calls.append(scope)
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await RequestBodyDecompressionMiddleware(app, max_decompressed_body_size_mb=CAP_MB)(
+        _http_scope([(b"content-encoding", b"gzip"), (b"transfer-encoding", b"chunked")]),
+        _scripted_receive(client_messages),
+        send,
+    )
+
+    assert app_calls == []
+    assert sent[0]["status"] == 413
+    assert json.loads(sent[1]["body"]) == {"error": f"Request size is too large. Max size is {CAP_MB} MB"}
+    assert client_messages, "the middleware read the whole body past the cap"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_messages", "body_the_app_gets"),
+    [
+        pytest.param(
+            [
+                {"type": "http.request", "more_body": True},
+                {"type": "http.request", "body": gzip.compress(REQUEST_JSON, mtime=0), "more_body": False},
+                {"type": "http.disconnect"},
+            ],
+            REQUEST_JSON,
+            id="first-chunk-without-a-body",
+        ),
+        pytest.param([{"type": "http.request"}, {"type": "http.disconnect"}], b"", id="empty-request"),
+    ],
+)
+async def test_request_messages_without_a_body_key_count_as_empty_chunks(
+    client_messages: list[Message], body_the_app_gets: bytes
+):
+    seen: Final[list[tuple[Scope, Message]]] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append((scope, await receive()))
+
+    async def send(message: Message) -> None:
+        raise AssertionError(f"middleware sent {message}")
+
+    await RequestBodyDecompressionMiddleware(app)(
+        _http_scope([(b"content-encoding", b"gzip")]), _scripted_receive(client_messages), send
+    )
+
+    [(app_scope, first_message)] = seen
+    assert (b"content-encoding", b"gzip") not in app_scope["headers"]
+    assert first_message == {"type": "http.request", "body": body_the_app_gets, "more_body": False}
 
 
 @pytest.mark.asyncio
