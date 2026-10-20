@@ -442,11 +442,11 @@ def reject_unknown_gemini_tts_voice_keys(
 def normalize_gemini_speech_config(
     value: Mapping[str, object], drop_unknown_fields: bool = False
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    speech_config: Final = _mapped_gemini_speech_config(value)
+    speech_config: Final = {**_with_gemini_speaker_voice_configs(mapped_gemini_speech_config(value))}
     return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
 
 
-def _mapped_gemini_speech_config(
+def mapped_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
     nested_config: Final = _gemini_speech_config_wrapper(value)
@@ -458,7 +458,7 @@ def _mapped_gemini_speech_config(
         if nested_config is not None
         else value
     )
-    normalized: Final = _with_gemini_speaker_voice_configs(_normalize_gemini_speech_config_item(config))
+    normalized: Final = _normalize_gemini_speech_config_item(config)
     speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
     voice_name: Final = next(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),

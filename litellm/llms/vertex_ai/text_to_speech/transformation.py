@@ -153,22 +153,43 @@ _CLOUD_TTS_SPEECH_CONFIG_FIELDS: Final[_CloudTtsVoiceFields] = MappingProxyType(
 )
 
 
-def _voice_field_mappings(value: object) -> tuple[Mapping[str, object], ...]:
-    items: Final = _SPEAKER_CONFIG_ITEMS.validate_python(value) if isinstance(value, list) else (value,)
-    return tuple(mapping for item in items if (mapping := as_str_mapping(item)) is not None)
+_CLOUD_TTS_LIST_FIELDS: Final = frozenset({"speakerVoiceConfigs"})
+
+_GEMINI_TTS_VOICE_NAME_KEYS: Final = ("name", "voiceName", "voice_name", "voice")
 
 
-def _fields_cloud_tts_cannot_send(value: object, fields: _CloudTtsVoiceFields, path: str) -> Iterator[str]:
-    for mapping in _voice_field_mappings(value):
-        for key, child in mapping.items():
-            yield from _field_cloud_tts_cannot_send(f"{path}{key}", child, fields.get(key))
+def _fields_cloud_tts_cannot_send(
+    config: Mapping[str, object], fields: _CloudTtsVoiceFields, path: str
+) -> Iterator[str]:
+    for key, value in config.items():
+        yield from _field_cloud_tts_cannot_send(f"{path}{key}", value, fields.get(key), key in _CLOUD_TTS_LIST_FIELDS)
 
 
-def _field_cloud_tts_cannot_send(path: str, value: object, fields: "_CloudTtsVoiceFields | None") -> Iterator[str]:
+def _field_cloud_tts_cannot_send(
+    path: str, value: object, fields: "_CloudTtsVoiceFields | None", is_list_field: bool
+) -> Iterator[str]:
     if fields is None:
         yield path
         return
-    yield from _fields_cloud_tts_cannot_send(value, fields, f"{path}.")
+    if value is None:
+        return
+    if not fields:
+        yield from () if isinstance(value, str) else (path,)
+        return
+    items: Final = (
+        _SPEAKER_CONFIG_ITEMS.validate_python(value) if is_list_field and isinstance(value, list) else (value,)
+    )
+    for item in items:
+        mapping = as_str_mapping(item)
+        yield from (path,) if mapping is None else _fields_cloud_tts_cannot_send(mapping, fields, f"{path}.")
+
+
+def _non_string_voice_names(config: Mapping[str, object], path: str) -> Iterator[str]:
+    return (
+        f"{path}{key}"
+        for key in _GEMINI_TTS_VOICE_NAME_KEYS
+        if config.get(key) is not None and not isinstance(config.get(key), str)
+    )
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -336,12 +357,17 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if drop_params:
             return
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            mapped_gemini_speech_config,
             named_voice_keys,
-            normalize_gemini_speech_config,
         )
 
+        speech_config: Final = VertexAITextToSpeechConfig._get_dict_value(voice, "speechConfig", "speech_config")
         unsendable: Final = sorted(
-            _fields_cloud_tts_cannot_send(normalize_gemini_speech_config(voice), _CLOUD_TTS_SPEECH_CONFIG_FIELDS, "")
+            {
+                *_fields_cloud_tts_cannot_send(mapped_gemini_speech_config(voice), _CLOUD_TTS_SPEECH_CONFIG_FIELDS, ""),
+                *_non_string_voice_names(voice, ""),
+                *_non_string_voice_names(speech_config or {}, "speechConfig."),
+            }
         )
         if not unsendable:
             return

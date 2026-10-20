@@ -389,6 +389,40 @@ class TestVertexAITextToSpeechConfig:
                 },
                 "multiSpeakerVoiceConfig.speakerVoiceConfigs.tone",
             ),
+            (
+                {
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}, "tone": "x"},
+                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "y"},
+                        ]
+                    }
+                },
+                "multiSpeakerVoiceConfig.speakerVoiceConfigs.tone",
+            ),
+            (
+                {
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {
+                                "speakerAlias": "Ryan",
+                                "speakerId": "Puck",
+                                "voiceConfig": {
+                                    "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "AAAA"}
+                                },
+                            },
+                            {"speakerAlias": "Katie", "speakerId": "Kore"},
+                        ]
+                    }
+                },
+                "multiSpeakerVoiceConfig.speakerVoiceConfigs.voiceConfig.replicatedVoiceConfig",
+            ),
+            ({"languageCode": ["en-US"], "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}, "languageCode"),
+            ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": 5}}}, "voiceConfig.prebuiltVoiceConfig.voiceName"),
+            ({"voiceConfig": "Puck"}, "voiceConfig"),
+            ({"multiSpeakerVoiceConfig": [{"speaker": "Ryan"}]}, "multiSpeakerVoiceConfig"),
+            ({"name": 5}, "name"),
+            ({"speechConfig": {"voice": ["Puck"]}}, "speechConfig.voice"),
         ],
     )
     def test_gemini_tts_cloud_tts_rejects_voice_fields_it_cannot_send(
@@ -396,18 +430,21 @@ class TestVertexAITextToSpeechConfig:
     ):
         config: Final = VertexAITextToSpeechConfig()
 
-        with pytest.raises(litellm.UnsupportedParamsError, match=unsendable_field):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
             config.map_openai_params(
                 model="gemini-3.1-flash-tts-preview",
                 optional_params={"response_format": "mp3"},
                 voice=voice,
             )
 
+        assert f"voice fields {unsendable_field} as mp3" in str(exc_info.value)
+
     @pytest.mark.parametrize(
         ("voice", "voice_name"),
         [
             ({"voiceConfig": {"replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklG"}}}, "Kore"),
             ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck", "style": "calm"}}}, "Puck"),
+            ({"voiceConfig": "Puck"}, "Kore"),
         ],
     )
     def test_gemini_tts_cloud_tts_drops_voice_fields_it_cannot_send_with_drop_params(
