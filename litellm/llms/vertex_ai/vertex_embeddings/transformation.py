@@ -1,7 +1,8 @@
 import types
+from collections.abc import Mapping
 from typing import Final, Literal
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
@@ -22,12 +23,17 @@ class _PredictResponseMetadata(TypedDict, total=False):
 _PREDICT_RESPONSE_METADATA: Final = TypeAdapter(_PredictResponseMetadata)
 
 
-def billable_character_count(response: _PredictResponseMetadata) -> int | None:
+def billable_character_count(response: Mapping[str, object]) -> int | None:
     """
     `metadata.billableCharacterCount` of a Vertex text embedding predict response, the count Google
     bills per-character embedding models (text-embedding-005, text-multilingual-embedding-002) on.
+    A missing, null or non-integer count is reported as absent so the embedding itself still comes back.
     """
-    return response.get("metadata", {}).get("billableCharacterCount")
+    try:
+        validated: Final = _PREDICT_RESPONSE_METADATA.validate_python(response)
+    except ValidationError:
+        return None
+    return validated.get("metadata", {}).get("billableCharacterCount")
 
 
 class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
@@ -269,7 +275,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        billable_characters: Final = billable_character_count(_PREDICT_RESPONSE_METADATA.validate_python(response))
+        billable_characters: Final = billable_character_count(response)
         usage: Final = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=0,
