@@ -1260,6 +1260,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -4831,7 +4841,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={

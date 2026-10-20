@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -21,7 +21,7 @@ class MessagesInterceptor(ABC):
     @abstractmethod
     def can_handle(
         self,
-        tools: list[dict] | None,
+        tools: Sequence[Mapping[str, object]] | None,
         custom_llm_provider: str | None,
     ) -> bool:
         """Return True if this interceptor should handle the request."""
