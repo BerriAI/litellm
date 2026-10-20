@@ -5,10 +5,10 @@ Every row sends `CODING_AGENT_REQUEST` to `/v1/chat/completions`, changing only 
 | Tier | Model versions |
 | --- | --- |
 | Small | Haiku 4.5 and 5.5, GPT 5 Mini and 5.4 Mini, GPT 5.6 Luna and 6 Luna |
-| Mid | Opus 5 and 5.5, GPT 5.6 Sol, 6 Sol and 6.1 Sol, GPT 5.6 Terra |
+| Mid | Opus 5 and 5.5, Sonnet 5.5, Gemini 3.8 Flash and 3.1 Pro Preview, GPT 5.6 Sol, 6 Sol and 6.1 Sol, GPT 5.6 Terra |
 | High | Fable 5 and 5.1, Gemini 4 Argon, GPT 6 Astra |
 
-The 45 rows cover Anthropic direct, OpenAI direct, Vertex, Azure OpenAI, Azure AI and Bedrock Converse where accessible. Vertex Haiku 5.5 was unavailable during capture and is not represented
+The 51 rows cover Anthropic direct, OpenAI direct, Vertex, Gemini direct, Azure OpenAI, Azure AI and Bedrock Converse where accessible. Vertex Haiku 5.5 was unavailable during capture and is not represented
 
 The request contains system instructions, conversation history, previous assistant tool calls and results, four function definitions, automatic parallel tools, low reasoning effort and an output limit. Each row exercises a tool-call response, raw streaming, SDK stream assembly and a follow-up that replays the returned assistant message and tool-call IDs
 
@@ -33,7 +33,7 @@ Streaming cases store `expected_litellm_message` and `expected_litellm_usage`. M
 
 Usage requires nonnegative integer counts, positive prompt and completion counts, and `total_tokens == prompt_tokens + completion_tokens`. The complete normalized usage must equal the independently expected counters, including cached and reasoning tokens and derived text/cache details. Missing, changed or unexpected counters fail. Only null optional fields, the explicitly listed provider metadata/duplicate counters and computed `cost` are excluded. Thus a wrong prompt count with an adjusted total still fails
 
-The raw stream check assembles tool names and argument fragments by index. The SDK check separately uses `OpenAI.chat.completions.stream()` without removing reasoning fields. All 45 SDK checks run, including the seven Haiku rows. [LIT-9653](https://linear.app/litellm-ai/issue/LIT-9653) was fixed in [#46611](https://github.com/BerriAI/litellm/pull/46611), so there are no Haiku skips
+The raw stream check assembles tool names and argument fragments by index. The SDK check separately uses `OpenAI.chat.completions.stream()` without removing reasoning fields. All 51 SDK checks run, including the seven Haiku rows. [LIT-9653](https://linear.app/litellm-ai/issue/LIT-9653) was fixed in [#46611](https://github.com/BerriAI/litellm/pull/46611), so there are no Haiku skips
 
 ## Recorded upstreams
 

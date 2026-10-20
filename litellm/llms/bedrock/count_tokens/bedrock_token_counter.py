@@ -16,7 +16,13 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountResponse
+from litellm.types.utils import (
+    CountContextManagement,
+    LiteLLMPydanticObjectBase,
+    LlmProviders,
+    TokenCountMessagesFormat,
+    TokenCountResponse,
+)
 
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
@@ -53,8 +59,7 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 
 class BedrockTokenCounter(BaseTokenCounter):
-    """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for Claude models bedrock-runtime answers 400 or 404 for"""
+    """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
     def __init__(
         self,
@@ -107,6 +112,9 @@ class BedrockTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None
@@ -118,17 +126,22 @@ class BedrockTokenCounter(BaseTokenCounter):
             **({"tools": tools} if tools else {}),
             **({"system": system} if system else {}),
         }
-        resolved_model: Final = get_bedrock_base_model(model_to_use)
+        use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
+        resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
 
-        runtime: Final = await self._count_with(
-            self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+        primary: Final = await self._count_with(
+            self._mantle_handler if use_mantle else self._runtime_handler,
+            MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE,
+            request_data,
+            litellm_params,
+            resolved_model,
         )
         outcome: Final = (
             await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
             )
-            if _runtime_rejected_claude_model(runtime, resolved_model)
-            else runtime
+            if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            else primary
         )
         match outcome:
             case CountedTokens():

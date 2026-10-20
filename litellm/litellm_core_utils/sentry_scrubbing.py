@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from functools import reduce
-from typing import TYPE_CHECKING, Final, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from pydantic import JsonValue
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
@@ -65,6 +65,8 @@ class SentryInitOptions(TypedDict):
     traces_sample_rate: ReadOnly[float]
     sample_rate: ReadOnly[float]
     send_default_pii: ReadOnly[bool]
+    max_request_body_size: ReadOnly[Literal["never"]]
+    include_local_variables: ReadOnly[bool]
     event_scrubber: ReadOnly[EventScrubber]
     before_send: ReadOnly[EventScrubFn]
     before_send_transaction: ReadOnly[EventScrubFn]
@@ -140,6 +142,8 @@ def build_sentry_init_options(env: Mapping[str, str]) -> SentryInitOptions:
         traces_sample_rate=float(env.get("SENTRY_API_TRACE_RATE") or "1.0"),
         sample_rate=float(env.get("SENTRY_API_SAMPLE_RATE") or "1.0"),
         send_default_pii=send_default_pii,
+        max_request_body_size="never",
+        include_local_variables=send_default_pii,
         event_scrubber=EventScrubber(
             denylist=list(SECRET_FIELD_NAMES),
             pii_denylist=list(PII_FIELD_NAMES),

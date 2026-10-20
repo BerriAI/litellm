@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -5,7 +6,8 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -56,8 +58,9 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -290,6 +293,7 @@ def _unsupported_params(
     model: str,
     custom_llm_provider: str,
     headers: Mapping[str, str],
+    supports_box_questions: bool,
 ) -> tuple[str, ...]:
     refuses_safety_identifier: Final = (
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
@@ -298,9 +302,7 @@ def _unsupported_params(
         None if provider_config.supports_images_in(ir_request.input, headers) else image_param(ir_request.input)
     )
     refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
-    refuses_box_questions: Final = _has_box_question(ir_request.questions) and not (
-        provider_config.supports_box_questions(model, custom_llm_provider, headers)
-    )
+    refuses_box_questions: Final = _has_box_question(ir_request.questions) and not supports_box_questions
     refuses_audio: Final = bool(ir_request.audio) and not provider_config.supports_audio_input(
         model, custom_llm_provider
     )
@@ -328,9 +330,8 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
-    model: str,
-    custom_llm_provider: str,
     headers: Mapping[str, str],
+    supports_box_questions: bool,
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
@@ -343,7 +344,7 @@ def _without_unsupported_params(
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions
-            if provider_config.supports_box_questions(model, custom_llm_provider, headers)
+            if supports_box_questions
             else tuple(filter(_is_not_box_question, ir_request.questions))
         ),
     )
@@ -365,6 +366,19 @@ def _without_malformed_images(
     return well_formed
 
 
+class _DeploymentBoxQuestions(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    supports_box_questions: StrictBool | None = None
+
+
+def _deployment_supports_box_questions(kwargs: Mapping[str, object]) -> bool | None:
+    try:
+        return _DeploymentBoxQuestions.model_validate(kwargs.get("model_info") or {}).supports_box_questions
+    except ValidationError:
+        return None
+
+
 def _provider_ir_request(
     ir_request: DecisionsIRRequest,
     *,
@@ -374,12 +388,17 @@ def _provider_ir_request(
     headers: Mapping[str, str],
     kwargs: Mapping[str, object],
 ) -> DecisionsIRRequest | _UnsupportedParams | _NothingLeftAfterDrop:
-    unsupported: Final = _unsupported_params(ir_request, provider_config, model, custom_llm_provider, headers)
+    supports_box_questions: Final = provider_config.supports_box_questions(
+        model, custom_llm_provider, headers, _deployment_supports_box_questions(kwargs)
+    )
+    unsupported: Final = _unsupported_params(
+        ir_request, provider_config, model, custom_llm_provider, headers, supports_box_questions
+    )
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
-    supported: Final = _without_unsupported_params(ir_request, provider_config, model, custom_llm_provider, headers)
+    supported: Final = _without_unsupported_params(ir_request, provider_config, headers, supports_box_questions)
     if _leaves_no_input(supported.input):
         return _NothingLeftAfterDrop(names=unsupported, missing="input to decide on")
     if not supported.questions:
@@ -397,6 +416,30 @@ def _outbound_headers(
         custom_llm_provider=custom_llm_provider,
     )
     return MappingProxyType({**(extra_headers or {}), **forwarded})
+
+
+_LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _jsonable_fallback(value: object) -> object:
+    return dict(_LOGGED_FIELDS_ADAPTER.validate_python(value)) if isinstance(value, Mapping) else str(value)
+
+
+def _logged_request_message(caller_request: object) -> ChatCompletionUserMessage:
+    caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
+        to_jsonable_python(caller_request, fallback=_jsonable_fallback)
+    )
+    sent_fields: Final = json.dumps(
+        dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
+    )
+    return ChatCompletionUserMessage(role="user", content=sent_fields)
+
+
+def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> None:
+    """Record every request field the caller sent as the logged `messages`, before any validation."""
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
 def prepare_call(
@@ -442,7 +485,7 @@ def prepare_call(
         ) from error
 
     try:
-        resolved_api_base, resolved_api_key = provider_config.resolve_connection(
+        resolved_api_base, static_api_key = provider_config.resolve_connection(
             dynamic_api_base or api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
@@ -453,6 +496,7 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
@@ -650,7 +694,10 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+            "provider_response_model": (
+                get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+                or f"{call.custom_llm_provider}/{call.model}"
+            ),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )

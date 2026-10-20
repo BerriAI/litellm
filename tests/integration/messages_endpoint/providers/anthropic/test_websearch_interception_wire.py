@@ -180,6 +180,8 @@ import httpx
 import pytest
 from integration._support.client import Gateway, eventually
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _QUERY: Final = "integration capped search"
 _TEXT_BLOCK: Final = {"type": "text", "text": "searching once more"}
 _NOT_INTERCEPTED: Final = "native tool reached the provider"
@@ -407,3 +409,81 @@ def test_database_created_search_tool_backend_receives_the_intercepted_query_ove
         assert targets[-3:] == (("POST", "/v1/messages"), ("GET", "/database/search"), ("POST", "/v1/messages")), (
             targets
         )
+
+
+def test_empty_exa_search_reaches_the_model_without_the_exa_response_envelope(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "websearch-exa-" + uuid.uuid4().hex
+    tool_name: Final = "integration-exa-" + uuid.uuid4().hex
+    envelope: Final = {
+        "requestId": "exa-request-" + identity,
+        "resolvedSearchType": "neural",
+        "searchTime": 98.5,
+        "costDollars": {"total": 0.005, "search": {"neural": 0.005}},
+    }
+
+    def respond(request: Request) -> Reply:
+        parts: Final = urlsplit(request.target)
+        if parts.path == "/exa/search":
+            assert (request.method, json.loads(request.body)["query"]) == ("POST", _QUERY), request.body
+            return Reply(body=json.dumps({**envelope, "results": []}).encode())
+        assert request.method == "POST" and parts.path == "/v1/messages", request.target
+        body: Final = json.loads(request.body)
+        assert [tool["name"] for tool in body["tools"]] == ["litellm_web_search"], body["tools"]
+        results: Final = [
+            block
+            for message in body["messages"]
+            if isinstance(message["content"], list)
+            for block in message["content"]
+            if block["type"] == "tool_result"
+        ]
+        if not results:
+            return _anthropic_reply(identity, [_TEXT_BLOCK, _search_tool_use(identity)], "tool_use")
+        assert results == [{"type": "tool_result", "tool_use_id": identity, "content": "results=[] object='search'"}], (
+            results
+        )
+        return _anthropic_reply(identity, [_FINAL_BLOCK], "end_turn")
+
+    with wire_server(respond) as wire:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["search_tools"] = [
+            {
+                "search_tool_name": tool_name,
+                "litellm_params": {
+                    "search_provider": "exa_ai",
+                    "api_key": "synthetic-exa-key",
+                    "api_base": wire.url + "/exa",
+                },
+            }
+        ]
+        config["litellm_settings"].update(
+            {
+                "callbacks": ["websearch_interception"],
+                "websearch_interception_params": {
+                    "enabled": True,
+                    "enabled_providers": ["anthropic"],
+                    "search_tool_name": tool_name,
+                },
+            }
+        )
+        path: Final = tmp_path / "websearch-exa.yaml"
+        path.write_text(yaml.safe_dump(config))
+        environment: Final = {"ANTHROPIC_API_BASE": wire.url}
+        with owned_proxy(gateway, tmp_path, environment, config=path) as candidate, candidate.scenario() as models:
+            model: Final = models.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=wire.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 64,
+                    "messages": [{"role": "user", "content": identity}],
+                    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["content"][-1] == _FINAL_BLOCK, response.text
+        assert envelope["requestId"] not in response.text, response.text
+        targets: Final = tuple((request.method, urlsplit(request.target).path) for request in wire.drain())
+        assert targets[-3:] == (("POST", "/v1/messages"), ("POST", "/exa/search"), ("POST", "/v1/messages")), targets
