@@ -99,9 +99,9 @@ class _CreatorRows:
 @dataclass(frozen=True, slots=True)
 class ResponseCreator:
     metadata: Mapping[str, object]
-    key_metadata: Mapping[str, object]
+    key_metadata: Mapping[str, object] | None
     team_id: str | None
-    team_metadata: Mapping[str, object]
+    team_metadata: Mapping[str, object] | None
 
 
 class ManagedObjectCreatorAttribution:
@@ -118,7 +118,8 @@ class ManagedObjectCreatorAttribution:
     A background response also carries its end user and the key, team, and user budgets, the
     way the read that billed it before did, and never names a key-scoped creator as its user.
     Its creator's key and team metadata come along too, so the billed event reaches the key's
-    and team's logging callbacks like that read did.
+    and team's logging callbacks like that read did. A key or team the row names that can no
+    longer be read comes back as None instead of empty, since its logging settings are unknown.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -141,9 +142,9 @@ class ManagedObjectCreatorAttribution:
                 **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
                 **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
             },
-            key_metadata=row_metadata(rows.key),
+            key_metadata=_named_row_metadata(rows.key, _names_a_key_row(getattr(job, "api_key", None), job.created_by)),
             team_id=getattr(job, "team_id", None),
-            team_metadata=row_metadata(rows.team),
+            team_metadata=_named_row_metadata(rows.team, bool(getattr(job, "team_id", None))),
         )
 
     async def _rows(self, job: ManagedObjectRow, object_id: str) -> _CreatorRows:
@@ -167,7 +168,7 @@ class ManagedObjectCreatorAttribution:
     async def _key_row(
         self, object_id: str, api_key: str | None, created_by: str | None
     ) -> prisma_models.LiteLLM_VerificationToken | None:
-        if not api_key or _is_cli_session_key(api_key, created_by):
+        if not api_key or not _names_a_key_row(api_key, created_by):
             return None
         try:
             return await _token_table(self._prisma_client).find_unique(where={"token": api_key})
@@ -214,6 +215,18 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
 def row_metadata(row: object) -> Mapping[str, object]:
     metadata: Final = getattr(row, "metadata", None)
     return cast(Mapping[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
+
+
+def _named_row_metadata(row: object, named: bool) -> Mapping[str, object] | None:
+    if row is None and named:
+        return None
+    return row_metadata(row)
+
+
+def _names_a_key_row(api_key: str | None, created_by: str | None) -> bool:
+    if not api_key:
+        return False
+    return not _is_cli_session_key(api_key, created_by)
 
 
 def _is_cli_session_key(api_key: str, created_by: str | None) -> bool:

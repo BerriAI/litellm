@@ -7955,6 +7955,29 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
 
 
+@pytest.mark.asyncio
+async def test_an_async_success_callback_logs_every_call_that_reuses_its_callback_list() -> None:
+    """The proxy hands the same key-level success_callback list to every attempt of a request, so each
+    call that reuses the list must log to its async callbacks, not only the first one that saw it."""
+    logged: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    async def record_success(kwargs: dict[str, object], *_: object) -> None:
+        logged.put_nowait(kwargs.get("litellm_call_id"))
+
+    success_callback: Final = [record_success]
+    for _ in range(2):
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            success_callback=success_callback,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert logged.qsize() == 2
+
+
 @pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
 def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(
     original_function: str,
