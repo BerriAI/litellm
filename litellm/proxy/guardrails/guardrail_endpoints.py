@@ -2431,6 +2431,26 @@ async def _emit_guardrail_success_logs(
     return response
 
 
+def _guardrail_metadata(
+    body: Mapping[str, object], data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: becomes request_data["metadata"], which guardrails write to
+    """
+    Body ``metadata`` with the caller identity taken from the authenticated request.
+
+    Chat routes strip client-sent ``user_api_key_*`` fields before guardrails see
+    them (``add_litellm_data_to_request``); this endpoint handed the body to the
+    guardrail as is, so a caller could pose as another key, user or team.
+    """
+    processed: Final = data.get("metadata")
+    trusted: Final[Mapping[str, object]] = (
+        cast("Mapping[str, object]", processed) if isinstance(processed, dict) else {}  # cast-ok: JSON keys are str
+    )
+    return {
+        **{k: v for k, v in body.items() if not k.startswith("user_api_key_")},
+        **{k: v for k, v in trusted.items() if k.startswith("user_api_key_")},
+    }
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
@@ -2499,7 +2519,13 @@ async def apply_guardrail(
 
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            **(
+                {
+                    "metadata": _guardrail_metadata(request.metadata, cast("Mapping[str, object]", data))
+                }  # cast-ok: JSON keys
+                if request.metadata is not None
+                else {}
+            ),
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(

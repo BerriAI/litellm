@@ -2256,6 +2256,53 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_takes_identity_from_auth_not_body(mocker):
+    """Body-supplied ``user_api_key_*`` fields must not reach the guardrail, the
+    same as on chat routes: guardrails attribute and scope by them."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    processor = mocker.patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing").return_value
+    processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=(
+            {
+                "metadata": {
+                    "route": "/apply_guardrail",
+                    "user_api_key_hash": "caller-hash",
+                    "user_api_key_user_id": "caller",
+                }
+            },
+            mocker.Mock(async_success_handler=AsyncMock(), model_call_details={}),
+        )
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={
+            "forbidden_topics": ["tax"],
+            "user_api_key_hash": "victim-hash",
+            "user_api_key_team_id": "victim-team",
+        },
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="caller-hash"),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={
+            "metadata": {
+                "forbidden_topics": ["tax"],
+                "user_api_key_hash": "caller-hash",
+                "user_api_key_user_id": "caller",
+            }
+        },
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     """
     Test get_guardrail_info endpoint returns proper response when guardrail is found in config.
