@@ -759,7 +759,7 @@ def openai_tokenizer_encoding_name(model: str) -> str:
 
 def _without_openai_provider_prefix(model: str) -> str:
     provider, separator, name = model.partition("/")
-    is_listed_openai_model: Final = provider in ("openai", "azure") and name in litellm.open_ai_chat_completion_models
+    is_listed_openai_model: Final = provider in ("openai", "azure") and _fix_model_name(name) == name
     return name if separator and is_listed_openai_model else model
 
 
