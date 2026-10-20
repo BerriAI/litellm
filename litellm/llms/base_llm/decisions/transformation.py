@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
@@ -418,11 +419,17 @@ def _normalize_systemone_response(payload: object) -> object:
     }
 
 
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
 def _validation_summary(error: ValidationError) -> str:
-    return "; ".join(
-        f"{'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}"
-        for detail in error.errors(include_url=False, include_input=False)
-    )
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
 
 
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
@@ -648,7 +655,7 @@ class BaseDecisionsConfig(ABC):
         try:
             return self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
                 f"{error.title} {_validation_summary(error)}",

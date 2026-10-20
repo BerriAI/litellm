@@ -612,21 +612,35 @@ async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_
     assert len(respx_mock.calls) == 0
 
 
+_PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "reply",
+    ("reply", "detail"),
     (
-        pytest.param({"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}, id="usage"),
-        pytest.param({"error": "Rate limit reached"}, id="rate_limit_text"),
-        pytest.param({"error": "Request timed out"}, id="timeout_text"),
+        pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
+        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"rate_limit": None}},
+            "DecisionsResponse answers.rate_limit: Input should be a valid dictionary",
+            id="null_answer_named_rate_limit",
+        ),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"is_defect": {"type": "Request timed out"}}},
+            "DecisionsResponse answers.is_defect",
+            id="answer_type_timeout_text",
+        ),
+        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
     ),
 )
-async def test_upstream_reply_without_answers_is_a_server_error(
-    reply: dict[str, object], respx_mock: respx.MockRouter
+async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
+    reply: object, detail: str, respx_mock: respx.MockRouter
 ) -> None:
     respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=reply)
 
-    with pytest.raises(litellm.InternalServerError, match="unexpected response: DecisionsResponse answers: Field"):
+    with pytest.raises(litellm.InternalServerError, match=re.escape(f"unexpected response: {detail}")):
         await litellm.asystemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",

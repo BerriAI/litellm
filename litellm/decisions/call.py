@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    DecisionsResponseValidationError,
     image_media_type,
     image_param,
     input_images,
@@ -732,18 +733,21 @@ def _formatted_response(
 
 
 def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
-    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
-        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
-        return litellm.APIConnectionError(
-            message=f"{provider_label} - {error.message}",
-            llm_provider=call.custom_llm_provider,
-            model=f"{call.custom_llm_provider}/{call.model}",
-        )
-    return litellm.exception_type(
-        model=f"{call.custom_llm_provider}/{call.model}",
-        custom_llm_provider=call.custom_llm_provider,
-        original_exception=error,
-    )
+    provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+    model: Final = f"{call.custom_llm_provider}/{call.model}"
+    match error:
+        case DecisionsResponseValidationError():
+            return litellm.InternalServerError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case BaseLLMException(status_code_is_synthesized=True):
+            return litellm.APIConnectionError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case _:
+            return litellm.exception_type(
+                model=model, custom_llm_provider=call.custom_llm_provider, original_exception=error
+            )
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
