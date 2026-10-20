@@ -19,7 +19,7 @@ from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventH
 
 _PLAINTEXT_KEY = "sk-plaintext-key-39315"
 _TOKEN_ID = "a1b2c3d4e5f6789012345678abcdef01"
-_MARKUP_KEY = 'sk-1234567890123456</pre><a href="https://attacker.example/login">Activate key</a><pre>'
+_MARKUP_KEY = 'sk-9876543210987654</pre><a href="https://attacker.example/login">Activate key</a><pre>'
 
 
 def _key_created_email_response(key: str = _PLAINTEXT_KEY) -> GenerateKeyResponse:
