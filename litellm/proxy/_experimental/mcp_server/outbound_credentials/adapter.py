@@ -477,7 +477,7 @@ def validate_static_credential(
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
-    if allow_absent and not any(value for _, value in values):
+    if allow_absent and not values:
         return Ok(None)
     if any(_usable_credential_value(auth_type, name, value) for name, value in values):
         return Ok(None)
