@@ -1421,6 +1421,9 @@ class Router:
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: dict[tuple[str, str], list[int]] = {}
         self.team_public_model_names: frozenset[str] = frozenset()
+        # Guards model_list and the three index maps above: writers change them, and readers turn an
+        # index into a deployment, under it, so a lookup never lands between a removal and its re-index
+        self._deployment_index_lock = threading.RLock()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # and ``_invalidate_access_groups_cache`` touch *before* the first
@@ -2063,8 +2066,8 @@ class Router:
         public_model_name: Final = deployment.model_info.team_public_model_name
         if team_id is None or public_model_name is None:
             return False
-        sibling_indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()
-        routable_siblings: Final = self._filter_blocked_deployments([self.model_list[idx] for idx in sibling_indices])
+        siblings: Final = self._team_deployments_named(team_id, public_model_name) or ()
+        routable_siblings: Final = self._filter_blocked_deployments(list(siblings))
         return len(routable_siblings) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
@@ -10617,10 +10620,10 @@ class Router:
         # O(k) via the name→indices map: only touch deployments whose name
         # is listed in `available_models`, instead of scanning model_list.
         for name in config.available_models:
-            indices = self.model_name_to_deployment_indices.get(name, [])
-            if not indices:
+            deployments = self._deployments_named(name)
+            if not deployments:
                 continue
-            d = (self.model_list or [])[indices[0]]
+            d = deployments[0]
             mi = d.get("model_info") if isinstance(d, dict) else d.model_info
             mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
             prefs_raw = mi_dict.get("adaptive_router_preferences")
@@ -10722,10 +10725,11 @@ class Router:
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
         self._discovered_model_info_cache.flush_cache()
-        self.model_list = []
-        self.model_id_to_deployment_index_map = {}  # Reset the index
-        self.model_name_to_deployment_indices = {}  # Reset the model_name index
-        self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        with self._deployment_index_lock:
+            self.model_list = []
+            self.model_id_to_deployment_index_map = {}  # Reset the index
+            self.model_name_to_deployment_indices = {}  # Reset the model_name index
+            self.team_model_to_deployment_indices = {}  # Reset the team_model index
         self.team_pattern_routers = {}
         self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
@@ -11116,26 +11120,27 @@ class Router:
         - model: dict - the model to add to the list
         - model_id: Optional[str] - the model ID to use for indexing. If None, will try to get from model["model_info"]["id"]
         """
-        idx: Final = len(self.model_list)
-        self.model_list.append(model)
-        self._invalidate_model_group_info_cache()
-        self._invalidate_access_groups_cache()
+        with self._deployment_index_lock:
+            idx: Final = len(self.model_list)
+            self.model_list.append(model)
+            self._invalidate_model_group_info_cache()
+            self._invalidate_access_groups_cache()
 
-        # Update model_id index for O(1) lookup
-        if model_id is not None:
-            self.model_id_to_deployment_index_map[model_id] = idx
-        elif model.get("model_info", {}).get("id") is not None:
-            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
+            # Update model_id index for O(1) lookup
+            if model_id is not None:
+                self.model_id_to_deployment_index_map[model_id] = idx
+            elif model.get("model_info", {}).get("id") is not None:
+                self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
 
-        # Update model_name index for O(1) lookup
-        model_name: Final = model.get("model_name")
-        if model_name:
-            if model_name not in self.model_name_to_deployment_indices:
-                self.model_name_to_deployment_indices[model_name] = []
-            self.model_name_to_deployment_indices[model_name].append(idx)
+            # Update model_name index for O(1) lookup
+            model_name: Final = model.get("model_name")
+            if model_name:
+                if model_name not in self.model_name_to_deployment_indices:
+                    self.model_name_to_deployment_indices[model_name] = []
+                self.model_name_to_deployment_indices[model_name].append(idx)
 
-        # Update team_model index for O(1) team-scoped lookup
-        self._update_team_model_index(model, idx)
+            # Update team_model index for O(1) team-scoped lookup
+            self._update_team_model_index(model, idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
         """
@@ -11162,18 +11167,15 @@ class Router:
 
                 # if there is a new litellm param -> then update the deployment
                 # remove the previous deployment
-                removal_idx: int | None = None
-                deployment_id: Final = deployment.model_info.id
-                deployment_fast_mapping: Final = self.model_id_to_deployment_index_map
-
-                if deployment_id in deployment_fast_mapping:
-                    removal_idx = deployment_fast_mapping[deployment_id]
-
+                with self._deployment_index_lock:
+                    removal_idx: Final = self.model_id_to_deployment_index_map.get(_deployment_model_id)
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
-                        self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self._update_deployment_indices_after_removal(
+                            model_id=_deployment_model_id, removal_idx=removal_idx
+                        )
 
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
@@ -11401,35 +11403,32 @@ class Router:
         - The deleted deployment
         - OR None (if deleted deployment not found)
         """
-        deployment_idx = None
-        if id in self.model_id_to_deployment_index_map:
-            deployment_idx = self.model_id_to_deployment_index_map[id]
-
         try:
-            if deployment_idx is not None:
+            with self._deployment_index_lock:
+                deployment_idx: Final = self.model_id_to_deployment_index_map.get(id)
+                if deployment_idx is None:
+                    return None
                 # Pop the item from the list first
                 item: Final = self.model_list.pop(deployment_idx)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
-                _budget_limiter: Final = self.get_router_deployment_budget_limiter()
-                if _budget_limiter is not None:
-                    _budget_limiter.unregister_deployment_budget(model_id=id)
-                try:
-                    self._unregister_pre_routing_strategy_for_deployment(
-                        deployment=item if isinstance(item, Deployment) else Deployment(**item)
-                    )
-                except Exception:
-                    verbose_router_logger.exception(
-                        "delete_deployment: could not release pre-routing strategies for model_id=%s; "
-                        "the deployment is out of the model_list and its indices are repaired",
-                        id,
-                    )
-                return item
-            else:
-                return None
+            _budget_limiter: Final = self.get_router_deployment_budget_limiter()
+            if _budget_limiter is not None:
+                _budget_limiter.unregister_deployment_budget(model_id=id)
+            try:
+                self._unregister_pre_routing_strategy_for_deployment(
+                    deployment=item if isinstance(item, Deployment) else Deployment(**item)
+                )
+            except Exception:
+                verbose_router_logger.exception(
+                    "delete_deployment: could not release pre-routing strategies for model_id=%s; "
+                    "the deployment is out of the model_list and its indices are repaired",
+                    id,
+                )
         except Exception:
             return None
+        return item
 
     def get_router_deployment_budget_limiter(
         self,
@@ -11478,6 +11477,18 @@ class Router:
         if _budget_limiter is not None:
             _budget_limiter.register_deployment_budget(deployment=deployment.to_json(exclude_none=True))
 
+    def _deployments_named(self, model_name: str) -> tuple[Any, ...] | None:
+        """The deployments indexed under `model_name`, or None when the name is not indexed."""
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_name)
+            return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
+    def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[Any, ...] | None:
+        """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""
+        with self._deployment_index_lock:
+            indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name))
+            return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
     def get_deployment(self, model_id: str) -> Deployment | None:
         """
         Returns -> Deployment or None
@@ -11485,9 +11496,10 @@ class Router:
         Raise Exception -> if model found in invalid format
         """
         # Use O(1) lookup via model_id_to_deployment_index_map only
-        if model_id in self.model_id_to_deployment_index_map:
-            idx: Final = self.model_id_to_deployment_index_map[model_id]
-            model: Final = self.model_list[idx]
+        with self._deployment_index_lock:
+            idx: Final = self.model_id_to_deployment_index_map.get(model_id)
+            model: Final = None if idx is None else self.model_list[idx]
+        if model is not None:
             if isinstance(model, dict):
                 return Deployment(**model)
             elif isinstance(model, Deployment):
@@ -11521,17 +11533,17 @@ class Router:
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         # O(1) lookup in model_name index
-        if model_group_name in self.model_name_to_deployment_indices:
-            indices: Final = self.model_name_to_deployment_indices[model_group_name]
-            if indices:
-                # Return first deployment for this model_name
-                model: Final = self.model_list[indices[0]]
-                if isinstance(model, dict):
-                    return Deployment(**model)
-                elif isinstance(model, Deployment):
-                    return model
-                else:
-                    raise Exception(f"Model Name invalid - {type(model)}")
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_group_name)
+            # Return first deployment for this model_name
+            model: Final = self.model_list[indices[0]] if indices else None
+        if model is not None:
+            if isinstance(model, dict):
+                return Deployment(**model)
+            elif isinstance(model, Deployment):
+                return model
+            else:
+                raise Exception(f"Model Name invalid - {type(model)}")
         return None
 
     @staticmethod
@@ -11554,11 +11566,12 @@ class Router:
         by other teams so a shared model name never resolves another team's
         credentials.
         """
-        indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
-        usable: Final = (
-            self.model_list[idx] for idx in indices if self.deployment_usable_by_team(self.model_list[idx], team_id)
-        )
-        first_usable: Final = next(usable, None)
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
+            usable: Final = (
+                self.model_list[idx] for idx in indices if self.deployment_usable_by_team(self.model_list[idx], team_id)
+            )
+            first_usable: Final = next(usable, None)
         if first_usable is None:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
@@ -11661,11 +11674,10 @@ class Router:
         this never triggers pattern matching or deep copies, so it is safe to call per
         listed model on the /v1/models hot path.
         """
-        indices: Final = self.model_name_to_deployment_indices.get(model_name)
-        if not indices:
+        deployments: Final = self._deployments_named(model_name)
+        if not deployments:
             return None
 
-        deployments: Final = tuple(self.model_list[index] for index in indices)
         model_infos: Final = tuple(
             MappingProxyType(
                 {
@@ -11848,10 +11860,11 @@ class Router:
     def _get_team_public_name_deployment(self, model_id: str, team_id: str | None) -> Deployment | None:
         if team_id is None:
             return None
-        team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
-        if not team_indices:
+        with self._deployment_index_lock:
+            team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
+            team_model: Final = self.model_list[team_indices[0]] if team_indices else None
+        if team_model is None:
             return None
-        team_model: Final = self.model_list[team_indices[0]]
         return Deployment(**team_model) if isinstance(team_model, dict) else team_model
 
     def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
@@ -12090,10 +12103,9 @@ class Router:
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         # O(1) lookup via model_id_to_deployment_index_map
-        if id in self.model_id_to_deployment_index_map:
-            idx: Final = self.model_id_to_deployment_index_map[id]
-            return self.model_list[idx]
-        return None
+        with self._deployment_index_lock:
+            idx: Final = self.model_id_to_deployment_index_map.get(id)
+            return None if idx is None else self.model_list[idx]
 
     def get_model_group(self, id: str) -> list | None:
         """
@@ -12763,20 +12775,19 @@ class Router:
 
         if model_name is not None:
             # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
-            if model_name in self.model_name_to_deployment_indices:
-                indices: Final = self.model_name_to_deployment_indices[model_name]
-                for idx in indices:
-                    model = self.model_list[idx]
-                    if "model_info" in model and "id" in model["model_info"]:
-                        if exclude_team_models and model["model_info"].get("team_id"):
-                            continue
-                        ids.append(model["model_info"]["id"])
+            for model in self._deployments_named(model_name) or ():
+                if "model_info" in model and "id" in model["model_info"]:
+                    if exclude_team_models and model["model_info"].get("team_id"):
+                        continue
+                    ids.append(model["model_info"]["id"])
         else:
             # When model_name is None, return all model IDs
             # Use the index map keys for O(n) where n = total deployments
-            for model_id in self.model_id_to_deployment_index_map:
-                idx = self.model_id_to_deployment_index_map[model_id]
-                model = self.model_list[idx]
+            with self._deployment_index_lock:
+                id_indices: Final = tuple(self.model_id_to_deployment_index_map.items())
+                models: Final = tuple(self.model_list)
+            for model_id, idx in id_indices:
+                model = models[idx]
                 if "model_info" in model and "id" in model["model_info"]:
                     if exclude_team_models and model["model_info"].get("team_id"):
                         continue
@@ -13102,12 +13113,10 @@ class Router:
 
         # O(1) lookup in team_model index when team_id is provided
         if team_id is not None:
-            key: Final = (team_id, model_name)
-            if key in self.team_model_to_deployment_indices:
-                indices = self.team_model_to_deployment_indices[key]
+            team_models: Final = self._team_deployments_named(team_id, model_name)
+            if team_models is not None:
                 # O(k) where k = team deployments for this model_name (typically 1-10)
-                for idx in indices:
-                    model = self.model_list[idx]
+                for model in team_models:
                     if not self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                         continue
                     if model_alias is not None:
@@ -13120,12 +13129,10 @@ class Router:
                     return returned_models
 
         # O(1) lookup in model_name index
-        if model_name in self.model_name_to_deployment_indices:
-            indices = self.model_name_to_deployment_indices[model_name]
-
+        named_models: Final = self._deployments_named(model_name)
+        if named_models is not None:
             # O(k) where k = deployments for this model_name (typically 1-10)
-            for idx in indices:
-                model = self.model_list[idx]
+            for model in named_models:
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
@@ -13139,7 +13146,7 @@ class Router:
             # Fallback: if team_id is provided and model_name not in index,
             # check if model_name matches any team_public_model_name
             # O(n) scan but only when team_id lookup fails
-            for idx, model in enumerate(self.model_list):
+            for _idx, model in enumerate(self.model_list):
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
@@ -14296,12 +14303,13 @@ class Router:
 
     def _team_deployments_across_teams(self, model: str) -> list[DeploymentTypedDict]:
         """Every team's deployments under public name `model`, for a proxy admin calling without a team."""
-        team_deployments: Final = [
-            self.model_list[index]
-            for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
-            if public_model_name == model
-            for index in indices
-        ]
+        with self._deployment_index_lock:
+            team_deployments: Final = [
+                self.model_list[index]
+                for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
+                if public_model_name == model
+                for index in indices
+            ]
         team_ids: Final = {
             team_id
             for deployment in team_deployments
