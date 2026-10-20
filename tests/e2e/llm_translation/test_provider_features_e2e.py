@@ -88,7 +88,7 @@ class TestServiceTier:
         )
 
 
-class _OutboundRetention(BaseModel):
+class _OutboundRetention(BaseModel, frozen=True):
     prompt_cache_retention: str | None = None
 
 
@@ -125,10 +125,10 @@ def _openai_edge_api_base(resources: ResourceManager, capture: _OpenAIBodyCaptur
     return f"{edge.edge.api_base('openai')}/v1"
 
 
-def _retention_backends() -> list[object]:
+def _retention_backends() -> tuple[object, ...]:
     """gpt-5.5 straight to /v1/chat/completions, and the openai/responses/ bridge
     (chat completions in, Responses out) to /v1/responses."""
-    return [
+    return (
         pytest.param(
             OPENAI_BACKEND,
             "/chat/completions",
@@ -163,7 +163,7 @@ def _retention_backends() -> list[object]:
             ),
             id="responses_bridge",
         ),
-    ]
+    )
 
 
 class TestPromptCacheRetention:

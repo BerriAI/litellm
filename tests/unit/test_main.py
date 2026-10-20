@@ -4011,16 +4011,12 @@ _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
 
 @pytest.mark.parametrize("param", sorted(_OPENAI_BODY_PARAM_CASES))
 def test_completion_sends_openai_body_param_to_openai(
-    param: str, respx_mock: respx.MockRouter, openai_api_response: dict[str, object]
+    param: str, respx_mock: respx.MockRouter, openai_api_response: Mapping[str, object]
 ):
     api_base: Final = "http://localhost:12346/v1"
-    sent_requests: Final[list[httpx.Request]] = []
-
-    def reply(request: httpx.Request) -> httpx.Response:
-        sent_requests.append(request)
-        return httpx.Response(status_code=200, json=openai_api_response)
-
-    respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=reply)
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
     model, call_kwargs = _OPENAI_BODY_PARAM_CASES[param]
 
     litellm.completion(
@@ -4031,8 +4027,8 @@ def test_completion_sends_openai_body_param_to_openai(
         **call_kwargs,
     )
 
-    assert len(sent_requests) == 1
-    sent: Final = _REQUEST_BODY.validate_json(sent_requests[0].content)
+    assert route.call_count == 1
+    sent: Final = _REQUEST_BODY.validate_json(route.calls.last.request.content)
     assert sent.get(param) == call_kwargs[param], f"{param} did not reach the OpenAI request body: {sent}"
 
 
