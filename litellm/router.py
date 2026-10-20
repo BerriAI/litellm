@@ -324,6 +324,7 @@ from litellm.router_utils.request_priority import (
     priority_error,
     request_drops_params,
     resolve_request_priority,
+    unqueueable_priority_message,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     find_deployment_metadata,
@@ -5072,10 +5073,7 @@ class Router:
     ):
         queued_priority, _ = self.split_request_priority(model=model, kwargs={**kwargs, "priority": priority})
         if queued_priority is None:
-            raise priority_error(
-                model=model,
-                message="priority is required to queue a request, send one or set router_settings.default_priority",
-            )
+            raise priority_error(model=model, message=unqueueable_priority_message(priority))
         return await self.acompletion(model=model, messages=messages, stream=stream, priority=queued_priority, **kwargs)
 
     def split_request_priority(

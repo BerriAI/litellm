@@ -8,6 +8,7 @@ from litellm.router_utils.request_priority import (
     parse_default_priority,
     request_drops_params,
     resolve_request_priority,
+    unqueueable_priority_message,
 )
 
 
@@ -74,6 +75,22 @@ def test_the_global_drop_params_wins_then_the_request_then_the_router_defaults_t
     assert request_drops_params({}, {"drop_params": False}, ()) is True
     assert request_drops_params({}, {}, ({"drop_params": False},)) is True
     assert request_drops_params({"drop_params": "not-a-flag"}, {}, ()) is True
+
+
+def test_a_priority_named_in_additional_drop_params_at_any_level_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    by_name: Final = {"additional_drop_params": ["priority"]}
+    assert request_drops_params(by_name, {}, ()) is True
+    assert request_drops_params({**by_name, "drop_params": False}, {}, ()) is True
+    assert request_drops_params({}, by_name, ()) is True
+    assert request_drops_params({}, {"drop_params": False}, (by_name,)) is True
+    assert request_drops_params({"additional_drop_params": ["seed"]}, {}, ()) is False
+    assert request_drops_params({}, {}, (params for params in ({"drop_params": True},))) is True
+
+
+def test_a_request_it_cannot_queue_is_told_why() -> None:
+    assert "priority is required" in unqueueable_priority_message(None)
+    assert unqueueable_priority_message("high").startswith("priority must be an integer, got str 'high'")
 
 
 @pytest.mark.parametrize(

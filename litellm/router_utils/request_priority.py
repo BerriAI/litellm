@@ -51,8 +51,20 @@ def parse_default_priority(value: object) -> int | None | InvalidPriority:
     return None if value is None else _as_priority(value)
 
 
+def unqueueable_priority_message(requested: object) -> str:
+    priority: Final = None if requested is None else _as_priority(requested)
+    if isinstance(priority, InvalidPriority):
+        return f"{priority.message}, and there is no router_settings.default_priority to queue it at instead"
+    return "priority is required to queue a request, send one or set router_settings.default_priority"
+
+
 def _explicit_drop_params(scope: Mapping[str, object]) -> bool | None:
     return normalize_drop_params(scope.get("drop_params"))
+
+
+def _drops_priority_by_name(scope: Mapping[str, object]) -> bool:
+    names: Final = scope.get("additional_drop_params")
+    return isinstance(names, list) and "priority" in names
 
 
 def request_drops_params(
@@ -60,7 +72,8 @@ def request_drops_params(
     router_defaults: Mapping[str, object],
     deployment_params: Iterable[Mapping[str, object]],
 ) -> bool:
-    if litellm.drop_params is True:
+    deployments: Final = tuple(deployment_params)
+    if litellm.drop_params is True or any(_drops_priority_by_name(s) for s in (kwargs, router_defaults, *deployments)):
         return True
     request_flag: Final = _explicit_drop_params(kwargs)
     if request_flag is not None:
@@ -68,4 +81,4 @@ def request_drops_params(
     router_flag: Final = _explicit_drop_params(router_defaults)
     if router_flag is not None:
         return router_flag
-    return any(_explicit_drop_params(params) is True for params in deployment_params)
+    return any(_explicit_drop_params(params) is True for params in deployments)

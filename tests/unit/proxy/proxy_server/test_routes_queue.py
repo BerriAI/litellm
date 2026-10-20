@@ -93,12 +93,14 @@ def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router
     assert len(response.content) > 0
 
 
-def _queue_router(monkeypatch: pytest.MonkeyPatch, default_priority: int | None) -> Router:
+def _queue_router(
+    monkeypatch: pytest.MonkeyPatch, default_priority: int | None, mock_response: str = "queued"
+) -> Router:
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-4",
-                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-queue-test", "mock_response": "queued"},
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-queue-test", "mock_response": mock_response},
             }
         ],
         default_priority=default_priority,
@@ -139,8 +141,12 @@ def test_queue_chat_completions_reports_the_priority_the_router_queued_at(
 
 @pytest.mark.parametrize(
     ("default_priority", "priority_fields", "message"),
-    [(None, {}, "priority is required"), (3, {"priority": "high"}, "priority must be an integer")],
-    ids=("no-priority-and-no-default", "malformed"),
+    [
+        (None, {}, "priority is required"),
+        (3, {"priority": "high"}, "priority must be an integer"),
+        (None, {"priority": "high", "drop_params": True}, "priority must be an integer, got str 'high'"),
+    ],
+    ids=("no-priority-and-no-default", "malformed", "dropped-word-and-no-default"),
 )
 def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_request(
     client,
@@ -160,3 +166,28 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
     assert (error["type"], error["param"]) == ("invalid_request_error", "priority")
     assert message in error["message"]
     assert add_request.await_count == 0
+
+
+def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
+    client, auth_as, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _queue_router(monkeypatch, default_priority=3)
+    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": "1", "stream": True}
+    with auth_as():
+        response = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 200, response.text
+    assert response.headers.get("x-litellm-priority") == "1"
+
+
+def test_a_provider_bad_request_on_the_queue_route_keeps_its_own_message(
+    client, auth_as, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _queue_router(monkeypatch, default_priority=3, mock_response="litellm.ContextWindowExceededError")
+    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+    with auth_as():
+        response = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert "context window" in error["message"].lower()
+    assert "Authentication Error" not in error["message"]

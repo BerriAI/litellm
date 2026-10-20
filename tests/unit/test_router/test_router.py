@@ -25648,6 +25648,8 @@ async def test_schedule_acompletion_under_a_default_priority_queues_the_explicit
         ({}, {"drop_params": True}),
         ({"drop_params": True}, {}),
         ({"drop_params": "true"}, {}),
+        ({"additional_drop_params": ["priority"]}, {}),
+        ({}, {"additional_drop_params": ["priority"]}),
     ],
 )
 async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_deployment_drop_params(
