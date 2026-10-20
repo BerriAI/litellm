@@ -96,6 +96,12 @@ from ..common_utils import (
     build_vertex_schema,
     supports_response_json_schema,
 )
+from ..context_caching.known_cached_contents import known_cached_contents
+from ..context_caching.rejected_cache_retry import (
+    cache_rebuild,
+    post_with_fresh_cache_async,
+    post_with_fresh_cache_sync,
+)
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
 from .long_decode import (
@@ -2786,7 +2792,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         litellm_params: dict,
         api_key: str | dict | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
@@ -2798,6 +2804,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(headers)
 
         return default_headers
+
+
+def _log_generate_request(
+    logging_obj: LoggingClass,
+    messages: Sequence[AllMessageValues],
+    api_base: str,
+    headers: Mapping[str, str],
+    body: RequestBody,
+) -> None:
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
 
 
 async def make_call(
@@ -2832,6 +2852,7 @@ async def make_call(
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
@@ -2845,14 +2866,18 @@ async def make_call(
         )
 
     async def open_hop(body: RequestBody) -> httpx.Response:
-        return await client.post(
-            url_for(api_base, body),
-            headers=dict(await hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return await client.post(
+                url_for(api_base, body),
+                headers=dict(await hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
@@ -2891,14 +2916,18 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(
-        url_for(api_base, request_body),
-        headers=headers,
-        data=data,
-        stream=True,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = client.post(
+            url_for(api_base, request_body),
+            headers=headers,
+            data=data,
+            stream=True,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+    except httpx.HTTPStatusError as e:
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
+        raise
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2908,14 +2937,18 @@ def make_sync_call(
         )
 
     def open_hop(body: RequestBody) -> httpx.Response:
-        return client.post(
-            url_for(api_base, body),
-            headers=dict(hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return client.post(
+                url_for(api_base, body),
+                headers=dict(hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.iter_lines(),
@@ -2983,14 +3016,14 @@ class VertexLLM(VertexBase):
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
         timeout: float | httpx.Timeout | None,
         encoding: object,
-        logging_obj,
-        stream,
+        logging_obj: LoggingClass,
+        stream: bool | None,
         optional_params: dict,
         litellm_params: dict,
         logger_fn=None,
@@ -3033,6 +3066,17 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
+        rebuild: Final = cache_rebuild(
+            partial(
+                async_transform_request_body,
+                **data,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         request_body: Final = await async_transform_request_body(
             **data,
             vertex_project=vertex_project,
@@ -3041,39 +3085,37 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
+
+        open_stream: Final = partial(
+            make_call,
+            gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            hop_headers=partial(
+                self._fresh_headers_async,
+                headers,
+                extra_headers,
+                vertex_credentials,
+                vertex_project,
+                custom_llm_provider,
+            ),
+            timeout=timeout,
         )
 
-        request_body_str: Final = json.dumps(request_body)
+        async def open_with_fresh_cache(client: AsyncHTTPHandler | None) -> ModelResponseIterator:
+            async def post(body: RequestBody) -> ModelResponseIterator:
+                return await open_stream(client=client, data=json.dumps(body), request_body=body)
+
+            return (await post_with_fresh_cache_async(request_body, rebuild, post, log_request))[1]
+
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
-            make_call=partial(
-                make_call,
-                gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                api_base=api_base,
-                headers=headers,
-                data=request_body_str,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                request_body=request_body,
-                hop_headers=partial(
-                    self._fresh_headers_async,
-                    headers,
-                    extra_headers,
-                    vertex_credentials,
-                    vertex_project,
-                    custom_llm_provider,
-                ),
-                timeout=timeout,
-            ),
+            make_call=open_with_fresh_cache,
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
@@ -3083,7 +3125,7 @@ class VertexLLM(VertexBase):
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
@@ -3093,7 +3135,7 @@ class VertexLLM(VertexBase):
         timeout: float | httpx.Timeout | None,
         encoding: object,
         logging_obj: LoggingClass,
-        stream,
+        stream: bool | None,
         optional_params: dict,
         litellm_params: dict,
         logger_fn=None,
@@ -3136,6 +3178,17 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
+        rebuild: Final = cache_rebuild(
+            partial(
+                async_transform_request_body,
+                **data,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         request_body: Final = await async_transform_request_body(
             **data,
             vertex_project=vertex_project,
@@ -3151,15 +3204,8 @@ class VertexLLM(VertexBase):
         else:
             client = client
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         fresh_headers: Final = partial(
             self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3175,6 +3221,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3188,14 +3235,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = await post(request_body)
+        sent_body, first_response = await post_with_fresh_cache_async(request_body, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=await collect_hops_async(parse_body(first_response), request_body, post),
+            hops=await collect_hops_async(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=request_body,
+            request_body=sent_body,
             messages=messages,
         )
 
@@ -3320,6 +3367,17 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
+        rebuild: Final = cache_rebuild(
+            partial(
+                sync_transform_request_body,
+                **transform_request_params,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         data: Final = sync_transform_request_body(
             **transform_request_params,
             vertex_project=vertex_project,
@@ -3328,15 +3386,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)
+        log_request(data)
 
         fresh_headers: Final = partial(
             self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3344,22 +3395,27 @@ class VertexLLM(VertexBase):
 
         ## SYNC STREAMING CALL ##
         if stream is True:
-            request_data_str: Final = json.dumps(data)
+            open_stream: Final = partial(
+                make_sync_call,
+                gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
+                api_base=url,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                headers=headers,
+                hop_headers=fresh_headers,
+                timeout=timeout,
+            )
+
+            def open_with_fresh_cache(client: HTTPHandler | None) -> ModelResponseIterator:
+                def post(body: RequestBody) -> ModelResponseIterator:
+                    return open_stream(client=client, data=json.dumps(body), request_body=body)
+
+                return post_with_fresh_cache_sync(data, rebuild, post, log_request)[1]
+
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
-                make_call=partial(
-                    make_sync_call,
-                    gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                    api_base=url,
-                    data=request_data_str,
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                    request_body=data,
-                    hop_headers=fresh_headers,
-                    timeout=timeout,
-                ),
+                make_call=open_with_fresh_cache,
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
@@ -3385,6 +3441,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3398,14 +3455,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = post(data)
+        sent_body, first_response = post_with_fresh_cache_sync(data, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=collect_hops_sync(parse_body(first_response), data, post),
+            hops=collect_hops_sync(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=data,
+            request_body=sent_body,
             messages=messages,
         )
 
