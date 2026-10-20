@@ -15,10 +15,14 @@ Schema = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
 
 
+def _is_field(part: list[str]) -> bool:
+    return len(part) >= 2 and not part[0].startswith(("@@", "//"))
+
+
 def parse_model_fields(schema: str) -> Schema:
     def fields(body: str) -> Mapping[str, str]:
         parts: Final = tuple(line.split() for line in body.splitlines())
-        return MappingProxyType({part[0]: " ".join(part[1:]) for part in parts if len(part) >= 2})
+        return MappingProxyType({part[0]: " ".join(part[1:]) for part in parts if _is_field(part)})
 
     return MappingProxyType({match[1]: fields(match[2]) for match in MODELS.finditer(schema)})
 
