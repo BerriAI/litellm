@@ -268,3 +268,28 @@ async def test_langgraph_streaming_acompletion_without_a_client_posts_through_th
         "assistant_id": "agent",
         "input": {"messages": [{"role": "human", "content": "What is 25 * 4?"}]},
     }
+
+
+@pytest.mark.asyncio
+async def test_langgraph_async_stream_delivers_every_message_event_before_its_stop(monkeypatch):
+    async def events():
+        yield b'data: ["messages", [[{"type": "ai", "content": "25 * 4"}, {}]]]\n\n'
+        yield b'data: ["messages", [[{"type": "ai", "content": " is 100"}, {}]]]\n\n'
+        yield b'data: ["metadata", {"run_id": "run-1"}]\n\n'
+
+    cached_client = get_async_httpx_client(llm_provider="langgraph", params={})
+    monkeypatch.setattr(
+        cached_client,
+        "client",
+        httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=events()))),
+    )
+
+    response = await litellm.acompletion(
+        model="langgraph/agent",
+        messages=[{"role": "user", "content": "What is 25 * 4?"}],
+        api_base="http://langgraph.test",
+        stream=True,
+    )
+    streamed = [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response]
+
+    assert streamed == [("25 * 4", None), (" is 100", None), (None, "stop")]

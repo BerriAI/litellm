@@ -307,6 +307,7 @@ class CustomStreamWrapper:
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
+        self.received_any_finish_reason = False  # a later chunk can reset intermittent_finish_reason
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1534,6 +1535,7 @@ class CustomStreamWrapper:
                 return _ProviderChunkEarlyReturn(None)
             completion_obj["content"] = response_obj["text"]
             self.intermittent_finish_reason = response_obj.get("finish_reason", None)
+            self.received_any_finish_reason |= self.intermittent_finish_reason is not None
             if response_obj["is_finished"]:
                 if response_obj["finish_reason"] == "error":
                     raise Exception(
@@ -1909,6 +1911,7 @@ class CustomStreamWrapper:
             and (self.custom_llm_provider in _OPENAI_AZURE_CHAT_PROVIDERS or self.uses_openai_chat_stream)
             and self.received_finish_reason is None
             and self.intermittent_finish_reason is None
+            and not self.received_any_finish_reason
         )
 
     @staticmethod

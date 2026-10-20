@@ -29,6 +29,9 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    ModelResponseIterator as GeminiModelResponseIterator,
+)
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -1757,6 +1760,48 @@ async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_st
 
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
     assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "partial reply"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_completes(
+    sync_mode: bool, logging_obj: Logging
+):
+    """Gemini marks every chunk unfinished, so its finishReason only shows up mid-stream before the usage chunk."""
+    lines: Final = [
+        f"data: {json.dumps(event)}"
+        for event in (
+            {"candidates": [{"content": {"parts": [{"text": "Hello"}], "role": "model"}, "index": 0}]},
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": " there"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+                ]
+            },
+            {"usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5}},
+        )
+    ]
+
+    async def async_lines() -> AsyncIterator[str]:
+        for line in lines:
+            yield line
+
+    logging_obj.update_environment_variables(
+        model="gemini-2.5-flash", user=None, optional_params={}, litellm_params={"litellm_call_id": "gemini-tail"}
+    )
+    iterator: Final = GeminiModelResponseIterator(
+        streaming_response=iter(lines) if sync_mode else async_lines(), sync_stream=sync_mode, logging_obj=logging_obj
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(iterator) if sync_mode else iterator,
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "Hello there"
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
 
 
 def test_streaming_handler_with_created_time_propagation(
