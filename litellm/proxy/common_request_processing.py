@@ -66,7 +66,6 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
-from litellm.litellm_core_utils.hook_pairing import HookPairing
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -1951,13 +1950,6 @@ def _content_text(fields: Mapping[str, object]) -> str:
     return str(fields.get("content", ""))
 
 
-def _run_sync_success_hooks_held_for(logging_obj: object) -> None:
-    """Ends the pairing of the async success the proxy just dropped, so the sync success hooks held back for it run."""
-    hook_pairing: Final = getattr(logging_obj, "async_success_hook_pairing", None)
-    if isinstance(hook_pairing, HookPairing):
-        hook_pairing.end_async_run()
-
-
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
@@ -2916,16 +2908,6 @@ class ProxyBaseLLMRequestProcessing:
                 responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
             else:
                 responses = await llm_responses
-        except BaseException:
-            try:
-                await _cancel_pending_gather_tasks(tasks)
-            finally:
-                # a during_call guardrail can raise after the LLM call parked its deferred success
-                ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-                    logging_obj=logging_obj,
-                    exception_raised=True,
-                )
-            raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
 
@@ -3883,15 +3865,13 @@ class ProxyBaseLLMRequestProcessing:
         Called from the finally block around post_call_success_hook so the
         StandardLoggingPayload is built after post-call guardrails write to
         metadata (deferred logging is enabled for non-streaming requests with
-        a registered post_call guardrail), and as an exception when the LLM
-        call's gather with the during_call guardrails raises.
+        a registered post_call guardrail).
 
         On exception (e.g. a post-call guardrail blocks the response), skip
         firing the closure — the exception propagates to post_call_failure_hook
         which writes its own failure spend log via async_failure_handler.
         Firing both produced a duplicate (Success + Failure) entry per request,
-        with the Success row exposing the blocked LLM response. Sync success
-        hooks the paired sync run held back for the dropped success still run.
+        with the Success row exposing the blocked LLM response.
 
         For streaming early-returns the closure is never stored (wrapper_async
         returns before the deferred block in litellm/utils.py), so this is a
@@ -3905,20 +3885,16 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
-                if exception_raised:
-                    _run_sync_success_hooks_held_for(logging_obj)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
         logging_obj.enqueue_deferred_logging = None
         if exception_raised:
-            _run_sync_success_hooks_held_for(logging_obj)
             return
         try:
             _enqueue_fn()
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
-            _run_sync_success_hooks_held_for(logging_obj)
 
     def _arm_deferred_stream_dispatch(
         self,

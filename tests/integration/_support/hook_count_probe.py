@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from collections.abc import Mapping
@@ -67,16 +66,6 @@ class SyncOnlyHookCountProbe(CustomLogger):
         _send("sync_failure", kwargs)
 
 
-class StalledAsyncSuccessLogger(CustomLogger):
-    """Overrides only the async success hook and holds it until the logging worker's per-handler timeout cuts the
-    handler off."""
-
-    async def async_log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
-    ) -> None:
-        await asyncio.sleep(300)
-
-
 class BlockingPostCallGuardrail(CustomGuardrail):
     """Rejects every response with a 400 after the provider answered."""
 
@@ -88,7 +77,6 @@ class BlockingPostCallGuardrail(CustomGuardrail):
 
 probe: Final = HookCountProbe()
 sync_only_probe: Final = SyncOnlyHookCountProbe()
-stalled_logger: Final = StalledAsyncSuccessLogger()
 
 
 def sync_success_function(

@@ -503,13 +503,11 @@ async def test_async_log_cache_hit_on_callbacks():
     print("mock logging obj methods called", mock_logging_obj.mock_calls)
 
     # Assertions
-    hook_pairing = mock_logging_obj.async_success_handler.call_args.kwargs["hook_pairing"]
     mock_logging_obj.async_success_handler.assert_called_once_with(
         result=cached_result,
         start_time=start_time,
         end_time=end_time,
         cache_hit=cache_hit,
-        hook_pairing=hook_pairing,
     )
 
     # Wait for the thread to complete
@@ -520,7 +518,6 @@ async def test_async_log_cache_hit_on_callbacks():
         start_time=start_time,
         end_time=end_time,
         cache_hit=cache_hit,
-        hook_pairing=hook_pairing,
     )
 
 

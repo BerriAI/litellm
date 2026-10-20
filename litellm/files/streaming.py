@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Final, Optional, cast
 import anyio
 
 from litellm.files.types import FileContentProvider
-from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -187,19 +186,16 @@ class FileContentStreamingResponse:
         self._logging_completed = True
         end_time: Final = datetime.datetime.now()
         standard_logging_object: Final = self._build_standard_logging_object(end_time=end_time)
-        hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         await self.logging_obj.async_success_handler(
             result=self._build_logging_response(),
             start_time=self._start_time,
             end_time=end_time,
             standard_logging_object=standard_logging_object,
-            hook_pairing=hook_pairing,
         )
         self.logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=self._build_logging_response(),
             start_time=self._start_time,
             end_time=end_time,
-            hook_pairing=hook_pairing,
         )
 
     def _log_success_sync(self) -> None:

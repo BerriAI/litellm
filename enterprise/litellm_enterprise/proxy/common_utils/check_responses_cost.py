@@ -42,7 +42,6 @@ from litellm.constants import (
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
     TERMINAL_RESPONSE_STATUSES,
 )
-from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -116,16 +115,13 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
     unpriced: Final = _without_read_price(billed.response)
     cost: Final = logging_obj.response_cost_calculator(result=unpriced)
     end_time: Final = datetime.now()
-    hook_pairing: Final = HookPairing(run_held_hook_in_executor)
     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-        async_coroutine=hook_pairing.async_run(
-            logging_obj.async_success_handler(
-                result=unpriced, start_time=logging_obj.start_time, end_time=end_time, hook_pairing=hook_pairing
-            )
+        async_coroutine=logging_obj.async_success_handler(
+            result=unpriced, start_time=logging_obj.start_time, end_time=end_time
         )
     )
     logging_obj.handle_sync_success_callbacks_for_async_calls(
-        result=unpriced, start_time=logging_obj.start_time, end_time=end_time, hook_pairing=hook_pairing
+        result=unpriced, start_time=logging_obj.start_time, end_time=end_time
     )
     return BilledCharge(cost=cost, logging_obj=logging_obj)
 

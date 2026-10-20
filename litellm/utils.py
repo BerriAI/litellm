@@ -90,7 +90,6 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
-from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor, run_held_hook_now
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -1374,7 +1373,7 @@ def _dispatch_success_logging(
     if is_litellm_internal_call:
         return
 
-    hook_pairing: Final = _schedule_async_success_logging(
+    _schedule_async_success_logging(
         logging_obj=logging_obj,
         result=result,
         start_time=start_time,
@@ -1385,7 +1384,6 @@ def _dispatch_success_logging(
         result=result,
         start_time=start_time,
         end_time=end_time,
-        hook_pairing=hook_pairing,
     )
 
 
@@ -1395,10 +1393,9 @@ def _schedule_async_success_logging(
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     is_completion_with_fallbacks: bool,
-) -> HookPairing | None:
+) -> None:
     """Fire the async success log for ``result`` now, or park it on the logging object while
-    the proxy defers logging past its post-call guardrails. Returns the pairing the request's
-    sync success run shares with that async run, or None when no async run logs the request.
+    the proxy defers logging past its post-call guardrails.
 
     Nested @client wrappers (Anthropic Messages over the chat adapter, chat over the Responses
     bridge) each exit through here with the same logging object and their own shape of the same
@@ -1408,9 +1405,8 @@ def _schedule_async_success_logging(
     slot keeps the same innermost-wins rule: the provider-shaped result is the one the spend log
     reads usage from, and the outer wrapper never swaps in its client-shaped translation.
     """
-    hook_pairing: Final = None if is_completion_with_fallbacks else HookPairing(run_held_hook_in_executor)
-    if not logging_obj.claim_async_success_log(hook_pairing):
-        return logging_obj.async_success_hook_pairing
+    if not logging_obj.claim_async_success_log():
+        return
 
     def _enqueue_async_logging() -> None:
         asyncio.create_task(
@@ -1420,17 +1416,15 @@ def _schedule_async_success_logging(
                 start_time=start_time,
                 end_time=end_time,
                 is_completion_with_fallbacks=is_completion_with_fallbacks,
-                hook_pairing=hook_pairing,
             )
         )
 
     if not logging_obj.defer_async_logging:
         _enqueue_async_logging()
-        return hook_pairing
+        return
     if logging_obj.enqueue_deferred_logging is not None:
-        return hook_pairing
+        return
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
-    return hook_pairing
 
 
 async def _client_async_logging_helper(
@@ -1439,7 +1433,6 @@ async def _client_async_logging_helper(
     start_time,
     end_time,
     is_completion_with_fallbacks: bool,
-    hook_pairing: HookPairing | None = None,
 ):
     if (
         is_completion_with_fallbacks is False
@@ -1452,11 +1445,8 @@ async def _client_async_logging_helper(
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        async_run: Final = logging_obj.async_success_handler(
-            result=result, start_time=start_time, end_time=end_time, hook_pairing=hook_pairing
-        )
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=async_run if hook_pairing is None else hook_pairing.async_run(async_run)
+            async_coroutine=logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         )
 
 
@@ -2287,17 +2277,14 @@ def client(original_function):
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
-                failure_hook_pairing: Final = HookPairing(run_held_hook_now)
                 try:
                     logging_obj.failure_handler(
-                        e, traceback_exception, start_time, end_time, hook_pairing=failure_hook_pairing
+                        e, traceback_exception, start_time, end_time, for_async_request=True
                     )  # DO NOT MAKE THREADED - router retry fallback relies on this!
                 except Exception as e:
                     raise e
                 try:
-                    await logging_obj.async_failure_handler(
-                        e, traceback_exception, start_time, end_time, hook_pairing=failure_hook_pairing
-                    )
+                    await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
                 except Exception as e:
                     raise e
 
