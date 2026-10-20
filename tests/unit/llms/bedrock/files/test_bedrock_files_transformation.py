@@ -50,7 +50,7 @@ class TestBedrockFilesTransformation:
                     openai_jsonl_content.append(json.loads(line))
 
         # Transform the content
-        bedrock_jsonl_content = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        bedrock_jsonl_content: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             openai_jsonl_content
         )
 
@@ -406,7 +406,7 @@ class TestBedrockFilesTransformation:
     def test_batch_object_name_sanitizes_model_path(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        object_name = BedrockFilesConfig().get_object_name(
+        object_name: Final = BedrockFilesConfig().get_object_name(
             {"content": json.dumps({"body": {"model": "bedrock/../../secret:model"}}).encode(), "filename": "b.jsonl"},
             purpose="batch",
         )
@@ -4388,7 +4388,6 @@ _VALID_BATCH_LINE: Final = json.dumps(
         },
     }
 )
-# The blank line is skipped but still counted, so the bad record is reported as line 3.
 _MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n\n{{not json\n".encode()
 
 
@@ -4459,12 +4458,12 @@ class TestMalformedBatchJsonl:
 _VALID_BATCH_RECORD: Final = json.loads(_VALID_BATCH_LINE)
 
 
-def _batch_line(**overrides: object) -> str:
-    return json.dumps({**_VALID_BATCH_RECORD, **overrides})
+def _batch_line(body: object) -> str:
+    return json.dumps({**_VALID_BATCH_RECORD, "body": body})
 
 
-def _batch_line_with_body(**body_overrides: object) -> str:
-    return _batch_line(body={**_VALID_BATCH_RECORD["body"], **body_overrides})
+def _batch_line_with_body(field: str, value: object) -> str:
+    return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
@@ -4479,27 +4478,27 @@ def _batch_line_with_body(**body_overrides: object) -> str:
             f"[1, 2]\n{_VALID_BATCH_LINE}\n".encode(), "Batch input file line 1 is not a JSON object", id="array-first"
         ),
         pytest.param(
-            f"{_VALID_BATCH_LINE}\n{_batch_line(body=None)}\n".encode(),
+            f"{_VALID_BATCH_LINE}\n{_batch_line(None)}\n".encode(),
             "Batch input file line 2 has a body that is missing or not a JSON object",
             id="null-body",
         ),
         pytest.param(
-            f"{_batch_line(body='hello')}\n".encode(),
+            f"{_batch_line('hello')}\n".encode(),
             "Batch input file line 1 has a body that is missing or not a JSON object",
             id="string-body",
         ),
         pytest.param(
-            f"{_batch_line_with_body(model=123)}\n".encode(),
+            f"{_batch_line_with_body("model", 123)}\n".encode(),
             "Batch input file line 1 has a body.model that is not a string",
             id="int-model",
         ),
         pytest.param(
-            f"{_batch_line_with_body(model=None)}\n".encode(),
+            f"{_batch_line_with_body("model", None)}\n".encode(),
             "Batch input file line 1 has a body.model that is not a string",
             id="null-model",
         ),
         pytest.param(
-            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body(messages='hi')}\n".encode(),
+            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body("messages", "hi")}\n".encode(),
             "Batch input file line 2 could not be converted to a Bedrock batch record",
             id="string-messages",
         ),
