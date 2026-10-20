@@ -4,11 +4,13 @@ import type * as vscode from "vscode";
 import type { GatewayClient, GatewayConfig, ModelGroupsResult } from "../src/gateway";
 import { ESTIMATED_TOKENS_PER_IMAGE } from "../src/messages";
 import { LiteLLMChatProvider, TRUNCATED_MESSAGE, type LiteLLMModel } from "../src/provider";
-import { CancellationTokenSource, LanguageModelTextPart, LanguageModelToolCallPart } from "./vscode-mock";
+import { SESSION_ID_HEADER } from "../src/sessions";
+import { CancellationTokenSource, LanguageModelDataPart, LanguageModelTextPart, LanguageModelToolCallPart } from "./vscode-mock";
 
 interface StreamRequest {
   readonly config: GatewayConfig;
   readonly params: ChatCompletionCreateParamsStreaming;
+  readonly headers: Record<string, string> | undefined;
 }
 
 interface FakeGateway extends GatewayClient {
@@ -55,8 +57,8 @@ const fakeGateway = (
       listCalls.push(config);
       return listResult;
     },
-    async streamChatCompletion(config, params, signal) {
-      streamRequests.push({ config, params });
+    async streamChatCompletion(config, params, signal, headers) {
+      streamRequests.push({ config, params, headers });
       return stream(signal);
     },
   };
@@ -176,8 +178,36 @@ describe("provideLanguageModelChatResponse", () => {
     expect(client.streamRequests).toEqual([
       {
         config: gateway,
+        headers: { [SESSION_ID_HEADER]: expect.stringMatching(/^[0-9a-f-]{36}$/) },
         params: expect.objectContaining({ model: "gpt-5.6", reasoning_effort: "high", tool_choice: "required", tools: [expect.anything()] }),
       },
+    ]);
+  });
+
+  it("reports the gateway's usage chunk as a usage data part so the harness shows token counts", async () => {
+    const usage = {
+      prompt_tokens: 1234,
+      completion_tokens: 56,
+      total_tokens: 1290,
+      prompt_tokens_details: { cached_tokens: 100 },
+    };
+    const client = fakeGateway(modelGroups, () =>
+      (async function* () {
+        yield chunk({ content: "answer" });
+        yield { id: "chatcmpl-1", object: "chat.completion.chunk", created: 0, model: "gpt-5.6", choices: [], usage };
+      })(),
+    );
+    const parts: vscode.LanguageModelResponsePart[] = [];
+    await new LiteLLMChatProvider(client).provideLanguageModelChatResponse(
+      model(),
+      [userMessage([{ value: "hi" }])],
+      responseOptions(),
+      { report: (part) => parts.push(part) },
+      token(),
+    );
+    expect(parts).toEqual([
+      new LanguageModelTextPart("answer"),
+      new LanguageModelDataPart(new TextEncoder().encode(JSON.stringify(usage)), "usage"),
     ]);
   });
 
@@ -230,6 +260,35 @@ describe("provideLanguageModelChatResponse", () => {
     );
     const { run } = collect(new LiteLLMChatProvider(client));
     await expect(run).rejects.toThrow("invalid JSON arguments for tool grep");
+  });
+
+  it("sends the same x-litellm-session-id for every turn of one chat conversation", async () => {
+    const client = fakeGateway();
+    const provider = new LiteLLMChatProvider(client);
+    const progress = { report: () => {} };
+    const firstTurn = [userMessage([{ value: "fix the bug" }])];
+    const secondTurn = [
+      userMessage([{ value: "fix the bug" }]),
+      { role: 2, content: [{ value: "on it" }], name: undefined } as vscode.LanguageModelChatRequestMessage,
+      userMessage([{ value: "and now?" }]),
+    ];
+    await provider.provideLanguageModelChatResponse(model(), firstTurn, responseOptions(), progress, token());
+    await provider.provideLanguageModelChatResponse(model(), secondTurn, responseOptions(), progress, token());
+    expect(client.streamRequests).toHaveLength(2);
+    const [first, second] = client.streamRequests;
+    expect(first?.headers?.[SESSION_ID_HEADER]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second?.headers?.[SESSION_ID_HEADER]).toBe(first?.headers?.[SESSION_ID_HEADER]);
+  });
+
+  it("sends a different x-litellm-session-id when a new chat conversation starts", async () => {
+    const client = fakeGateway();
+    const provider = new LiteLLMChatProvider(client);
+    const progress = { report: () => {} };
+    await provider.provideLanguageModelChatResponse(model(), [userMessage([{ value: "fix the bug" }])], responseOptions(), progress, token());
+    await provider.provideLanguageModelChatResponse(model(), [userMessage([{ value: "write tests" }])], responseOptions(), progress, token());
+    const [first, second] = client.streamRequests;
+    expect(first?.headers?.[SESSION_ID_HEADER]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second?.headers?.[SESSION_ID_HEADER]).not.toBe(first?.headers?.[SESSION_ID_HEADER]);
   });
 });
 

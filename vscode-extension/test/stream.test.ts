@@ -34,10 +34,19 @@ const collect = async (chunks: readonly ChatCompletionChunk[]): Promise<readonly
 };
 
 describe("responseParts", () => {
-  it("yields text deltas as they arrive and ignores empty and usage-only chunks", async () => {
+  it("yields text deltas as they arrive and surfaces the usage chunk", async () => {
     expect(await collect([chunk({ role: "assistant", content: "" }), chunk({ content: "Hel" }), chunk({ content: "lo" }), usageChunk])).toEqual([
       { kind: "text", value: "Hel" },
       { kind: "text", value: "lo" },
+      { kind: "usage", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+    ]);
+  });
+
+  it("emits usage after a truncation so the harness still records the request", async () => {
+    expect(await collect([chunk({ content: "half" }), chunk({}, "length"), usageChunk])).toEqual([
+      { kind: "text", value: "half" },
+      { kind: "truncated" },
+      { kind: "usage", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
     ]);
   });
 
@@ -71,7 +80,7 @@ describe("responseParts", () => {
   });
 
   it("flags a response cut off at the output token limit after the text it did produce", async () => {
-    expect(await collect([chunk({ content: "half" }), chunk({}, "length"), usageChunk])).toEqual([
+    expect(await collect([chunk({ content: "half" }), chunk({}, "length")])).toEqual([
       { kind: "text", value: "half" },
       { kind: "truncated" },
     ]);

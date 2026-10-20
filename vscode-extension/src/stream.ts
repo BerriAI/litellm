@@ -1,10 +1,12 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions";
+import type { CompletionUsage } from "openai/resources/completions";
 
 export type ResponsePart =
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "tool_call"; readonly callId: string; readonly name: string; readonly input: object }
   | { readonly kind: "invalid_tool_call"; readonly callId: string; readonly name: string; readonly arguments: string }
-  | { readonly kind: "truncated" };
+  | { readonly kind: "truncated" }
+  | { readonly kind: "usage"; readonly usage: CompletionUsage };
 
 interface PendingToolCall {
   readonly index: number;
@@ -47,14 +49,15 @@ const mergeToolCallDelta = (pending: PendingToolCalls, delta: ToolCallDelta): Pe
 };
 
 export const applyChunk = (pending: PendingToolCalls, chunk: ChatCompletionChunk): ChunkOutcome => {
+  const usage = chunk.usage == null ? [] : [{ kind: "usage", usage: chunk.usage } as const];
   const choice = chunk.choices[0];
   if (choice === undefined) {
-    return { pending, parts: [] };
+    return { pending, parts: usage };
   }
   const text = typeof choice.delta.content === "string" && choice.delta.content !== "" ? [{ kind: "text", value: choice.delta.content } as const] : [];
   const truncated = choice.finish_reason === "length" ? [{ kind: "truncated" } as const] : [];
   const nextPending = (choice.delta.tool_calls ?? []).reduce(mergeToolCallDelta, pending);
-  return { pending: nextPending, parts: [...text, ...truncated] };
+  return { pending: nextPending, parts: [...text, ...truncated, ...usage] };
 };
 
 const parseArguments = (raw: string): object | undefined => {

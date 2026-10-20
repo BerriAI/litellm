@@ -10,6 +10,13 @@ export class LanguageModelToolCallPart {
   ) {}
 }
 
+export class LanguageModelDataPart {
+  constructor(
+    readonly data: Uint8Array,
+    readonly mimeType: string,
+  ) {}
+}
+
 export const LanguageModelChatToolMode = { Auto: 1, Required: 2 } as const;
 
 type Listener<T> = (value: T) => void;

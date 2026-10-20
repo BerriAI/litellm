@@ -19,6 +19,7 @@ interface RecordedRequest {
   readonly url: string | undefined;
   readonly authorization: string | undefined;
   readonly userAgent: string | undefined;
+  readonly sessionId: string | undefined;
   readonly body: string;
 }
 
@@ -42,6 +43,7 @@ const startGateway = (handler: Handler): Promise<{ readonly url: string; readonl
         url: request.url,
         authorization: request.headers.authorization,
         userAgent: request.headers["user-agent"],
+        sessionId: request.headers["x-litellm-session-id"]?.toString(),
         body: await readBody(request),
       };
       requests.push(recorded);
@@ -182,6 +184,63 @@ describe("streamChatCompletion", () => {
       reasoning_effort: "high",
       messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
     });
+  });
+
+  it("sends extra headers such as the session id on the chat completion request", async () => {
+    const gateway = await startGateway((_request, response) =>
+      sse(response, [
+        { id: "c", object: "chat.completion.chunk", created: 0, model: "gpt-5.6", choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] },
+      ]),
+    );
+    const params = buildChatCompletionParams({
+      model: "gpt-5.6",
+      messages: [{ role: 1, content: [{ value: "hello" }], name: undefined }],
+      tools: [],
+      requireToolCall: false,
+      reasoningEffort: undefined,
+      modelOptions: {},
+    });
+    const chunks = await createGatewayClient().streamChatCompletion(
+      configFor(gateway.url, "sk-test"),
+      params,
+      new AbortController().signal,
+      { "x-litellm-session-id": "session-abc" },
+    );
+    for await (const chunk of chunks) {
+      void chunk;
+    }
+    const [request] = gateway.requests;
+    expect(request).toMatchObject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      sessionId: "session-abc",
+      userAgent: USER_AGENT,
+    });
+  });
+
+  it("omits the session id header when no extra headers are given", async () => {
+    const gateway = await startGateway((_request, response) =>
+      sse(response, [
+        { id: "c", object: "chat.completion.chunk", created: 0, model: "gpt-5.6", choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] },
+      ]),
+    );
+    const params = buildChatCompletionParams({
+      model: "gpt-5.6",
+      messages: [{ role: 1, content: [{ value: "hello" }], name: undefined }],
+      tools: [],
+      requireToolCall: false,
+      reasoningEffort: undefined,
+      modelOptions: {},
+    });
+    const chunks = await createGatewayClient().streamChatCompletion(
+      configFor(gateway.url, "sk-test"),
+      params,
+      new AbortController().signal,
+    );
+    for await (const chunk of chunks) {
+      void chunk;
+    }
+    expect(gateway.requests[0]?.sessionId).toBeUndefined();
   });
 
   it("leaves retries to the gateway instead of resending a failed request", async () => {

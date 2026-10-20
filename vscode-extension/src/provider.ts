@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { gatewayConfigFrom, summarizeErrorBody, type GatewayClient, type GatewayConfig, type GatewayConfigResult, type ModelGroupsResult } from "./gateway";
 import { buildChatCompletionParams, estimateMessageTokens } from "./messages";
 import { describeModels, estimateTokens, reasoningEffortFrom, type ModelDescriptor } from "./models";
+import { SESSION_ID_HEADER, SessionTracker } from "./sessions";
 import { responseParts, type ResponsePart } from "./stream";
 
 export interface LiteLLMModel extends vscode.LanguageModelChatInformation {
@@ -45,6 +46,8 @@ const toModel = (descriptor: ModelDescriptor, gateway: GatewayConfig): LiteLLMMo
   gateway,
 });
 
+const USAGE_MIME_TYPE = "usage";
+
 const toVscodePart = (part: ResponsePart): vscode.LanguageModelResponsePart => {
   switch (part.kind) {
     case "text":
@@ -55,6 +58,8 @@ const toVscodePart = (part: ResponsePart): vscode.LanguageModelResponsePart => {
       throw new Error(`Model returned invalid JSON arguments for tool ${part.name}: ${part.arguments}`);
     case "truncated":
       throw new Error(TRUNCATED_MESSAGE);
+    case "usage":
+      return new vscode.LanguageModelDataPart(new TextEncoder().encode(JSON.stringify(part.usage)), USAGE_MIME_TYPE);
   }
 };
 
@@ -71,6 +76,7 @@ const withAbortSignal = async <T>(token: vscode.CancellationToken, run: (signal:
 export class LiteLLMChatProvider implements vscode.LanguageModelChatProvider<LiteLLMModel>, vscode.Disposable {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeLanguageModelChatInformation = this.changeEmitter.event;
+  private readonly sessions = new SessionTracker();
 
   constructor(private readonly gateway: GatewayClient) {}
 
@@ -115,9 +121,10 @@ export class LiteLLMChatProvider implements vscode.LanguageModelChatProvider<Lit
       reasoningEffort: reasoningEffortFrom(options.modelConfiguration),
       modelOptions: options.modelOptions ?? {},
     });
+    const sessionId = this.sessions.sessionIdFor(messages);
     try {
       await withAbortSignal(token, async (signal) => {
-        const chunks = await this.gateway.streamChatCompletion(model.gateway, params, signal);
+        const chunks = await this.gateway.streamChatCompletion(model.gateway, params, signal, { [SESSION_ID_HEADER]: sessionId });
         for await (const part of responseParts(chunks)) {
           progress.report(toVscodePart(part));
         }
