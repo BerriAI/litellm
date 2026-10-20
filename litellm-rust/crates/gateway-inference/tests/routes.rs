@@ -1,16 +1,9 @@
 mod support;
 
-use std::sync::Arc;
-
 use axum::{
     body::{Body, Bytes},
     http::Request,
 };
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
-use litellm_inference::resources::CoreResources;
-use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -68,66 +61,37 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
 }
 
 #[rstest]
-#[case::missing_messages(json!({}), 400)]
-#[case::malformed_messages(json!({"messages": "hi"}), 400)]
-#[case::invalid_streaming_request(json!({"messages": [], "stream": true}), 400)]
+#[case::missing_messages(json!({}), "/chat/completions: Missing required parameter: 'messages'.")]
+#[case::malformed_messages(json!({"messages": "hi"}), "Invalid type for 'messages': expected an array of messages.")]
+#[case::empty_streaming_request(json!({"messages": [], "stream": true}), "Invalid 'messages': empty array. Expected an array with minimum length 1, but got an empty array instead.")]
+#[case::message_not_an_object(json!({"messages": ["hi"]}), "Invalid type for 'messages[0]': expected an object.")]
+#[case::role_not_a_string(json!({"messages": [{"role": 1, "content": "hi"}]}), "Invalid type for 'messages[0].role': expected a string.")]
 #[tokio::test]
-async fn chat_errors_come_from_core(
+async fn malformed_chat_requests_are_refused_before_any_provider_call(
     #[case] fields: Value,
-    #[case] status: u16,
+    #[case] message: &str,
     #[values("/v1/chat/completions", "/engines/public%2Fmodel/chat/completions")] path: &str,
+    #[values("anthropic/test-model", "openai/test-model")] model: &str,
 ) {
     let upstream = MockServer::start().await;
-    let base = upstream.uri();
-    let resources = CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let provider = resources
-        .pool
-        .client(&http, ClientVariant::Provider)
-        .unwrap();
-    let fields = fields.as_object().unwrap();
-    let error = ChatCompletionsRoute::new(
-        provider,
-        resources.auth.clone(),
-        Arc::new(support::NoSecrets),
-    )
-    .execute(
-        ChatCompletionsRequest {
-            model: "anthropic/test-model",
-            messages: fields.get("messages").cloned().unwrap_or_default(),
-            optional_params: fields
-                .iter()
-                .filter(|(name, _)| name.as_str() != "messages")
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
-            api_key: Some("test-key"),
-            api_base: Some(&base),
-            custom_llm_provider: None,
-            extra_headers: None,
-            timeout: None,
-            drop_params: Some(false),
-            model_info: None,
-        },
-        &(),
-        None,
-    )
-    .await
-    .unwrap_err();
     let body = fields
+        .as_object()
+        .unwrap()
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
         .chain([("model".into(), json!("public/model"))])
         .collect();
     let response = support::post(
-        support::app("anthropic/test-model", &base),
+        support::app(model, &upstream.uri()),
         path,
         Value::Object(body),
     )
     .await;
-    assert_eq!(response.status(), status);
+    assert_eq!(response.status(), 400);
     let body = support::json(response).await;
-    assert_eq!(body["error"]["message"], error.to_string());
-    assert_eq!(body["error"]["code"], status);
+    assert_eq!(body["error"]["message"], message);
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["param"], "messages");
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 

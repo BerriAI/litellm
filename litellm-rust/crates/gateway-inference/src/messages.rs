@@ -49,6 +49,7 @@ async fn handle(
     JsonBody { object, raw }: JsonBody,
 ) -> Result<Response, Error> {
     gateway.check_body(&object)?;
+    request::check_messages(&object)?;
     let group = request::resolve_group(gateway, &object)?;
     let name = request::model_name(&object)?.to_owned();
     let tracking = crate::hooks::admit(
@@ -76,6 +77,18 @@ async fn handle(
         }
     };
     edit(&mut body);
+    let max_tokens = request::check_max_tokens(&body, || {
+        let usable = request::usable(identity);
+        group
+            .deployments()
+            .any(|deployment| usable(deployment) && request::sets_max_tokens(deployment))
+    });
+    if let Err(error) = max_tokens {
+        if let Some(tracking) = tracking {
+            tracking.fail(&error);
+        }
+        return Err(error);
+    }
     let reparse = || -> Result<Map<String, Value>, Error> {
         let mut body = crate::caching::prepare(identity, request::object(&raw)?)?.0;
         edit(&mut body);

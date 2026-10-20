@@ -90,6 +90,30 @@ async fn invalid_messages_stays_an_anthropic_error() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
+#[rstest]
+#[case::messages_left_out(json!({"model": "public/model", "max_tokens": 16}), "anthropic_messages: Missing required parameter: 'messages'.")]
+#[case::max_tokens_left_out(json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}]}), "anthropic_messages: Missing required parameter: 'max_tokens'.")]
+#[case::message_without_content(json!({"model": "public/model", "messages": [{"role": "user"}], "max_tokens": 16}), "Invalid type for 'messages[0].content': expected a string or an array.")]
+#[tokio::test]
+async fn malformed_messages_requests_never_reach_the_provider(
+    #[case] body: serde_json::Value,
+    #[case] message: &str,
+) {
+    let upstream = MockServer::start().await;
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        "/v1/messages",
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["message"], message);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
 /// Answers with the SSE head and one event, then drops the connection short of the
 /// announced body length.
 async fn truncating_upstream() -> String {
@@ -186,7 +210,12 @@ async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
         &upstream.uri(),
         litellm_gateway_auth::Permissions::None,
     );
-    let response = support::post(app, path, json!({"model": "public/model"})).await;
+    let response = support::post(
+        app,
+        path,
+        json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+    )
+    .await;
     assert_eq!(response.status(), 403);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }

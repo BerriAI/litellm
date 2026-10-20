@@ -270,6 +270,41 @@ async fn requests_over_the_key_limit_are_refused_like_the_proxy() {
 }
 
 #[rstest]
+#[case::chat_messages_text("/v1/chat/completions", json!({"model": "claude", "messages": "invalid"}))]
+#[case::chat_messages_left_out("/v1/chat/completions", json!({"model": "claude"}))]
+#[case::chat_messages_empty("/v1/chat/completions", json!({"model": "claude", "messages": []}))]
+#[case::chat_message_text("/v1/chat/completions", json!({"model": "claude", "messages": ["hi"]}))]
+#[case::chat_numeric_role("/v1/chat/completions", json!({"model": "claude", "messages": [{"role": 7, "content": "hi"}]}))]
+#[case::messages_text("/v1/messages", json!({"model": "claude", "max_tokens": 8, "messages": "invalid"}))]
+#[case::messages_without_content("/v1/messages", json!({"model": "claude", "max_tokens": 8, "messages": [{"role": "user"}]}))]
+#[tokio::test]
+async fn malformed_requests_are_refused_before_they_count_or_reach_a_provider(
+    #[case] path: &str,
+    #[case] body: Value,
+) {
+    let limits = KeyLimits {
+        key: rpm(1),
+        ..KeyLimits::default()
+    };
+    let gateway = gateway(vec![("sk-key", key(None, limits))], Setup::default()).await;
+    let refused = send(&gateway.app, path, body).await;
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"]["type"], "invalid_request_error");
+    // `/v1/messages` answers in Anthropic's envelope, Chat Completions in OpenAI's.
+    let anthropic = path == "/v1/messages";
+    assert_eq!(refused.body["type"] == "error", anthropic);
+    assert_eq!(gateway.upstream.calls.load(Ordering::SeqCst), 0);
+    // The refusal took nothing from the key's one request a minute.
+    let admitted = send(&gateway.app, path, message(json!({}))).await;
+    assert_eq!(admitted.status, 200);
+    assert_eq!(
+        header(&admitted, "x-ratelimit-api_key-remaining-requests"),
+        Some("0")
+    );
+    assert_eq!(gateway.upstream.calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
 #[case::user(KeyLimits { user: rpm(1), ..KeyLimits::default() }, "user: user-1")]
 #[case::team(KeyLimits { team: rpm(1), ..KeyLimits::default() }, "team: team-1")]
 #[case::team_member(KeyLimits { team_member: rpm(1), ..KeyLimits::default() }, "team_member: team-1:user-1")]
