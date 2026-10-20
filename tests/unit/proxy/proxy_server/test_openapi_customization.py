@@ -304,10 +304,13 @@ async def test_a_request_is_answered_while_a_cold_openapi_json_builds(monkeypatc
                 build_saw_the_answer.set()
             return handler(schema)
 
-    monkeypatch.setattr(app, "openapi_schema", None)
-    monkeypatch.setattr(app.router, "routes", [*app.router.routes])
-    app.add_api_route("/holds-the-docs-build", lambda: None, response_model=HoldsTheDocsBuild)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_app: Final = ps.app
+    monkeypatch.setattr(proxy_app, "openapi_schema", None)
+    monkeypatch.setattr(proxy_app.router, "routes", [*proxy_app.router.routes])
+    proxy_app.add_api_route("/holds-the-docs-build", lambda: None, response_model=HoldsTheDocsBuild)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_app), base_url="http://proxy") as client:
         docs_request: Final = asyncio.ensure_future(client.get("/openapi.json"))
         await asyncio.to_thread(build_started.wait, UNBLOCK_TIMEOUT_SECONDS)
         liveliness: Final = await client.get("/health/liveliness")
