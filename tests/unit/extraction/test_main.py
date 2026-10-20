@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.extraction import ExtractionResponse
 
 _CLAIRIC_URL: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clairic"
@@ -133,6 +138,41 @@ def test_sync_extraction_reads_an_unwrapped_result(respx_mock: respx.MockRouter)
     _assert_invoice_answers(response)
 
 
+def _clairic_transport() -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == _CLAIRIC_URL
+        return httpx.Response(200, json=_ENVELOPE)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_async_extraction_sends_through_the_callers_client(respx_mock: respx.MockRouter) -> None:
+    response: Final = await litellm.aextraction(
+        model="cloudflare/clairic",
+        state=_STATE,
+        fields=_FIELDS,
+        client=AsyncHTTPHandler(transport=_clairic_transport()),
+    )
+
+    assert len(respx_mock.calls) == 0
+    _assert_invoice_answers(response)
+
+
+@pytest.mark.usefixtures("cloudflare_env")
+def test_sync_extraction_sends_through_the_callers_client(respx_mock: respx.MockRouter) -> None:
+    response: Final = litellm.extraction(
+        model="cloudflare/clairic",
+        state=_STATE,
+        fields=_FIELDS,
+        client=HTTPHandler(client=httpx.Client(transport=_clairic_transport())),
+    )
+
+    assert len(respx_mock.calls) == 0
+    _assert_invoice_answers(response)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("cloudflare_env")
 async def test_a_cloudflare_bad_input_is_a_bad_request_with_the_cloudflare_message(
@@ -241,3 +281,75 @@ async def test_router_extraction_sends_the_deployment_model_and_credentials(resp
     assert json.loads(route.calls[0].request.content)["model"] == "clairic"
     assert response.model == "cloudflare/clairic"
     _assert_invoice_answers(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_provider_keys_go_upstream_as_sent_while_litellm_params_stay_local(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=_ENVELOPE)
+
+    await litellm.aextraction(
+        model="cloudflare/clairic",
+        state=_STATE,
+        fields=_FIELDS,
+        language="en",
+        metadata={"team": "billing"},
+        num_retries=0,
+        user="end-user-1",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "clairic",
+        "state": _STATE,
+        "fields": _FIELDS,
+        "language": "en",
+    }
+
+
+class _RecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.standard_logging_object: Mapping[str, object] | None = None
+        self.stream: object = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.stream = kwargs.get("stream")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if isinstance(standard_logging_object, dict):
+            self.standard_logging_object = standard_logging_object
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_stream_is_refused_before_http_without_drop_params(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['stream']")):
+        await litellm.aextraction(model="cloudflare/clairic", state=_STATE, fields=_FIELDS, stream=True)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_a_dropped_stream_is_sent_and_logged_as_a_billed_non_stream_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=_ENVELOPE)
+    recording_logger: Final = _RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    response: Final = await litellm.aextraction(
+        model="cloudflare/clairic", state=_STATE, fields=_FIELDS, stream=True, drop_params=True
+    )
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert "stream" not in json.loads(route.calls[0].request.content)
+    _assert_invoice_answers(response)
+    logged: Final = recording_logger.standard_logging_object
+    assert logged is not None
+    assert recording_logger.stream is False
+    assert response.hidden_params["response_cost"] > 0
+    assert logged["response_cost"] == pytest.approx(response.hidden_params["response_cost"])

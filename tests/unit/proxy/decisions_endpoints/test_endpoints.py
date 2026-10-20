@@ -548,7 +548,7 @@ def test_openai_format_decisions_translate_through_systemone(
         },
     }
     body: Final = response.json()
-    assert body["model"] == _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST["model"]
+    assert body["model"] == _OPENAI_FORMAT_REQUEST["model"]
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == {
         "input_tokens": _INPUT_TOKENS,
@@ -1307,7 +1307,7 @@ _EXTRACTION_REQUEST: Final[Mapping[str, object]] = {
 }
 
 
-def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch) -> None:
+def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch, drop_params: bool = False) -> None:
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -1319,6 +1319,7 @@ def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch) -> None:
                         "model": "cloudflare/clairic",
                         "api_key": "cloudflare-key",
                         "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+                        "drop_params": drop_params,
                     },
                 }
             ]
@@ -1341,7 +1342,7 @@ def test_proxy_extraction_forwards_the_body_to_clairic_and_returns_its_answers_a
     response: Final = client.post(endpoint, json=_EXTRACTION_REQUEST)
 
     assert response.status_code == 200, response.text
-    assert response.json() == {**_CLAIRIC_RESULT, "model": "cloudflare/clairic"}
+    assert response.json() == {**_CLAIRIC_RESULT, "model": "invoice-reader"}
     expected_cost: Final = _CLAIRIC_INPUT_TOKENS * float(
         litellm.model_cost["cloudflare/clairic"]["input_cost_per_token"]
     )
@@ -1374,6 +1375,50 @@ def test_proxy_extraction_refuses_a_malformed_body_before_calling_clairic(
     assert response.status_code == 400, response.text
     assert "Invalid Extraction request" in response.text
     assert not upstream.called
+
+
+def test_proxy_extraction_sends_keys_it_does_not_know_to_clairic_as_sent(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post("/v1/extraction", json={**_EXTRACTION_REQUEST, "language": "en"})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        **_EXTRACTION_REQUEST,
+        "language": "en",
+        "model": "clairic",
+    }
+
+
+def test_proxy_extraction_refuses_stream_before_calling_clairic_unless_the_deployment_drops_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post("/v1/extraction", json={**_EXTRACTION_REQUEST, "stream": True})
+
+    assert response.status_code == 400, response.text
+    assert "does not support parameters: ['stream']" in response.text
+    assert not upstream.called
+
+
+def test_proxy_extraction_answers_a_dropped_stream_with_one_json_body(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _route_invoice_reader_to_clairic(monkeypatch, drop_params=True)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post("/v1/extraction", json={**_EXTRACTION_REQUEST, "stream": True})
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {**_CLAIRIC_RESULT, "model": "invoice-reader"}
+    assert json.loads(upstream.calls[0].request.content) == {**_EXTRACTION_REQUEST, "model": "clairic"}
 
 
 @pytest.mark.parametrize("path", ("/v1/extraction", "/extraction"))

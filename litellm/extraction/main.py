@@ -9,10 +9,13 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.decisions.call import log_caller_request
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.extraction import (
     ExtractionBase64Image,
@@ -21,7 +24,8 @@ from litellm.types.extraction import (
     ExtractionRequestBody,
     ExtractionResponse,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,  # pyright: ignore[reportUnknownVariableType]  # client is an untyped decorator
@@ -34,6 +38,9 @@ ExtractionOptionsParam: TypeAlias = ExtractionOptions | Mapping[str, object]
 
 _REQUEST_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
 _HANDLER: Final = BaseLLMHTTPHandler()
+_LITELLM_KWARGS: Final = frozenset(
+    (*all_litellm_params, *GenericLiteLLMParams.model_fields, *OPENAI_CHAT_COMPLETION_PARAMS)
+)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -49,6 +56,7 @@ class _ExtractionCall:
     headers: Mapping[str, str]
     timeout: float | httpx.Timeout | None
     litellm_params: Mapping[str, object]
+    client: HTTPHandler | AsyncHTTPHandler | None
 
 
 def supported_extraction_providers() -> tuple[str, ...]:
@@ -101,7 +109,10 @@ def _prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> _ExtractionCall:
-    log_caller_request(kwargs, request_fields)
+    provider_fields: Final = MappingProxyType(
+        {**{name: value for name, value in kwargs.items() if name not in _LITELLM_KWARGS}, **request_fields}
+    )
+    log_caller_request(kwargs, provider_fields)
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -109,8 +120,18 @@ def _prepare_call(
         api_key=api_key,
     )
     provider_config: Final = _provider_config(model, provider)
+    if kwargs.get("stream") and not drops_unsupported_params(kwargs.get("drop_params")):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{provider} does not support parameters: ['stream'], for model={model}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
+                "`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
     try:
-        request: Final = _REQUEST_ADAPTER.validate_python(request_fields)
+        request: Final = _REQUEST_ADAPTER.validate_python(provider_fields)
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Extraction request: {error}", model=model, llm_provider=provider
@@ -127,6 +148,7 @@ def _prepare_call(
             message=f"Missing API key for Extraction provider '{provider}'", model=model, llm_provider=provider
         )
     logging_obj: Final = kwargs.get("litellm_logging_obj")
+    http_client: Final = kwargs.get("client")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # Logging takes untyped dicts
             kwargs=dict(kwargs),
@@ -149,6 +171,7 @@ def _prepare_call(
         headers=MappingProxyType(dict(extra_headers or {})),
         timeout=timeout,
         litellm_params=kwargs,
+        client=http_client if isinstance(http_client, HTTPHandler | AsyncHTTPHandler) else None,
     )
 
 
@@ -194,6 +217,7 @@ async def _asend(call: _ExtractionCall) -> ExtractionResponse:
             headers=call.headers,
             timeout=call.timeout,
             litellm_params=call.litellm_params,
+            client=call.client if isinstance(call.client, AsyncHTTPHandler) else None,
         )
     except Exception as error:
         raise _upstream_exception(error, call) from error
@@ -213,6 +237,7 @@ def _send(call: _ExtractionCall) -> ExtractionResponse:
             headers=call.headers,
             timeout=call.timeout,
             litellm_params=call.litellm_params,
+            client=call.client if isinstance(call.client, HTTPHandler) else None,
         )
     except Exception as error:
         raise _upstream_exception(error, call) from error

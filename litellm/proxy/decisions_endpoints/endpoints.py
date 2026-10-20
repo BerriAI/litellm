@@ -316,13 +316,17 @@ async def extraction(
     """
     Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.
 
-    Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`),
-    `estimate` and `forecast` (set `min` and `max`). Each answer carries its `value`, which is null when the
-    input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for estimates,
-    `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote URLs are
-    not accepted. Requests that break these rules are rejected with a 400 before any provider is called. `model`
-    is any extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep
-    the provider's format. Streaming is not supported.
+    Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`
+    (set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
+    null when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for
+    estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
+    URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
+    starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
+    provider is called. Other keys go to the provider as sent, so a field missing a setting its type needs, an empty
+    `state` with no images or a key the provider does not take comes back with the provider's own error. `model` is
+    any extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+    provider's format. Streaming is not supported, so `stream: true` is rejected with a 400 unless `drop_params` is
+    set.
     """
     return await _process_decisions(
         request=request,

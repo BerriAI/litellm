@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, JsonValue, PrivateAttr, with_config
-from typing_extensions import ReadOnly, Required, TypedDict
+from pydantic import ConfigDict, Field, JsonValue, PrivateAttr, model_validator, with_config
+from typing_extensions import ReadOnly, Required, Self, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -45,6 +45,12 @@ class ExtractionField(_ClairicObject):
     ] = None
     horizon: Annotated[int | None, Field(description="Forecast only, number of steps")] = None
     interval: Literal["step", "minute", "hour", "day", "week", "month", "quarter", "year"] | None = None
+
+    @model_validator(mode="after")
+    def _list_fields_name_their_item_type(self) -> Self:
+        if self.type == "list" and self.items is None:
+            raise ValueError("list fields need items set to text, number or date")
+        return self
 
 
 class ExtractionBase64Image(_ClairicObject):

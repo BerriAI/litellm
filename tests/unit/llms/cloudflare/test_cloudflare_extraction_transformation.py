@@ -158,6 +158,27 @@ def test_unknown_field_type_is_rejected() -> None:
         ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {"vendor": {"type": "color"}}})
 
 
+def test_a_list_field_without_an_item_type_is_rejected_locally() -> None:
+    # Cloudflare answered a list field without items with 422 code 3030 on @cf/cloudflare/clairic, probed 2026-10-20
+    with pytest.raises(ValidationError, match=r"fields\.line_items\n.*list fields need items"):
+        ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {"line_items": {"type": "list"}}})
+
+
+@pytest.mark.parametrize("name", ("due date", "1st_item", "x" * 80), ids=("space", "digit_first", "80_chars"))
+def test_a_field_name_clairic_refuses_is_rejected_locally(name: str) -> None:
+    # Cloudflare answered each of these names with 422 code 3030 on @cf/cloudflare/clairic, probed 2026-10-19
+    with pytest.raises(ValidationError, match=r"fields\."):
+        ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {name: {"type": "text"}}})
+
+
+@pytest.mark.parametrize("name", ("_vendor", "line.items", "days-to-pay", "x" * 64))
+def test_field_names_with_dots_dashes_and_underscores_up_to_64_chars_are_accepted(name: str) -> None:
+    # Cloudflare answered each of these names with a 200 on @cf/cloudflare/clairic, probed 2026-10-19
+    request: Final = ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {name: {"type": "text"}}})
+
+    assert tuple(request.fields) == (name,)
+
+
 def test_decisions_config_still_resolves_clef_after_the_shared_helpers_moved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
     config: Final = litellm.CloudflareDecisionsConfig()

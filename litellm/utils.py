@@ -2075,7 +2075,11 @@ def client(original_function):
 
             # Sync logging_obj.stream after deployment hooks (they may convert it).
             _hook_stream: Final = kwargs.get("stream")
-            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+            if (
+                _hook_stream is not None
+                and logging_obj.stream != _hook_stream
+                and call_type not in _NEVER_STREAMING_CALL_TYPES
+            ):
                 logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
@@ -2419,6 +2423,15 @@ _STREAMING_CALL_TYPES: Final = frozenset(
     }
 )
 
+_NEVER_STREAMING_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.extraction,
+        CallTypes.aextraction,
+        CallTypes.extraction.value,
+        CallTypes.aextraction.value,
+    }
+)
+
 
 def _is_streaming_request(
     kwargs: dict[str, object],
@@ -2430,6 +2443,8 @@ def _is_streaming_request(
         - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
         - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
     """
+    if call_type in _NEVER_STREAMING_CALL_TYPES:
+        return False
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
     return call_type in _STREAMING_CALL_TYPES
