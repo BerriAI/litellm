@@ -315,6 +315,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        cache_id_auth_scope: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -328,6 +329,29 @@ class ContextCachingEndpoints(VertexBase):
         """
         if cached_content is not None:
             return messages, optional_params, cached_content
+
+        from . import redis_cache_ids
+
+        if redis_cache_ids.enabled(custom_llm_provider):
+            return redis_cache_ids.check_and_create(
+                self,
+                redis_cache_ids.CacheArguments(
+                    messages=messages,
+                    optional_params=optional_params,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model=model,
+                    client=client,
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_auth_header=vertex_auth_header,
+                    extra_headers=extra_headers,
+                    cache_id_auth_scope=cache_id_auth_scope,
+                ),
+            )
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
@@ -473,6 +497,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        cache_id_auth_scope: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -486,6 +511,29 @@ class ContextCachingEndpoints(VertexBase):
         """
         if cached_content is not None:
             return messages, optional_params, cached_content
+
+        from . import redis_cache_ids
+
+        if redis_cache_ids.enabled(custom_llm_provider):
+            return await redis_cache_ids.async_check_and_create(
+                self,
+                redis_cache_ids.CacheArguments(
+                    messages=messages,
+                    optional_params=optional_params,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model=model,
+                    client=client,
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_auth_header=vertex_auth_header,
+                    extra_headers=extra_headers,
+                    cache_id_auth_scope=cache_id_auth_scope,
+                ),
+            )
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 

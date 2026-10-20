@@ -9472,6 +9472,49 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
     assert chunk.usage.cache_creation_input_tokens == 1280
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_managed_cache_streaming_error_preserves_vertex_status(respx_mock, asynchronous):
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.vertex_ai.context_caching.redis_cache_ids import CacheReference, Registry
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_call, make_sync_call
+
+    reference = CacheReference("projects/p/locations/global/cachedContents/c", Registry(Mock(), ("scope",), {}), [], {})
+    reference.rebuild = lambda: {"contents": []}
+    body = {"cachedContent": reference, "contents": []}
+    route = respx_mock.post("https://provider.invalid/streamGenerateContent").respond(
+        403, json={"error": {"message": "permission denied"}}
+    )
+    client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if asynchronous else HTTPHandler()
+    try:
+        kwargs = dict(
+            client=client,
+            gemini_client=client,
+            api_base="https://provider.invalid/streamGenerateContent",
+            headers={},
+            data=json.dumps(body),
+            model="gemini-2.5-flash",
+            messages=[],
+            logging_obj=Mock(),
+            request_body=body,
+            hop_headers=AsyncMock(return_value={}) if asynchronous else lambda: {},
+        )
+        with pytest.raises(VertexAIError) as error:
+            if asynchronous:
+                await make_call(**kwargs)
+            else:
+                make_sync_call(**kwargs)
+        assert error.value.status_code == 403
+        assert "permission denied" in str(error.value)
+        assert route.call_count == 1
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+
 THOUGHT_SUMMARY_REQUESTS: Final = (
     pytest.param("gemini-2.5-flash", {"reasoning_effort": "minimal"}, id="budget-minimal"),
     pytest.param("gemini-2.5-flash", {"reasoning_effort": "low"}, id="budget-low"),
@@ -9756,3 +9799,142 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("expires_on_hop", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.asyncio
+async def test_managed_cache_recovery_preserves_continuations(asynchronous, expires_on_hop, streaming):
+    import datetime
+    from unittest.mock import AsyncMock
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.vertex_ai.context_caching.redis_cache_ids import CacheReference, Registry
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_call, make_sync_call
+
+    litellm_logging = Logging(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="cache-recovery",
+        function_id="cache-recovery",
+    )
+    litellm_logging.update_environment_variables(litellm_params={}, optional_params={})
+
+    sent = []
+    registry = Registry(Mock(), ("scope",), {})
+    reference = CacheReference(
+        "projects/p/locations/global/cachedContents/c",
+        registry,
+        [{"role": "user", "content": "hello"}],
+        {"max_output_tokens": 100},
+    )
+    full_body = {
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "generationConfig": {"max_output_tokens": 100},
+    }
+    reference.rebuild = lambda: full_body.copy()
+    body = {"cachedContent": reference, "contents": [], "generationConfig": {"max_output_tokens": 100}}
+    first = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "hello"}]},
+                "finishReason": "CONTINUATION",
+                "continuationToken": "dG9rLTE=",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3, "totalTokenCount": 13},
+    }
+    last = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": " world"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3, "totalTokenCount": 13},
+    }
+    expired = httpx.Response(404, json={"error": {"message": "CachedContent expired"}})
+    first_response = (
+        httpx.Response(200, content="data: " + json.dumps(first) + "\n\n")
+        if streaming
+        else httpx.Response(200, json=first)
+    )
+    last_response = (
+        httpx.Response(200, content="data: " + json.dumps(last) + "\n\n")
+        if streaming
+        else httpx.Response(200, json=last)
+    )
+    responses = (first_response, expired, last_response) if expires_on_hop else (expired, first_response, last_response)
+
+    def handler(request):
+        sent.append(
+            (
+                json.loads(request.content),
+                request.url.path,
+                request.extensions["timeout"]["read"],
+                request.headers.get("Authorization"),
+            )
+        )
+        return responses[len(sent) - 1]
+
+    transport = httpx.MockTransport(handler)
+    client = (
+        AsyncHTTPHandler(timeout=7.5, transport=transport)
+        if asynchronous
+        else HTTPHandler(client=httpx.Client(timeout=7.5, transport=transport))
+    )
+    kwargs = dict(
+        client=client,
+        gemini_client=None,
+        api_base="https://provider.invalid/v1/projects/p/locations/global/models/m:streamGenerateContent",
+        headers={"Authorization": "Bearer initial"},
+        data=json.dumps(body),
+        request_body=body,
+        model="gemini-2.5-flash",
+        messages=[],
+        logging_obj=litellm_logging,
+        timeout=7.5,
+        hop_headers=AsyncMock(return_value={"Authorization": "Bearer fresh"})
+        if asynchronous
+        else lambda: {"Authorization": "Bearer fresh"},
+    )
+    try:
+        if streaming:
+            if asynchronous:
+                stream = await make_call(**kwargs)
+                chunks = [chunk async for chunk in stream]
+            else:
+                chunks = list(make_sync_call(**kwargs))
+            assert (
+                "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk and chunk.choices)
+                == "hello world"
+            )
+        else:
+            completion_kwargs = dict(
+                model="gemini/gemini-2.5-flash",
+                messages=[{"role": "user", "content": "hello"}],
+                cached_content=reference,
+                max_tokens=100,
+                timeout=7.5,
+                api_key="test-key",
+                api_base="https://provider.invalid/v1/projects/p/locations/global",
+                client=client,
+            )
+            result = (
+                await litellm.acompletion(**completion_kwargs)
+                if asynchronous
+                else litellm.completion(**completion_kwargs)
+            )
+            assert result.choices[0].message.content == "hello world"
+        assert len(sent) == 3
+        assert all(request[2] == 7.5 for request in sent)
+        assert sent[-1][0]["continuationToken"] == "dG9rLTE="
+        assert "cachedContent" not in sent[-1][0]
+        assert sent[-1][0]["contents"] == full_body["contents"]
+        assert "/v1beta1/projects/" in sent[-1][1]
+        if streaming:
+            assert sent[-1][3] == "Bearer fresh"
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()

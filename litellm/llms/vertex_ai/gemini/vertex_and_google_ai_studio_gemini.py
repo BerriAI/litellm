@@ -96,6 +96,11 @@ from ..common_utils import (
     build_vertex_schema,
     supports_response_json_schema,
 )
+from ..context_caching.redis_cache_ids import (
+    async_post_with_recovery,
+    credential_scope,
+    post_with_recovery,
+)
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
 from .long_decode import (
@@ -2821,13 +2826,16 @@ async def make_call(
         )
 
     try:
-        response: Final = await client.post(
-            url_for(api_base, request_body),
-            headers=headers,
-            data=data,
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
+        response: Final = await async_post_with_recovery(
+            lambda _: client.post(
+                url_for(api_base, request_body),
+                headers=headers,
+                data=json.dumps(request_body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            ),
+            request_body,
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -2845,14 +2853,17 @@ async def make_call(
         )
 
     async def open_hop(body: RequestBody) -> httpx.Response:
-        return await client.post(
-            url_for(api_base, body),
-            headers=dict(await hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        async def send(_: RequestBody | None) -> httpx.Response:
+            return await client.post(
+                url_for(api_base, body),
+                headers=dict(await hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+
+        return await async_post_with_recovery(send, body)
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
@@ -2891,14 +2902,22 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(
-        url_for(api_base, request_body),
-        headers=headers,
-        data=data,
-        stream=True,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = post_with_recovery(
+            lambda _: client.post(
+                url_for(api_base, request_body),
+                headers=headers,
+                data=json.dumps(request_body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            ),
+            request_body,
+        )
+    except httpx.HTTPStatusError as error:
+        raise VertexAIError(
+            status_code=error.response.status_code, message=str(error.response.read()), headers=error.response.headers
+        ) from error
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2908,13 +2927,16 @@ def make_sync_call(
         )
 
     def open_hop(body: RequestBody) -> httpx.Response:
-        return client.post(
-            url_for(api_base, body),
-            headers=dict(hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
+        return post_with_recovery(
+            lambda _: client.post(
+                url_for(api_base, body),
+                headers=dict(hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            ),
+            body,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -3038,6 +3060,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         ## LOGGING
@@ -3141,6 +3164,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         _async_client_params: Final = {}
@@ -3166,13 +3190,16 @@ class VertexLLM(VertexBase):
         )
 
         async def post(body: RequestBody) -> httpx.Response:
-            try:
-                response: Final = await client.post(
+            async def send(_: RequestBody | None) -> httpx.Response:
+                return await client.post(
                     url_for(api_base, body),
                     headers=dict(await fresh_headers()),
                     json=dict(body),
                     logging_obj=logging_obj,
                 )
+
+            try:
+                response: Final = await async_post_with_recovery(send, body)
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
                 raise VertexAIError(
@@ -3325,6 +3352,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         ## LOGGING
@@ -3380,8 +3408,11 @@ class VertexLLM(VertexBase):
 
         def post(body: RequestBody) -> httpx.Response:
             try:
-                response: Final = client.post(
-                    url=url_for(url, body), headers=dict(fresh_headers()), json=dict(body), logging_obj=logging_obj
+                response: Final = post_with_recovery(
+                    lambda _: client.post(
+                        url=url_for(url, body), headers=dict(fresh_headers()), json=dict(body), logging_obj=logging_obj
+                    ),
+                    body,
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
