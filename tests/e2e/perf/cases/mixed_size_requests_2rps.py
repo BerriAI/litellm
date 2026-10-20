@@ -62,6 +62,8 @@ CASE: Final = PerformanceTestCase(
     ),
     limits=(
         Limit("unexpected_status_count", max=3),
+        Limit("gateway_added_seconds", percentile=50, max=0.58),
+        Limit("gateway_added_seconds", percentile=99, max=6.1),
         Limit("litellm_overhead_seconds", percentile=50, max=0.05),
         Limit("litellm_overhead_seconds", percentile=99, max=2.2),
         Limit("litellm_response_seconds", percentile=50, max=1.2),
