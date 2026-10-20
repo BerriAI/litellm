@@ -9,7 +9,8 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import AppliedEdit
 
 from .constants import CLEAR_TOOL_USES_EDIT_TYPE, COMPACT_EDIT_TYPE
-from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112
+from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112, clear_tool_uses_spec_error
+from .errors import AnthropicContextManagementError
 from .result import PolyfillResult
 
 if TYPE_CHECKING:
@@ -73,6 +74,12 @@ def _wrap_editor_return(
     )
 
 
+def _edit_error(index: int, edit_spec: dict[str, object]) -> AnthropicContextManagementError | None:
+    if edit_spec.get("type") != CLEAR_TOOL_USES_EDIT_TYPE:
+        return None
+    return clear_tool_uses_spec_error(edit_spec, index)
+
+
 async def apply_context_management(
     *,
     model: str,
@@ -86,8 +93,12 @@ async def apply_context_management(
     sub_call_logging_kwargs: "ProxySubCallLoggingKwargs | None" = None,
     parent_trace_id: str | None = None,
     count_only: bool = False,
+    drop_invalid_edits: bool = False,
 ) -> PolyfillResult:
     """Run edits in order; return a single ``PolyfillResult``.
+
+    Every ``clear_tool_uses_20250919`` edit is validated before any editor runs, so a malformed one raises its 400
+    before a ``compact_20260112`` summary call is paid for, or is the only edit skipped under ``drop_invalid_edits``.
 
     The dispatcher is async so async editors (``compact_20260112``) can
     ``await`` the configured summarization model. Sync editors run in a
@@ -97,6 +108,11 @@ async def apply_context_management(
     edits: Final = normalize_spec(context_management_spec)
     if not edits:
         return PolyfillResult(messages=messages, system=system, applied_edits=[])
+    errors: Final = tuple(_edit_error(index, edit_spec) for index, edit_spec in enumerate(edits))
+    first_error: Final = next((error for error in errors if error is not None), None)
+    if first_error is not None and not drop_invalid_edits:
+        raise first_error
+    valid_edits: Final = tuple(edit_spec for edit_spec, error in zip(edits, errors) if error is None)
 
     current_messages = messages
     current_system = system
@@ -104,7 +120,7 @@ async def apply_context_management(
     aggregated_compaction_block = None
     aggregated_iterations_usage = None
 
-    for edit_spec in edits:
+    for edit_spec in valid_edits:
         edit_type = edit_spec.get("type")
         editor = _EDITOR_REGISTRY.get(edit_type) if isinstance(edit_type, str) else None
         if editor is None:

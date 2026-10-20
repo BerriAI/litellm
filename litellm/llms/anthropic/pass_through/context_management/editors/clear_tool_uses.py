@@ -5,15 +5,17 @@
 count, unless ``clear_tool_inputs`` covers their tool: then their input can still be cleared, and the API counts and
 clears them like any other. Clearing goes oldest first in batches that free at least ``clear_at_least`` tokens,
 counting the result and any input it clears, and leaves an incomplete last batch, so the cleared prefix only grows
-between requests and each batch costs one prompt-cache miss. A malformed field is a 400, like the API's.
+between requests and each batch costs one prompt-cache miss. ``clear_tool_uses_spec_error`` answers a malformed field
+the way the API's 400 does, so the dispatcher can reject or drop the edit before any editor runs.
 """
 
 from collections.abc import Mapping, Sequence, Set
 from functools import reduce
 from itertools import chain
-from typing import Any, Final, Literal, TypeVar, cast
+from types import MappingProxyType
+from typing import Annotated, Any, Final, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -38,7 +40,7 @@ class _ClearAtLeast(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["input_tokens"]
-    value: NonNegativeInt
+    value: Annotated[StrictInt, Field(ge=0)]
 
 
 class _ClearToolUsesFields(BaseModel):
@@ -50,6 +52,13 @@ class _ClearToolUsesFields(BaseModel):
 
 
 _BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+# api.anthropic.com, measured 2026-10-19: its wording for the two shapes pydantic words differently
+_API_MESSAGES: Final = MappingProxyType(
+    {
+        "tuple_type": "Input should be a valid array",
+        "model_type": "Input does not match the expected shape.",
+    }
+)
 
 
 class ClearToolUsesEditSpec(TypedDict, total=False):
@@ -70,15 +79,18 @@ def _parse(adapter: TypeAdapter[T], value: object) -> T | None:
         return None
 
 
-def _fields_or_error(edit_spec: ClearToolUsesEditSpec) -> _ClearToolUsesFields | AnthropicContextManagementError:
+def clear_tool_uses_spec_error(edit_spec: Mapping[str, object], index: int) -> AnthropicContextManagementError | None:
+    """The API's 400 for the first malformed field of ``edits[index]``, or None when every field is well formed."""
     try:
-        return _ClearToolUsesFields.model_validate(edit_spec)
+        _ClearToolUsesFields.model_validate(edit_spec)
     except ValidationError as error:
         first: Final = error.errors(include_url=False)[0]
+        location: Final = ".".join(map(str, ("edits", index, CLEAR_TOOL_USES_EDIT_TYPE, *first["loc"])))
         return AnthropicContextManagementError(
             status_code=400,
-            message=f"context_management.{CLEAR_TOOL_USES_EDIT_TYPE}.{'.'.join(map(str, first['loc']))}: {first['msg']}",
+            message=f"context_management.{location}: {_API_MESSAGES.get(first['type'], first['msg'])}",
         )
+    return None
 
 
 def _input_tools(clear_tool_inputs: bool | tuple[str, ...] | None) -> ToolNames:
@@ -164,10 +176,6 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
 
     batch_end, _ = reduce(step, enumerate(candidates), (0, 0))
     return tuple(candidates[:batch_end])
-
-
-def _count_tool_uses(blocks: Sequence[Mapping[str, object]], exclude_tools: Set[str]) -> int:
-    return sum(1 for _, name in _tool_uses_in_order(blocks) if name not in exclude_tools)
 
 
 def _trigger_met(
@@ -283,10 +291,8 @@ def apply_clear_tool_uses_20250919(
     system: str | list[dict[str, object]] | None,
     edit_spec: ClearToolUsesEditSpec,
 ) -> tuple[list[dict[str, object]], AppliedEdit | None]:
-    """Apply clear_tool_uses; return (messages, AppliedEdit or None)."""
-    fields: Final = _fields_or_error(edit_spec)
-    if isinstance(fields, AnthropicContextManagementError):
-        raise fields
+    """Apply clear_tool_uses to an edit ``clear_tool_uses_spec_error`` passed; return (messages, AppliedEdit or None)."""
+    fields: Final = _ClearToolUsesFields.model_validate(edit_spec)
     clear_at_least: Final = 0 if fields.clear_at_least is None else fields.clear_at_least.value
     exclude_tools: Final = frozenset(fields.exclude_tools or ())
     input_tools: Final = _input_tools(fields.clear_tool_inputs)
@@ -301,11 +307,6 @@ def apply_clear_tool_uses_20250919(
     }
 
     blocks: Final = _all_blocks(messages)
-    met, counted_tokens = _trigger_met(trigger, model, messages, tools, _count_tool_uses(blocks, exclude_tools))
-    if not met:
-        return messages, None
-
-    keep_count: Final = _resolve_keep_count(keep)
     results: Final = _blocks_by_id(blocks, "tool_result", "tool_use_id")
     uses: Final = _blocks_by_id(blocks, "tool_use", "id")
     tiny: Final = _tiny_result_ids(results)
@@ -314,6 +315,11 @@ def apply_clear_tool_uses_20250919(
         for tool_use_id, name in _tool_uses_in_order(blocks)
         if name not in exclude_tools and (tool_use_id not in tiny or _clears_input(name, input_tools))
     )
+    met, counted_tokens = _trigger_met(trigger, model, messages, tools, len(clearable))
+    if not met:
+        return messages, None
+
+    keep_count: Final = _resolve_keep_count(keep)
     if len(clearable) <= keep_count:
         return messages, None
 

@@ -10,13 +10,18 @@ import pytest
 
 import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import _run_polyfill_if_enabled
-from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
+from litellm.llms.anthropic.pass_through.context_management import (
+    AnthropicContextManagementError,
+    apply_context_management,
+)
 from litellm.llms.anthropic.pass_through.context_management.constants import (
     CLEARED_TOOL_RESULT_PLACEHOLDER,
+    COMPACT_SUMMARY_MODEL_SETTING_KEY,
 )
 from litellm.llms.anthropic.pass_through.context_management.editors.clear_tool_uses import (
     apply_clear_tool_uses_20250919,
 )
+from litellm.types.llms.anthropic import AppliedEdit
 
 MODEL = "xai/grok-4"
 
@@ -333,7 +338,7 @@ def test_history_of_only_excluded_tools_is_left_unchanged():
     assert new_messages == original
 
 
-def _clear_with_keep_two(messages):
+def _clear_with_keep_two(messages: list[dict[str, object]]) -> tuple[list[dict[str, object]], AppliedEdit | None]:
     return apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
@@ -357,7 +362,9 @@ def test_tiny_results_are_never_cleared_and_do_not_count_toward_keep():
     assert applied["cleared_tool_uses"] == 2
 
 
-def _clear_with_keep_two_and_inputs(messages, clear_tool_inputs):
+def _clear_with_keep_two_and_inputs(
+    messages: list[dict[str, object]], clear_tool_inputs: bool | list[str]
+) -> tuple[list[dict[str, object]], AppliedEdit | None]:
     return apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
@@ -458,6 +465,18 @@ def test_clear_tool_inputs_list_clears_only_the_named_tools():
     }
 
 
+async def _malformed_spec_error(edits: list[dict[str, object]]) -> AnthropicContextManagementError:
+    with pytest.raises(AnthropicContextManagementError) as raised:
+        await apply_context_management(
+            model=MODEL,
+            messages=_make_history(n_pairs=3),
+            tools=None,
+            system=None,
+            context_management_spec={"edits": edits},
+        )
+    return raised.value
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -465,57 +484,98 @@ def test_clear_tool_inputs_list_clears_only_the_named_tools():
         ("clear_at_least", {"value": 5}),
         ("clear_at_least", {"type": "input_tokens", "value": -1}),
         ("clear_at_least", {"type": "input_tokens", "value": 1.5}),
+        ("clear_at_least", {"type": "input_tokens", "value": "1200"}),
+        ("clear_at_least", {"type": "input_tokens", "value": True}),
         ("exclude_tools", "get_weather"),
         ("exclude_tools", [1]),
         ("clear_tool_inputs", "get_weather"),
     ],
 )
-def test_malformed_fields_are_a_400_even_below_the_trigger(field, value):
-    messages = _make_history(n_pairs=3)
-    with pytest.raises(AnthropicContextManagementError) as raised:
-        apply_clear_tool_uses_20250919(
-            model=MODEL,
-            messages=messages,
-            tools=None,
-            system=None,
-            edit_spec={
-                "type": "clear_tool_uses_20250919",
-                "trigger": {"type": "tool_uses", "value": 99},
-                field: value,
-            },
-        )
-    assert raised.value.status_code == 400
-    assert f"clear_tool_uses_20250919.{field}" in raised.value.message
+async def test_malformed_fields_are_a_400_even_below_the_trigger(field, value):
+    error = await _malformed_spec_error(
+        [{"type": "clear_tool_uses_20250919", "trigger": {"type": "tool_uses", "value": 99}, field: value}]
+    )
+    assert error.status_code == 400
+    assert error.message.startswith(f"context_management.edits.0.clear_tool_uses_20250919.{field}")
 
 
-_MALFORMED_SPEC: Final = {
-    "edits": [
-        {
-            "type": "clear_tool_uses_20250919",
-            "trigger": {"type": "tool_uses", "value": 0},
-            "exclude_tools": "get_weather",
-        }
-    ]
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("exclude_tools", "memory", "exclude_tools: Input should be a valid array"),
+        ("clear_at_least", 1200, "clear_at_least: Input does not match the expected shape."),
+        ("clear_at_least", {"type": "input_tokens", "value": "1200"}, "value: Input should be a valid integer"),
+        ("clear_tool_inputs", 5, "clear_tool_inputs.bool: Input should be a valid boolean, unable to interpret input"),
+    ],
+)
+async def test_malformed_field_400_names_the_edit_and_field_as_the_api_does(field, value, message):
+    # api.anthropic.com, measured 2026-10-19, answers these four with these messages for the edit at index 1.
+    error = await _malformed_spec_error(
+        [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919", field: value}]
+    )
+    assert error.message.startswith("context_management.edits.1.clear_tool_uses_20250919.")
+    assert error.message.endswith(message)
+
+
+_VALID_EDIT: Final = {
+    "type": "clear_tool_uses_20250919",
+    "trigger": {"type": "tool_uses", "value": 0},
+    "keep": {"type": "tool_uses", "value": 1},
 }
+_MALFORMED_EDIT: Final = {**_VALID_EDIT, "exclude_tools": "get_weather"}
 
 
-async def test_malformed_field_raises_through_the_polyfill_and_drops_under_drop_params():
+async def test_drop_params_skips_only_the_malformed_edit():
     async def run(drop_invalid_edits: bool):
         return await _run_polyfill_if_enabled(
             model=MODEL,
             messages=_make_history(n_pairs=3),
             tools=None,
             system=None,
-            context_management_spec=_MALFORMED_SPEC,
+            context_management_spec={"edits": [_VALID_EDIT, _MALFORMED_EDIT]},
             litellm_metadata={},
             additional_drop_params=None,
             llm_router=None,
             drop_invalid_edits=drop_invalid_edits,
         )
 
-    with pytest.raises(AnthropicContextManagementError):
+    with pytest.raises(AnthropicContextManagementError, match=r"^context_management\.edits\.1\."):
         await run(drop_invalid_edits=False)
-    assert await run(drop_invalid_edits=True) is None
+    result: Final = await run(drop_invalid_edits=True)
+    assert result is not None
+    assert _cleared_ids(result.messages) == {"toolu_00", "toolu_01"}
+    assert [edit["type"] for edit in result.applied_edits] == ["clear_tool_uses_20250919"]
+
+
+class _RecordingRouter:
+    def __init__(self) -> None:
+        self.models: list[object] = []
+
+    async def acompletion(self, **kwargs: object) -> object:
+        self.models.append(kwargs.get("model"))
+        raise RuntimeError("summary model unavailable")
+
+
+async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(monkeypatch):
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "summary-model")
+    router: Final = _RecordingRouter()
+    with pytest.raises(AnthropicContextManagementError):
+        await apply_context_management(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hello " * 60_000}],
+            tools=None,
+            system=None,
+            context_management_spec={
+                "edits": [
+                    {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}},
+                    _MALFORMED_EDIT,
+                ]
+            },
+            llm_router=router,
+        )
+    assert router.models == []
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "cleared"), [("yes", True), ("true", True), (1, True), ("no", False)])
@@ -551,6 +611,25 @@ def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value, triggers
             "trigger": {"type": "tool_uses", "value": trigger_value},
             "keep": {"type": "tool_uses", "value": 0},
             "exclude_tools": ["search"],
+        },
+    )
+    assert (applied is not None) == triggers
+
+
+@pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])
+def test_tool_uses_trigger_counts_tiny_results_only_when_their_inputs_are_cleared(clear_tool_inputs, triggers):
+    messages = _make_history(n_pairs=3)
+    messages[2]["content"][0]["content"] = "ok"
+    _, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 2},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_tool_inputs": clear_tool_inputs,
         },
     )
     assert (applied is not None) == triggers

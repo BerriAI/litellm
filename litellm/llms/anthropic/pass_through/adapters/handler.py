@@ -329,8 +329,9 @@ async def _run_polyfill_if_enabled(
     does not disable a valid spec because context_management is a supported
     param). Raises ``AnthropicContextManagementError`` so the /v1/messages
     endpoint can emit an Anthropic-format 400, unless ``drop_invalid_edits``
-    (``drop_params``) drops the invalid spec. All other exceptions are
-    best-effort swallowed (matches v0 behavior).
+    (``drop_params``) drops what is invalid: a malformed ``clear_tool_uses``
+    edit alone, or the whole spec for an invalid ``compact`` trigger. All other
+    exceptions are best-effort swallowed (matches v0 behavior).
     """
     if not context_management_spec:
         return None
@@ -351,6 +352,7 @@ async def _run_polyfill_if_enabled(
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=parent_trace_id,
             count_only=count_only,
+            drop_invalid_edits=drop_invalid_edits,
         )
     except AnthropicContextManagementError:
         if drop_invalid_edits:
