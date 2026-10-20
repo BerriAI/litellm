@@ -367,49 +367,23 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
 
 
 @pytest.mark.asyncio
-async def test_end_user_from_db_reads_the_end_user_row_by_user_id():
-    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=0.0))
+async def test_from_db_reads_the_end_user_row_by_user_id():
+    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=12.5))
 
-    result: Final = await SpendCounterReseed.end_user_from_db(
-        prisma_client=prisma, counter_key="spend:end_user:customer-42"
-    )
-
-    assert result == 0.0
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") == 12.5
     assert prisma.db.litellm_endusertable.where_clauses == [{"user_id": "customer-42"}]
 
 
 @pytest.mark.asyncio
-async def test_end_user_from_db_returns_the_recorded_spend():
-    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=12.5))
-
+async def test_from_db_returns_none_for_a_missing_or_unreadable_end_user_row():
     assert (
-        await SpendCounterReseed.end_user_from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42")
-        == 12.5
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("counter_key", ["spend:key:hashed", "spend:team:t1", "spend:tag:t1"])
-async def test_end_user_from_db_ignores_other_counter_kinds_without_touching_the_db(counter_key):
-    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="x", spend=5.0))
-
-    assert await SpendCounterReseed.end_user_from_db(prisma_client=prisma, counter_key=counter_key) is None
-    assert prisma.db.litellm_endusertable.where_clauses == []
-
-
-@pytest.mark.asyncio
-async def test_end_user_from_db_returns_none_without_a_row_a_client_or_on_db_error():
-    assert (
-        await SpendCounterReseed.end_user_from_db(prisma_client=None, counter_key="spend:end_user:customer-42") is None
-    )
-    assert (
-        await SpendCounterReseed.end_user_from_db(
+        await SpendCounterReseed.from_db(
             prisma_client=_FakePrismaClient(end_user_row=None), counter_key="spend:end_user:customer-42"
         )
         is None
     )
     assert (
-        await SpendCounterReseed.end_user_from_db(
+        await SpendCounterReseed.from_db(
             prisma_client=_FakePrismaClient(end_user_error=RuntimeError("db down")),
             counter_key="spend:end_user:customer-42",
         )
@@ -470,13 +444,3 @@ async def test_from_db_deadline_covers_the_wait_for_a_gate_slot(monkeypatch: pyt
         find_unique.assert_not_called()
     finally:
         db_lookup_stall_tracker.clear()
-
-
-@pytest.mark.asyncio
-async def test_from_db_still_never_reads_the_end_user_row():
-    """A cold end-user counter keeps seeding from the cached end-user object the auth
-    path already loaded; the row is read only as the budget floor."""
-    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=5.0))
-
-    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
-    assert prisma.db.litellm_endusertable.where_clauses == []

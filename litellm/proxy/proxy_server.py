@@ -615,7 +615,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
-from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
@@ -3290,7 +3290,7 @@ async def reseed_spend_counter_from_db(counter_key: str) -> bool:
     the read-time floor (_authoritative_floor_spend) converges to the true total
     as the buffer flushes. The point is to restore enforcement to a real floor
     rather than leave the counter deleted and unenforced (the prior fail-open).
-    Counters with no DB row (window/end-user/tag) are left untouched rather than
+    Counters with no DB row (window/tag) are left untouched rather than
     deleted, so enforcement keeps reading whatever value they hold.
     """
     db_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
@@ -3307,8 +3307,6 @@ async def _floor_spend_from_db(
     window_duration: str | None,
     window_start: datetime | None,
 ) -> float | None:
-    if counter_key.startswith(END_USER_COUNTER_PREFIX):
-        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
     entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
     if entity_spend is not None:
         return entity_spend

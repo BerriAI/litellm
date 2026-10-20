@@ -5740,6 +5740,7 @@ def _unrestricted_end_user_prisma(spend: float):
     end_user_row = MagicMock()
     end_user_row.user_id = "customer-1"
     end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
+    end_user_row.spend = spend
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])

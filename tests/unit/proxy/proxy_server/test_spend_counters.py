@@ -50,6 +50,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_loca
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
+from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
 
 from .conftest import normalize
 
@@ -1355,6 +1356,49 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
         "seed_increment_called": True,
         "warm_check_done": True,
     }
+
+
+class _FakeRedisMeetingAtTheWarmCheck(FakeAsyncRedis):
+    """Holds each request's MGET until every request has made one, so all of them find the counter missing before
+    any of them seeds it."""
+
+    def __init__(self, server: FakeServer, callers: int) -> None:
+        super().__init__(server=server)
+        self._warm_checks: Final = asyncio.Barrier(callers)
+
+    async def mget(self, keys: list[str], *args: str) -> list[bytes | None]:
+        values: Final = await super().mget(keys, *args)
+        await self._warm_checks.wait()
+        return values
+
+
+@pytest.mark.asyncio
+async def test_overlapping_cold_end_user_seeds_write_the_end_user_row_once(monkeypatch):
+    counter_key: Final = "spend:end_user:customer-1"
+    callers: Final = 3
+    redis: Final = _FakeRedisMeetingAtTheWarmCheck(FakeServer(), callers)
+    auth_cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    auth_cache.set_cache(
+        key=end_user_cache_key("customer-1"),
+        value=LiteLLM_EndUserTable(user_id="customer-1", blocked=False, spend=6.0),
+        local_only=True,
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=MagicMock(spend=7.5))
+    counter_cache: Final = ps.DualCache(redis_cache=_RedisCacheOnClient(redis))
+    monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", auth_cache)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+
+    async def _request() -> None:
+        with spend_counter_batch_scope(counter_cache.redis_cache, counter_keys=frozenset((counter_key,))):
+            await ps.ensure_spend_counter_initialized(
+                counter_key=counter_key, source_cache_key=end_user_cache_key("customer-1")
+            )
+
+    await asyncio.wait_for(asyncio.gather(*(_request() for _ in range(callers))), timeout=5)
+
+    assert float(await redis.get(counter_key)) == 7.5
 
 
 # ---------------------------------------------------------------------------

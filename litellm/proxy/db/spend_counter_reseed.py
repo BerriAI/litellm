@@ -45,8 +45,6 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
-    from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
-
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import PrismaClient
 
@@ -84,14 +82,11 @@ class SpendCounterReseed:
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
         spend:project:{project_id}        -> LiteLLM_ProjectTable.spend
+        spend:end_user:{end_user_id}      -> LiteLLM_EndUserTable.spend
 
-    End-user and tag spend counters intentionally do not reseed here. Their
-    auth paths already load the corresponding objects via get_end_user_object()
-    and get_tag_objects_batch(); callers pass those values as fallback_spend.
-    end_user_from_db is the one end-user read, used only as the budget floor when
-    a counter sits below that cached spend: a worker that did not run the budget
-    reset still caches the pre-reset end-user object, and LiteLLM_EndUserTable
-    is the row the reset zeroed.
+    Tag spend counters intentionally do not reseed here. Their auth path already
+    loads the tag objects via get_tag_objects_batch(); callers pass those values
+    as fallback_spend.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -180,23 +175,11 @@ class SpendCounterReseed:
                 return await ProjectRepository(prisma_client).table.find_unique(
                     where={"project_id": counter_key[len("spend:project:") :]}
                 )
+            if counter_key.startswith(END_USER_COUNTER_PREFIX):
+                return await EndUserRepository(prisma_client).table.find_unique(
+                    where={"user_id": counter_key[len(END_USER_COUNTER_PREFIX) :]}
+                )
             return None
-
-    @staticmethod
-    async def end_user_from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
-        if prisma_client is None or not counter_key.startswith(END_USER_COUNTER_PREFIX):
-            return None
-        where: Final[LiteLLM_EndUserTableWhereUniqueInput] = {"user_id": counter_key[len(END_USER_COUNTER_PREFIX) :]}
-        try:
-            row: Final = await bounded_db_lookup(
-                EndUserRepository(prisma_client).table.find_unique(where=where), name="end_user_spend"
-            )
-        except Exception:  # noqa: BLE001  # a failed floor read falls back to the cached spend, like from_db
-            verbose_proxy_logger.exception("SpendCounterReseed.end_user_from_db: failed for %s", counter_key)
-            return None
-        if row is None:
-            return None
-        return float(row.spend or 0.0)
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:

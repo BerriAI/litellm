@@ -636,13 +636,13 @@ class ResetBudgetJob:
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
         """Drop a stale management-cache entry so the next read fetches from DB.
 
-        Tags and end-users are not reseeded by ``SpendCounterReseed.from_db``;
-        for those, when the spend counter expires the budget check falls back
-        to ``cached_obj.spend``. Keys, orgs, and team memberships are reseeded
-        from the DB, but auth still may consult ``user_api_key_cache`` objects
-        whose ``.spend`` field can lag a cross-pod DB reset. Deleting the cache
-        entry forces the next auth-time fetch to reload the zeroed row from
-        Postgres.
+        Tags are not reseeded by ``SpendCounterReseed.from_db``; for those,
+        when the spend counter expires the budget check falls back to
+        ``cached_obj.spend``. Keys, orgs, team memberships and end users are
+        reseeded from the DB, but auth still may consult ``user_api_key_cache``
+        objects whose ``.spend`` field can lag a cross-pod DB reset. Deleting
+        the cache entry forces the next auth-time fetch to reload the zeroed
+        row from Postgres.
         """
         try:
             from litellm.proxy.proxy_server import user_api_key_cache
