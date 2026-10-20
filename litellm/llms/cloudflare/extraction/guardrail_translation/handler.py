@@ -30,8 +30,9 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]
 )
 
 
-_AnswerKey: TypeAlias = Literal["value", "guess", "mean", "median"]
-_STATISTIC_KEYS: Final[frozenset[_AnswerKey]] = frozenset(("mean", "median"))
+_AnswerKey: TypeAlias = Literal["value", "guess", "mean", "median", "p10", "p90", "quantiles"]
+_ESTIMATE_KEYS: Final[tuple[_AnswerKey, ...]] = ("value", "guess", "mean", "median", "p10", "p90", "quantiles")
+_STATISTIC_KEYS: Final[frozenset[_AnswerKey]] = frozenset(("mean", "median", "p10", "p90", "quantiles"))
 _NULLED_ANSWER: Final[Mapping[str, None]] = MappingProxyType(
     dict.fromkeys(("value", "guess", "mean", "median", "p10", "p90", "quantiles", "steps", "span", "spans"), None)
 )
@@ -120,12 +121,22 @@ def _value_texts(name: str, key: _AnswerKey, value: JsonValue) -> tuple[_AnswerT
     return () if text is None else (_AnswerText(name=name, key=key, item=None, text=text),)
 
 
+def _step_texts(name: str, step: JsonValue) -> tuple[_AnswerText, ...]:
+    if not isinstance(step, dict):
+        return ()
+    return tuple(chain.from_iterable(_value_texts(name, key, step.get(key)) for key in _ESTIMATE_KEYS))
+
+
 def _answer_texts(name: str, answer: ExtractionAnswer) -> tuple[_AnswerText, ...]:
     return (
         *_value_texts(name, "value", answer.value),
         *_value_texts(name, "guess", answer.guess),
         *_value_texts(name, "mean", answer.mean),
         *_value_texts(name, "median", answer.median),
+        *_value_texts(name, "p10", answer.p10),
+        *_value_texts(name, "p90", answer.p90),
+        *_value_texts(name, "quantiles", list(answer.quantiles or ())),
+        *chain.from_iterable(_step_texts(name, step) for step in answer.steps or ()),
     )
 
 

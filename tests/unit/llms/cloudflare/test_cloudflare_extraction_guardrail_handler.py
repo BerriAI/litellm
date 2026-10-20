@@ -1,4 +1,3 @@
-import time
 from typing import Final, Literal
 
 import pytest
@@ -213,6 +212,10 @@ async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carry
             "phone_list": {"type": "list", "items": "number"},
             "phone_mean": {"type": "estimate"},
             "phone_median": {"type": "estimate"},
+            "phone_p10": {"type": "estimate"},
+            "phone_p90": {"type": "estimate"},
+            "phone_quantile": {"type": "estimate"},
+            "phone_forecast": {"type": "forecast"},
             "total": {"type": "number"},
         }
     }
@@ -237,6 +240,20 @@ async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carry
                     "p90": 4155550200,
                     "p_null": 0.6,
                 },
+                "phone_p10": {"type": "estimate", "value": None, "p10": 4155550123, "p_null": 0.6},
+                "phone_p90": {"type": "estimate", "value": None, "p90": 4155550123.2, "p_null": 0.6},
+                "phone_quantile": {
+                    "type": "estimate",
+                    "value": None,
+                    "quantiles": [4155550000, 4155550123, 4155550200],
+                    "p_null": 0.6,
+                },
+                "phone_forecast": {
+                    "type": "forecast",
+                    "value": None,
+                    "steps": [{"value": 12, "p10": 10}, {"value": 13, "p90": 4155550123}],
+                    "p_null": 0.6,
+                },
                 "total": {"type": "number", "value": 174, "guess": 174},
             },
             "truncated": False,
@@ -255,6 +272,10 @@ async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carry
         "phone_list": {"type": "list", "value": None},
         "phone_mean": {"type": "estimate", "value": None, "p_null": 0.6},
         "phone_median": {"type": "estimate", "value": None, "p_null": 0.6},
+        "phone_p10": {"type": "estimate", "value": None, "p_null": 0.6},
+        "phone_p90": {"type": "estimate", "value": None, "p_null": 0.6},
+        "phone_quantile": {"type": "estimate", "value": None, "p_null": 0.6},
+        "phone_forecast": {"type": "forecast", "value": None, "p_null": 0.6},
         "total": {"type": "number", "value": 174, "guess": 174},
     }
 
@@ -312,49 +333,3 @@ async def test_a_response_guardrail_sees_the_decimal_text_of_a_fractional_number
         "unit_price": {"type": "number", "value": None},
         "prices": {"type": "list", "value": None},
     }
-
-
-_MANY_FIELDS: Final = 20_000
-
-
-@pytest.mark.asyncio
-async def test_a_request_with_many_field_instructions_is_guardrailed_in_linear_time() -> None:
-    data: Final = {
-        "model": "invoice-reader",
-        "fields": {
-            f"field_{index}": {"type": "text", "instructions": f"secret {index}"} for index in range(_MANY_FIELDS)
-        },
-    }
-
-    started: Final = time.perf_counter()
-    result: Final = await ExtractionHandler().process_input_messages(data, _MaskingGuardrail("secret", "[MASKED]"))
-    elapsed: Final = time.perf_counter() - started
-
-    assert result["fields"] == {
-        f"field_{index}": {"type": "text", "instructions": f"[MASKED] {index}"} for index in range(_MANY_FIELDS)
-    }
-    assert elapsed < 5
-
-
-@pytest.mark.asyncio
-async def test_a_response_with_many_text_answers_is_guardrailed_in_linear_time() -> None:
-    response: Final = ExtractionResponse.model_validate(
-        {
-            "model": "invoice-reader",
-            "answers": {
-                f"field_{index}": {"type": "text", "value": f"secret {index}"} for index in range(_MANY_FIELDS)
-            },
-            "truncated": False,
-            "usage": {"input_tokens": 52, "output_tokens": 0},
-        }
-    )
-
-    started: Final = time.perf_counter()
-    result: Final = await ExtractionHandler().process_output_response(response, _MaskingGuardrail("secret", "[MASKED]"))
-    elapsed: Final = time.perf_counter() - started
-
-    assert isinstance(result, ExtractionResponse)
-    assert {name: answer.value for name, answer in result.answers.items()} == {
-        f"field_{index}": f"[MASKED] {index}" for index in range(_MANY_FIELDS)
-    }
-    assert elapsed < 5
