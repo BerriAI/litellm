@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     cast,
     get_args,
+    runtime_checkable,
 )
 
 from pydantic import TypeAdapter
@@ -23,6 +24,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import MID_STREAM_FAILURE_LOG_WAIT_SECONDS
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -63,6 +65,14 @@ class _ChunkStream(Protocol):
     def __iter__(self) -> "Iterator[ModelResponseStream]": ...
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]": ...
+
+
+@runtime_checkable
+class _FailureLoggingWaiter(Protocol):
+    @property
+    def has_dispatched_failure_logging(self) -> bool: ...
+
+    async def wait_for_failure_logging(self, timeout: float) -> None: ...
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -191,7 +201,11 @@ class _CombinedChunkSplitter:
 
     @property
     def has_dispatched_failure_logging(self) -> bool:
-        return getattr(self._stream, "has_dispatched_failure_logging", False) is True
+        return isinstance(self._stream, _FailureLoggingWaiter) and self._stream.has_dispatched_failure_logging is True
+
+    async def wait_for_failure_logging(self, timeout: float) -> None:
+        if isinstance(self._stream, _FailureLoggingWaiter):
+            await self._stream.wait_for_failure_logging(timeout=timeout)
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -526,7 +540,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
         # _CombinedChunkSplitter.
-        super().__init__(_CombinedChunkSplitter(completion_stream))
+        combined_chunk_splitter: Final = _CombinedChunkSplitter(completion_stream)
+        super().__init__(combined_chunk_splitter)
+        self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
@@ -1248,10 +1264,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if provider_error is e:
                     raise
                 raise provider_error from e
-            stream_has_dispatched_failure_logging: Final = (
-                getattr(self.completion_stream, "has_dispatched_failure_logging", False) is True
-            )
-            if logging_obj is not None and not stream_has_dispatched_failure_logging:
+            stream_has_dispatched_failure_logging: Final = self._combined_chunk_splitter.has_dispatched_failure_logging
+            if stream_has_dispatched_failure_logging:
+                await self._combined_chunk_splitter.wait_for_failure_logging(
+                    timeout=MID_STREAM_FAILURE_LOG_WAIT_SECONDS
+                )
+            elif logging_obj is not None:
                 try:
                     await logging_obj.dispatch_failure_handlers(
                         exception=provider_error,

@@ -2391,8 +2391,6 @@ class CustomStreamWrapper:
         self._handle_stream_fallback_error(e)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
-        if self.logging_obj is None:
-            return
         self._record_partial_usage_for_failure()
         self._failure_logging = asyncio.create_task(
             self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)

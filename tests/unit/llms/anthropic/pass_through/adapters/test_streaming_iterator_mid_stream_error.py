@@ -199,9 +199,27 @@ class _AsyncFailureRecorder(CustomLogger):
         self.usages = (*self.usages, (payload["prompt_tokens"], payload["completion_tokens"]))
 
 
-@pytest.mark.asyncio
-async def test_anthropic_adapter_does_not_repeat_custom_stream_failure_dispatch() -> None:
-    async_recorder: Final = _AsyncFailureRecorder()
+class _BoundaryAsyncFailureRecorder(_AsyncFailureRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = 0
+        self.completed = 0
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        self.started += 1
+        await asyncio.sleep(0.05)
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+        self.completed += 1
+
+
+def test_anthropic_adapter_does_not_repeat_custom_stream_failure_dispatch() -> None:
+    async_recorder: Final = _BoundaryAsyncFailureRecorder()
     sync_recorder: Final = _SyncFailureRecorder()
     logging_obj: Final = _make_logging_obj("wrapped-custom-stream", async_recorder, sync_recorder)
     chunk: Final = ModelResponseStream(
@@ -224,11 +242,11 @@ async def test_anthropic_adapter_does_not_repeat_custom_stream_failure_dispatch(
         litellm_logging_obj=logging_obj,
     )
 
-    events: Final = await _drain_sse(wrapper)
-    await inner_stream.wait_for_failure_logging(timeout=1)
-    await _wait_for_sync_failure(sync_recorder)
+    events: Final = asyncio.run(_drain_sse(wrapper))
 
     assert _parse_sse(events[-1])[0] == "error"
+    assert async_recorder.started == 1
+    assert async_recorder.completed == 1
     assert len(async_recorder.exceptions) == 1
     assert len(sync_recorder.exceptions) == 1
     assert async_recorder.usages == ((30, 1),)
