@@ -1490,8 +1490,6 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
 
 @pytest.mark.asyncio
 async def test_one_tag_from_two_teams_is_queued_as_two_team_attributed_entries():
-    """The queue merges entries by key before the upsert ever sees them, so a key without the
-    team would fold both teams' spend on a shared tag into one entry."""
     writer = DBSpendUpdateWriter()
     prisma = MagicMock()
     prisma.get_request_status = MagicMock(return_value="success")

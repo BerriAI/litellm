@@ -5159,9 +5159,6 @@ class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     request_id: str | None
     tag: str
-    # "" when the request had no team. Not required: entries queued by a pod running the
-    # previous release, or replayed from the Redis buffer across an upgrade, carry no such key,
-    # and the upsert reads a missing value as "".
     team_id: ReadOnly[NotRequired[str]]
 
 

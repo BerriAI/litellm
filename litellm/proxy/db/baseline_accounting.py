@@ -58,8 +58,6 @@ class DailyBaselineAttribution(LiteLLMBaseModel):
     model_group: str | None = None
     endpoint: str | None = None
     mcp_namespaced_tool_name: str | None = None
-    # The request's team, for the team-scoped tag rows. Defaulted so records stored before
-    # the column existed still validate; they land under "" like any pre-upgrade tag spend.
     team_id: str = ""
     targets: tuple[DailyBaselineTarget, ...] = ()
 
