@@ -27,7 +27,6 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_ws_peer import (
     PROVIDER_MODEL,
@@ -260,9 +259,9 @@ async def _until(read: Callable[[], float], satisfied: Callable[[float], bool]) 
     return await asyncio.to_thread(eventually, read, satisfied, 15)
 
 
-def _failure_rows(key: str) -> list[dict[str, JsonValue]]:
+def _failure_rows(gateway: Gateway, key: str) -> list[dict[str, JsonValue]]:
     rows: Final = eventually(
-        lambda: read_rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
+        lambda: gateway.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
         lambda found: any(row["status"] == "failure" for row in found),
         seconds=70,
     )
@@ -291,7 +290,7 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
         _assert_refused(second)
         _assert_refused(third)
         assert deployment.forwarded_turns() == 1
-        failures: Final = _failure_rows(key)
+        failures: Final = _failure_rows(limited, key)
         assert len(failures) == 1, failures
         assert failures[0]["model_group"] == deployment.name, failures
         assert tag in list_value(failures[0]["request_tags"]), failures
@@ -355,7 +354,7 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_the_socket_serv
         _assert_turn_check_failed(third, fault)
         completed(fourth)
         assert deployment.forwarded_turns() == 2
-        failures: Final = _failure_rows(key)
+        failures: Final = _failure_rows(faulting, key)
         assert len(failures) == 1, failures
         assert failures[0]["model_group"] == deployment.name, failures
         recorded: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
@@ -387,7 +386,7 @@ def test_a_turn_still_streaming_when_the_next_turns_check_fails_completes_and_is
         billed: Final = completed(streamed)
         assert deployment.forwarded_turns() == 1
         rows: Final = eventually(
-            lambda: read_rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
+            lambda: faulting.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
             lambda found: any(row["request_id"] == billed["id"] for row in found),
             seconds=70,
         )

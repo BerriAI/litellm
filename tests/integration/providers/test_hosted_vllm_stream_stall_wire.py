@@ -42,8 +42,8 @@ _RESPONSES_TARGET: Final = "/v1/responses"
 _STREAM_TIMEOUT_SECONDS: Final = 1
 _DEPLOYMENT_TIMEOUT_SECONDS: Final = 30
 _PAUSE_SECONDS: Final = 3.0
-_HOLD_SECONDS: Final = 30.0
 _ROW_SECONDS: Final = 60
+_HOLD_SECONDS: Final = 2.0 * _ROW_SECONDS
 _EXTRA: Final[dict[str, JsonValue]] = {"num_retries": 0, "cache": {"no-cache": True}}
 _ROWS: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s'
 _EITHER_GROUP_ROWS: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE model_group IN (%s, %s)'

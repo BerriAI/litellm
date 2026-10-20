@@ -8,7 +8,6 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -108,7 +107,7 @@ def _create_agent(candidate: Gateway, wire: Wire, agent_name: str, cleanups: Exi
 def _delete_agent(candidate: Gateway, agent_id: str) -> None:
     deleted: Final = candidate.request("DELETE", f"/v1/agents/{agent_id}")
     assert deleted.status_code == 200, deleted.text
-    assert read_rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent_id,)) == []
+    assert candidate.rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent_id,)) == []
 
 
 def _card(candidate: Gateway, agent_id: str, key: str) -> httpx.Response:
