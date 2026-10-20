@@ -444,7 +444,7 @@ async def test_route_request_with_router_settings_override_no_router():
         assert response == "success"
         # Verify litellm.acompletion was called with merged settings
         call_kwargs = mock_completion.call_args[1]
-        assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+        assert "fallbacks" not in call_kwargs
         assert call_kwargs["num_retries"] == 3
     finally:
         litellm.acompletion = original_acompletion
@@ -1407,6 +1407,40 @@ async def test_route_request_keeps_router_only_override_settings_out_of_pass_thr
         await (await route_request(data, router, None, "acompletion"))
 
     assert set(router_only_setting).isdisjoint(JSON_OBJECT_ADAPTER.validate_json(upstream.calls.last.request.content))
+
+
+@pytest.mark.asyncio
+async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {
+        "model": "openai/gpt-pass-through",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"fallbacks": [{"gpt-4": ["gpt-4"]}], "num_retries": 0},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "upstream down"}})
+        )
+        with pytest.raises(litellm.InternalServerError):
+            await (await route_request(data, router, None, "acompletion"))
+
+    provider_bodies: Final = tuple(JSON_OBJECT_ADAPTER.validate_json(call.request.content) for call in upstream.calls)
+    assert provider_bodies and all("gpt-4" not in body for body in provider_bodies), provider_bodies
 
 
 @pytest.mark.parametrize(

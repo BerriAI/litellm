@@ -50,7 +50,7 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = (
     "enable_tag_filtering",
 )
 _ROUTER_ONLY_SETTINGS: Final = frozenset(
-    ("context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
+    ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
 )
 
 
