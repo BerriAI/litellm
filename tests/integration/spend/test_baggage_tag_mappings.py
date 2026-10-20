@@ -74,6 +74,10 @@ class Rig:
     def guarded_tag(self) -> str:
         return f"guarded-{self.marker}:on"
 
+    @property
+    def policy_tag(self) -> str:
+        return f"policy-{self.marker}:sensitive"
+
 
 def _chat_reply() -> Reply:
     marker: Final = uuid.uuid4().hex
@@ -178,7 +182,8 @@ def _mapped_models(marker: str, provider: Wire, upstream_url: str) -> list[JsonV
         },
     }
     guarded: Final = _deployment(f"guarded-{marker}", provider, tags=[f"guarded-{marker}:on"])
-    return [_deployment(f"chat-{marker}", provider), guarded, *routed, realtime]
+    pre_guarded: Final = _deployment(f"guarded-pre-{marker}", provider, tags=[f"guarded-{marker}:pre"])
+    return [_deployment(f"chat-{marker}", provider), guarded, pre_guarded, *routed, realtime]
 
 
 def _mapped_rules(marker: str, *, tenant_required: bool) -> list[JsonValue]:
@@ -197,7 +202,13 @@ def _deployment_tag_mode_guardrail(marker: str, provider: Wire) -> dict[str, Jso
         "guardrail_name": f"deployment-tag-mode-{marker}",
         "litellm_params": {
             "guardrail": "generic_guardrail_api",
-            "mode": {"tags": {f"guarded-{marker}:on": "post_call"}},
+            "mode": {
+                "tags": {
+                    f"guarded-{marker}:on": "post_call",
+                    f"guarded-{marker}:pre": "pre_call",
+                    f"policy-{marker}:sensitive": "post_call",
+                }
+            },
             "default_on": True,
             "api_base": f"{provider.url}{GUARDRAIL_PATH}",
             "api_key": "synthetic-guardrail-key",
@@ -310,6 +321,14 @@ ROUTE_PATHS: Final[Mapping[Route, str]] = {
     "messages": "/v1/messages",
     "responses": "/v1/responses",
 }
+
+
+def _guardrail_inputs(rig: Rig) -> tuple[JsonValue, ...]:
+    return tuple(
+        JSON_OBJECT.validate_json(request.body)["input_type"]
+        for request in rig.provider.drain()
+        if request.target == GUARDRAIL_PATH
+    )
 
 
 def _chat(
@@ -725,12 +744,21 @@ def test_serving_deployment_tag_selects_its_guardrail_mode_when_baggage_maps_the
         optional.provider.drain()
         response: Final = _chat(optional, key, "guard=on", model=model)
         assert response.status_code == 200, response.text
-        guardrail_inputs: Final = tuple(
-            JSON_OBJECT.validate_json(request.body)["input_type"]
-            for request in optional.provider.drain()
-            if request.target == GUARDRAIL_PATH
-        )
+        guardrail_inputs: Final = _guardrail_inputs(optional)
         assert guardrail_inputs == (("response",) if deployment_tagged else ()), guardrail_inputs
+
+
+def test_baggage_mapping_a_deployment_tag_keeps_the_team_tag_guardrail_mode_first(optional: Rig) -> None:
+    model: Final = f"guarded-pre-{optional.marker}"
+    with optional.proxy.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [optional.policy_tag]})
+        key: Final = scenario.key(team_id=team)
+        optional.provider.drain()
+        plain: Final = _chat(optional, key, None, model=model)
+        plain_inputs: Final = _guardrail_inputs(optional)
+        response: Final = _chat(optional, key, "guard=pre", model=model)
+        assert (plain.status_code, response.status_code) == (200, 200), (plain.text, response.text)
+        assert (plain_inputs, _guardrail_inputs(optional)) == (("response",), ("response",))
 
 
 @pytest.mark.parametrize(

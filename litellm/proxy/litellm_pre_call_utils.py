@@ -2216,7 +2216,9 @@ class LiteLLMProxyRequestSetup:
         slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
         metadata: Final = _normalized_metadata_slot(request_data, slot)
         existing: Final = metadata.get("tags")
-        existing_tags: Final = _STRING_TAGS_ADAPTER.validate_python(existing) if isinstance(existing, list) else ()
+        if existing is not None and not isinstance(existing, list):
+            return
+        existing_tags: Final = _STRING_TAGS_ADAPTER.validate_python(existing) if existing is not None else ()
         metadata["tags"] = list(dict.fromkeys((*existing_tags, *tags)))
         metadata[BAGGAGE_MAPPED_TAGS_METADATA_KEY] = BaggageMappedTagsStamp(
             tags=tuple(tag for tag in tags if tag not in existing_tags)

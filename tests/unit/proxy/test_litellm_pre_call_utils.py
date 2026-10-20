@@ -10369,3 +10369,50 @@ async def test_raw_body_inference_keeps_authenticated_baggage_tags_for_spend(rou
     assert "existing" in enriched["metadata"]["tags"]
     assert "usecase:a" not in enriched["metadata"]["inherited_tags"]
     assert enriched["metadata"]["tags"].count("usecase:a") == 1
+
+
+async def _string_tags_outcome(baggage_headers: tuple[tuple[bytes, bytes], ...]) -> str:
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model","metadata":{"tags":"client-tag"}}'}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), *baggage_headers],
+        },
+        receive,
+    )
+    admitted: Final = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "tenant", "tag_prefix": "tenant:"}]},
+        None,
+        MagicMock(),
+    )
+    try:
+        enriched: Final = await add_litellm_data_to_request(
+            data=json.loads(await request.body()),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+            proxy_config=ProxyConfig(),
+            general_settings={},
+        )
+    except Exception as error:
+        return type(error).__name__
+    return repr(enriched["metadata"].get("tags"))
+
+
+@pytest.mark.asyncio
+async def test_string_metadata_tags_get_the_same_outcome_with_or_without_mapped_baggage():
+    without_baggage: Final = await _string_tags_outcome(())
+    with_baggage: Final = await _string_tags_outcome(((b"baggage", b"tenant=a"),))
+    assert with_baggage == without_baggage

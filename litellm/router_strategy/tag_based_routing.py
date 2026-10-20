@@ -519,11 +519,13 @@ def tags_with_serving_deployment_tags(metadata: object, deployment_tags: object)
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     mapped_tags: Final = stamp.tags if isinstance(stamp, BaggageMappedTagsStamp) else ()
     kept_tags: Final = tuple(tag for tag in existing_tags if tag not in mapped_tags)
-    candidates: Final = (*serving_tags, *existing_tags)
-    added_tags: Final = tuple(
-        tag for index, tag in enumerate(candidates) if tag not in kept_tags and tag not in candidates[:index]
+    added_serving_tags: Final = tuple(
+        tag for index, tag in enumerate(serving_tags) if tag not in kept_tags and tag not in serving_tags[:index]
     )
-    return (*kept_tags, *added_tags)
+    readded_mapped_tags: Final = tuple(
+        dict.fromkeys(tag for tag in existing_tags if tag in mapped_tags and tag not in added_serving_tags)
+    )
+    return (*kept_tags, *added_serving_tags, *readded_mapped_tags)
 
 
 def _metadata_tags(metadata: Mapping[str, object], key: str) -> Sequence[object]:

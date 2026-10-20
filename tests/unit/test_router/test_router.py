@@ -9536,6 +9536,26 @@ def test_update_kwargs_with_deployment_propagates_model_tags():
     assert "production" in kwargs["metadata"]["tags"]
 
 
+def test_update_kwargs_with_deployment_merges_many_client_tags_in_linear_time():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key", "tags": ["deployment-tag"]},
+            },
+        ],
+    )
+    client_tags: Final = [f"client-{index}" for index in range(100_000)]
+    kwargs: Final = {"metadata": {"tags": client_tags}}
+    deployment: Final = router.get_deployment_by_model_group_name(model_group_name="gpt-4o-mini")
+
+    started: Final = time.perf_counter()
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert time.perf_counter() - started < 2
+    assert kwargs["metadata"]["tags"] == [*client_tags, "deployment-tag"]
+
+
 def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
     """
     Test that when both request-level and deployment-level tags exist,
