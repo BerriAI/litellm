@@ -480,10 +480,12 @@ def validate_static_credential(
     return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
 
 
-async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
+async def prepare_mcp_client(server: MCPServer, client: MCPClient, *, for_tool_listing: bool = False) -> MCPClient:
     if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
         return client
     request: Final = await client.prepare_request_auth()
+    if for_tool_listing and server.auth_type == MCPAuth.authorization and "authorization" not in request.headers:
+        return client
     match validate_static_credential(
         server.auth_type, request.headers, server.upstream_token_header, server.static_headers or ()
     ):

@@ -4322,6 +4322,7 @@ class MCPServerManager:
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
         protocol_version_override: MCPUpstreamProtocol | None = None,
+        for_tool_listing: bool = False,
     ) -> MCPClient:
         self.catalog.assert_current(server)
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
@@ -4355,6 +4356,7 @@ class MCPServerManager:
                 else None
             ),
             upstream_transport=self._upstream_transport,
+            for_tool_listing=for_tool_listing,
         )
 
     _create_mcp_client = create_mcp_client
@@ -4501,6 +4503,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                for_tool_listing=True,
             )
 
             ## HANDLE OPENAPI TOOLS
