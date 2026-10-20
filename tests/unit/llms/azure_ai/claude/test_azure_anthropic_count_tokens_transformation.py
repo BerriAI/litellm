@@ -105,3 +105,10 @@ class TestAzureAIAnthropicCountTokensConfig:
             endpoint
             == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
         )
+
+    def test_get_count_tokens_endpoint_for_a_resource_named_anthropic(self):
+        config = AzureAIAnthropicCountTokensConfig()
+
+        endpoint = config.get_count_tokens_endpoint("https://anthropic-res.services.ai.azure.com")
+
+        assert endpoint == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages/count_tokens"

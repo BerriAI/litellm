@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
 
@@ -140,7 +141,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         project = self._validate_path_id(project, "vertex_project", model)
         location = self._validate_path_id(location, "vertex_location", model)
 
-        return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
+        return join_api_base(api_base, f"v1/projects/{project}/locations/{location}/chat/completions")
 
     def _read_env_bool(self, val: bool | str | None, env_var: str, default: bool = True) -> bool | str:
         def _parse(s: str) -> bool | str:

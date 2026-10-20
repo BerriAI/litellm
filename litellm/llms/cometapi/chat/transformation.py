@@ -10,6 +10,7 @@ from typing import Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -112,16 +113,14 @@ class CometAPIConfig(OpenAIGPTConfig):
 
         # Ensure we include /v1 prefix when missing
         if api_base.endswith("/v1"):
-            return f"{api_base}/{endpoint}"
-        if api_base.endswith("/v1/"):
-            return f"{api_base}{endpoint}"
+            return join_api_base(api_base, endpoint)
         # If user provided https://api.cometapi.com, add /v1
         if api_base == "https://api.cometapi.com":
-            return f"{api_base}/v1/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
         # Generic fallback: if '/v1' not in path, add it
         if "/v1" not in api_base.split("//", 1)[-1]:
-            return f"{api_base}/v1/{endpoint}"
-        return f"{api_base}/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
+        return join_api_base(api_base, endpoint)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """

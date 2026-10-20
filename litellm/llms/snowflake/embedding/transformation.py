@@ -5,6 +5,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -31,7 +32,7 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
 
-        return f"{api_base}/cortex/inference:embed"
+        return join_api_base(api_base, "cortex/inference:embed")
 
     def transform_embedding_request(
         self,

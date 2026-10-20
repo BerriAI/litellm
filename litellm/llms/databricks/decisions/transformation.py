@@ -6,6 +6,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
@@ -84,8 +85,8 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         if is_ai_decide_model(model):
-            return f"{databricks_workspace_host(api_base)}{_AI_DECIDE_PATH}"
-        return f"{api_base.rstrip('/')}/{validate_databricks_decisions_model(model)}/invocations"
+            return join_api_base(databricks_workspace_host(api_base), _AI_DECIDE_PATH)
+        return join_api_base(api_base, f"{validate_databricks_decisions_model(model)}/invocations")
 
     def transform_decisions_request(
         self,

@@ -10,6 +10,7 @@ import litellm
 from litellm.litellm_core_utils.url_utils import (
     async_safe_get,
     encode_url_path_segment,
+    join_api_base,
     safe_get,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -194,7 +195,7 @@ class VertexAIBatchPrediction(VertexLLM):
         api_base_path: Final = urlparse(api_base).path.rstrip("/")
         if api_base_path in ("/v1", "/v1beta1"):
             return graft_default_vertex_path(api_base=api_base, default_url=default_endpoint_url)
-        return api_base.rstrip("/") + urlparse(default_endpoint_url).path
+        return join_api_base(api_base, urlparse(default_endpoint_url).path)
 
     def _resolve_fine_tuned_endpoint_model(
         self,

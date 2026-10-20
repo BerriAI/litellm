@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 
 if TYPE_CHECKING:
@@ -29,11 +30,11 @@ def _build_chat_completion_url(model_url: str) -> str:
 
     # Append /chat/completions if not already present
     if model_url.endswith("/v1"):
-        model_url += "/chat/completions"
+        model_url = join_api_base(model_url, "chat/completions")
 
     # Append /v1/chat/completions if not already present
     if not model_url.endswith("/chat/completions"):
-        model_url += "/v1/chat/completions"
+        model_url = join_api_base(model_url, "v1/chat/completions")
 
     return model_url
 

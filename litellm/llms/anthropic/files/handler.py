@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
@@ -74,7 +74,7 @@ class AnthropicFilesHandler:
             batch_id = file_id
 
         # Get Anthropic API credentials
-        api_base = self.anthropic_model_info.get_api_base(api_base)
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
         auth_header: Final = await self.anthropic_model_info.aget_auth_header(
             api_key, api_base, litellm_params=litellm_params, allow_workload_identity=True
         )
@@ -84,7 +84,7 @@ class AnthropicFilesHandler:
 
         # Construct the Anthropic batch results URL
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        results_url: Final = f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}/results"
+        results_url: Final = join_api_base(api_base, f"v1/messages/batches/{encoded_batch_id}/results")
 
         # Prepare headers
         headers: Final = {

@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -807,7 +808,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if endpoint in api_base:
             return api_base
 
-        return f"{api_base}/{endpoint}"
+        return join_api_base(api_base, endpoint)
 
     def validate_environment(
         self,

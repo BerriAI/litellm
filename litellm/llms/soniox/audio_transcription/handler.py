@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -329,7 +330,7 @@ class SonioxAudioTranscriptionHandler:
                 input=None,
                 api_key=api_key,
                 additional_args={
-                    "api_base": f"{api_base}/v1/transcriptions",
+                    "api_base": join_api_base(api_base, "v1/transcriptions"),
                     "atranscription": True,
                     "complete_input_dict": SonioxAudioTranscriptionHandler._redact_body_for_logging(body),
                 },
@@ -451,7 +452,7 @@ class SonioxAudioTranscriptionHandler:
             self._safe_log_pre_call(logging_obj, api_key, base_url, body)
 
             create_resp: Final = http_client.post(
-                url=f"{base_url}/v1/transcriptions",
+                url=join_api_base(base_url, "v1/transcriptions"),
                 headers=auth_headers,
                 json=body,
                 timeout=timeout,
@@ -472,7 +473,7 @@ class SonioxAudioTranscriptionHandler:
             )
 
             transcript_resp: Final = http_client.get(
-                url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
+                url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}/transcript"),
                 headers=auth_headers,
                 timeout=timeout,
             )
@@ -528,7 +529,7 @@ class SonioxAudioTranscriptionHandler:
         # `Authorization` header is fine; httpx sets multipart Content-Type.
         upload_headers: Final = {"Authorization": auth_headers["Authorization"]}
         resp: Final = http_client.post(
-            url=f"{base_url}/v1/files",
+            url=join_api_base(base_url, "v1/files"),
             headers=upload_headers,
             files=files,
             timeout=timeout,
@@ -550,7 +551,7 @@ class SonioxAudioTranscriptionHandler:
     ) -> _TranscriptionMeta:
         for _ in range(max_attempts):
             resp = http_client.get(
-                url=f"{base_url}/v1/transcriptions/{transcription_id}",
+                url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}"),
                 headers=auth_headers,
                 timeout=timeout,
             )
@@ -593,7 +594,7 @@ class SonioxAudioTranscriptionHandler:
         if "transcription" in cleanup and transcription_id:
             try:
                 http_client.delete(
-                    url=f"{base_url}/v1/transcriptions/{transcription_id}",
+                    url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}"),
                     headers=auth_headers,
                     timeout=timeout,
                 )
@@ -605,7 +606,7 @@ class SonioxAudioTranscriptionHandler:
         if "file" in cleanup and file_id_to_cleanup:
             try:
                 http_client.delete(
-                    url=f"{base_url}/v1/files/{file_id_to_cleanup}",
+                    url=join_api_base(base_url, f"v1/files/{file_id_to_cleanup}"),
                     headers=auth_headers,
                     timeout=timeout,
                 )
@@ -685,7 +686,7 @@ class SonioxAudioTranscriptionHandler:
             self._safe_log_pre_call(logging_obj, api_key, base_url, body)
 
             create_resp: Final = await http_client.post(
-                url=f"{base_url}/v1/transcriptions",
+                url=join_api_base(base_url, "v1/transcriptions"),
                 headers=auth_headers,
                 json=body,
                 timeout=timeout,
@@ -706,7 +707,7 @@ class SonioxAudioTranscriptionHandler:
             )
 
             transcript_resp: Final = await http_client.get(
-                url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
+                url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}/transcript"),
                 headers=auth_headers,
                 timeout=timeout,
             )
@@ -761,7 +762,7 @@ class SonioxAudioTranscriptionHandler:
         }
         upload_headers: Final = {"Authorization": auth_headers["Authorization"]}
         resp: Final = await http_client.post(
-            url=f"{base_url}/v1/files",
+            url=join_api_base(base_url, "v1/files"),
             headers=upload_headers,
             files=files,
             timeout=timeout,
@@ -783,7 +784,7 @@ class SonioxAudioTranscriptionHandler:
     ) -> _TranscriptionMeta:
         for _ in range(max_attempts):
             resp = await http_client.get(
-                url=f"{base_url}/v1/transcriptions/{transcription_id}",
+                url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}"),
                 headers=auth_headers,
                 timeout=timeout,
             )
@@ -826,7 +827,7 @@ class SonioxAudioTranscriptionHandler:
         if "transcription" in cleanup and transcription_id:
             try:
                 await http_client.delete(
-                    url=f"{base_url}/v1/transcriptions/{transcription_id}",
+                    url=join_api_base(base_url, f"v1/transcriptions/{transcription_id}"),
                     headers=auth_headers,
                     timeout=timeout,
                 )
@@ -838,7 +839,7 @@ class SonioxAudioTranscriptionHandler:
         if "file" in cleanup and file_id_to_cleanup:
             try:
                 await http_client.delete(
-                    url=f"{base_url}/v1/files/{file_id_to_cleanup}",
+                    url=join_api_base(base_url, f"v1/files/{file_id_to_cleanup}"),
                     headers=auth_headers,
                     timeout=timeout,
                 )

@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -266,7 +267,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        effective_api_base = (
+        effective_api_base: Final = (
             (user_session.api_base if user_session is not None else None)
             or api_base
             or self.authenticator.get_api_base()
@@ -274,11 +275,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
-
-        # Return the responses endpoint
-        return f"{effective_api_base}/responses"
+        return join_api_base(effective_api_base, "responses")
 
     def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 
@@ -278,10 +279,10 @@ class DatabricksBase:
         if normalized_api_base.endswith("/ai-gateway/mlflow/v1"):
             return normalized_api_base
         if normalized_api_base.endswith("/serving-endpoints"):
-            return f"{normalized_api_base.removesuffix('/serving-endpoints')}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base.removesuffix("/serving-endpoints"), "ai-gateway/mlflow/v1")
         api_base_parts: Final = urlsplit(normalized_api_base)
         if api_base_parts.path in ("", "/"):
-            return f"{normalized_api_base}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base, "ai-gateway/mlflow/v1")
         return api_base
 
     def get_oauth_m2m_token(
@@ -319,7 +320,7 @@ class DatabricksBase:
 
         api_base_parts: Final = urlsplit(api_base)
         workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
-        token_url: Final = f"{workspace_url}/oidc/v1/token"
+        token_url: Final = join_api_base(workspace_url, "oidc/v1/token")
 
         try:
             response: Final = requests.post(
@@ -477,5 +478,6 @@ class DatabricksBase:
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
-        endpoint_path: Final = "" if custom_endpoint is True else DATABRICKS_ENDPOINT_PATHS[endpoint_type]
-        return f"{api_base}{endpoint_path}", headers
+        if custom_endpoint is True:
+            return api_base, headers
+        return join_api_base(api_base, DATABRICKS_ENDPOINT_PATHS[endpoint_type]), headers

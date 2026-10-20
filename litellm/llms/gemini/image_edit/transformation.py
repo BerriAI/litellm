@@ -7,6 +7,7 @@ import httpx
 from httpx._types import RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
@@ -79,9 +80,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
-        base_url = base_url.rstrip("/")
-        return f"{base_url}/models/{model}:generateContent"
+        base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, f"models/{model}:generateContent")
 
     def transform_image_edit_request(
         self,

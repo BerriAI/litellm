@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.request_metadata import (
@@ -97,13 +98,8 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         # Encode model ID for ARNs (e.g., :imported-model/ -> :imported-model%2F)
         model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
 
-        # Build the invoke URL
-        if stream:
-            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke"
-
-        return endpoint_url
+        invoke_route: Final = "invoke-with-response-stream" if stream else "invoke"
+        return join_api_base(endpoint_url, f"model/{model_id}/{invoke_route}")
 
     def sign_request(
         self,
