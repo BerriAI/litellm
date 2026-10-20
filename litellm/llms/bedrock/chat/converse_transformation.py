@@ -385,7 +385,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
-        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+        return re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-k3", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -2127,6 +2127,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2207,6 +2208,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
