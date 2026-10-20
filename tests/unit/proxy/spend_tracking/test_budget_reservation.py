@@ -176,35 +176,6 @@ def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
     assert invoke_cost < converse_cost < 2 * invoke_cost
 
 
-CLAIRIC: Final = "cloudflare/@cf/cloudflare/clairic"
-EXTRACTION_FIELDS: Final = {"vendor": {"type": "text", "instructions": "Who sent the invoice?"}}
-
-
-def _extraction_reservation(state: str, fields: dict[str, object]) -> float | None:
-    return estimate_request_max_cost(
-        request_body={"model": CLAIRIC, "state": state, "fields": fields},
-        route="/v1/extraction",
-        llm_router=None,
-        input_token_counts={},
-    )
-
-
-def test_extraction_body_reserves_its_state_and_fields_not_the_context_window():
-    context_window_cost: Final = estimate_request_max_cost(
-        request_body={"model": CLAIRIC}, route="/v1/extraction", llm_router=None, input_token_counts={}
-    )
-    short_cost: Final = _extraction_reservation("Invoice from Acme Tools.", EXTRACTION_FIELDS)
-    long_state_cost: Final = _extraction_reservation("Invoice from Acme Tools. " * 50, EXTRACTION_FIELDS)
-    more_fields_cost: Final = _extraction_reservation(
-        "Invoice from Acme Tools.", {**EXTRACTION_FIELDS, "total": {"type": "number", "unit": "USD"}}
-    )
-    assert context_window_cost is not None and short_cost is not None
-    assert long_state_cost is not None and more_fields_cost is not None
-    assert 0 < short_cost < context_window_cost / 100
-    assert short_cost < long_state_cost
-    assert short_cost < more_fields_cost
-
-
 def _tiered_deployment(input_cost_per_token: float) -> Deployment:
     return Deployment(
         model_name="tiered-group",

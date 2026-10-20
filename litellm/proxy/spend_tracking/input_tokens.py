@@ -17,8 +17,6 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.rust_bridge import runtime
@@ -33,19 +31,7 @@ from litellm.rust_bridge.token_counter import (
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
-_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
-
-_INPUT_SIZE_FIELDS: Final = (
-    "messages",
-    "prompt",
-    "input",
-    "query",
-    "documents",
-    "tools",
-    "tool_choice",
-    "state",
-    "fields",
-)
+_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
@@ -162,9 +148,6 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
-        if "fields" in request_body:
-            extraction_body: Final = _REQUEST_BODY.validate_python(request_body)
-            return _count_text_tokens(model=model, text=[extraction_body.get("state"), extraction_body.get("fields")])
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None

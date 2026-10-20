@@ -177,7 +177,8 @@ async def _scanned_texts(
     litellm_logging_obj: "LiteLLMLoggingObj | None",
     images: Sequence[str] = (),
 ) -> tuple[str, ...]:
-    inputs: Final = GenericGuardrailAPIInputs(texts=list(texts), model=model if isinstance(model, str) else None)
+    unique_texts: Final = tuple(dict.fromkeys(texts))
+    inputs: Final = GenericGuardrailAPIInputs(texts=list(unique_texts), model=model if isinstance(model, str) else None)
     if images:
         inputs["images"] = list(images)
     guardrailed: Final = await guardrail_to_apply.apply_guardrail(  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.apply_guardrail types request_data as a bare dict
@@ -187,7 +188,10 @@ async def _scanned_texts(
         logging_obj=litellm_logging_obj,
     )
     returned: Final = guardrailed.get("texts", [])
-    return tuple(returned[index] if index < len(returned) else text for index, text in enumerate(texts))
+    guardrailed_by_text: Final = MappingProxyType(
+        {text: returned[index] if index < len(returned) else text for index, text in enumerate(unique_texts)}
+    )
+    return tuple(guardrailed_by_text[text] for text in texts)
 
 
 class ExtractionHandler(BaseTranslation):

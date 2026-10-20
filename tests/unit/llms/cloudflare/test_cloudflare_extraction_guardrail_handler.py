@@ -130,7 +130,7 @@ async def test_response_answers_and_state_text_are_guardrailed_on_a_copy_without
 
     assert guardrail.seen == (
         "response",
-        ("Acme Tools", "Acme Tools", "12", "hammers", "174", "174", "Invoice from Acme Tools"),
+        ("Acme Tools", "12", "hammers", "174", "Invoice from Acme Tools"),
     )
     assert isinstance(result, ExtractionResponse)
     assert result.model_dump(mode="json") == {
