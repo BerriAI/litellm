@@ -118,6 +118,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
+    get_service_tier_timeout,
 )
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
@@ -222,6 +223,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
+    get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
@@ -1387,6 +1389,9 @@ class Router:
         )
         self._ptu_share_teams = lru_cache(maxsize=1)(self._collect_ptu_share_teams)
         self._cached_team_ptu_ceiling = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._resolve_team_ptu_ceiling)
+        self._cached_deployment_tracks_usage = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self._deployment_tracks_usage
+        )
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -4772,6 +4777,7 @@ class Router:
         """Helper to get stream timeout from kwargs or deployment params"""
         return (
             kwargs.get("stream_timeout", None)  # the params dynamically set by user
+            or get_service_tier_timeout(kwargs.get("service_tier"), data, "stream_timeout_by_service_tier")
             or data.get("stream_timeout", None)  # timeout set on litellm_params for this deployment
             or self.stream_timeout  # timeout set on router
             or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
@@ -4785,6 +4791,7 @@ class Router:
         return (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
+            or get_service_tier_timeout(kwargs.get("service_tier"), data, "timeout_by_service_tier")
             or data.get("timeout", None)  # timeout set on litellm_params for this deployment
             or data.get("request_timeout", None)  # timeout set on litellm_params for this deployment
             or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
@@ -9049,30 +9056,9 @@ class Router:
     ) -> str | None:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
-        deployment_info: Final = self.get_deployment(model_id=deployment_id)
-        if deployment_info is None:
-            return None
-        deployment_model_info: Final = self.get_router_model_info(
-            deployment=deployment_info,
-            received_model_name=model_group,
-        )
-        configured_limits: Final = (
-            deployment_info.get("tpm", None),
-            deployment_info.get("rpm", None),
-            deployment_info.litellm_params.tpm,
-            deployment_info.litellm_params.rpm,
-            deployment_model_info.get("tpm", None),
-            deployment_model_info.get("rpm", None),
-        )
-        ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
-        ## set. IO deployments still record TPM/RPM usage here so TPM-aware
-        ## routing strategies see their real load in mixed model groups; their
-        ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
-        if all(limit is None for limit in configured_limits) and not deployment_has_io_token_limits(
-            deployment_info.model_dump()
-        ):
-            return None
         if total_tokens <= 0 and rpm_increment <= 0:
+            return None
+        if not self._cached_deployment_tracks_usage(deployment_id, model_group):
             return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
@@ -9096,6 +9082,30 @@ class Router:
                     operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
                 )
         return tpm_key
+
+    def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
+        deployment_info: Final = self.get_deployment(model_id=deployment_id)
+        if deployment_info is None:
+            return False
+        deployment_model_info: Final = self.get_router_model_info(
+            deployment=deployment_info,
+            received_model_name=model_group,
+        )
+        configured_limits: Final = (
+            deployment_info.get("tpm", None),
+            deployment_info.get("rpm", None),
+            deployment_info.litellm_params.tpm,
+            deployment_info.litellm_params.rpm,
+            deployment_model_info.get("tpm", None),
+            deployment_model_info.get("rpm", None),
+        )
+        ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
+        ## set. IO deployments still record TPM/RPM usage here so TPM-aware
+        ## routing strategies see their real load in mixed model groups; their
+        ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
+        return any(limit is not None for limit in configured_limits) or deployment_has_io_token_limits(
+            deployment_info.model_dump()
+        )
 
     def sync_deployment_callback_on_success(
         self,
@@ -12598,6 +12608,80 @@ class Router:
             if isinstance(model_info, Mapping) and model_info.get("id") is not None
         )
 
+    def _region_routable_deployments(
+        self,
+        deployments: Sequence[DeploymentTypedDict],
+        request_kwargs: Mapping[str, object] | None,
+        has_request_input: bool,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """
+        `deployments` without the ones `_pre_call_checks` keeps this request away from for being outside its allowed
+        region, typed for the tag routing filter
+        """
+        allowed_model_region: Final = None if request_kwargs is None else request_kwargs.get("allowed_model_region")
+        if allowed_model_region is None or not self.enable_pre_call_checks or not has_request_input:
+            return tuple(deployments)
+        if not isinstance(allowed_model_region, str):
+            return ()
+        return tuple(
+            deployment
+            for deployment in deployments
+            if is_region_allowed(
+                litellm_params=LiteLLM_Params.model_validate(deployment["litellm_params"]),
+                allowed_model_region=allowed_model_region,
+            )
+        )
+
+    async def _async_routable_cooled_deployment_ids(
+        self,
+        model: str,
+        request_deployments: Sequence[DeploymentTypedDict],
+        cooldown_deployments: Iterable[str],
+        request_kwargs: Mapping[str, object],
+        has_request_input: bool,
+    ) -> frozenset[str]:
+        """
+        Ids of the cooling deployments in `request_deployments` that region and tag routing would send this request
+        to, each tag routing pick counted along with the picks it falls back to once that one is unavailable, judged
+        without recording a tag match on the request
+        """
+        cooled_ids: Final = frozenset(cooldown_deployments)
+        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+        metadata: Final = request_kwargs.get(metadata_variable_name)
+        if metadata_variable_name in request_kwargs and not isinstance(metadata, Mapping):
+            return frozenset()
+        tag_request: Final[Mapping[str, Any]] = (
+            {**request_kwargs, metadata_variable_name: {**metadata}}
+            if isinstance(metadata, Mapping)
+            else request_kwargs
+        )
+        routable_ids = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
+        remaining = tuple(  # rebind-ok: each pass drops what tag routing just picked
+            deployment
+            for deployment in self._region_routable_deployments(request_deployments, request_kwargs, has_request_input)
+            if self._deployment_ids((deployment,)) <= cooled_ids
+        )
+        while remaining:
+            try:
+                picked = await get_deployments_for_tag(
+                    llm_router_instance=self,
+                    model=model,
+                    healthy_deployments=remaining,
+                    request_kwargs=tag_request,
+                    metadata_variable_name=metadata_variable_name,
+                )
+            except ValueError:  # tag routing sends this request to none of the rest
+                break
+            picked_identities = frozenset(id(deployment) for deployment in picked)
+            rest = tuple(deployment for deployment in remaining if id(deployment) not in picked_identities)
+            if len(rest) == len(remaining):
+                break
+            routable_ids |= self._deployment_ids(
+                tuple(deployment for deployment in remaining if id(deployment) in picked_identities)
+            )
+            remaining = rest
+        return routable_ids
+
     def has_model_id(self, candidate_id: str) -> bool:
         """
         O(1) membership check for a deployment ID without allocating large lists.
@@ -13308,6 +13392,7 @@ class Router:
         self.cached_deployment_model_info.cache_clear()
         self._ptu_share_teams.cache_clear()
         self._cached_team_ptu_ceiling.cache_clear()
+        self._cached_deployment_tracks_usage.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
@@ -14457,6 +14542,13 @@ class Router:
                 litellm_router_instance=self,
                 model=model,
                 parent_otel_span=parent_otel_span,
+                route_model_ids=await self._async_routable_cooled_deployment_ids(
+                    model=model,
+                    request_deployments=request_deployments,
+                    cooldown_deployments=cooldown_deployments,
+                    request_kwargs=cast(Mapping[str, object], request_kwargs),  # cast-ok: str-keyed request kwargs
+                    has_request_input=messages is not None or input is not None,
+                ),
             )
             raise exception
 
@@ -15656,6 +15748,17 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self,
+                    self._deployment_ids(
+                        self._region_routable_deployments(
+                            request_deployments,
+                            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: str-keyed request kwargs
+                            messages is not None or input is not None,
+                        )
+                    ),
+                    _cooldown_list,
+                ),
             )
 
         if strategy == "simple-shuffle":
@@ -15830,6 +15933,17 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=pass_through_model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self,
+                    self._deployment_ids(
+                        self._region_routable_deployments(
+                            request_deployments,
+                            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: str-keyed request kwargs
+                            messages is not None or input is not None,
+                        )
+                    ),
+                    _cooldown_list,
+                ),
             )
 
         # 6. Apply load balancing strategy

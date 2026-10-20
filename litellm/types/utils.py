@@ -3386,6 +3386,11 @@ class StandardLoggingZeroCostDiagnostic(TypedDict):
     missing_pricing_keys: ReadOnly[tuple[str, ...]]
 
 
+class CooldownDeploymentInfo(TypedDict):
+    model_id: ReadOnly[str]
+    api_base: ReadOnly[str | None]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3414,6 +3419,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    error_cooldown_deployments: ReadOnly[tuple[CooldownDeploymentInfo, ...] | None]
     normalized_error: ReadOnly[str | None]
 
 
@@ -4463,6 +4469,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    DEEPSEEK = "deepseek"
 
 
 # Create a set of all search provider values for quick lookup
