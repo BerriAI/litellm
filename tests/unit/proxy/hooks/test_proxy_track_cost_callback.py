@@ -16,6 +16,7 @@ from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _get_budget_reservation_from_metadata,
@@ -254,7 +255,7 @@ async def test_attempt_rows_are_attributed_to_the_deployment_that_billed_them():
 @pytest.mark.asyncio
 async def test_attempt_rows_add_spend_but_not_requests_to_daily_spend():
     """Regression since #47416: one caller request with N billed earlier attempts counted N+1 requests in
-    the daily spend tables. The attempt rows keep their spend and tokens and count zero requests."""
+    the daily spend tables. The attempt rows keep their spend, tokens and model usage and count zero requests."""
     payloads = await _spend_log_payloads_of_a_retried_timeout_across_a_fallback()
     prisma = MagicMock()
     prisma.get_request_status = MagicMock(return_value="failure")
@@ -271,6 +272,9 @@ async def test_attempt_rows_add_spend_but_not_requests_to_daily_spend():
     assert [row["failed_requests"] for row in daily if row is not None] == [1, 0, 0]
     assert [row["spend"] for row in daily if row is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
     assert [row["prompt_tokens"] for row in daily if row is not None] == [24, 24, 24]
+    model_usage = [build_model_usage_transaction(payload) for payload in payloads]
+    assert all(usage is not None for usage in model_usage), "attempt spend must still reach daily model usage"
+    assert [usage.spend for usage in model_usage if usage is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
 
 
 @pytest.mark.asyncio

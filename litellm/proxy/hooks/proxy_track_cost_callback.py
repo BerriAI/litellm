@@ -10,7 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
-from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
@@ -60,7 +60,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
 from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
 from litellm.types.router import Deployment
 from litellm.types.utils import (
-    BILLED_RETRY_ATTEMPT_CALL_ORIGIN,
     CallTypes,
     LiteLLMBatch,
     StandardLoggingPayload,
@@ -229,8 +228,8 @@ def _attempt_spend_row_kwargs(
     and the retry count restarts after a fallback hop), its estimated usage and cost, its retry
     count under ``attempted_retries``, the deployment that billed it under ``model_info.id`` and,
     when the router still knows that deployment, its model, provider, ``api_base`` and model group.
-    The row is stamped ``billed_retry_attempt`` so daily spend keeps the cost without counting
-    it as a request the caller sent."""
+    The row is stamped ``billed_retry_attempt`` so the daily spend tables keep its spend, tokens
+    and model usage without counting it as a request the caller sent."""
     suffix: Final = f"-attempt-{position}"
     attribution: Final = _NO_ATTRIBUTION if deployment is None else _deployment_attribution(deployment)
     raw_params: Final = cast("Mapping[str, object]", request_data.get("litellm_params") or {})  # cast-ok: request dict
@@ -241,7 +240,7 @@ def _attempt_spend_row_kwargs(
     metadata: Final = {
         **cast("Mapping[str, object]", litellm_params.get("metadata") or {}),  # cast-ok: request dict
         "attempted_retries": attempt.attempted_retries,
-        INTERNAL_CALL_ORIGIN_METADATA_KEY: BILLED_RETRY_ATTEMPT_CALL_ORIGIN,
+        BILLED_RETRY_ATTEMPT_METADATA_KEY: True,
         **({} if deployment is None else {"model_group": attribution["model_group"]}),
     }
     metadata.pop("previous_models", None)
