@@ -453,8 +453,9 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # ``litellm.model_cost`` map. Both effects belong to deployment configuration,
 # not to user-supplied request bodies, so the proxy strips them before they
 # reach the call path. Built from the Pydantic model so newly-added pricing
-# fields are covered automatically.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+# fields are covered automatically. ``base_model`` selects which cost-map entry
+# prices the row, so a caller naming a cheaper model lowers their own spend.
+_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
 # ``standard_logging_guardrail_information`` is proxy-written telemetry summed
@@ -3321,12 +3322,12 @@ async def _resolve_user_provider_credentials_for_request(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 
-    from .credential_endpoints.user_provider_credentials import aget_user_provider_tokens
+    from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
 
     if prisma_client is None:
         return
     try:
-        tokens: Final = await aget_user_provider_tokens(
+        connections: Final = await aget_user_provider_credentials(
             prisma_client=prisma_client,
             cache=user_api_key_cache,
             user_id=user_id,
@@ -3341,7 +3342,7 @@ async def _resolve_user_provider_credentials_for_request(
     secret_fields: Final = data.get("secret_fields")
     if not isinstance(secret_fields, dict):
         return
-    secret_fields["user_provider_credentials"] = RedactedDict(dict(tokens))
+    secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
     secret_fields["user_provider_credentials_user_id"] = user_id
 
 

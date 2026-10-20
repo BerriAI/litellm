@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
+from urllib.parse import urlsplit
 from typing import Final
 
 from playwright.sync_api import Error as PlaywrightError
@@ -30,6 +31,8 @@ class Sample(BaseModel):
     seconds: float
     rows: int = 0
     error: str = ""
+    status: int = 0
+    request: str = ""
 
 
 class Timings(BaseModel):
@@ -80,6 +83,10 @@ def summarize(samples: tuple[Sample, ...]) -> Timings:
 def error_code(sample: Sample) -> str:
     if not sample.error:
         return ""
+    if sample.status >= 400:
+        return f"http_{sample.status}"
+    if sample.error.startswith("wall_clock"):
+        return "wall_clock"
     return "timeout" if sample.error == "timeout" else "ui"
 
 
@@ -185,6 +192,19 @@ def _is_data_fetch(response: Response) -> bool:
     return response.request.resource_type in ("fetch", "xhr") and "/_next/" not in response.url
 
 
+def _worst(responses: list[Response]) -> Response | None:
+    return next((response for response in responses if response.status >= 400), responses[-1] if responses else None)
+
+
+def _with_response(sample: Sample, responses: list[Response]) -> Sample:
+    worst: Final = _worst(responses)
+    if worst is None:
+        return sample
+    return sample.model_copy(
+        update={"status": worst.status, "request": f"{worst.request.method} {urlsplit(worst.url).path}"[:120]}
+    )
+
+
 def measure(page: Page, journey: Journey, timeout: float) -> Sample:
     """Wall time from the user's action to the data being on screen. Every sample starts from the
     same pre-action state so repeats measure the same journey, not a warmed client cache."""
@@ -192,16 +212,27 @@ def measure(page: Page, journey: Journey, timeout: float) -> Sample:
         journey.start(page, timeout)
     except (PlaywrightError, AssertionError) as error:
         return Sample(seconds=0.0, error=f"start {type(error).__name__}: {error}"[:300])
+    responses: Final[list[Response]] = []  # mutable-ok: filled by the playwright response listener
+
+    def record(response: Response) -> None:
+        if _is_data_fetch(response):
+            responses.append(response)
+
+    page.on("response", record)
     started: Final = time.monotonic()
     try:
         with page.expect_response(_is_data_fetch, timeout=timeout * 1000):
             journey.act(page)
         rows: Final = journey.settled(page, timeout)
     except PlaywrightTimeoutError:
-        return Sample(seconds=time.monotonic() - started, error="timeout")
+        return _with_response(Sample(seconds=time.monotonic() - started, error="timeout"), responses)
     except (PlaywrightError, AssertionError) as error:
-        return Sample(seconds=time.monotonic() - started, error=f"{type(error).__name__}: {error}"[:300])
-    return Sample(seconds=time.monotonic() - started, rows=rows)
+        return _with_response(
+            Sample(seconds=time.monotonic() - started, error=f"{type(error).__name__}: {error}"[:300]), responses
+        )
+    finally:
+        page.remove_listener("response", record)
+    return _with_response(Sample(seconds=time.monotonic() - started, rows=rows), responses)
 
 
 def _visible(page: Page, test_id: str) -> Locator:

@@ -10739,3 +10739,53 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+CONTROL_PLANE_ENDPOINT: Final = "https://bedrock-fips.us-east-1.amazonaws.com"
+
+
+def _bedrock_chat_answer(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/invoke"):
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_control_plane",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+    )
+
+
+@pytest.mark.parametrize("route_prefix", ["bedrock/", "bedrock/converse/", "bedrock/invoke/"])
+@pytest.mark.respx(assert_all_called=True)
+def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_requests(
+    respx_mock: respx.Router, route_prefix: str
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.+/(converse|invoke)$"
+    ).mock(side_effect=_bedrock_chat_answer)
+
+    response: Final = litellm.completion(
+        model=f"{route_prefix}us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        aws_access_key_id="AKIACONTROLPLANE",
+        aws_secret_access_key="control-plane-secret",
+        aws_region_name="us-east-1",
+        aws_bedrock_control_plane_endpoint=CONTROL_PLANE_ENDPOINT,
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
