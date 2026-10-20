@@ -672,6 +672,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._is_gemini_3_or_newer(model)
 
     @staticmethod
+    def _is_gemini_4_or_newer(model: str) -> bool:
+        """
+        Check if the model is Gemini 4 or newer.
+        """
+        if not VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return False
+        model_name: Final = model.split("/")[-1].lower()
+        return bool(re.match(r"^gemini-(?:[4-9]|\d{2,})(?:\.\d+)?(?:-|$)", model_name))
+
+    @classmethod
+    def is_gemini_4_or_newer(
+        cls,
+        model: str,
+    ) -> bool:
+        return cls._is_gemini_4_or_newer(model)
+
+    def _supports_candidate_count(self, model: str) -> bool:
+        # Gemini 4+ models reject candidate_count (`n`) with HTTP 400
+        return not VertexGeminiConfig._is_gemini_4_or_newer(model)
+
+    @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
         """
         Whether to include `id` on function_call / function_response parts.
@@ -741,7 +762,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "functions",
             "tool_choice",
             "response_format",
-            "n",
             "stop",
             "extra_headers",
             "seed",
@@ -754,6 +774,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "include_server_side_tool_invocations",
             "service_tier",
         ]
+
+        if self._supports_candidate_count(model):
+            supported_params.append("n")
 
         # Add penalty parameters only for non-preview models
         if self._supports_penalty_parameters(model):
@@ -1637,7 +1660,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             elif param == "n":
-                optional_params["candidate_count"] = value
+                if self._supports_candidate_count(model):
+                    optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
                 optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
             elif param == "stop":
@@ -2250,9 +2274,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     @staticmethod
+    def _response_bills_grounding_tool_use_tokens(
+        completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
+        model: str | None = None,
+    ) -> bool:
+        """
+        Gemini 4+ bills every token the model processes, including internal tool system
+        instructions and function declarations when using grounding (in addition to the
+        per-query search grounding fee).
+        Source: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon#migrate-to-4-argon-from-31-pro
+        """
+        resolved_model: Final = _served_model_name(completion_response.get("modelVersion")) or model
+        if not resolved_model:
+            return False
+        return VertexGeminiConfig._is_gemini_4_or_newer(resolved_model)
+
+    @staticmethod
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        model: str | None = None,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -2398,7 +2439,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         billable_tool_use_prompt_tokens: Final = (
             0
-            if VertexGeminiConfig._response_has_search_grounding(completion_response)
+            if (
+                VertexGeminiConfig._response_has_search_grounding(completion_response)
+                and not VertexGeminiConfig._response_bills_grounding_tool_use_tokens(completion_response, model=model)
+            )
             else (tool_use_prompt_tokens or 0)
         )
         billable_text_tokens: Final = (
@@ -2438,8 +2482,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        model: str | None = None,
     ) -> Usage:
-        return cls._calculate_usage(completion_response, cache_creation_tokens)
+        return cls._calculate_usage(completion_response, cache_creation_tokens, model=model)
 
     @staticmethod
     def _check_finish_reason(
@@ -3042,6 +3087,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
+                model=model_response.model,
             )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
@@ -4021,9 +4067,11 @@ class ModelResponseIterator:
         if "usageMetadata" not in processed_chunk:
             return None
 
+        logging_model: Final[object] = getattr(self.logging_obj, "model", None)
         usage: Final = VertexGeminiConfig.calculate_usage(
             completion_response=processed_chunk,
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
+            model=model_response.model or (logging_model if isinstance(logging_model, str) else None),
         )
 
         VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
