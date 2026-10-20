@@ -6766,7 +6766,7 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["total_tokens"] == 0
 
 
-def test_failure_after_earlier_rounds_keeps_their_fixed_margin_when_the_failed_round_priced_no_breakdown(
+def test_failure_after_earlier_rounds_bills_only_the_failed_round_when_it_priced_no_breakdown(
     logging_obj: LitellmLogging,
 ) -> None:
     earlier_breakdown: Final = CostBreakdown(total_cost=0.3, margin_fixed_amount=0.1)
@@ -6781,8 +6781,9 @@ def test_failure_after_earlier_rounds_keeps_their_fixed_margin_when_the_failed_r
     logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "anthropic", "claude"), "tb")
 
     row: Final = logging_obj.model_call_details["standard_logging_object"]
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (5 + 7, 2)
-    assert row["response_cost"] == pytest.approx(0.3)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (7, 0)
+    assert row["response_cost"] == pytest.approx(0.0)
+    assert row.get("cost_breakdown") is None or row["cost_breakdown"]["total_cost"] == pytest.approx(0.0)
 
 
 def test_set_cost_breakdown_stores_reasoning_cost():

@@ -108,14 +108,12 @@ def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -
     return MappingProxyType({**summed, **charged_once})
 
 
-def breakdown_of_both_rounds(
-    first_breakdown: CostBreakdown | None, final_breakdown: CostBreakdown | None, repeated_fixed_margin: float
+def breakdown_less_repeated_fixed_margin(
+    breakdown: CostBreakdown | None, repeated_fixed_margin: float
 ) -> CostBreakdown | None:
-    if first_breakdown is None or final_breakdown is None:
+    if breakdown is None:
         return None
-    return _COST_BREAKDOWN.validate_python(
-        _less_repeated_fixed_margin(_summed_mapping(first_breakdown, final_breakdown), repeated_fixed_margin)
-    )
+    return _COST_BREAKDOWN.validate_python(_less_repeated_fixed_margin(breakdown, repeated_fixed_margin))
 
 
 def summed_cost_breakdown(
@@ -132,8 +130,13 @@ def summed_cost_breakdown(
         return None
     if served_from_cache(first):
         return final_breakdown
-    return breakdown_of_both_rounds(
-        first_breakdown, final_breakdown, _repeated_fixed_margin(first, first_breakdown, final, final_breakdown)
+    if first_breakdown is None or final_breakdown is None:
+        return None
+    return _COST_BREAKDOWN.validate_python(
+        _less_repeated_fixed_margin(
+            _summed_mapping(first_breakdown, final_breakdown),
+            _repeated_fixed_margin(first, first_breakdown, final, final_breakdown),
+        )
     )
 
 

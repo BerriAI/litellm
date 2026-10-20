@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, Protocol, TypeAlias
@@ -114,8 +114,8 @@ class StreamedRoundBilling:
     Each round's iterator parks its success dispatch on the shared logging object rather than sending it, either as a
     ready dispatch or, for a stream bridged through chat completions, as the assembled response and its cache hit.
     When a round completes, before its tools run, it is folded into the rounds before it and a dispatch for every
-    round so far stays parked, so a client disconnect still bills them. Only the request's final response is
-    dispatched, through the proxy's deferred release when the proxy armed one."""
+    round so far stays parked, so a client disconnect or a later round that fails still bills them. Only the latest
+    dispatch is sent, through the proxy's deferred release when the proxy armed one."""
 
     def __init__(self, logging_obj: LiteLLMLoggingObj) -> None:
         self._logging_obj: Final = logging_obj
@@ -161,12 +161,9 @@ class StreamedRoundBilling:
         )
 
     def record_billed_rounds(self, follow_up: object) -> None:
-        if self._billed is None:
+        if self._billed is None or not isinstance(follow_up, BaseResponsesAPIStreamingIterator):
             return
-        spend: Final = self._billed.spend
-        self._logging_obj.record_partial_usage_for_failure(spend.usage, spend.cost)
-        if isinstance(follow_up, BaseResponsesAPIStreamingIterator):
-            follow_up.bill_failure_after_earlier_rounds(spend)
+        follow_up.bill_failure_after_earlier_rounds(self._billed.spend)
 
     def charge_final_round(
         self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
@@ -226,20 +223,20 @@ class StreamedRoundBilling:
         response: ResponsesAPIResponse,
         billed: _BilledRounds,
         restore_headers: RestoresHeaders,
-    ) -> BilledRoundsDispatch:
+    ) -> BilledRoundsDispatch | Coroutine[object, object, None]:
         logged_response: Final = response.model_copy()
         logged_response.hidden_params = {**response.hidden_params}
         logged: Final = completed.model_copy(update={"response": logged_response})
         restore_headers(logged)
-        return BilledRoundsDispatch(
-            self._log_success(
-                logged,
-                datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
-                _logged_cache_hit(response, billed.chat_usage),
-                billed.chat_usage,
-            ),
-            billed.spend,
+        dispatch: Final = self._log_success(
+            logged,
+            datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
+            _logged_cache_hit(response, billed.chat_usage),
+            billed.chat_usage,
         )
+        if billed.chat_usage is None:
+            return dispatch
+        return BilledRoundsDispatch(dispatch, billed.spend)
 
     async def _log_success(
         self,

@@ -2430,7 +2430,11 @@ class CustomStreamWrapper:
         later recovers via a router fallback overwrites this with the combined
         success log on the same request id, so this never double counts.
         """
-        if self.logging_obj is None or not self.chunks:
+        if self.logging_obj is None:
+            return
+        if self._earlier_rounds_spend is not None:
+            self.logging_obj = self.logging_obj.attempt_scoped_copy()
+        if not self.chunks:
             return
         try:
             partial_response: Final = litellm.stream_chunk_builder(

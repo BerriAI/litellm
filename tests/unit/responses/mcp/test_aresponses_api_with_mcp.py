@@ -2489,7 +2489,7 @@ async def test_stream_auto_execute_deferred_for_a_post_call_guardrail_logs_both_
 
 
 @pytest.mark.asyncio
-async def test_stream_auto_execute_bills_the_paid_first_round_on_the_failure_row_when_the_follow_up_stream_breaks(
+async def test_stream_auto_execute_bills_the_paid_first_round_on_its_success_row_when_the_follow_up_stream_breaks(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     from litellm.proxy.utils import ProxyLogging
@@ -2505,10 +2505,38 @@ async def test_stream_auto_execute_bills_the_paid_first_round_on_the_failure_row
     with pytest.raises(litellm.ServiceUnavailableError):
         await _stream_auto_execute(logging_obj)
     ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-    await _settle(lambda: len(recorder.failed) > 0)
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
-    assert recorder.logged == ()
-    _assert_one_row_bills(recorder.failed, _ROUND_ONE_BODY)
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
+    assert [row["response_cost"] for row in recorder.failed] == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_keeps_both_rounds_on_the_success_row(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY)))
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-stream-rounds-blocked")
+    blocked: Final = GuardrailRaisedException(guardrail_name="output-policy", message="blocked")
+
+    with _echo_tool_served("PING"):
+        stream: Final = await _open_stream_auto_execute(logging_obj)
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=stream, route_type="aresponses", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+        )
+        events: Final = await _drain(stream)
+    if not ProxyLogging._discard_deferred_stream_logging_for_failure({"litellm_logging_obj": logging_obj}, blocked):
+        ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await logging_obj.async_failure_handler(blocked, "blocked by output-policy")
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+
+    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, _final_response(events))
+    assert [row["response_cost"] for row in recorder.failed] == [0.0]
 
 
 @pytest.mark.asyncio
@@ -2616,7 +2644,7 @@ async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_when_
 
 
 @pytest.mark.asyncio
-async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_on_the_failure_row_when_the_follow_up_fails(
+async def test_stream_auto_execute_bills_a_failed_follow_up_on_its_own_failure_row_with_no_second_fixed_margin(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
@@ -2630,14 +2658,13 @@ async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_on_th
 
     with pytest.raises(litellm.ServiceUnavailableError):
         await _stream_auto_execute(_rounds_logging_obj(recorder, "mcp-stream-follow-up-failed"))
-    await _settle(lambda: len(recorder.failed) > 0)
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
-    assert recorder.logged == ()
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
     assert len(recorder.failed) == 1
-    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
-    charged_once: Final = _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
-    assert recorder.failed[0]["response_cost"] == pytest.approx(charged_once)
-    assert recorder.failed[0]["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (149, 5)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN)
+    _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
 
 
 _XAI_MODEL: Final = "xai/grok-4.7"
@@ -3027,7 +3054,7 @@ async def test_bridged_stream_auto_execute_bills_both_rounds_when_the_caller_sto
 
 
 @pytest.mark.asyncio
-async def test_bridged_stream_auto_execute_bills_the_paid_rounds_with_one_fixed_margin_when_the_follow_up_stream_breaks(
+async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_on_its_own_failure_row_with_no_second_fixed_margin(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
@@ -3043,14 +3070,14 @@ async def test_bridged_stream_auto_execute_bills_the_paid_rounds_with_one_fixed_
         await _drain(
             await _open_bridged_stream_auto_execute(_rounds_logging_obj(recorder, "mcp-bridged-stream-breaks"))
         )
-    await _settle(lambda: len(recorder.failed) > 0)
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
-    assert recorder.logged == ()
+    assert len(recorder.logged) == 1
+    assert (recorder.logged[0]["prompt_tokens"], recorder.logged[0]["completion_tokens"]) == (533, 40)
+    assert recorder.logged[0]["response_cost"] == pytest.approx(_bridged_round_cost(533, 40))
     assert len(recorder.failed) == 1
-    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (533 + 470, 40)
-    assert recorder.failed[0]["response_cost"] == pytest.approx(
-        _bridged_round_cost(533, 40) + _bridged_round_cost(470, 0) - _FIXED_MARGIN
-    )
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (470, 0)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_bridged_round_cost(470, 0) - _FIXED_MARGIN)
     _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
 
 
@@ -3082,9 +3109,9 @@ async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_its_own_fixe
         await _drain(
             await _open_bridged_stream_auto_execute(_rounds_logging_obj(recorder, "mcp-bridged-cache-then-break"))
         )
-    await _settle(lambda: len(recorder.failed) > 0)
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
-    assert recorder.logged == ()
+    assert [row["response_cost"] for row in recorder.logged] == [0.0]
     assert len(recorder.failed) == 1
     assert recorder.failed[0]["response_cost"] == pytest.approx(_bridged_round_cost(470, 0))
 
@@ -3129,10 +3156,19 @@ async def test_bridged_stream_auto_execute_bills_nothing_for_a_round_served_from
         )
     await _settle(lambda: len(first_cached.logged) > 0)
 
+    both_cached: Final = _RoundRecorder()
+    with _echo_tool_served("PING"):
+        await _drain(
+            await _open_bridged_stream_auto_execute(_rounds_logging_obj(both_cached, "mcp-bridged-cache-both-rounds"))
+        )
+    await _settle(lambda: len(both_cached.logged) > 0)
+
     client: Final = _final_response(events)
     assert provider.call_count == 3
     assert len(first_cached.logged) == 1
     assert (first_cached.logged[0]["prompt_tokens"], first_cached.logged[0]["completion_tokens"]) == (533 + 470, 40 + 4)
     assert first_cached.logged[0]["response_cost"] == pytest.approx(_bridged_round_cost(470, 4))
+    assert first_cached.logged[0]["cache_hit"] is False
+    assert [(row["response_cost"], row["cache_hit"]) for row in both_cached.logged] == [(0.0, True)]
     assert client.usage is not None
     assert client.usage.cost == pytest.approx(_bridged_round_cost(470, 4))

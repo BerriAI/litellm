@@ -446,13 +446,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._round_billing = self._bill_rounds_on_one_row()
         try:
             chunk: Final = await self._anext_impl()
-        except StopAsyncIteration:
-            if self._round_billing is not None:
-                self._round_billing.finish()
-            raise
         except Exception:
             if self._round_billing is not None:
-                self._round_billing.abandon()
+                self._round_billing.finish()
             raise
         sequence_number: Final = getattr(chunk, "sequence_number", None)
         if isinstance(sequence_number, int):
