@@ -33002,22 +33002,26 @@
         "supports_parallel_function_calling": true
     },
     "github_copilot/gpt-4.1": {
+        "deprecation_date": "2026-06-01",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
     "github_copilot/gpt-4.1-2025-04-14": {
+        "deprecation_date": "2026-06-01",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
