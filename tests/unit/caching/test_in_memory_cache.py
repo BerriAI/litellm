@@ -76,6 +76,28 @@ def test_in_memory_cache_max_size_per_item():
     assert result is False
 
 
+@pytest.mark.parametrize(
+    ("character", "count", "should_cache"),
+    [
+        ("a", 100, True),
+        ("\u00e9", 100, True),
+        ("\u6f22", 100, True),
+        ("\U0001f600", 100, True),
+        ("a", 1023, False),
+        ("\u00e9", 1023, False),
+        ("\u6f22", 600, False),
+        ("\U0001f600", 300, False),
+    ],
+)
+def test_string_cache_admission_respects_byte_size(character: str, count: int, should_cache: bool) -> None:
+    cache: Final = InMemoryCache(max_size_per_item=1, clock=lambda: 1000.0)
+    value: Final = character * count
+
+    cache.set_cache("text", value)
+
+    assert cache.get_cache("text") == (value if should_cache else None)
+
+
 def test_in_memory_cache_ttl():
     """
     Check that
