@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import threading
+import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -26,7 +27,7 @@ import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
@@ -1648,6 +1649,41 @@ async def test_one_callback_opting_out_redacts_instructions_only_for_itself(
         if sibling.logged_kwargs is not None and opted_out.logged_kwargs is not None:
             break
         await asyncio.sleep(0.1)
+    assert _logged_instructions(sibling) == (SECRET,) * 6
+    assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
+
+
+class SyncTestCustomLogger(TestCustomLogger):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_obj = response_obj
+        self.logged_kwargs = kwargs
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_one_callback_opting_out_on_a_sync_call_redacts_instructions_only_for_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opted_out: Final = SyncTestCustomLogger(message_logging=False)
+    sibling: Final = SyncTestCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [opted_out, sibling])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    litellm.responses(
+        model="openai/gpt-5-mini",
+        input="hi",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+            )
+        ),
+    )
+
+    for _ in range(100):
+        if sibling.logged_kwargs is not None and opted_out.logged_kwargs is not None:
+            break
+        time.sleep(0.1)
     assert _logged_instructions(sibling) == (SECRET,) * 6
     assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
 

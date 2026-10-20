@@ -3486,8 +3486,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=call_details,
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=call_details, custom_logger=callback
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3497,8 +3499,13 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
