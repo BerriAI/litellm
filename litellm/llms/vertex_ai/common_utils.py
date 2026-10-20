@@ -672,7 +672,7 @@ def _fix_enum_types(schema, depth=0):
     Gemini / Vertex APIs only accept string enum values. An integer enum is sent
     the way Gemini documents it: type INTEGER, `format: "enum"` and the values as
     strings; the model still returns an integer. An integer enum already in that
-    form is kept, so a schema converted on an earlier call keeps its values. On
+    form, as a Gemini-native schema sends it, is kept. On
     any other non-string typed property (or when `anyOf` types do not include a
     string type), the enum is removed to avoid provider validation errors.
     """
@@ -701,7 +701,7 @@ def _fix_enum_types(schema, depth=0):
         if not keep_enum:
             enum_values: Final = cast(Sequence[object], schema["enum"])  # cast-ok: the schema is an untyped JSON dict
             is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
-            # integer strings too: a schema converted on an earlier call already holds its values as strings
+            # integer strings too: a schema already in Gemini's form holds its values as strings
             is_integer_enum: Final = is_integer_type and all(
                 (isinstance(value, int) and not isinstance(value, bool))
                 or (isinstance(value, str) and value.lstrip("-").isdigit())

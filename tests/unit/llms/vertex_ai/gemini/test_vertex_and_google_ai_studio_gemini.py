@@ -2120,6 +2120,37 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     ]
 
 
+def test_gemini_tool_mapping_leaves_caller_tools_intact_for_fallbacks() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    caller_tools: Final = deepcopy(tools)
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    sent_level: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"]
+    assert sent_level["format"] == "enum"
+    assert sent_level["enum"] == ["1", "2", "5"]
+    assert tools == caller_tools
+
+
 def test_vertex_ai_transform_parts():
     """
     Test the _transform_parts method for converting Vertex AI function calls
