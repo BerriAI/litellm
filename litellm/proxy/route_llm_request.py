@@ -2,11 +2,11 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -218,6 +218,15 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None
+)
+
+
+def _none_unless_json_object(value: object) -> object:
+    return value if isinstance(value, Mapping) else None
+
+
+_JSON_OBJECT_OR_DROPPED_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Annotated[Mapping[str, object] | None, BeforeValidator(_none_unless_json_object)]
 )
 
 
@@ -667,8 +676,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
+    drop_params: Final = data.get("drop_params", litellm.drop_params) is True  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
+    router_settings_override_adapter: Final = (
+        _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
+    )
     try:
-        router_settings_override: Final = _OPTIONAL_JSON_OBJECT_ADAPTER.validate_python(
+        router_settings_override: Final = router_settings_override_adapter.validate_python(
             data.pop("router_settings_override", None)
         )
     except ValidationError:
