@@ -1,11 +1,21 @@
+import json
+import logging
+from collections.abc import Mapping
+from typing import Final
+
 import pytest
 
 import litellm
+from litellm._logging import JsonFormatter, verbose_logger
 from litellm.router_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_STRENGTH_ORDER,
+    RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
     nearest_declared_reasoning_effort,
+    resolve_deployment_reasoning_effort,
     resolve_supported_reasoning_efforts,
+    thinking_budget_effort,
 )
 
 
@@ -395,22 +405,25 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         [
             ("azure/gpt-6-astra", "azure"),
             ("azure/us/gpt-6-astra", "azure"),
+            ("azure/eu/gpt-6-astra", "azure"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
         ],
     )
-    def test_an_azure_hosted_deployment_advertises_none_but_not_max(
+    def test_an_azure_hosted_deployment_advertises_the_levels_both_its_routes_accept(
         self, local_model_cost_map, model, custom_llm_provider
     ):
-        """Microsoft hosts the same model with a different level set than OpenAI does. Verified live
-        on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
-        which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
-        xhigh as the levels it does take."""
+        """Verified live on 2026-10-01 against a Foundry gpt-6-astra deployment (model
+        gpt-6-astra-2026-09-03): none returns 400 unsupported_value on chat and on Responses, naming
+        low, medium, high and xhigh as the levels it takes; Responses also honors max with reasoning
+        tokens billed while chat refuses it, as OpenAI's chat does. The flag is route-blind, so the
+        row keeps max off and the advertised set stops at the level every route accepts.
+        Earlier evidence (2026-09-05, commit e79f3ec5205) had none accepted on chat; the deployment
+        no longer behaves that way."""
         from litellm.utils import get_model_info_helper
 
         model_info = dict(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
-            "none",
             "low",
             "medium",
             "high",
@@ -459,6 +472,203 @@ class TestNearestDeclaredReasoningEffort:
         assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
         assert nearest_declared_reasoning_effort("medium", ()) == "medium"
 
+    def test_rounding_down_takes_the_strongest_declared_level_at_most_as_strong(self) -> None:
+        assert nearest_declared_reasoning_effort("medium", ("low", "high", "max"), "down") == "low"
+        assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max"), "down") == "high"
+        assert nearest_declared_reasoning_effort("high", ("low", "high", "max"), "down") == "high"
+
+    def test_rounding_down_below_the_floor_takes_the_weakest_declared_one(self) -> None:
+        assert nearest_declared_reasoning_effort("minimal", ("none", "low", "high"), "down") == "low"
+
+    def test_rounding_down_leaves_none_and_unknown_levels_alone(self) -> None:
+        assert nearest_declared_reasoning_effort("none", ("low", "high"), "down") == "none"
+        assert nearest_declared_reasoning_effort("turbo", ("low", "high"), "down") == "turbo"
+
+
+KIMI_DEPLOYMENT: Final = {"id": "deployment-1", "reasoning_effort_levels": ["low", "high", "max", "none"]}
+
+
+def _sent(
+    requested: RequestedReasoningEffort,
+    deployment_model_info: Mapping[str, object] | None = KIMI_DEPLOYMENT,
+    *,
+    model: str = "my-kimi",
+    provider: str = "hosted_vllm",
+    drop_params: bool = False,
+    model_group: str = "kimi-k3",
+) -> RequestedReasoningEffort:
+    return resolve_deployment_reasoning_effort(
+        requested,
+        model=model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+        model_group=model_group,
+        drop_params=drop_params,
+    ).value
+
+
+def _bare_map_model_declaring_fewer_levels() -> tuple[str, str]:
+    def declares_fewer(key: str, entry: Mapping[str, object]) -> bool:
+        levels: Final = entry.get("reasoning_effort_levels")
+        return "/" not in key and isinstance(levels, list) and not set(REASONING_EFFORT_STRENGTH_ORDER) <= set(levels)
+
+    model, entry = next((key, entry) for key, entry in litellm.model_cost.items() if declares_fewer(key, entry))
+    return str(entry["litellm_provider"]), model
+
+
+class TestResolveDeploymentReasoningEffort:
+    @pytest.mark.parametrize(
+        "requested, expected",
+        [
+            ("minimal", "low"),
+            ("low", "low"),
+            ("medium", "high"),
+            ("xhigh", "max"),
+            ("max", "max"),
+            ("none", "none"),
+            ("turbo", "turbo"),
+            ("default", None),
+            ({"effort": "medium", "summary": "auto"}, {"effort": "high", "summary": "auto"}),
+            ({"effort": "default", "summary": "auto"}, {"summary": "auto"}),
+            ({"effort": "default"}, None),
+        ],
+    )
+    def test_a_declaring_deployment_receives_a_level_it_declared(
+        self, requested: RequestedReasoningEffort, expected: RequestedReasoningEffort
+    ) -> None:
+        assert _sent(requested) == expected
+
+    def test_a_deployment_that_declares_nothing_gets_the_request_untouched(self, local_model_cost_map: None) -> None:
+        requested: Final = {"effort": "minimal", "summary": "auto"}
+
+        assert _sent(requested, {"id": "deployment-1"}) == requested
+        assert _sent("default", None) == "default"
+
+    def test_the_deployment_rounding_wins_over_the_global(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "down"}) == "low"
+
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "up"}) == "high"
+        assert _sent("medium") == "low"
+
+    @pytest.mark.parametrize("spelling", ["DOWN", " Down "])
+    def test_the_rounding_setting_ignores_case_and_surrounding_spaces(
+        self, monkeypatch: pytest.MonkeyPatch, spelling: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": spelling}) == "low"
+
+    @pytest.mark.parametrize("invalid", ["sideways", 1, None])
+    def test_an_invalid_rounding_falls_back_to_the_next_setting(
+        self, monkeypatch: pytest.MonkeyPatch, invalid: str | int | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "low"
+
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", invalid)
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "high"
+
+    def test_a_misspelled_rounding_is_reported_rather_than_silently_rounding_up(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", None)
+
+        _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "donw\nforged"})
+
+        assert [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING] == [
+            "Ignoring reasoning_effort_rounding=donwforged, expected 'up' or 'down'"
+        ]
+
+    def test_only_the_deployment_declaration_rounds_never_the_model_map(self, local_model_cost_map: None) -> None:
+        assert _sent("xhigh", None, model="kimi-k3", provider="fireworks_ai") == "xhigh"
+        assert _sent("xhigh", {"id": "kimi-1"}, model="kimi-k3", provider="fireworks_ai") == "xhigh"
+        assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
+            "medium"
+        )
+
+    def test_a_model_info_echoing_a_map_key_rounds_nothing_the_deployment_did_not_declare(
+        self, local_model_cost_map: None
+    ) -> None:
+        provider, model = _bare_map_model_declaring_fewer_levels()
+        echoed: Final = {"key": f"{provider}/{model}", "litellm_provider": provider}
+
+        sent: Final = [_sent(level, echoed, model=model, provider=provider) for level in REASONING_EFFORT_STRENGTH_ORDER]
+
+        assert sent == list(REASONING_EFFORT_STRENGTH_ORDER)
+
+    @pytest.mark.parametrize(
+        "requested, expected",
+        [
+            ("turbo", None),
+            ({"effort": "turbo", "summary": "auto"}, {"summary": "auto"}),
+            ("none", "none"),
+            ("medium", "high"),
+        ],
+    )
+    def test_drop_params_drops_a_level_the_deployment_does_not_declare(
+        self, requested: RequestedReasoningEffort, expected: RequestedReasoningEffort
+    ) -> None:
+        assert _sent(requested, drop_params=True) == expected
+
+    def test_drop_params_drops_none_only_where_the_deployment_leaves_it_out(self) -> None:
+        assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}, drop_params=True) is None
+        assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}) == "none"
+
+    def test_a_dropped_unrecognized_level_is_not_written_to_the_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent("turbo\nforged line", drop_params=True)
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "reasoning_effort unrecognized sent as None (rounding up) to deployment deployment-1, "
+            "model group kimi-k3, model hosted_vllm/my-kimi"
+        ]
+
+    def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent(
+            "medium",
+            {"id": "deployment-1\r\nforged id", "reasoning_effort_levels": ["low", "high"]},
+            model="my-kimi\nforged model",
+            model_group="kimi-k3\nforged group",
+        )
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "reasoning_effort medium sent as high (rounding up) to deployment deployment-1forged id, "
+            "model group kimi-k3forged group, model hosted_vllm/my-kimiforged model"
+        ]
+
+    def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent("high")
+        _sent("medium")
+
+        assert len(caplog.records) == 1
+        logged: Final = json.loads(JsonFormatter().format(caplog.records[0]))
+        assert logged["level"] == "INFO"
+        assert {key: value for key, value in logged.items() if key.startswith("reasoning_effort_")} == {
+            "reasoning_effort_deployment_id": "deployment-1",
+            "reasoning_effort_model_group": "kimi-k3",
+            "reasoning_effort_deployment_model": "hosted_vllm/my-kimi",
+            "reasoning_effort_requested": "medium",
+            "reasoning_effort_sent": "high",
+            "reasoning_effort_rounding": "up",
+        }
+
 
 class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
     @pytest.mark.parametrize(
@@ -485,3 +695,23 @@ class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
         assert resolve_supported_reasoning_efforts(
             azure_info, deployment_is_mapped=True
         ) == resolve_supported_reasoning_efforts(openai_info, deployment_is_mapped=True)
+
+
+class TestThinkingBudgetEffort:
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider, expected",
+        [
+            ("my-kimi", "hosted_vllm", "medium"),
+            ("FW-Kimi-K3", "azure_ai", "medium"),
+            ("claude-opus-5-5", "anthropic", "medium"),
+            ("claude-sonnet-4-6", "anthropic", None),
+        ],
+    )
+    def test_only_a_provider_that_would_send_an_effort_gets_one(
+        self, model: str, custom_llm_provider: str, expected: str | None
+    ) -> None:
+        thinking: Final = {"type": "enabled", "budget_tokens": 2048}
+
+        assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False) == (
+            expected
+        )

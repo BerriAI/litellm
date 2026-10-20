@@ -92,6 +92,7 @@ class TeamListItem(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
 
 
 class TeamListResponse(LiteLLMBaseModel):

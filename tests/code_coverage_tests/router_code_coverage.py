@@ -42,9 +42,11 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and (
+                    "router" in os.path.relpath(file_path, dir_path).lower() or test_dir == "unit"
+                ):
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
@@ -97,7 +99,9 @@ ignored_function_names = [
     "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
     "_embedding",
     "_aembedding",
-    "_anthropic_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_narrow_to_video_deployment",  # Tested through video_status and avideo_status polls in test_router_provider_endpoints.py
+    "_video_call_pin",  # Tested through the video_status pin tests and the chat video_id test in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
@@ -105,13 +109,48 @@ ignored_function_names = [
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
     "_anthropic_messages_plain_retry_budget",  # Tested through the retry budget precedence test in test_router.py
-    "_anthropic_messages_should_retry",  # Tested through every mid-stream retry test in test_router.py
-    "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
+    "_stream_should_retry",  # Tested through every mid-stream retry test in test_router.py
+    "_astream_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_register_continuation_prefill_check",  # Tested through the continuation tests in test_router.py
+    "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
+    "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
+    "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
+    "_names_deployment_that_cannot_continue",  # Tested through the deployment-id continuation tests in test_router.py
+    "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
+    "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
+    "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
+    "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
+    "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
+    "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
+    "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
+    "is_batch_capable",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
+    "deployments_the_caller_may_use",  # Tested through the usage-based-routing team batch create test in test_router.py
+    "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
+    "_endpoint_paths",  # Read by deployment_supported_endpoints, tested through the malformed endpoint list group info test in test_router.py
+    "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
+    "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
+    "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
 ]
 
 

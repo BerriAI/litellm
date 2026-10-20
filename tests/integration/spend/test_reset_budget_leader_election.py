@@ -11,6 +11,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 RESET_LEASE_KEY: Final = "cronjob_lock:reset_budget_job"
 PEER_POD_LEASE: Final = json.dumps("integration-peer-pod-holding-the-reset-lease")
 FAST_RESET_TICK: Final = MappingProxyType(

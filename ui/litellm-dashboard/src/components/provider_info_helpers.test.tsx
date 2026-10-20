@@ -197,6 +197,7 @@ describe("provider_info_helpers", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
         Providers.AUTO_ROUTER,
+        Providers.Bespoke,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.Cognition,
@@ -209,9 +210,11 @@ describe("provider_info_helpers", () => {
         Providers.GALADRIEL,
         Providers.GradientAI,
         Providers.HEROKU,
+        Providers.Laya,
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
+        Providers.Nace,
         Providers.NLP_CLOUD,
         Providers.NSCALE,
         Providers.OVHCLOUD,
@@ -371,6 +374,13 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
     });
 
+    it.each([
+      [Providers.Laya, "laya/english"],
+      [Providers.Bespoke, "bespoke/nimble"],
+    ])("should return the %s decisions model placeholder", (provider, placeholder) => {
+      expect(getPlaceholder(provider)).toBe(placeholder);
+    });
+
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
       expect(getPlaceholder("UnknownProvider" as any)).toBe("gpt-3.5-turbo");
     });
@@ -506,6 +516,16 @@ describe("provider_info_helpers", () => {
         "sagemaker-model": { litellm_provider: "sagemaker" },
       };
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("lists Nace decision models and resolves the provider name and model placeholder", () => {
+      const modelMap = {
+        "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels(Providers.Nace, modelMap)).toEqual(["nace/drex-latest"]);
+      expect(getProviderLogoAndName("nace").displayName).toBe("Nace");
+      expect(getPlaceholder("Nace")).toBe("nace/drex-latest");
     });
 
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
