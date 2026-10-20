@@ -748,13 +748,19 @@ def openai_tokenizer_encoding_name(model: str) -> str:
     A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
     know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
     OpenAI model since gpt-4o uses."""
-    model_to_use: Final = _fix_model_name(model)
+    model_to_use: Final = _fix_model_name(_without_openai_provider_prefix(model))
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
         return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
+
+
+def _without_openai_provider_prefix(model: str) -> str:
+    provider, separator, name = model.partition("/")
+    is_listed_openai_model: Final = provider in ("openai", "azure") and name in litellm.open_ai_chat_completion_models
+    return name if separator and is_listed_openai_model else model
 
 
 def _suffixed_variant_encoding_name(model: str) -> str | None:

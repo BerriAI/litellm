@@ -2216,7 +2216,9 @@ def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monk
 _MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
 
 
-@pytest.mark.parametrize("model", ["gpt-5.1", "gpt-5.5", "gpt-6.1-sol", "azure/gpt-41"])
+@pytest.mark.parametrize(
+    "model", ["gpt-5.1", "gpt-5.5", "gpt-6.1-sol", "azure/gpt-41", "azure/gpt-5.1", "openai/gpt-5.1", "openai/gpt-4o"]
+)
 def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
     expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
 
@@ -2227,7 +2229,7 @@ def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200
     )
 
 
-@pytest.mark.parametrize("model", ["groq/qwen3-32b", "text-embedding-ada-002-v2"])
+@pytest.mark.parametrize("model", ["groq/qwen3-32b", "text-embedding-ada-002-v2", "azure/gpt-4", "azure/my-deployment"])
 def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
     assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
         tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
