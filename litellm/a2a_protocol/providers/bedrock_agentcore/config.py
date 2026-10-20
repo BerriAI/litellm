@@ -3,7 +3,7 @@ Bedrock AgentCore A2A provider configuration.
 """
 
 from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Final
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.bedrock_agentcore.handler import (
@@ -23,10 +23,10 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         api_base: str | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Handle non-streaming request to AgentCore A2A agent."""
         litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:
@@ -43,10 +43,10 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
     async def handle_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         api_base: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """Handle streaming request to AgentCore A2A agent."""
         litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:

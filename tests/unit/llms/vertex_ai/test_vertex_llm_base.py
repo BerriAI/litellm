@@ -1,7 +1,15 @@
 import asyncio
+import base64
 import json
+import logging
+import os
+import pathlib
+import re
+import traceback
+from typing import Final
 from unittest.mock import MagicMock, call, patch
 
+import google.auth.exceptions
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -34,17 +42,15 @@ class TestVertexBase:
         mock_creds.quota_project_id = "project-1"
 
         # Test case 1: Ensure credentials match project
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials={"type": "service_account", "project_id": "project-1"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials={"type": "service_account", "project_id": "project-1"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -53,17 +59,15 @@ class TestVertexBase:
             assert token == "fake-token-1"
 
         # Test case 2: Allow using credentials from different project
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
             if is_async:
-                result = await vertex_base._ensure_access_token_async(
+                result = await vertex_base.ensure_access_token_async(
                     credentials={"type": "service_account"},
                     project_id="different-project",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                result = vertex_base._ensure_access_token(
+                result = vertex_base.ensure_access_token(
                     credentials={"type": "service_account"},
                     project_id="different-project",
                     custom_llm_provider="vertex_ai",
@@ -83,18 +87,16 @@ class TestVertexBase:
         mock_creds.quota_project_id = "project-1"
 
         # Test initial credential load and caching
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
             # First call should load credentials
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -103,13 +105,13 @@ class TestVertexBase:
 
             # Second call should use cached credentials
             if is_async:
-                token2, project2 = await vertex_base._ensure_access_token_async(
+                token2, project2 = await vertex_base.ensure_access_token_async(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token2, project2 = vertex_base._ensure_access_token(
+                token2, project2 = vertex_base.ensure_access_token(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -143,13 +145,13 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials={"type": "service_account"},
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -166,11 +168,11 @@ class TestVertexBase:
 
         # Test that Gemini requests bypass credential checks
         if is_async:
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=None, project_id=None, custom_llm_provider="gemini"
             )
         else:
-            token, project = vertex_base._ensure_access_token(
+            token, project = vertex_base.ensure_access_token(
                 credentials=None, project_id=None, custom_llm_provider="gemini"
             )
         assert token == ""
@@ -214,13 +216,13 @@ class TestVertexBase:
 
             # 1. Test that authorized_user-style credentials are correctly handled and uses quota_project_id
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -233,13 +235,13 @@ class TestVertexBase:
             # 2. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
             not_quota_project_id = "new-project"
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=not_quota_project_id,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=not_quota_project_id,
                     custom_llm_provider="vertex_ai",
@@ -278,13 +280,13 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, _ = await vertex_base._ensure_access_token_async(
+                token, _ = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, _ = vertex_base._ensure_access_token(
+                token, _ = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -329,22 +331,22 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, _ = await vertex_base._ensure_access_token_async(
+                token, _ = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, _ = vertex_base._ensure_access_token(
+                token, _ = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
 
             assert mock_credentials_from_identity_pool_with_aws.called
-            assert mock_credentials_from_identity_pool_with_aws.call_args[1][
-                "scopes"
-            ] == ["https://www.googleapis.com/auth/cloud-platform"]
+            assert mock_credentials_from_identity_pool_with_aws.call_args[1]["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
             assert token == "refreshed-token"
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
@@ -361,17 +363,15 @@ class TestVertexBase:
 
         credentials = {"type": "service_account", "project_id": "project-1"}
 
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -410,13 +410,13 @@ class TestVertexBase:
 
         # Should handle old format gracefully
         if is_async:
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
             )
         else:
-            token, project = vertex_base._ensure_access_token(
+            token, project = vertex_base.ensure_access_token(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
@@ -439,18 +439,16 @@ class TestVertexBase:
 
         credentials = {"type": "service_account"}
 
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "resolved-project")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "resolved-project")):
             # Call without project_id, should use resolved project from credentials
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -509,13 +507,13 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
+                token, project = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, project = vertex_base._ensure_access_token(
+                token, project = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -549,18 +547,16 @@ class TestVertexBase:
 
         credentials = {"type": "service_account", "project_id": "cred-project"}
 
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "cred-project")
-        ):
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "cred-project")):
             # First call with explicit project_id
             if is_async:
-                token1, project1 = await vertex_base._ensure_access_token_async(
+                token1, project1 = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id="explicit-project",
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token1, project1 = vertex_base._ensure_access_token(
+                token1, project1 = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id="explicit-project",
                     custom_llm_provider="vertex_ai",
@@ -568,13 +564,13 @@ class TestVertexBase:
 
             # Second call with None project_id (should use credential project)
             if is_async:
-                token2, project2 = await vertex_base._ensure_access_token_async(
+                token2, project2 = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token2, project2 = vertex_base._ensure_access_token(
+                token2, project2 = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -617,16 +613,15 @@ class TestVertexBase:
             "load_auth",
             return_value=(mock_creds, "resolved-from-credentials"),
         ) as mock_load_auth:
-
             # First call: User provides NO project_id, should resolve from credentials
             if is_async:
-                token1, project1 = await vertex_base._ensure_access_token_async(
+                token1, project1 = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,  # Key: user doesn't provide project_id
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token1, project1 = vertex_base._ensure_access_token(
+                token1, project1 = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,  # Key: user doesn't provide project_id
                     custom_llm_provider="vertex_ai",
@@ -659,13 +654,13 @@ class TestVertexBase:
 
             # Second call: Same scenario - should use cache and NOT call load_auth again
             if is_async:
-                token2, project2 = await vertex_base._ensure_access_token_async(
+                token2, project2 = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,  # Still no project_id provided
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token2, project2 = vertex_base._ensure_access_token(
+                token2, project2 = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,  # Still no project_id provided
                     custom_llm_provider="vertex_ai",
@@ -679,13 +674,13 @@ class TestVertexBase:
             # Third call: Now user provides the resolved project_id explicitly
             # This should also use cache (the resolved_cache_key)
             if is_async:
-                token3, project3 = await vertex_base._ensure_access_token_async(
+                token3, project3 = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id="resolved-from-credentials",  # Explicit resolved project_id
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token3, project3 = vertex_base._ensure_access_token(
+                token3, project3 = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id="resolved-from-credentials",  # Explicit resolved project_id
                     custom_llm_provider="vertex_ai",
@@ -1452,6 +1447,18 @@ class TestVertexBase:
             "aws_region_name": "us-east-1",
         }
 
+    def test_extract_aws_params_keeps_values_that_are_not_strings(self):
+        json_with_null_region = {
+            "type": "external_account",
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
+        assert VertexAIAwsWifAuth.extract_aws_params(json_with_null_region) == {
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
     def test_credentials_from_aws_with_explicit_auth(self):
         """Test that explicit AWS auth creates credentials via supplier, not metadata."""
         json_obj = {
@@ -1582,13 +1589,13 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, _ = await vertex_base._ensure_access_token_async(
+                token, _ = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, _ = vertex_base._ensure_access_token(
+                token, _ = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -1645,13 +1652,13 @@ class TestVertexBase:
             mock_refresh.side_effect = mock_refresh_impl
 
             if is_async:
-                token, _ = await vertex_base._ensure_access_token_async(
+                token, _ = await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                token, _ = vertex_base._ensure_access_token(
+                token, _ = vertex_base.ensure_access_token(
                     credentials=credentials,
                     project_id=None,
                     custom_llm_provider="vertex_ai",
@@ -1767,7 +1774,7 @@ class TestVertexBase:
 
             # Launch 50 concurrent requests
             tasks = [
-                vertex_base._ensure_access_token_async(
+                vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id="project-1",
                     custom_llm_provider="vertex_ai",
@@ -1829,7 +1836,7 @@ class TestVertexBase:
         ):
             results = await asyncio.gather(
                 *[
-                    vertex_base._ensure_access_token_async(
+                    vertex_base.ensure_access_token_async(
                         credentials=credentials,
                         project_id="project-1",
                         custom_llm_provider="vertex_ai",
@@ -1875,7 +1882,7 @@ class TestVertexBase:
 
             mock_refresh.side_effect = mock_refresh_impl
 
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
@@ -1884,8 +1891,8 @@ class TestVertexBase:
             # Should return the current (still usable) token immediately
             assert token == "near-expiry-token"
 
-            # Let the background refresh task run
-            await asyncio.sleep(0.05)
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
 
             assert mock_refresh.called, "Background refresh should have been triggered"
 
@@ -1917,7 +1924,7 @@ class TestVertexBase:
 
             mock_refresh.side_effect = mock_refresh_impl
 
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
@@ -1946,7 +1953,7 @@ class TestVertexBase:
         )
 
         with patch.object(vertex_base, "refresh_auth") as mock_refresh:
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
@@ -1986,14 +1993,14 @@ class TestVertexBase:
 
             mock_refresh.side_effect = mock_refresh_impl
 
-            await vertex_base._ensure_access_token_async(
+            await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
             )
 
-            # Allow the background task to complete.
-            await asyncio.sleep(0.1)
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
 
             # After completion the entry should have been removed by the done-callback.
             assert len(vertex_base._background_refresh_tasks) == 0, (
@@ -2012,6 +2019,7 @@ class TestVertexBase:
         vertex_base = VertexBase()
 
         num_keys = 20
+        background_refreshes: list[asyncio.Task] = []
 
         for i in range(num_keys):
             mock_creds = MagicMock()
@@ -2037,14 +2045,14 @@ class TestVertexBase:
 
                 mock_refresh.side_effect = mock_refresh_impl
 
-                await vertex_base._ensure_access_token_async(
+                await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=f"project-{i}",
                     custom_llm_provider="vertex_ai",
                 )
+                background_refreshes.extend(vertex_base._background_refresh_tasks.values())
 
-        # Let all background tasks finish.
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(asyncio.gather(*set(background_refreshes)), timeout=5)
 
         assert len(vertex_base._background_refresh_tasks) == 0, (
             f"Expected 0 tasks after all refreshes completed, "
@@ -2098,7 +2106,7 @@ class TestVertexBase:
                 ),
                 patch.object(vertex_base, "refresh_auth"),
             ):
-                await vertex_base._ensure_access_token_async(
+                await vertex_base.ensure_access_token_async(
                     credentials=credentials,
                     project_id=f"project-{i}",
                     custom_llm_provider="vertex_ai",
@@ -2185,7 +2193,7 @@ class TestVertexBase:
             "_acquire_async_refresh_lock",
             wraps=vertex_base._acquire_async_refresh_lock,
         ) as mock_get_lock:
-            token, project = await vertex_base._ensure_access_token_async(
+            token, project = await vertex_base.ensure_access_token_async(
                 credentials=credentials,
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
@@ -2193,3 +2201,375 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+_ENCODED_VERTEX_KEY: Final = base64.b64encode(
+    json.dumps({"type": "service_account", "private_key_id": "kid-123", "private_key": "MIIEvQIBADA???>>>"}).encode()
+).decode()
+
+
+class TestVertexCredentialsSource:
+    """A `vertex_credentials` path that cannot be read must not be reported as malformed JSON.
+
+    Regression for https://github.com/BerriAI/litellm/issues/40166: dispatching on
+    os.path.exists() sent a missing or unreadable path down the inline-JSON branch,
+    where the path string itself was parsed and every failure came back as a
+    JSONDecodeError blaming the key material.
+    """
+
+    FILE_FAILURE: Final = "Unable to load the vertex credentials file"
+
+    def test_missing_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
+        missing = tmp_path / "vertexai.json"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(missing), project_id="p")
+
+        message = str(exc_info.value)
+        assert "not valid JSON" not in message
+        assert str(missing) not in message
+        assert repr(str(missing)) in caplog.text
+        assert "No such file or directory" in caplog.text
+
+    def test_unreadable_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
+        # Present but not openable as a file, the same shape as a path on a mount
+        # that has stopped serving reads.
+        unreadable = tmp_path / "vertexai.json"
+        unreadable.mkdir()
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(unreadable), project_id="p")
+
+        assert str(unreadable) not in str(exc_info.value)
+        assert repr(str(unreadable)) in caplog.text
+        assert "Is a directory" in caplog.text
+        assert "not valid JSON" not in caplog.text
+
+    def test_malformed_credentials_file_logs_the_private_key_hint(self, tmp_path, caplog):
+        malformed = tmp_path / "vertexai.json"
+        malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(malformed), project_id="p")
+
+        assert str(malformed) not in str(exc_info.value)
+        assert repr(str(malformed)) in caplog.text
+        assert "is not valid JSON" in caplog.text
+        assert "private_key" in caplog.text
+
+    def test_every_file_failure_gives_the_caller_the_same_message(self, tmp_path):
+        """Callers allowed to send `vertex_credentials` must not learn what is on the proxy's disk."""
+        directory = tmp_path / "directory.json"
+        directory.mkdir()
+        malformed = tmp_path / "malformed.json"
+        malformed.write_text("{not json")
+        not_an_object = tmp_path / "list.json"
+        not_an_object.write_text("[1, 2]")
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text('{"hello": "world"}')
+        bad_private_key = tmp_path / "bad-key.json"
+        bad_private_key.write_text(
+            '{"type": "service_account", "private_key": "x", "client_email": "a@b.c", "token_uri": "https://t"}'
+        )
+        paths = (tmp_path / "missing.json", directory, malformed, not_an_object, not_a_key, bad_private_key)
+
+        def message_for(path: pathlib.Path) -> str:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(path), project_id="p")
+            return str(exc_info.value)
+
+        assert {message_for(path) for path in paths} == {
+            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
+        }
+
+    NOT_A_KEY: Final = '{"hello": "world"}'
+
+    def _google_auth_rejection(self) -> str:
+        with pytest.raises(google.auth.exceptions.GoogleAuthError) as exc_info:
+            VertexBase()._credentials_from_service_account(json.loads(self.NOT_A_KEY), scopes=None)
+        return str(exc_info.value)
+
+    def test_google_auth_rejecting_a_credentials_file_is_named_only_in_the_log(self, tmp_path, caplog):
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text(self.NOT_A_KEY)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(not_a_key), project_id="p")
+
+        rejection = self._google_auth_rejection()
+        assert rejection not in "".join(traceback.format_exception(exc_info.value))
+        assert repr(str(not_a_key)) in caplog.text
+        assert rejection in caplog.text
+
+    def test_google_auth_rejecting_inline_credentials_still_tells_the_caller_why(self):
+        rejection = self._google_auth_rejection()
+
+        with pytest.raises(ValueError, match=re.escape(rejection)) as exc_info:
+            VertexBase().load_auth(credentials=self.NOT_A_KEY, project_id="p")
+
+        assert self.FILE_FAILURE not in str(exc_info.value)
+
+    def test_litellm_rejecting_a_credentials_file_is_not_blamed_on_google_auth(self, tmp_path, caplog):
+        wif_without_region = tmp_path / "wif.json"
+        wif_without_region.write_text(
+            json.dumps(
+                {
+                    "type": "external_account",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+                }
+            )
+        )
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(wif_without_region), project_id="p")
+
+        assert "holds credentials that cannot be used: aws_region_name is required" in caplog.text
+        assert "Google auth" not in caplog.text
+
+    def test_a_credentials_file_too_large_to_be_a_key_is_not_read_whole(self, tmp_path, caplog):
+        oversized = tmp_path / "vertexai.json"
+        oversized.write_text("{" + " " * (1 << 20) + "}")
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(oversized), project_id="p")
+
+        assert "larger than any credentials file" in caplog.text
+
+    def test_a_credentials_file_holding_json_that_is_not_an_object_says_so_in_the_log(self, tmp_path, caplog):
+        double_encoded = tmp_path / "vertexai.json"
+        double_encoded.write_text(json.dumps(json.dumps({"type": "service_account"})))
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(double_encoded), project_id="p")
+
+        assert "is JSON but not a JSON object" in caplog.text
+        assert "not valid JSON" not in caplog.text
+
+    def test_a_path_with_a_newline_cannot_forge_a_log_line(self, tmp_path, caplog):
+        forged = str(tmp_path / "vertexai.json") + "\nLiteLLM:ERROR: forged entry"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=forged, project_id="p")
+
+        assert "\nLiteLLM:ERROR: forged entry" not in caplog.text
+        assert "\\nLiteLLM:ERROR: forged entry" in caplog.text
+
+    def test_a_value_too_long_to_be_a_path_is_logged_by_length_only(self, caplog):
+        not_a_path = "not a path, " * 25
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=not_a_path, project_id="p")
+
+        assert "not a path, not a path" not in caplog.text
+        assert f"{len(not_a_path)}-character value" in caplog.text
+
+    def test_malformed_inline_credentials_do_not_echo_the_credential(self):
+        inline = (
+            '{"type": "service_account", "private_key": '
+            '"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"}'
+        )
+
+        with pytest.raises(
+            ValueError, match="The inline `vertex_credentials` value is not valid JSON"
+        ) as exc_info:
+            VertexBase().load_auth(credentials=inline, project_id="p")
+
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "unescaped newlines in private_key" in message
+
+    def test_a_credential_misconfigured_as_a_path_is_not_echoed(self):
+        """A value that is neither a path nor JSON must not come back in the message."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+            VertexBase().load_auth(credentials=pem, project_id="p")
+
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "BEGIN PRIVATE KEY" not in message
+
+    def test_readable_credentials_file_is_still_loaded(self, tmp_path):
+        creds_file = tmp_path / "vertexai.json"
+        creds_file.write_text(json.dumps({"type": "service_account", "project_id": "from-file"}))
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-file"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials=str(creds_file), project_id=None)
+
+        assert creds is mock_creds
+        assert project_id == "from-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-file"}
+
+    @pytest.mark.parametrize("leading", ["", "\n  "])
+    def test_inline_credentials_json_is_still_parsed(self, leading):
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-inline"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(
+                credentials=leading + json.dumps({"type": "service_account", "project_id": "from-inline"}),
+                project_id=None,
+            )
+
+        assert creds is mock_creds
+        assert project_id == "from-inline"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
+
+    def test_a_credential_misconfigured_as_a_path_is_not_logged_either(self, caplog):
+        """The path reaches the log, so a credential put in that field must be scrubbed first."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=pem, project_id="p")
+
+        assert "MIIEvQIBADA" not in caplog.text
+        assert "REDACTED" in caplog.text
+
+    def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self, caplog):
+        """open() rejects some paths with a bare ValueError before any filesystem call."""
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="creds" + chr(0) + ".json", project_id="p")
+
+        assert "embedded null" in caplog.text
+
+    def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path, monkeypatch):
+        """Shape dispatch must not strand a real file that happens to be named like JSON.
+
+        The value has to be relative for this to bite: an absolute path never starts with
+        a brace, so only "{vertex}.json" reaches the inline branch and needs the fallback.
+        """
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account", "project_id": "from-braced-file"}))
+        monkeypatch.chdir(tmp_path)
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-braced-file"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials="{vertex}.json", project_id=None)
+
+        assert creds is mock_creds
+        assert project_id == "from-braced-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
+
+    @pytest.mark.parametrize(
+        "encoded",
+        [
+            pytest.param(_ENCODED_VERTEX_KEY, id="padded"),
+            pytest.param(_ENCODED_VERTEX_KEY.rstrip("="), id="unpadded"),
+            pytest.param('"' + _ENCODED_VERTEX_KEY + '"', id="quoted"),
+            pytest.param("base64:" + _ENCODED_VERTEX_KEY, id="prefixed"),
+            pytest.param(_ENCODED_VERTEX_KEY.replace("+", "-").replace("/", "_"), id="urlsafe"),
+            pytest.param("\n".join(_ENCODED_VERTEX_KEY[i : i + 64] for i in range(0, len(_ENCODED_VERTEX_KEY), 64)), id="wrapped"),
+        ],
+    )
+    def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, encoded, caplog):
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="is base64-encoded JSON") as exc_info:
+                VertexBase().load_auth(credentials=encoded, project_id="p")
+
+        assert _ENCODED_VERTEX_KEY[8:40] not in str(exc_info.value)
+        assert _ENCODED_VERTEX_KEY[8:40] not in caplog.text
+
+    @pytest.mark.parametrize(
+        ("wrapped", "expected"),
+        [
+            pytest.param(
+                json.dumps(json.dumps({"type": "service_account"})),
+                "The `vertex_credentials` value is JSON but not a JSON object, it may be quoted or encoded twice",
+                id="double-encoded",
+            ),
+            pytest.param(
+                "'" + json.dumps({"type": "service_account"}) + "'",
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="single-quoted",
+            ),
+            pytest.param(
+                "\ufeff" + json.dumps({"type": "service_account"}),
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="byte-order-mark",
+            ),
+        ],
+    )
+    def test_wrapped_inline_json_is_reported_as_inline_not_as_a_file(self, wrapped, expected):
+        with pytest.raises(ValueError, match=expected):
+            VertexBase().load_auth(credentials=wrapped, project_id="p")
+
+    @pytest.mark.parametrize("empty", ["", "  \n"])
+    def test_an_empty_value_is_named_as_empty(self, empty):
+        with pytest.raises(ValueError, match="The `vertex_credentials` value is empty"):
+            VertexBase().load_auth(credentials=empty, project_id="p")
+
+    def test_a_malformed_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
+        (tmp_path / "{vertex}.json").write_text('{"type": "service_account",')
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+
+        assert "'{vertex}.json' is not valid JSON" in caplog.text
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_an_unreadable_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account"}))
+        braced.chmod(0)
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+
+        assert "cannot read the credentials file at '{vertex}.json': Permission denied" in caplog.text
+
+    def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path, caplog):
+        not_text = tmp_path / "vertexai.json"
+        not_text.write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(not_text), project_id="p")
+
+        assert "is not UTF-8 text" in caplog.text
+
+
+def test_get_access_token_reraises_malformed_service_account_credentials_without_caching(caplog):
+    vertex_base: Final = VertexBase()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(google.auth.exceptions.MalformedError):
+            vertex_base.get_access_token(
+                credentials=json.dumps({"type": "service_account", "project_id": "project-1"}),
+                project_id="project-1",
+            )
+
+    assert vertex_base._credentials_project_mapping == {}
+    assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
+        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
+    ]

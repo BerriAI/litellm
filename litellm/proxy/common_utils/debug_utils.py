@@ -8,7 +8,7 @@ import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -21,6 +21,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_environment_report
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 router: Final = APIRouter()
 
@@ -127,6 +130,13 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         return {"top_50_memory_usage": result}
 
 
+def _prompt_caching_pins(llm_router: "Router | None") -> tuple[Mapping[str, object], Mapping[str, float]]:
+    if llm_router is None:
+        return {}, {}
+    pin_cache: Final = llm_router.prompt_caching_pin_cache.in_memory_cache
+    return pin_cache.cache_dict, pin_cache.ttl_dict
+
+
 @router.get("/memory-usage-in-mem-cache", include_in_schema=False)
 async def memory_usage_in_mem_cache(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -151,6 +161,9 @@ async def memory_usage_in_mem_cache(
             llm_router.cache.in_memory_cache.ttl_dict
         )
 
+    pin_entries, pin_expiries = _prompt_caching_pins(llm_router)
+    num_items_in_prompt_caching_pin_cache: Final = len(pin_entries) + len(pin_expiries)
+
     num_items_in_user_api_key_cache: Final = (
         len(user_api_key_cache.in_memory_cache.cache_dict)
         + len(user_api_key_cache.in_memory_cache.ttl_dict)
@@ -165,6 +178,7 @@ async def memory_usage_in_mem_cache(
     return {
         "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
         "num_items_in_llm_router_cache": num_items_in_llm_router_cache,
+        "num_items_in_prompt_caching_pin_cache": num_items_in_prompt_caching_pin_cache,
         "num_items_in_proxy_logging_obj_cache": num_items_in_proxy_logging_obj_cache,
     }
 
@@ -186,20 +200,17 @@ async def memory_usage_in_mem_cache_items(
         user_api_key_cache,
     )
 
-    if llm_router is None:
-        llm_router_in_memory_cache_dict = {}
-        llm_router_in_memory_ttl_dict = {}
-    else:
-        llm_router_in_memory_cache_dict = llm_router.cache.in_memory_cache.cache_dict
-        llm_router_in_memory_ttl_dict = llm_router.cache.in_memory_cache.ttl_dict
+    pin_entries, pin_expiries = _prompt_caching_pins(llm_router)
 
     return {
         "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
         "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
         "user_key_object_cache": user_api_key_cache.key_object_cache.in_memory_cache.cache_dict,
         "user_key_object_ttl": user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict,
-        "llm_router_cache": llm_router_in_memory_cache_dict,
-        "llm_router_ttl": llm_router_in_memory_ttl_dict,
+        "llm_router_cache": {} if llm_router is None else llm_router.cache.in_memory_cache.cache_dict,
+        "llm_router_ttl": {} if llm_router is None else llm_router.cache.in_memory_cache.ttl_dict,
+        "prompt_caching_pin_cache": pin_entries,
+        "prompt_caching_pin_ttl": pin_expiries,
         "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict,
         "proxy_logging_obj_ttl": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.ttl_dict,
     }
@@ -318,7 +329,7 @@ def _summary_process_memory(process: _ProcessHandle | None) -> tuple[_SummaryPro
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Get simplified memory usage summary for the proxy.
 
@@ -331,7 +342,7 @@ async def get_memory_summary(
     - garbage_collector: GC status and pending object counts
 
     Example usage:
-    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     For detailed analysis, call GET /debug/memory/details
     For cache management, use the cache management endpoints
@@ -363,11 +374,17 @@ async def get_memory_summary(
         # Router cache
         if llm_router is not None:
             router_cache_items: Final = len(llm_router.cache.in_memory_cache.cache_dict)
-            total_cache_items += router_cache_items
+            pin_cache_items: Final = len(_prompt_caching_pins(llm_router)[0])
+            total_cache_items += router_cache_items + pin_cache_items
             caches["llm_responses"] = {
                 "count": router_cache_items,
                 "count_readable": f"{router_cache_items:,}",
                 "what_it_stores": "LLM responses for identical requests",
+            }
+            caches["prompt_caching_pins"] = {
+                "count": pin_cache_items,
+                "count_readable": f"{pin_cache_items:,}",
+                "what_it_stores": "Deployment pins for cached prompt prefixes",
             }
 
         # Proxy logging cache
@@ -482,7 +499,7 @@ def _get_uncollectable_objects_info() -> Mapping[str, object]:
 
 
 def _get_cache_memory_stats(
-    user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache
+    user_api_key_cache, llm_router: "Router | None", proxy_logging_obj, redis_usage_cache
 ) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
     cache_stats: Final[dict[str, object]] = {}
@@ -512,6 +529,15 @@ def _get_cache_memory_stats(
                 "cache_dict_size_bytes": router_cache_size,
                 "ttl_dict_size_bytes": router_ttl_size,
                 "total_size_mb": round((router_cache_size + router_ttl_size) / (1024 * 1024), 2),
+            }
+            pin_entries, pin_expiries = _prompt_caching_pins(llm_router)
+            pin_cache_size: Final = sys.getsizeof(pin_entries)
+            pin_ttl_size: Final = sys.getsizeof(pin_expiries)
+            cache_stats["prompt_caching_pin_cache"] = {
+                "num_items": len(pin_entries),
+                "cache_dict_size_bytes": pin_cache_size,
+                "ttl_dict_size_bytes": pin_ttl_size,
+                "total_size_mb": round((pin_cache_size + pin_ttl_size) / (1024 * 1024), 2),
             }
 
         # Proxy logging cache
@@ -674,7 +700,7 @@ async def get_memory_details(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
     top_n: int = Query(20, description="Number of top object types to return"),
     include_process_info: bool = Query(True, description="Include process memory info"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Get detailed memory diagnostics for deep debugging.
 
@@ -692,7 +718,7 @@ async def get_memory_details(
     - include_process_info: Include process-level memory info using psutil (default: true)
 
     Example usage:
-    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     All memory sizes are reported in both bytes and MB.
     """
@@ -734,7 +760,7 @@ async def configure_gc_thresholds_endpoint(
     generation_0: int = Query(700, description="Generation 0 threshold (default: 700)"),
     generation_1: int = Query(10, description="Generation 1 threshold (default: 10)"),
     generation_2: int = Query(10, description="Generation 2 threshold (default: 10)"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Configure Python garbage collection thresholds.
 
@@ -754,10 +780,10 @@ async def configure_gc_thresholds_endpoint(
     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
 
     Example for more aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     Example for less aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     Monitor memory usage with GET /debug/memory/summary after changes.
     """
@@ -796,7 +822,7 @@ async def get_debug_report(
     Nothing from the operator's config values, request data, or errors
 
     Example usage:
-    curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+    curl http://localhost:4000/debug/report -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     """
     if not is_proxy_admin(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can read /debug/report")

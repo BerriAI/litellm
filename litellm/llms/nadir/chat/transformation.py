@@ -35,7 +35,7 @@ def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
 
 class NadirConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: return type fixed by the base interface
-        return list(_SUPPORTED_OPENAI_PARAMS)  # mutable-ok: the base interface returns a list
+        return list(_SUPPORTED_OPENAI_PARAMS)
 
     def transform_response(
         self,

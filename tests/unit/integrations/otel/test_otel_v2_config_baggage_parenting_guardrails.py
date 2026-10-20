@@ -11,6 +11,8 @@
 """
 
 import asyncio
+import logging
+from typing import Final
 
 import pytest
 
@@ -22,17 +24,18 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 
 from litellm.integrations.otel import LiteLLM, OpenTelemetryV2Config  # noqa: E402
-from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.baggage import (  # noqa: E402
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
 )
-from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.model.config import excluded_db_systems_from  # noqa: E402
 from litellm.integrations.otel.model.payloads import GuardrailSpanData  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
 )
+from litellm.integrations.otel.plumbing import providers  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Area 1 — baggage allowlists configurable
@@ -74,13 +77,11 @@ def test_baggage_keys_from_config_yaml_kwargs():
 
 
 def test_baggage_processor_allowlist_uses_config_keys():
-    cfg = OpenTelemetryV2Config(
-        exporter="in_memory", baggage_promoted_keys=[LiteLLM.TEAM_ID]
-    )
+    cfg = OpenTelemetryV2Config(exporter="in_memory", baggage_promoted_keys=[LiteLLM.TEAM_ID])
     provider, exporter = providers.in_memory_provider(cfg)
-    from litellm.integrations.otel.plumbing import context as ctx_mod
     from litellm.integrations.otel.emitter import SpanEmitter
     from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.plumbing import context as ctx_mod
 
     engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg)
     ctx = ctx_mod.set_request_baggage({LiteLLM.TEAM_ID: "t1", LiteLLM.TEAM_ALIAS: "ta"})
@@ -88,6 +89,123 @@ def test_baggage_processor_allowlist_uses_config_keys():
     (span,) = exporter.get_finished_spans()
     assert span.attributes.get(LiteLLM.TEAM_ID) == "t1"
     assert LiteLLM.TEAM_ALIAS not in span.attributes  # not in this allowlist
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        (["redis"], frozenset({"redis"})),
+        (["postgres"], frozenset({"postgresql"})),
+        (["postgresql"], frozenset({"postgresql"})),
+        (["batch_write_to_db"], frozenset({"postgresql"})),
+        (["redis_spend_update_queue"], frozenset({"redis"})),
+        (["redis", "postgres"], frozenset({"redis", "postgresql"})),
+    ],
+)
+def test_excluded_services_normalize_to_db_system_names(given, expected):
+    assert OpenTelemetryV2Config(excluded_services=given).excluded_services == expected
+
+
+def test_excluded_services_from_env_csv(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis, postgres")
+    assert OpenTelemetryV2Config().excluded_services == frozenset({"redis", "postgresql"})
+
+
+@pytest.mark.parametrize("name", ["EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"])
+def test_a_bare_excluded_services_env_var_is_ignored(monkeypatch, name):
+    for env_name in ("LITELLM_OTEL_EXCLUDED_SERVICES", "EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv(name, "redis,postgres")
+    assert OpenTelemetryV2Config().excluded_services == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("set_env_name", "env_value", "case_sensitive", "env_ignore_empty", "env_parse_none_str"),
+    [
+        pytest.param("otel_service_name", "lower", True, False, None, id="case-sensitive"),
+        pytest.param("OTEL_SERVICE_NAME", "", False, True, None, id="ignore-empty"),
+        pytest.param("OTEL_ENDPOINT", "null", False, False, "null", id="parse-none"),
+        pytest.param("excluded_services", "redis", True, False, None, id="bare-exclusion"),
+    ],
+)
+def test_env_source_preserves_runtime_options(
+    monkeypatch: pytest.MonkeyPatch,
+    set_env_name: str,
+    env_value: str,
+    case_sensitive: bool,
+    env_ignore_empty: bool,
+    env_parse_none_str: str | None,
+) -> None:
+    for env_name in (
+        "OTEL_SERVICE_NAME",
+        "otel_service_name",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "LITELLM_OTEL_EXCLUDED_SERVICES",
+        "EXCLUDED_SERVICES",
+        "excluded_services",
+        "Excluded_Services",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv(set_env_name, env_value)
+    config: Final = OpenTelemetryV2Config(
+        _case_sensitive=case_sensitive,
+        _env_ignore_empty=env_ignore_empty,
+        _env_parse_none_str=env_parse_none_str,
+    )
+    assert config.service_name == "litellm"
+    assert config.endpoint is None
+    assert config.excluded_services == frozenset()
+
+
+def test_the_documented_env_var_wins_over_a_bare_excluded_services(monkeypatch):
+    for env_name in ("LITELLM_OTEL_EXCLUDED_SERVICES", "EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("EXCLUDED_SERVICES", "postgres")
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
+    assert OpenTelemetryV2Config().excluded_services == frozenset({"redis"})
+
+
+def test_excluded_services_config_wins_over_env(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
+    assert OpenTelemetryV2Config(excluded_services=["postgres"]).excluded_services == frozenset({"postgresql"})
+
+
+def test_excluded_services_drops_a_non_datastore_service_and_logs(caplog):
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        config = OpenTelemetryV2Config(excluded_services=["auth", "redis"])
+    assert config.excluded_services == frozenset({"redis"})
+    assert any("'auth' is not a datastore service; ignored" in record.message for record in caplog.records)
+
+
+def test_excluded_services_env_drops_a_bad_value_and_logs(monkeypatch, caplog):
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "auth,postgres")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        config = OpenTelemetryV2Config()
+    assert config.excluded_services == frozenset({"postgresql"})
+    assert any("'auth' is not a datastore service; ignored" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "given,expected,logged",
+    [
+        (None, frozenset(), None),
+        ("", frozenset(), None),
+        ([], frozenset(), None),
+        (["REDIS", " Postgres "], frozenset({"redis", "postgresql"}), None),
+        (7, frozenset(), "excluded_services must be a list or comma-separated string; 7 ignored"),
+        ({"redis": True}, frozenset(), "excluded_services must be a list or comma-separated string"),
+        ([7, "redis"], frozenset({"redis"}), "excluded_services must be a list of service names; 7 ignored"),
+    ],
+)
+def test_malformed_excluded_services_logs_and_still_builds_the_config(given, expected, logged, caplog):
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        config = OpenTelemetryV2Config(excluded_services=given)
+        resolved = excluded_db_systems_from(given)
+    assert config.excluded_services == expected
+    assert resolved == expected
+    messages = [record.message for record in caplog.records]
+    assert (logged is None and messages == []) or any(logged in message for message in messages), messages
 
 
 # --------------------------------------------------------------------------- #
@@ -124,9 +242,7 @@ def test_passthrough_llm_span_parents_to_ambient_server_span():
     later (possibly detached) success callback only closes the already-parented
     span, so it never becomes a separate root trace."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     kwargs = {
         "standard_logging_object": _payload(),
         "litellm_params": {"metadata": {}},
@@ -150,9 +266,7 @@ def test_llm_span_unaffected_by_phase_span_active_at_close():
     successor to the old auth-failure-401 case where the LLM log nested under
     ``auth``: the span is now born after auth, parented to the request root."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     kwargs = {
         "standard_logging_object": _payload(),
         "litellm_params": {"metadata": {}},

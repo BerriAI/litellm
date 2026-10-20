@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound=BaseModel)
 
+from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
+
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 
 

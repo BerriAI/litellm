@@ -20,8 +20,14 @@ class EnterpriseCustomGuardrailHelper:
           the tag's value (the mode for that tag).
         - If no request tag matches, fall back to default mode(s).
         """
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
+        )
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
+        )
+        from litellm.router_strategy.tag_based_routing import (
+            without_baggage_mapped_tags,
         )
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
@@ -36,9 +42,13 @@ class EnterpriseCustomGuardrailHelper:
 
         proxy_server_request = data.get("proxy_server_request", {})
 
-        request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            litellm_params=data,
-            proxy_server_request=proxy_server_request,
+        request_tags = without_baggage_mapped_tags(
+            StandardLoggingPayloadSetup.get_request_tags(
+                litellm_params=data,
+                proxy_server_request=proxy_server_request,
+            ),
+            data.get(get_metadata_variable_name_from_kwargs(data)),
+            keep_serving_deployment_tags=True,
         )
 
         # Check if any request tag matches a Mode tag key

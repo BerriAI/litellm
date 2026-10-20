@@ -2,6 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 from typing_extensions import (
+    NotRequired,
     ReadOnly,
     Required,
     TypedDict,
@@ -82,3 +83,4 @@ class DatabricksResponse(TypedDict):
     model: str
     choices: list[DatabricksChoice]
     usage: ChatCompletionUsageBlock
+    system_fingerprint: NotRequired[ReadOnly[str | None]]

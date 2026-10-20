@@ -2,6 +2,7 @@ import { uiHref } from "@/utils/uiHref";
 
 const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
   Object.entries({
+    home: "home",
     "api-keys": "api-keys",
     models: "models-and-endpoints",
     api_ref: "api-reference",
@@ -28,7 +29,9 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     "cost-tracking": "cost-tracking",
     "transform-request": "transform-request",
     "ui-theme": "ui-theme",
+    telemetry: "telemetry",
     logs: "logs",
+    lens: "lens",
     "admin-panel": "admin-panel",
     "logging-and-alerts": "logging-and-alerts",
     "model-hub-table": "model-hub-table",

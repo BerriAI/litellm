@@ -49,21 +49,12 @@ class IdentityHistoryKey(TypedDict):
     client_id: ReadOnly[str]
 
 
-class IdentityHistoryWhere(TypedDict):
-    provider_tenant_id_client_id: ReadOnly[IdentityHistoryKey]
-
-
 class IdentityHistoryEntry(IdentityHistoryKey):
     issuer: ReadOnly[str]
 
 
-class IdentityHistoryConnect(TypedDict):
-    where: ReadOnly[IdentityHistoryWhere]
-    create: ReadOnly[IdentityHistoryEntry]
-
-
 class IdentityHistoryWrite(TypedDict):
-    connectOrCreate: ReadOnly[IdentityHistoryConnect]
+    create: ReadOnly[IdentityHistoryEntry]
 
 
 class ManagedWriteFields(TypedDict, total=False):
@@ -161,20 +152,11 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
     }
     result: Final[ManagedWriteFields] = {
         "retired_identities": {
-            "connectOrCreate": {
-                "where": {
-                    "provider_tenant_id_client_id": {
-                        "provider": identity.provider,
-                        "tenant_id": identity.tenant_id,
-                        "client_id": identity.client_id,
-                    }
-                },
-                "create": {
-                    "provider": identity.provider,
-                    "issuer": identity.issuer,
-                    "tenant_id": identity.tenant_id,
-                    "client_id": identity.client_id,
-                },
+            "create": {
+                "provider": identity.provider,
+                "issuer": identity.issuer,
+                "tenant_id": identity.tenant_id,
+                "client_id": identity.client_id,
             }
         },
         "identity_managed": True,
