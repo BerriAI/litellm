@@ -892,12 +892,13 @@ def test_openai_handler_repairs_github_copilot_empty_choices(mock_request, mock_
 
 def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
     config = GithubCopilotConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-github-oauth-token")
+    session = GithubCopilotUserSession(token="user-github-oauth-token", endpoints=github_host_endpoints("github.com"))
     headers = config.validate_environment(
         headers={"Authorization": "Bearer caller-token"},
         model="github_copilot/gpt-4o",

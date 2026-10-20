@@ -1,4 +1,3 @@
-import re
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
@@ -20,6 +19,12 @@ from litellm.proxy._experimental.mcp_server.utils import (
     strip_known_server_prefix,
 )
 from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
+from litellm.responses.mcp.tool_precheck import (
+    LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
+    may_name_litellm_mcp_gateway,
+    names_gateway_explicitly,
+    proxy_path_mcp_name,
+)
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -63,29 +68,6 @@ class MCPToolResult(TypedDict):
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
     pass
-
-
-LITELLM_PROXY_MCP_SERVER_URL: Final = "litellm_proxy"
-LITELLM_PROXY_MCP_SERVER_URL_PREFIX: Final = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
-
-_PROXY_MCP_PATH_RE: Final = re.compile(r"^https?://.+/mcp/([^/]+)$")
-
-
-def _mcp_server_url(tool: ToolParam) -> str | None:
-    if not isinstance(tool, dict) or tool.get("type") != "mcp":
-        return None
-    server_url: Final = tool.get("server_url")
-    return server_url if isinstance(server_url, str) else None
-
-
-def _names_gateway_explicitly(tool: ToolParam) -> bool:
-    return (_mcp_server_url(tool) or "").startswith(LITELLM_PROXY_MCP_SERVER_URL)
-
-
-def _proxy_path_mcp_name(tool: ToolParam) -> str | None:
-    server_url: Final = _mcp_server_url(tool)
-    match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)
-    return None if match is None else match.group(1)
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
@@ -133,7 +115,7 @@ async def _gateway_served_names(
 async def _served_mcp_path_names(
     tools: Collection[ToolParam], served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]]
 ) -> frozenset[str]:
-    names: Final = frozenset(name for name in map(_proxy_path_mcp_name, tools) if name is not None)
+    names: Final = frozenset(name for name in map(proxy_path_mcp_name, tools) if name is not None)
     return await served_names(names) if names else frozenset[str]()
 
 
@@ -162,17 +144,15 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def should_use_litellm_mcp_gateway(tools: Iterable[ToolParam] | None) -> bool:
-        """True when a tool may name this gateway: server_url "litellm_proxy..." or an http(s) URL ending in
-        /mcp/<name>. `_split_mcp_tools` then settles which of the latter the gateway actually serves."""
-        return any(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) is not None for tool in tools or ())
+        return may_name_litellm_mcp_gateway(tools)
 
     _should_use_litellm_mcp_gateway = should_use_litellm_mcp_gateway
 
     @staticmethod
     def _parse_mcp_tools(tools: Iterable[Mapping[str, object]] | None) -> SplitTools:
         items: Final = tuple(tools or ())
-        gateway_tools: Final[list[ToolParam]] = [tool for tool in items if _names_gateway_explicitly(tool)]
-        other_tools: Final[list[ToolParam]] = [tool for tool in items if not _names_gateway_explicitly(tool)]
+        gateway_tools: Final[list[ToolParam]] = [tool for tool in items if names_gateway_explicitly(tool)]
+        other_tools: Final[list[ToolParam]] = [tool for tool in items if not names_gateway_explicitly(tool)]
         return gateway_tools, other_tools
 
     @staticmethod
@@ -185,7 +165,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
             [
                 {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"}
-                if (name := _proxy_path_mcp_name(tool)) in served
+                if (name := proxy_path_mcp_name(tool)) in served
                 else tool
                 for tool in items
             ]
@@ -201,7 +181,7 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> tuple[bool, ...]:
         items: Final = tuple(tools or ())
         served: Final = await _served_mcp_path_names(items, served_names)
-        return tuple(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) in served for tool in items)
+        return tuple(names_gateway_explicitly(tool) or proxy_path_mcp_name(tool) in served for tool in items)
 
     @staticmethod
     async def _apply_toolset_permissions(
@@ -793,9 +773,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 ]
                 tool_logging_call_id = (
-                    f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}"
-                    if request_trace_id and litellm_call_id
-                    else litellm_call_id or str(uuid.uuid4())
+                    f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}" if litellm_call_id else str(uuid.uuid4())
                 )
                 logging_metadata: dict[str, object] = {
                     "tool_call_id": tool_call_id,

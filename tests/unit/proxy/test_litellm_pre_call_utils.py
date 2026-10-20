@@ -3330,9 +3330,7 @@ def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_se
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
-@pytest.mark.parametrize(
-    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
-)
+@pytest.mark.parametrize("session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"])
 @pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
@@ -4754,6 +4752,43 @@ async def test_add_guardrails_from_policy_engine():
     policy_registry._initialized = False
     attachment_registry._attachments = []
     attachment_registry._initialized = False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_tags,inherited_tags,expected_guardrails",
+    [((), (), []), (("usecase:a",), (), ["usecase_guard"]), ((), ("usecase:a",), ["usecase_guard"])],
+)
+async def test_baggage_mapped_tags_match_tag_policies_only_when_the_caller_or_key_asked_for_them(
+    caller_tags, inherited_tags, expected_guardrails
+):
+    from typing import cast
+
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"model": "gpt-4", "metadata": {"tags": [], "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    data["metadata"]["caller_tags"] = caller_tags
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {"usecase": Policy(guardrails=PolicyGuardrails(add=["usecase_guard"]))}
+    policy_registry._initialized = True
+    attachment_registry._attachments = [PolicyAttachment(policy="usecase", tags=["usecase:a"])]
+    attachment_registry._initialized = True
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+    assert "usecase:a" in data["metadata"]["tags"]
+    assert data["metadata"].get("guardrails", []) == expected_guardrails
 
 
 def test_match_and_track_policies_preserves_attachment_and_request_body_order():
@@ -7181,6 +7216,76 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         assert value not in logged
 
 
+_SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_forwarded_x_api_key_holding_an_oidc_reference():
+    """A forwarded provider key lands in api_key after auth, so the body check cannot see it and a client could get
+    the proxy to read its own service account token for the call."""
+    from fastapi import HTTPException
+
+    request_mock = _make_request_mock(
+        "/v1/messages",
+        {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            "x-api-key": _SERVICE_ACCOUNT_TOKEN_REFERENCE,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_model_config_credential_holding_an_oidc_reference(monkeypatch):
+    """Team and project metadata are written by non-admins, so a model_config naming a credential whose api_key is an
+    oidc/ reference must not get that reference resolved for a deployment the team controls."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(litellm, "enable_model_config_credential_overrides", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_info={},
+                credential_values={"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            )
+        ],
+    )
+    team_key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-1",
+        team_metadata={"model_config": {"azure/gpt-4o": {"azure": {"litellm_credentials": "admin-oidc"}}}},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "azure/gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+            user_api_key_dict=team_key,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
 @pytest.mark.parametrize(
     "header, expected_redacted",
     [
@@ -8175,6 +8280,7 @@ _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
+    "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
@@ -8209,6 +8315,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+    assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
@@ -9240,7 +9347,9 @@ class TestResolveUserProviderCredentials:
             llm_router=self._router(),
         )
 
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
@@ -9697,7 +9806,9 @@ class TestResolveUserProviderCredentials:
             team_id=None,
             llm_router=router,
         )
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
 
@@ -10183,7 +10294,8 @@ async def test_secret_fields_user_provider_credentials_repr_hides_tokens(monkeyp
     assert isinstance(credentials, RedactedDict)
     assert "gho_secret" not in str(data)
     assert "gho_secret" not in repr(credentials)
-    assert credentials["copilot-cred"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio
@@ -10197,8 +10309,10 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10237,7 +10351,8 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"], f"header-mapped user-b must never reach the token loader: {called_user_ids}"
     credentials = updated["secret_fields"]["user_provider_credentials"]
-    assert credentials["copilot-cred"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
     assert updated["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
 
@@ -10250,8 +10365,10 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10287,4 +10404,114 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
 
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
-    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["github_host"] == "github.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/v1/rerank"])
+async def test_raw_body_inference_keeps_authenticated_baggage_tags_for_spend(route):
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model","metadata":{"tags":["existing"]}}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    reparsed = json.loads(await request.body())
+    enriched = await add_litellm_data_to_request(
+        data=reparsed,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert "usecase:a" in enriched["metadata"]["tags"]
+    assert "existing" in enriched["metadata"]["tags"]
+    assert "usecase:a" not in enriched["metadata"]["inherited_tags"]
+    assert enriched["metadata"]["tags"].count("usecase:a") == 1
+
+
+async def _string_tags_outcome(baggage_headers: tuple[tuple[bytes, bytes], ...]) -> str:
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model","metadata":{"tags":"client-tag"}}'}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), *baggage_headers],
+        },
+        receive,
+    )
+    admitted: Final = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "tenant", "tag_prefix": "tenant:"}]},
+        None,
+        MagicMock(),
+    )
+    try:
+        enriched: Final = await add_litellm_data_to_request(
+            data=json.loads(await request.body()),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+            proxy_config=ProxyConfig(),
+            general_settings={},
+        )
+    except Exception as error:
+        return type(error).__name__
+    return repr(enriched["metadata"].get("tags"))
+
+
+@pytest.mark.asyncio
+async def test_string_metadata_tags_get_the_same_outcome_with_or_without_mapped_baggage():
+    without_baggage: Final = await _string_tags_outcome(())
+    with_baggage: Final = await _string_tags_outcome(((b"baggage", b"tenant=a"),))
+    assert with_baggage == without_baggage
+
+
+def test_applying_mapped_baggage_tags_again_leaves_the_metadata_unchanged():
+    request: Final = Request({"type": "http", "headers": []})
+    request.state.litellm_baggage_mapped_tags = ("tenant:a",)
+    once: Final[dict[str, object]] = {"metadata": {"tags": ["client-tag"]}}
+    twice: Final[dict[str, object]] = copy.deepcopy(once)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, once)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, twice)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, twice)
+    assert twice == once
+
+
+def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
+    request: Final = Request({"type": "http", "headers": []})
+    request.state.litellm_baggage_mapped_tags = ("tenant:a",)
+    data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]

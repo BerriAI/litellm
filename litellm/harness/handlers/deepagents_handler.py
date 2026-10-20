@@ -183,7 +183,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
                 break
             resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
             for interrupt in state.interrupts:
-                decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
+                decisions: list[dict[str, str]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
                     approval = Approval(
                         tool=normalized_tool_name(str(request.get("name") or "")),

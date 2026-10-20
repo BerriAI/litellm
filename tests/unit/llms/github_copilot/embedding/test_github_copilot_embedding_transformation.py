@@ -277,12 +277,13 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     """With a per-user session the Authorization header carries the caller's Copilot token
     and the shared Authenticator is never consulted."""
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
     config = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-copilot-token")
+    session = GithubCopilotUserSession(token="user-copilot-token", endpoints=github_host_endpoints("github.com"))
     headers = config.validate_environment(
         headers={},
         model="github_copilot/text-embedding-3-small",
@@ -297,10 +298,11 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
 @pytest.mark.parametrize("authorization_header", ["Authorization", "authorization", "AUTHORIZATION"])
 def test_per_user_session_token_wins_over_caller_authorization(authorization_header: str):
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
     config = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="user-copilot-token")
+    session = GithubCopilotUserSession(token="user-copilot-token", endpoints=github_host_endpoints("github.com"))
     headers = config.validate_environment(
         headers={authorization_header: "Bearer caller-token", "x-custom": "preserved"},
         model="github_copilot/text-embedding-3-small",
@@ -321,11 +323,12 @@ def test_get_complete_url_with_per_user_session_ignores_the_deployment_base(
     monkeypatch: pytest.MonkeyPatch, deployment_base: str | None
 ) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
     monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "http://localhost:8080/")
     config: Final = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
-    session: Final = GithubCopilotUserSession(token="user-oauth-token")
+    session: Final = GithubCopilotUserSession(token="user-oauth-token", endpoints=github_host_endpoints("github.com"))
     url: Final = config.get_complete_url(
         api_base=deployment_base,
         api_key=None,

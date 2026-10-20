@@ -21,7 +21,10 @@ from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+from .github_host import GithubHostEndpoints, github_host_endpoints
 
 COPILOT_VERSION: Final = "0.26.7"
 EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
@@ -29,7 +32,6 @@ USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 _GITHUB_API_HOST: Final = "api.github.com"
-_COPILOT_USER_URL: Final = f"https://{_GITHUB_API_HOST}/copilot_internal/user"
 _PLAN_API_BASE_TTL_SECONDS: Final = 3600
 _PLAN_API_BASE_RETRY_SECONDS: Final = 60
 _PLAN_API_BASE_TIMEOUT_SECONDS: Final = 10.0
@@ -202,9 +204,9 @@ def _is_valid_api_base(api_base: str) -> bool:
     )
 
 
-def _reject_enterprise_token_exchange_url() -> None:
+def _reject_enterprise_token_exchange_url(endpoints: GithubHostEndpoints) -> None:
     api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL")
-    if api_key_url and _hostname(api_key_url) != _GITHUB_API_HOST:
+    if endpoints.host == GITHUB_COPILOT_DEFAULT_HOST and api_key_url and _hostname(api_key_url) != _GITHUB_API_HOST:
         raise InvalidAPIBaseError(
             status_code=500,
             message=(
@@ -214,14 +216,14 @@ def _reject_enterprise_token_exchange_url() -> None:
         )
 
 
-def _configured_copilot_api_base_source(api_base: str | None) -> tuple[str, str | None]:
-    return ("api_base", api_base) if api_base else ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE"))
+def _configured_copilot_api_base_source(api_base: str | None, endpoints: GithubHostEndpoints) -> tuple[str, str | None]:
+    return ("api_base", api_base) if api_base else ("GITHUB_COPILOT_API_BASE", endpoints.configured_copilot_api_base)
 
 
-def _configured_copilot_api_base(api_base: str | None) -> str | None:
-    source, configured_api_base = _configured_copilot_api_base_source(api_base)
+def _configured_copilot_api_base(api_base: str | None, endpoints: GithubHostEndpoints) -> str | None:
+    source, configured_api_base = _configured_copilot_api_base_source(api_base, endpoints)
     if not configured_api_base:
-        _reject_enterprise_token_exchange_url()
+        _reject_enterprise_token_exchange_url(endpoints)
         return None
     if not _is_valid_api_base(configured_api_base):
         raise InvalidAPIBaseError(
@@ -231,7 +233,7 @@ def _configured_copilot_api_base(api_base: str | None) -> str | None:
     return configured_api_base
 
 
-def _trusted_plan_api_base(endpoints_api: object) -> str | None:
+def _trusted_plan_api_base(endpoints_api: object, endpoints: GithubHostEndpoints) -> str | None:
     if not isinstance(endpoints_api, str) or not _is_valid_api_base(endpoints_api):
         return None
     try:
@@ -240,23 +242,24 @@ def _trusted_plan_api_base(endpoints_api: object) -> str | None:
     except ValueError:
         return None
     hostname: Final = (parsed.hostname or "").lower()
-    is_copilot_host: Final = parsed.scheme.lower() == "https" and hostname.endswith(".githubcopilot.com")
+    is_copilot_host: Final = parsed.scheme.lower() == "https" and endpoints.is_copilot_api_host(hostname)
     return endpoints_api.rstrip("/") if is_copilot_host and port in (None, 443) else None
 
 
-def _plan_api_base_from(response: httpx.Response) -> tuple[str, int]:
+def _plan_api_base_from(response: httpx.Response, endpoints: GithubHostEndpoints) -> tuple[str, int]:
     if not response.is_success:
-        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
+        return endpoints.default_copilot_api_base, _PLAN_API_BASE_RETRY_SECONDS
     try:
-        endpoints: Final = _COPILOT_USER.validate_python(response.json()).get("endpoints")
+        plan_endpoints: Final = _COPILOT_USER.validate_python(response.json()).get("endpoints")
     except ValueError:
-        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
-    endpoints_api: Final = endpoints.get("api") if endpoints is not None else None
-    return _trusted_plan_api_base(endpoints_api) or DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_TTL_SECONDS
+        return endpoints.default_copilot_api_base, _PLAN_API_BASE_RETRY_SECONDS
+    endpoints_api: Final = plan_endpoints.get("api") if plan_endpoints is not None else None
+    trusted_api_base: Final = _trusted_plan_api_base(endpoints_api, endpoints)
+    return trusted_api_base or endpoints.default_copilot_api_base, _PLAN_API_BASE_TTL_SECONDS
 
 
-def _plan_api_base_key(github_token: str) -> str:
-    return hashlib.sha256(github_token.encode()).hexdigest()
+def _plan_api_base_key(github_token: str, endpoints: GithubHostEndpoints) -> str:
+    return hashlib.sha256(f"{endpoints.host}\x00{github_token}".encode()).hexdigest()
 
 
 def _cached_plan_api_base(key: str) -> str | None:
@@ -269,27 +272,29 @@ def _remember_plan_api_base(key: str, resolved: tuple[str, int]) -> None:
     _PLAN_API_BASES.set_cache(key, api_base, ttl=ttl)
 
 
-def _plan_api_base_is_needed(github_token: str, api_base: str | None) -> bool:
+def _plan_api_base_is_needed(github_token: str, api_base: str | None, endpoints: GithubHostEndpoints) -> bool:
     return (
-        _configured_copilot_api_base(api_base) is None
-        and _cached_plan_api_base(_plan_api_base_key(github_token)) is None
+        _configured_copilot_api_base(api_base, endpoints) is None
+        and _cached_plan_api_base(_plan_api_base_key(github_token, endpoints)) is None
     )
 
 
-def _lookup_plan_api_base(github_token: str) -> tuple[str, int]:
+def _lookup_plan_api_base(github_token: str, endpoints: GithubHostEndpoints) -> tuple[str, int]:
     import litellm
 
     client: Final = cast(_SyncGetClient, litellm.module_level_client)  # cast-ok: pins the untyped client
     try:
         response: Final = client.get(
-            _COPILOT_USER_URL, headers=get_copilot_auth_headers(github_token), timeout=_PLAN_API_BASE_TIMEOUT_SECONDS
+            endpoints.copilot_user_url,
+            headers=get_copilot_auth_headers(github_token),
+            timeout=_PLAN_API_BASE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError:
-        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
-    return _plan_api_base_from(response)
+        return endpoints.default_copilot_api_base, _PLAN_API_BASE_RETRY_SECONDS
+    return _plan_api_base_from(response, endpoints)
 
 
-async def _alookup_plan_api_base(github_token: str) -> tuple[str, int]:
+async def _alookup_plan_api_base(github_token: str, endpoints: GithubHostEndpoints) -> tuple[str, int]:
     from litellm.llms.custom_httpx import http_handler
 
     client: Final = cast(  # cast-ok: pins the untyped client factory to the local Protocol
@@ -297,20 +302,31 @@ async def _alookup_plan_api_base(github_token: str) -> tuple[str, int]:
     )("github_copilot")
     try:
         response: Final = await client.get(
-            _COPILOT_USER_URL, headers=get_copilot_auth_headers(github_token), timeout=_PLAN_API_BASE_TIMEOUT_SECONDS
+            endpoints.copilot_user_url,
+            headers=get_copilot_auth_headers(github_token),
+            timeout=_PLAN_API_BASE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError:
-        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
-    return _plan_api_base_from(response)
+        return endpoints.default_copilot_api_base, _PLAN_API_BASE_RETRY_SECONDS
+    return _plan_api_base_from(response, endpoints)
 
 
-def prefetch_copilot_plan_api_base(github_token: str, api_base: str | None = None) -> None:
-    if _plan_api_base_is_needed(github_token, api_base):
-        _remember_plan_api_base(_plan_api_base_key(github_token), _lookup_plan_api_base(github_token))
+def _default_host_endpoints() -> GithubHostEndpoints:
+    return github_host_endpoints(GITHUB_COPILOT_DEFAULT_HOST)
 
 
-async def _alookup_and_remember_plan_api_base(key: str, github_token: str) -> None:
-    _remember_plan_api_base(key, await _alookup_plan_api_base(github_token))
+def prefetch_copilot_plan_api_base(
+    github_token: str, api_base: str | None = None, endpoints: GithubHostEndpoints | None = None
+) -> None:
+    host_endpoints: Final = endpoints or _default_host_endpoints()
+    if _plan_api_base_is_needed(github_token, api_base, host_endpoints):
+        _remember_plan_api_base(
+            _plan_api_base_key(github_token, host_endpoints), _lookup_plan_api_base(github_token, host_endpoints)
+        )
+
+
+async def _alookup_and_remember_plan_api_base(key: str, github_token: str, endpoints: GithubHostEndpoints) -> None:
+    _remember_plan_api_base(key, await _alookup_plan_api_base(github_token, endpoints))
 
 
 def _forget_plan_api_base_lookup(key: str, lookup: "asyncio.Task[None]") -> None:
@@ -318,34 +334,45 @@ def _forget_plan_api_base_lookup(key: str, lookup: "asyncio.Task[None]") -> None
         _PLAN_API_BASE_LOOKUPS.pop(key, None)
 
 
-def _plan_api_base_lookup(key: str, github_token: str) -> "asyncio.Task[None]":
+def _plan_api_base_lookup(key: str, github_token: str, endpoints: GithubHostEndpoints) -> "asyncio.Task[None]":
     loop: Final = asyncio.get_running_loop()
     in_flight: Final = _PLAN_API_BASE_LOOKUPS.get(key)
     if in_flight is not None and in_flight.get_loop() is loop:
         return in_flight
-    lookup: Final = loop.create_task(_alookup_and_remember_plan_api_base(key, github_token))
+    lookup: Final = loop.create_task(_alookup_and_remember_plan_api_base(key, github_token, endpoints))
     _PLAN_API_BASE_LOOKUPS[key] = lookup
     lookup.add_done_callback(partial(_forget_plan_api_base_lookup, key))
     return lookup
 
 
-async def aprefetch_copilot_plan_api_base(github_token: str, api_base: str | None = None) -> None:
-    if _plan_api_base_is_needed(github_token, api_base):
-        await asyncio.shield(_plan_api_base_lookup(_plan_api_base_key(github_token), github_token))
+async def aprefetch_copilot_plan_api_base(
+    github_token: str, api_base: str | None = None, endpoints: GithubHostEndpoints | None = None
+) -> None:
+    host_endpoints: Final = endpoints or _default_host_endpoints()
+    if _plan_api_base_is_needed(github_token, api_base, host_endpoints):
+        key: Final = _plan_api_base_key(github_token, host_endpoints)
+        await asyncio.shield(_plan_api_base_lookup(key, github_token, host_endpoints))
 
 
-def get_copilot_api_base(api_base: str | None = None, github_token: Callable[[], str | None] | None = None) -> str:
-    configured_api_base: Final = _configured_copilot_api_base(api_base)
+def get_copilot_api_base(
+    api_base: str | None = None,
+    github_token: Callable[[], str | None] | None = None,
+    endpoints: GithubHostEndpoints | None = None,
+) -> str:
+    host_endpoints: Final = endpoints or _default_host_endpoints()
+    configured_api_base: Final = _configured_copilot_api_base(api_base, host_endpoints)
     if configured_api_base is not None:
         return configured_api_base
     token: Final = github_token() if github_token is not None else None
-    plan_api_base: Final = _cached_plan_api_base(_plan_api_base_key(token)) if token else None
-    return plan_api_base or DEFAULT_GITHUB_COPILOT_API_BASE
+    plan_api_base: Final = _cached_plan_api_base(_plan_api_base_key(token, host_endpoints)) if token else None
+    return plan_api_base or host_endpoints.default_copilot_api_base
 
 
-async def aget_copilot_api_base(github_token: str, api_base: str | None = None) -> str:
-    await aprefetch_copilot_plan_api_base(github_token, api_base)
-    return get_copilot_api_base(api_base, lambda: github_token)
+async def aget_copilot_api_base(
+    github_token: str, api_base: str | None = None, endpoints: GithubHostEndpoints | None = None
+) -> str:
+    await aprefetch_copilot_plan_api_base(github_token, api_base, endpoints)
+    return get_copilot_api_base(api_base, lambda: github_token, endpoints)
 
 
 def pin_session_authorization(

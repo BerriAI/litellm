@@ -55,9 +55,9 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
         monitor.assert_complete(state)
         assert_finished(connection, state)
         rss_after: Final = read_rss_everywhere(proxy)
-        assert {r.worker for r in rss_before.readings} == {r.worker for r in rss_after.readings}, (
-            "Gateway workers restarted"
-        )
+        assert {(r.replica, r.hostname) for r in rss_before.readings} == {
+            (r.replica, r.hostname) for r in rss_after.readings
+        }, "Gateway pods replaced during the upgrade"
         observed: Final = Observation(
             records=outcome.records,
             mock_requests=tuple(seen for url in urls for seen in read_mock_requests(url)),

@@ -4,7 +4,6 @@ establish that connection. The shared device login (Authenticator) is never
 touched on the per-user path.
 """
 
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import (
@@ -21,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import (
     GITHUB_COPILOT_AUTH_TYPE_KEY,
+    GITHUB_COPILOT_HOST_KEY,
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
 from litellm.exceptions import (
@@ -31,12 +31,7 @@ from litellm.exceptions import (
     ServiceUnavailableError,
 )
 
-from .authenticator import (
-    DEFAULT_GITHUB_ACCESS_TOKEN_URL,
-    DEFAULT_GITHUB_CLIENT_ID,
-    DEFAULT_GITHUB_DEVICE_CODE_URL,
-    Authenticator,
-)
+from .authenticator import Authenticator
 from .common_utils import (
     aget_copilot_api_base,
     aprefetch_copilot_plan_api_base,
@@ -45,6 +40,7 @@ from .common_utils import (
     get_copilot_default_headers,
     prefetch_copilot_plan_api_base,
 )
+from .github_host import GithubHostEndpoints, github_host_endpoints, normalized_github_host
 
 GITHUB_COPILOT_USER_SESSION_KWARG_KEY: Final = "github_copilot_user_session"
 _LLM_PROVIDER: Final = "github_copilot"
@@ -98,14 +94,15 @@ _GITHUB_USER: Final = TypeAdapter(_GithubUserPayload)
 
 @dataclass(frozen=True, slots=True, repr=False)
 class GithubCopilotUserSession:
-    """A caller's stored GitHub OAuth token, resolved for this request. Only this
-    module constructs it, so ``isinstance`` checks downstream are unforgeable by
-    request JSON."""
+    """A caller's stored GitHub OAuth token plus the GitHub host it belongs to,
+    resolved for this request. Only this module constructs it, so ``isinstance``
+    checks downstream are unforgeable by request JSON."""
 
     token: str = field(repr=False)
+    endpoints: GithubHostEndpoints
 
     def __repr__(self) -> str:
-        return "GithubCopilotUserSession(token=REDACTED)"
+        return f"GithubCopilotUserSession(github_host={self.endpoints.host!r}, token=REDACTED)"
 
     __str__ = __repr__
 
@@ -164,15 +161,30 @@ def _new_async_github_client() -> _AsyncGitHubClient:
     )(_LLM_PROVIDER)
 
 
-async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
+def github_copilot_host_endpoints(credential_name: str) -> GithubHostEndpoints:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    host_raw: Final[object] = (
+        credential.credential_values.get(GITHUB_COPILOT_HOST_KEY) if credential is not None else None
+    )
+    host: Final = normalized_github_host(host_raw)
+    if host is None:
+        raise BadRequestError(
+            message=f"Credential '{credential_name}' has an invalid {GITHUB_COPILOT_HOST_KEY}",
+            llm_provider=_LLM_PROVIDER,
+            model="",
+        )
+    return github_host_endpoints(host)
+
+
+async def astart_device_flow(endpoints: GithubHostEndpoints) -> GithubCopilotDeviceFlowStart:
     client: Final = _new_async_github_client()
-    device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
-    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
         response: Final = await client.post(
-            device_code_url,
+            endpoints.device_code_url,
             headers=get_copilot_auth_headers(),
-            json={"client_id": client_id, "scope": _DEVICE_FLOW_SCOPE},
+            json={"client_id": endpoints.client_id, "scope": _DEVICE_FLOW_SCOPE},
         )
     except httpx.HTTPStatusError as e:
         raise ServiceUnavailableError(
@@ -203,16 +215,14 @@ async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
     )
 
 
-async def apoll_device_flow(device_code: str) -> GithubCopilotDeviceFlowPoll:
+async def apoll_device_flow(device_code: str, endpoints: GithubHostEndpoints) -> GithubCopilotDeviceFlowPoll:
     client: Final = _new_async_github_client()
-    access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
-    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
         response: Final = await client.post(
-            access_token_url,
+            endpoints.access_token_url,
             headers=get_copilot_auth_headers(),
             json={
-                "client_id": client_id,
+                "client_id": endpoints.client_id,
                 "device_code": device_code,
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             },
@@ -268,11 +278,11 @@ def _poll_payload_from_response(response: httpx.Response) -> GithubCopilotDevice
             )
 
 
-async def afetch_github_login(github_token: str) -> str:
+async def afetch_github_login(github_token: str, endpoints: GithubHostEndpoints) -> str:
     client: Final = _new_async_github_client()
     try:
         response: Final = await client.get(
-            "https://api.github.com/user",
+            endpoints.user_url,
             headers=get_copilot_auth_headers(github_token),
         )
     except Exception as e:
@@ -298,9 +308,9 @@ async def afetch_github_login(github_token: str) -> str:
     return payload["login"]
 
 
-async def acheck_copilot_seat(github_token: str, credential_name: str) -> None:
+async def acheck_copilot_seat(github_token: str, credential_name: str, endpoints: GithubHostEndpoints) -> None:
     client: Final = _new_async_github_client()
-    api_base: Final = await aget_copilot_api_base(github_token)
+    api_base: Final = await aget_copilot_api_base(github_token, endpoints=endpoints)
     try:
         response: Final = await client.get(
             f"{api_base.rstrip('/')}/models",
@@ -357,7 +367,11 @@ def _connect_error(credential_name: str) -> CallerCredentialAuthenticationError:
     )
 
 
-def _caller_connection(kwargs: Mapping[str, object], credential_name: str) -> tuple[str, str]:
+def _caller_connection(
+    kwargs: Mapping[str, object],
+    credential_name: str,
+    endpoints: GithubHostEndpoints,
+) -> tuple[str, str]:
     secret_fields_raw: Final[object] = kwargs.get("secret_fields")
     secret_fields: Final = (
         cast(Mapping[object, object], secret_fields_raw)  # cast-ok: value is Mapping-checked or dict-shaped at runtime
@@ -375,8 +389,21 @@ def _caller_connection(kwargs: Mapping[str, object], credential_name: str) -> tu
         if isinstance(credentials_raw, Mapping)
         else None
     )
-    token: Final[object] = credentials.get(credential_name) if credentials is not None else None
-    if not isinstance(user_id, str) or not user_id or not isinstance(token, str) or not token:
+    connection_raw: Final[object] = credentials.get(credential_name) if credentials is not None else None
+    connection: Final = (
+        cast(Mapping[object, object], connection_raw)  # cast-ok: runtime Mapping check validates the stored connection
+        if isinstance(connection_raw, Mapping)
+        else None
+    )
+    token: Final[object] = connection.get("access_token") if connection is not None else None
+    github_host: Final = normalized_github_host(connection.get("github_host") if connection is not None else None)
+    if (
+        not isinstance(user_id, str)
+        or not user_id
+        or not isinstance(token, str)
+        or not token
+        or github_host != endpoints.host
+    ):
         raise _connect_error(credential_name)
     return user_id, token
 
@@ -427,7 +454,7 @@ def resolve_copilot_api_base(
 ) -> str:
     if user_session is None:
         return get_copilot_api_base(api_base, shared_token)
-    return get_copilot_api_base(None, lambda: user_session.token)
+    return get_copilot_api_base(None, lambda: user_session.token, user_session.endpoints)
 
 
 def github_copilot_caller_rejection(
@@ -514,23 +541,26 @@ def attach_github_copilot_user_session(
     if isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession):
         return
     credential_name: Final = credential_name_obj if isinstance(credential_name_obj, str) else ""
-    _, github_token = _caller_connection(kwargs, credential_name)
-    session: Final = GithubCopilotUserSession(token=github_token)
+    endpoints: Final = github_copilot_host_endpoints(credential_name)
+    _, github_token = _caller_connection(kwargs, credential_name, endpoints)
+    session: Final = GithubCopilotUserSession(token=github_token, endpoints=endpoints)
     kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = session  # rebind-ok: kwargs is the request mutation channel
     _strip_caller_authorization(kwargs)
 
 
-def _plan_api_base_request(kwargs: Mapping[str, object], model: object) -> tuple[str, str | None] | None:
+def _plan_api_base_request(
+    kwargs: Mapping[str, object], model: object
+) -> tuple[str, str | None, GithubHostEndpoints | None] | None:
     api_base_obj: Final = kwargs.get("api_base")
     api_base: Final = api_base_obj if isinstance(api_base_obj, str) else None
     session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
     if isinstance(session, GithubCopilotUserSession):
-        return session.token, None
+        return session.token, None, session.endpoints
     targets_github_copilot: Final = kwargs.get("custom_llm_provider") == _LLM_PROVIDER or (
         isinstance(model, str) and model.startswith(f"{_LLM_PROVIDER}/")
     )
     shared_token: Final = Authenticator().stored_access_token() if targets_github_copilot else None
-    return (shared_token, api_base) if shared_token is not None else None
+    return (shared_token, api_base, None) if shared_token is not None else None
 
 
 def prepare_github_copilot_request(

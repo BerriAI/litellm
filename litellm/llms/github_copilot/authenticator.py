@@ -17,11 +17,7 @@ from .common_utils import (
     GetDeviceCodeError,
     get_copilot_auth_headers,
 )
-
-# Constants (default values — overridable via environment variables at call time)
-DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
-DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
-DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
+from .github_host import DEFAULT_GITHUB_ACCESS_TOKEN_URL, DEFAULT_GITHUB_CLIENT_ID, DEFAULT_GITHUB_DEVICE_CODE_URL
 
 
 @with_config(ConfigDict(extra="allow", strict=True))

@@ -9,6 +9,7 @@ from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import (
     GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
     GithubCopilotUserSession,
@@ -168,7 +169,7 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
 
 @pytest.mark.usefixtures("local_beta_headers_config")
 def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
-    session: Final = GithubCopilotUserSession(token="gh.test-key")
+    session: Final = GithubCopilotUserSession(token="gh.test-key", endpoints=github_host_endpoints("github.com"))
 
     validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers={},
@@ -371,7 +372,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator(
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-copilot-token")
+    session = GithubCopilotUserSession(token="user-copilot-token", endpoints=github_host_endpoints("github.com"))
     headers, api_base = config.validate_anthropic_messages_environment(
         headers={},
         model="github_copilot/claude-sonnet-5.5",
@@ -401,7 +402,7 @@ def test_per_user_session_token_wins_over_caller_authorization(authorization_hea
 
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="user-copilot-token")
+    session = GithubCopilotUserSession(token="user-copilot-token", endpoints=github_host_endpoints("github.com"))
     headers, _ = config.validate_anthropic_messages_environment(
         headers={authorization_header: "Bearer caller-token", "x-custom": "preserved"},
         model="github_copilot/claude-sonnet-4.5",

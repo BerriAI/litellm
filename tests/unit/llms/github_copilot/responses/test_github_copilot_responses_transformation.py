@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
@@ -91,7 +92,7 @@ class TestGithubCopilotResponsesAPITransformation:
         url = config.get_complete_url(
             api_base=api_base,
             litellm_params=(
-                {"github_copilot_user_session": GithubCopilotUserSession(token="user-github-oauth-token")}
+                {"github_copilot_user_session": GithubCopilotUserSession(token="user-github-oauth-token", endpoints=github_host_endpoints("github.com"))}
                 if per_user
                 else {}
             ),
@@ -840,7 +841,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-github-oauth-token")
+    session = GithubCopilotUserSession(token="user-github-oauth-token", endpoints=github_host_endpoints("github.com"))
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-5.4",
@@ -855,7 +856,7 @@ def test_per_user_session_token_wins_over_caller_authorization():
     session token on the outgoing request."""
     config = GithubCopilotResponsesAPIConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="user-github-oauth-token")
+    session = GithubCopilotUserSession(token="user-github-oauth-token", endpoints=github_host_endpoints("github.com"))
     headers = config.validate_environment(
         headers={"Authorization": "Bearer caller-token", "authorization": "Bearer caller-token-lower"},
         model="github_copilot/gpt-5.1",

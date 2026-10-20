@@ -30,6 +30,12 @@ Metric = Literal[
     "cpu_seconds_per_request",
     "redis_calls_per_request",
     "redis_background_calls_per_request",
+    "litellm_overhead_seconds",
+    "litellm_response_seconds",
+    "prometheus_redis_latency_mean_seconds",
+    "postgres_active_sessions",
+    "postgres_slowest_statement_seconds",
+    "postgres_peak_connections",
 ]
 
 

@@ -94,7 +94,15 @@ CALLBACK_LISTS: Final = (
     "_async_failure_callback",
     "_async_input_callback",
 )
-RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
+RESET_TO_NONE_GLOBALS: Final = (
+    "model_fallbacks",
+    "cache",
+    "max_fallbacks",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 RESTORED_GLOBALS: Final = (
     "disable_aiohttp_transport",
     "force_ipv4",
@@ -298,6 +306,30 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         litellm_router_module._live_routers.add(router)
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
+def _provider_model_sets() -> tuple[set[str], ...]:
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 

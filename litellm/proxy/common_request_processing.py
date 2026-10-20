@@ -128,6 +128,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -253,7 +254,9 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    get_metadata_variable_name,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
@@ -453,6 +456,13 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
+    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    if partial_responses_event is not None:
+        verbose_proxy_logger.debug(
+            "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
+            sanitize_for_log(logging_obj.litellm_call_id),
+        )
+        return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
     if not isinstance(chunks, list) or not chunks:
         return False
@@ -482,6 +492,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
+    return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, partial_response: object) -> bool:
     try:
         await logging_obj.dispatch_success_handlers(
             partial_response,
@@ -2244,6 +2258,7 @@ class ProxyBaseLLMRequestProcessing:
         llm_router: Router | None = None,
         rate_limited_model: str | None = None,
         skip_guardrails: bool = False,
+        logging_auth: UserAPIKeyAuth | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2263,6 +2278,14 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if logging_auth is not None:
+            metadata_variable_name: Final = get_metadata_variable_name(request)
+            request_metadata: Final = self.data.get(metadata_variable_name)
+            if isinstance(request_metadata, dict):
+                self.data[metadata_variable_name] = {
+                    **TypeAdapter(dict[str, object]).validate_python(request_metadata),
+                    **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(logging_auth),
+                }
         if not general_settings.get("expose_fallback_errors_to_caller"):
             self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
@@ -2285,8 +2308,6 @@ class ProxyBaseLLMRequestProcessing:
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
-            from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name
-
             _metadata_variable_name: Final = get_metadata_variable_name(request)
             if _metadata_variable_name not in self.data:
                 self.data[_metadata_variable_name] = {}

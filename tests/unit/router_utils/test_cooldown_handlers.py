@@ -2971,8 +2971,9 @@ def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(
     """A 429/401 from the caller's own Copilot seat is scoped to that user; it must
     not cool down the shared deployment for every other caller."""
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
-    session_kwargs = {"github_copilot_user_session": GithubCopilotUserSession(token="gho_user")}
+    session_kwargs = {"github_copilot_user_session": GithubCopilotUserSession(token="gho_user", endpoints=github_host_endpoints("github.com"))}
     for exc, status in (
         (litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o"), 429),
         (litellm.AuthenticationError("copilot 401", "github_copilot", "gpt-4o"), 401),
