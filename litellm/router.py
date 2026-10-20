@@ -11219,10 +11219,6 @@ class Router:
         return (backend_key,)
 
     @staticmethod
-    def _deployment_pricing_provider(deployment: Deployment) -> str | None:
-        return deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
-
-    @staticmethod
     def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
@@ -11239,6 +11235,9 @@ class Router:
             if field_value is not None:
                 model_info[field] = field_value
         backend_model: Final = Router._cost_map_backend_model(deployment)
+        pricing_provider: Final = (
+            deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
+        )
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
         if (
             params.get("model_id")
@@ -11258,23 +11257,23 @@ class Router:
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=Router._deployment_pricing_provider(deployment),
+            custom_llm_provider=pricing_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
                 backend_model=backend_model,
-                custom_llm_provider=Router._deployment_pricing_provider(deployment),
+                custom_llm_provider=pricing_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=Router._deployment_pricing_provider(deployment),
+            custom_llm_provider=pricing_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=backend_model,
-            custom_llm_provider=Router._deployment_pricing_provider(deployment),
+            custom_llm_provider=pricing_provider,
         )
         return model_info
 
