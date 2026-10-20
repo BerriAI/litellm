@@ -1888,21 +1888,20 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    provider_duration: Final = _get_transcription_usage_duration(completion_response)
-                    transcription_info: Final = (
+                    provider_duration, transcription_info = (
+                        _get_transcription_usage_duration(completion_response),
                         _get_model_info_or_none(requested_model, custom_llm_provider)
                         if requested_model is not None and custom_llm_provider is not None
-                        else None
-                    )
-                    transcription_metadata: Final = (
-                        as_str_mapping(transcription_info.get("provider_specific_entry"))
-                        if transcription_info is not None
-                        else None
+                        else None,
                     )
                     audio_transcription_file_duration = (
                         provider_duration
                         if provider_duration is not None
-                        and transcription_metadata is not None
+                        and transcription_info is not None
+                        and (
+                            transcription_metadata := as_str_mapping(transcription_info.get("provider_specific_entry"))
+                        )
+                        is not None
                         and transcription_metadata.get("transcription_usage_duration") == 1
                         else _hidden.get("audio_transcription_duration", getattr(completion_response, "duration", 0.0))
                         or (
