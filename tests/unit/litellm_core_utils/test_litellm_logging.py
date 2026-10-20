@@ -11017,6 +11017,7 @@ def test_uncached_price_leaves_no_failure_debug_info_for_unpriced_model():
 PR44187_PRICED_MODEL: Final = "lit44187-priced-model"
 PR44187_INPUT_COST: Final = 1e-6
 PR44187_OUTPUT_COST: Final = 2e-6
+PR44187_START_TIME: Final = datetime.datetime(2026, 10, 20)
 
 
 @pytest.fixture
@@ -11044,7 +11045,7 @@ def _pr44187_logging_obj(model: str) -> LitellmLogging:
         messages=[{"role": "user", "content": "Hi"}],
         stream=True,
         call_type="completion",
-        start_time=time.time(),
+        start_time=PR44187_START_TIME,
         litellm_call_id="lit44187-late-priced-stream",
         function_id="fn",
     )
