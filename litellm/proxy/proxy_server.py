@@ -2719,13 +2719,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
-def _configured_max_request_size_mb() -> int | float | None:
+def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
-    get_max_request_size_mb=lambda: _configured_max_request_size_mb() if premium_user is True else None,
+    get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -21436,7 +21436,7 @@ attach_lazy_features(app)
 app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    get_max_request_size_mb=_configured_max_request_size_mb,
+    get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 app.add_middleware(

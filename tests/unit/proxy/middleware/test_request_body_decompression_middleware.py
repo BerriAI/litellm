@@ -59,6 +59,7 @@ def _client(max_decompressed_body_size_mb: float = CAP_MB, **options: object) ->
         routes=[
             Route("/v1/systemone", _echo_request, methods=["POST"]),
             Route("/plugin-proxy/{path:path}", _echo_request, methods=["POST"]),
+            Route("/claude_code_gateway/v1/{signal}", _echo_request, methods=["POST"]),
         ]
     )
     return TestClient(
@@ -330,17 +331,28 @@ def test_zstd_is_unavailable_without_failing_the_import_on_a_python_without_zstd
 
 
 @pytest.mark.parametrize(
-    ("body", "content_encoding"),
+    "path",
     [
-        (gzip.compress(REQUEST_JSON, mtime=0), "gzip"),
-        (zstd.compress(REQUEST_JSON), "zstd"),
-        (zstd.compress(_low_entropy_text(int(CAP_MB * MIB) * 2)), "zstd"),
+        "/plugin-proxy/notes/v1/run",
+        "/claude_code_gateway/v1/metrics",
+        "/claude_code_gateway/v1/logs",
+        "/claude_code_gateway/v1/traces",
     ],
 )
-def test_plugin_proxy_bodies_reach_the_plugin_as_sent(body: bytes, content_encoding: str):
-    response: Final = _post(
-        _client(codecs=MappingProxyType({"gzip": GZIP})), body, (content_encoding,), path="/plugin-proxy/notes/v1/run"
-    )
+@pytest.mark.parametrize(
+    ("body", "content_encoding"),
+    [
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), "gzip", id="gzip"),
+        pytest.param(zstd.compress(REQUEST_JSON), "zstd", id="zstd"),
+        pytest.param(zstd.compress(_low_entropy_text(int(CAP_MB * MIB) * 2)), "zstd", id="zstd-past-the-cap"),
+        pytest.param(_gzip_bomb(2), "gzip", id="gzip-past-the-ratio-limit"),
+        pytest.param(
+            gzip.compress(REQUEST_JSON, mtime=0) + gzip.compress(REQUEST_JSON, mtime=0), "gzip", id="gzip-two-members"
+        ),
+    ],
+)
+def test_raw_body_routes_get_the_body_as_sent(path: str, body: bytes, content_encoding: str):
+    response: Final = _post(_client(codecs=MappingProxyType({"gzip": GZIP})), body, (content_encoding,), path=path)
 
     assert response.status_code == 200
     assert response.json() == {

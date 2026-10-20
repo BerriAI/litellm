@@ -26,7 +26,12 @@ ZSTD_FRAME_MAGIC: Final = b"\x28\xb5\x2f\xfd"
 ZSTD_SKIPPABLE_FRAME_MAGIC_HIGH_BYTES: Final = b"\x2a\x4d\x18"
 SIGNATURE_LENGTH: Final = len(ZSTD_FRAME_MAGIC)
 GZIP_HEADER_AND_TRAILER_LENGTH: Final = 18
-RAW_BODY_ROUTE_PREFIXES: Final = ("/plugin-proxy/",)
+RAW_BODY_ROUTE_PREFIXES: Final = (
+    "/plugin-proxy/",
+    "/claude_code_gateway/v1/metrics",
+    "/claude_code_gateway/v1/logs",
+    "/claude_code_gateway/v1/traces",
+)
 CODING_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"x-gzip": "gzip"})
 _REPLACED_REQUEST_HEADERS: Final = frozenset({b"content-encoding", b"content-length", b"transfer-encoding"})
 _CONTENT_ENCODING_HEADER: Final = frozenset({b"content-encoding"})

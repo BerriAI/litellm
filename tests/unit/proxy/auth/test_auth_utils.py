@@ -4845,3 +4845,12 @@ async def test_a_quoted_max_request_size_mb_rejects_a_larger_keyed_request_with_
         await check_if_request_size_is_safe(request=_request_with_content_length(11 * 1024 * 1024))
     assert raised.value.code == "400"
     assert "Max size is 10 MB" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"max_request_size_mb": "10MB"}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+    ):
+        assert await check_if_request_size_is_safe(request=_request_with_content_length(1024)) is True
