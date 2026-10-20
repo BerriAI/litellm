@@ -8,7 +8,7 @@ cross-group fallback runs.
 """
 
 from collections import Counter
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -954,9 +954,11 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
         ("deployment_affinity", {"user_api_key_hash": "hashed-key-1"}),
     ],
 )
-async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deployment(pre_call_check, metadata):
+async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deployment(
+    pre_call_check: str, metadata: dict[str, str]
+):
     """A pin on the failed deployment must not hide its healthy sibling from weighted failover."""
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "test-model",
@@ -996,7 +998,7 @@ async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deploy
         fallbacks=[{"test-model": ["fallback-model"]}],
     )
 
-    responses = [
+    responses: Final = [
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],

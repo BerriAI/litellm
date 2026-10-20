@@ -14703,15 +14703,6 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
-        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
-        ## this request via weighted-failover. Always honored, regardless of the
-        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
-        _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
-            healthy_deployments,
-            excluded_deployment_ids=_excluded_deployment_ids,
-        )
-
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
@@ -14789,6 +14780,15 @@ class Router:
                 )
             ),
             target_order=_target_order,
+        )
+
+        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+        ## this request via weighted-failover. Always honored, regardless of the
+        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
+        _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
+        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
+            cast(list[dict], healthy_deployments),
+            excluded_deployment_ids=_excluded_deployment_ids,
         )
 
         ## RETRY SKIP ## -> drop deployments that already refused this request with a

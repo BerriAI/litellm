@@ -1209,3 +1209,60 @@ async def test_virtual_key_hash_wins_over_user_id_for_affinity():
         parent_otel_span=None,
     )
     assert other_key_same_user == healthy_deployments
+
+
+class _ForbiddenError(Exception):
+    status_code: Final = 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_call_check", "metadata"),
+    [
+        ("session_affinity", {"session_id": "sess-retry"}),
+        ("deployment_affinity", {"user_api_key_hash": "hashed-key-retry"}),
+    ],
+)
+async def test_retry_reaches_healthy_sibling_when_affinity_pins_deployment_that_refused(
+    pre_call_check: str, metadata: dict[str, str]
+):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": _ForbiddenError("A refuses"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "ok from B",
+                    "weight": 0,
+                },
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=1,
+        retry_after=0,
+        disable_cooldowns=True,
+        optional_pre_call_checks=[pre_call_check],
+    )
+
+    responses: Final = [
+        await router.acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(metadata),
+        )
+        for _ in range(2)
+    ]
+
+    assert [response._hidden_params["model_id"] for response in responses] == ["B", "B"]
