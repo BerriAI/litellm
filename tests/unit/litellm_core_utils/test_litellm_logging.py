@@ -30,7 +30,13 @@ from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
+from litellm.constants import (
+    KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    REDACTED_BY_LITELLM,
+    SENTRY_PII_DENYLIST,
+)
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
@@ -401,6 +407,20 @@ def test_get_masked_api_base(logging_obj):
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
     assert type(masked_api_base) == str
+
+
+@pytest.mark.parametrize("no_upstream_call", [False, True])
+def test_pre_call_stamps_the_provider_handoff_only_when_a_provider_call_is_made(logging_obj, no_upstream_call):
+    """The proxy fires pre_call for a failure it raised itself (auth, rate limit, client disconnect)
+    so callbacks see it; that call never reached a provider, so neither handoff instant may be set."""
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    if no_upstream_call:
+        logging_obj.model_call_details[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+
+    logging_obj.pre_call(input="", api_key="")
+
+    assert ("api_call_start_time" in logging_obj.model_call_details) is not no_upstream_call
+    assert (logging_obj.model_call_details.get("first_api_call_start_time") is not None) is not no_upstream_call
 
 
 def test_pre_call_tolerates_missing_api_base(logging_obj):
@@ -2067,6 +2087,56 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_async_hook_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils import thread_pool_executor
+    from litellm.responses.main import base_llm_http_handler
+
+    class InlineExecutor:
+        def submit(self, fn, *args, **kwargs):
+            fn(*args, **kwargs)
+
+    sessions: list[LitellmLogging] = []
+
+    async def open_session(**kwargs):
+        sessions.append(kwargs["logging_obj"])
+
+    async_logged = asyncio.Event()
+    sync_call_ids: list[str] = []
+    async_call_ids: list[str] = []
+
+    class CaptureLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            sync_call_ids.append(kwargs["litellm_call_id"])
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            async_call_ids.append(kwargs["litellm_call_id"])
+            async_logged.set()
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", ["cache", logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    monkeypatch.setattr(thread_pool_executor, "executor", InlineExecutor())
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how a turn of the session logs is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(side_effect=open_session)
+    ):
+        await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now())
+
+    await turn.dispatch_success_handlers(
+        litellm.ResponsesAPIResponse(
+            id="resp_turn_2", created_at=0, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[]
+        ),
+        prefer_async_handlers=True,
+    )
+    await asyncio.wait_for(async_logged.wait(), timeout=10)
+
+    assert (async_call_ids, sync_call_ids) == (["ws-turn-2"], [])
+
+
+@pytest.mark.asyncio
 async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2238,30 +2308,41 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
 
 
 @pytest.mark.parametrize(
-    "async_flag",
+    ("async_flag", "for_async_request"),
     [
-        "acompletion",
-        "aresponses",
-        "allm_passthrough_route",
-        "aanthropic_messages",
-        "agenerate_content",
-        "agenerate_content_stream",
+        ("acompletion", False),
+        ("aresponses", False),
+        ("allm_passthrough_route", False),
+        ("aanthropic_messages", False),
+        ("agenerate_content", False),
+        ("agenerate_content_stream", False),
+        (None, True),
     ],
 )
-def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, async_flag):
-    """Ensure sync success callbacks are skipped when async call type flags are set."""
+def test_success_handler_skips_sync_callbacks_for_async_requests(
+    logging_obj: LitellmLogging, async_flag: str | None, for_async_request: bool
+) -> None:
     from litellm.integrations.custom_logger import CustomLogger
 
     class DummyLogger(CustomLogger):
-        pass
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            return None
 
     logging_obj.stream = False  # simulate non-streaming request where sync callbacks would normally run
-    logging_obj.model_call_details["litellm_params"] = {async_flag: True}
+    logging_obj.model_call_details["litellm_params"] = {async_flag: True} if async_flag else {}
     logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
 
     dummy_logger = DummyLogger()
     dummy_logger.log_success_event = MagicMock()
     dummy_logger.log_stream_event = MagicMock()
+
+    logging_obj.dynamic_async_success_callbacks = [dummy_logger]
 
     model_response = ModelResponse(
         id="resp-123",
@@ -2281,14 +2362,17 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, as
         "get_combined_callback_list",
         return_value=[dummy_logger],
     ):
-        logging_obj.success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response, for_async_request=for_async_request)
 
     dummy_logger.log_success_event.assert_not_called()
     dummy_logger.log_stream_event.assert_not_called()
 
 
 @pytest.mark.parametrize("call_type", ["completion", "responses"])
-def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call_type):
+@pytest.mark.parametrize("for_async_request", [False, True])
+def test_success_handler_runs_sync_callbacks_for_sync_requests(
+    logging_obj: LitellmLogging, call_type: str, for_async_request: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Ensure sync success callbacks execute when call type is sync (completion/responses)."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -2317,15 +2401,158 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
         usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     )
 
-    with patch.object(
-        logging_obj,
-        "get_combined_callback_list",
-        return_value=[dummy_logger],
-    ):
-        logging_obj.success_handler(result=model_response)
+    logging_obj.dynamic_success_callbacks = [dummy_logger]
+    logging_obj.dynamic_async_success_callbacks = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj.success_handler(result=model_response, for_async_request=for_async_request)
 
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registration", ["sync", "async", "overlapping"])
+@pytest.mark.parametrize("kind", ["sync", "async", "dual"])
+@pytest.mark.parametrize("compatibility_first", [False, True])
+async def test_completed_success_selects_one_implemented_hook(
+    monkeypatch: pytest.MonkeyPatch, registration: str, kind: str, compatibility_first: bool
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import SimpleQueue
+
+    events: Final[SimpleQueue[tuple[str, str, object, int]]] = SimpleQueue()
+    loop_thread: Final = threading.get_ident()
+
+    def record(hook: str, kwargs: dict[str, object], response_obj: object) -> None:
+        assert isinstance(response_obj, ModelResponse)
+        events.put((hook, response_obj.id, kwargs["response_cost"], threading.get_ident()))
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            record("sync", kwargs, response_obj)
+
+    class AsyncRecorder(CustomLogger):
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            record("async", kwargs, response_obj)
+
+    class DualRecorder(CustomLogger):
+        def log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            record("sync", kwargs, response_obj)
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            record("async", kwargs, response_obj)
+
+    callback: Final = {"sync": SyncRecorder, "async": AsyncRecorder, "dual": DualRecorder}[kind]()
+    monkeypatch.setattr(litellm, "success_callback", [callback] if registration != "async" else [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [callback] if registration != "sync" else [])
+    logging_obj: Final = _async_request_logging_obj("completed-hook", [])
+    response: Final = ModelResponse(id="chatcmpl-completed-hook")
+    now: Final = datetime.datetime.now()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(litellm_logging, "executor", pool)
+        if compatibility_first:
+            logging_obj.handle_sync_success_callbacks_for_async_calls(response, now, now)
+        await logging_obj.async_success_handler(response, now, now)
+        logging_obj.handle_sync_success_callbacks_for_async_calls(response, now, now)
+
+    assert events.qsize() == 1
+    hook, response_id, cost, thread_id = events.get_nowait()
+    assert hook == ("sync" if kind == "sync" else "async")
+    assert response_id == response.id
+    assert cost == logging_obj.model_call_details["response_cost"]
+    assert (thread_id == loop_thread) is (kind != "sync")
+
+
+
+@pytest.mark.parametrize("for_async_request", [False, True])
+@pytest.mark.parametrize("private_first", [False, True])
+@pytest.mark.parametrize("response_kind", ["responses", "completion"])
+def test_sync_success_redacts_only_opted_out_loggers(
+    monkeypatch: pytest.MonkeyPatch, for_async_request: bool, private_first: bool, response_kind: str
+) -> None:
+    from queue import SimpleQueue
+
+    events: Final[SimpleQueue[tuple[bool, str]]] = SimpleQueue()
+
+    class PayloadRecorder(CustomLogger):
+        def log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            events.put((self.turn_off_message_logging, json.dumps(kwargs["standard_logging_object"])))
+
+    private_logger: Final = PayloadRecorder(turn_off_message_logging=True)
+    public_logger: Final = PayloadRecorder()
+    callbacks: Final = [private_logger, public_logger] if private_first else [public_logger, private_logger]
+    monkeypatch.setattr(litellm, "success_callback", callbacks)
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "private-request-marker"}],
+        stream=False,
+        call_type="aget_responses",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="callback-redaction",
+        function_id="callback-redaction",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="openai")
+    response: Final = (
+        _responses_api_response_with_text("private-response-marker")
+        if response_kind == "responses"
+        else ModelResponse(
+            id="chatcmpl-private",
+            model="openai/gpt-6.1-sol",
+            choices=[{"message": {"role": "assistant", "content": "private-response-marker"}}],
+            usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+        )
+    )
+    logging_obj.success_handler(result=response, for_async_request=for_async_request)
+
+    assert events.qsize() == 2
+    payloads: Final = dict(events.get_nowait() for _ in range(2))
+    assert "private-request-marker" not in payloads[True]
+    assert "private-response-marker" not in payloads[True]
+    assert REDACTED_BY_LITELLM in payloads[True]
+    assert "private-request-marker" in payloads[False]
+    assert "private-response-marker" in payloads[False]
+    private_payload, public_payload = json.loads(payloads[True]), json.loads(payloads[False])
+    assert private_payload["total_tokens"] == public_payload["total_tokens"]
+    assert private_payload["response"]["usage"] == public_payload["response"]["usage"]
+    assert private_payload["response"]["usage"]["total_tokens"] == response.usage.total_tokens
+    assert private_payload["response"]["id"] == public_payload["response"]["id"]
+    assert private_payload["response"]["model"] == public_payload["response"]["model"]
+    assert private_payload["response_cost"] == public_payload["response_cost"]
+    assert "private-response-marker" in response.model_dump_json()
 
 
 class _PhaseRecordingLogger(CustomLogger):
@@ -4357,6 +4584,50 @@ def test_get_error_information_falls_back_to_str_when_no_message_attr():
     assert result["error_class"] == "ValueError"
 
 
+def test_get_error_information_records_the_cooled_deployments_of_a_router_refusal():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.router import RouterRateLimitError
+    from litellm.types.utils import CooldownDeploymentInfo
+
+    cooled: Final = (
+        CooldownDeploymentInfo(model_id="refused-1", api_base="https://first.example/v1"),
+        CooldownDeploymentInfo(model_id="refused-2", api_base=None),
+    )
+    refusal: Final = RouterRateLimitError(
+        model="refused",
+        cooldown_time=60,
+        enable_pre_call_checks=False,
+        cooldown_list=["refused-1", "refused-2", "neighbour-1"],
+        model_ids=("refused-1", "refused-2"),
+        cooldown_deployments=cooled,
+    )
+
+    result: Final = StandardLoggingPayloadSetup.get_error_information(refusal)
+    assert (result["error_class"], result["error_code"], result["error_cooldown_deployments"]) == (
+        "RouterRateLimitError",
+        "429",
+        cooled,
+    ), result
+    provider_429: Final = litellm.RateLimitError("scripted 429", "openai", "gpt-5.4")
+    assert StandardLoggingPayloadSetup.get_error_information(provider_429)["error_cooldown_deployments"] is None
+
+
+def test_get_error_information_handles_a_router_refusal_subclass_that_skips_its_init():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.router import RouterRateLimitError
+
+    class PluginRefusal(RouterRateLimitError):
+        def __init__(self, message: str) -> None:
+            ValueError.__init__(self, message)
+
+    result: Final = StandardLoggingPayloadSetup.get_error_information(PluginRefusal("plugin refused"))
+    assert (result["error_class"], result["error_code"], result["error_cooldown_deployments"]) == (
+        "PluginRefusal",
+        "429",
+        None,
+    ), result
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
@@ -5506,6 +5777,97 @@ def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_
     assert payload["metadata"]["used_client_oauth_token"] is expected
 
 
+@pytest.mark.parametrize(
+    ("metadata", "litellm_metadata", "expected"),
+    [
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {},
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.1",
+                "pod_count": 3,
+                "selection": "round_robin",
+            },
+        ),
+        (
+            {},
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.2",
+                    "pod_count": 3,
+                    "selection": "session_affinity",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.2",
+                "pod_count": 3,
+                "selection": "session_affinity",
+            },
+        ),
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.3",
+                    "pod_count": 3,
+                    "selection": "session_affinity_retry",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.3",
+                "pod_count": 3,
+                "selection": "session_affinity_retry",
+            },
+        ),
+    ],
+)
+def test_standard_logging_payload_resolves_kubernetes_pod_routing_from_metadata_buckets(
+    logging_obj: LitellmLogging,
+    metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"][KUBERNETES_POD_ROUTING_KEY] == expected
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime
@@ -6526,34 +6888,56 @@ def test_in_progress_background_create_is_not_billed(call_type):
 
 
 @pytest.mark.asyncio
-async def test_background_interaction_completion_rebills_after_in_progress_success():
+async def test_background_interaction_completion_rebills_after_in_progress_success(monkeypatch: pytest.MonkeyPatch):
     import datetime as dt
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import SimpleQueue
 
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logging_obj = _interactions_logging_obj(stream=False)
-    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
-    await logging_obj.async_success_handler(
-        result=in_progress,
-        start_time=dt.datetime.now(),
-        end_time=dt.datetime.now(),
-    )
+    events: Final[SimpleQueue[tuple[object, object]]] = SimpleQueue()
+    logged: Final = threading.Event()
 
-    assert logging_obj.model_call_details.get("response_cost") is None
-    assert logging_obj.should_run_logging(event_type="async_success") is False
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object,
+            start_time: dt.datetime, end_time: dt.datetime,
+        ) -> None:
+            events.put((response_obj, kwargs.get("response_cost")))
+            logged.set()
 
-    completed = InteractionsAPIResponse(
-        id="interactions/abc",
-        model="gemini-2.5-flash",
-        status="completed",
-        steps=[],
-        usage=dict(INTERACTIONS_USAGE_BLOCK),
-    )
-    await logging_obj.async_log_background_interaction_completion(result=completed)
+    monkeypatch.setattr(litellm, "success_callback", [SyncRecorder()])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(litellm_logging, "executor", pool)
+        logging_obj = _interactions_logging_obj(stream=False)
+        in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+        await logging_obj.async_success_handler(
+            result=in_progress,
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+        )
 
-    assert logging_obj.model_call_details["response_cost"] > 0
-    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+        assert await asyncio.to_thread(logged.wait, 10)
+        assert logging_obj.model_call_details.get("response_cost") is None
+        assert logging_obj.should_run_logging(event_type="async_success") is False
 
+        completed = InteractionsAPIResponse(
+            id="interactions/abc",
+            model="gemini-2.5-flash",
+            status="completed",
+            steps=[],
+            usage=dict(INTERACTIONS_USAGE_BLOCK),
+        )
+        await logging_obj.async_log_background_interaction_completion(result=completed)
+
+        assert logging_obj.model_call_details["response_cost"] > 0
+        assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+
+
+    assert events.qsize() == 2
+    assert events.get_nowait() == (in_progress, None)
+    assert events.get_nowait() == (completed, logging_obj.model_call_details["response_cost"])
 
 @pytest.mark.asyncio
 async def test_background_interaction_completion_prices_the_settled_body_itself():
@@ -7797,6 +8181,7 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sync_payloads: Final[list[object]] = []
+    sync_logged: Final = threading.Event()
 
     class AthinaRecorder:
         def log_event(
@@ -7808,9 +8193,10 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
             print_verbose: object,
         ) -> None:
             sync_payloads.append(kwargs.get("standard_logging_object"))
+            sync_logged.set()
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
-    monkeypatch.setattr(litellm, "success_callback", ["athina"])
+    monkeypatch.setattr(litellm, "success_callback", [_ResponseEditingHook(), "athina"])
     monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaRecorder())
     logging_obj: Final = LitellmLogging(
         model="pass-through-model",
@@ -7827,9 +8213,7 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
     async_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
     assert isinstance(async_payload, dict)
     async_payload_before_sync: Final = dict(async_payload)
-    monkeypatch.setattr(litellm, "success_callback", [_ResponseEditingHook(), "athina"])
-
-    logging_obj.success_handler(result=raw_body, for_async_request=True)
+    assert sync_logged.wait(timeout=10)
 
     assert sync_payloads == [{**async_payload_before_sync, "response": "edited by sync hook"}]
     assert logging_obj.model_call_details["standard_logging_object"] is async_payload
@@ -10345,6 +10729,89 @@ def test_uncached_price_leaves_no_pricing_state_on_the_call():
 
         assert cost is not None and cost > 0.0
         assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token"),
+    [(1e-06, 2e-06), (0.0, 0.0)],
+    ids=["custom_price", "explicit_zero_price"],
+)
+def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_billed_from(
+    input_cost_per_token: float, output_cost_per_token: float
+):
+    """A deployment with its own price keeps the catalog model as model_map_key but is logged at its own rates."""
+    deployment_id: Final = "lit9660-priced-deployment"
+    deployment_model_info: Final = {
+        "id": deployment_id,
+        "input_cost_per_token": input_cost_per_token,
+        "output_cost_per_token": output_cost_per_token,
+    }
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = LitellmLogging(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9660",
+            function_id="fn",
+        )
+        litellm_params: Final = {
+            "metadata": {
+                "model_group": "lit9660-group",
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": deployment_model_info,
+            }
+        }
+        logging_obj.update_environment_variables(
+            model="gpt-5.4-nano", user="", optional_params={}, litellm_params=litellm_params, custom_llm_provider="openai"
+        )
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+        )
+
+        response_cost: Final = logging_obj.response_cost_calculator(result=response)
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "custom_llm_provider": "openai",
+                "litellm_params": litellm_params,
+                "response_cost": response_cost,
+            },
+            init_response_obj=response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
+        assert payload is not None
+        assert payload["model_map_information"] == {
+            "model_map_key": "openai/gpt-5.4-nano",
+            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
+        }
+        model_map_value: Final = payload["model_map_information"]["model_map_value"]
+        assert model_map_value is not None
+        assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (
+            input_cost_per_token,
+            output_cost_per_token,
+        )
     finally:
         litellm.model_cost.pop(deployment_id, None)
 

@@ -40,6 +40,14 @@ class ServerStreamingClassification(str, Enum):
 SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", 5.0
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", 300.0
+)
+KUBERNETES_POD_DISCOVERY_DNS_TIMEOUT_SECONDS: Final = 2.0
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
@@ -244,6 +252,13 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKE
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
+MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
+)
+MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS", 5.0
+)
 MCP_METADATA_TIMEOUT: Final = get_env_float("LITELLM_MCP_METADATA_TIMEOUT", 10.0)
 MCP_HEALTH_CHECK_TIMEOUT: Final = get_env_float("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", 10.0)
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
@@ -1030,6 +1045,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.openinfer.ai/v1",
 ]
 
 
@@ -1098,6 +1114,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
@@ -1253,14 +1270,6 @@ together_ai_models: Final[set] = set(
 )
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
 
 featherless_ai_models: Final[set] = set(
     [

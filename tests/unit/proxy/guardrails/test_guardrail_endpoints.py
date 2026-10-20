@@ -125,6 +125,7 @@ def test_get_guardrails_list_response() -> None:
     assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
     assert minimal_response.guardrails[0].guardrail_info is None
 
+
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
         "guardrail": "litellm_content_filter",
@@ -655,6 +656,8 @@ async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, 
     response = await get_guardrail_info("test-db-guardrail")
 
     assert response.litellm_params.stream_scope is None
+
+
 async def test_get_guardrail_info_normalizes_invalid_scope_from_db(
     mocker, mock_guardrail_registry, mock_in_memory_handler
 ):
@@ -2159,7 +2162,6 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     mock_proxy_logging.post_call_success_hook.assert_awaited_once()
     mock_logging_obj.async_success_handler.assert_awaited_once()
     assert mock_logging_obj.call_type == "pass_through_endpoint"
-    mock_executor.submit.assert_called_once()
     assert mock_logging_obj.async_success_handler.await_args.kwargs["result"] == {
         "response": {"response_text": "masked"}
     }
@@ -3624,3 +3626,68 @@ async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guar
 
     assert exc_info.value.status_code == 400
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.proxy.guardrails.guardrail_endpoints import _emit_guardrail_success_logs
+    from litellm.types.guardrails import ApplyGuardrailResponse
+
+    class OverlappingHook(CustomLogger):
+        barrier: Barrier
+
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            self.barrier.wait(timeout=5)
+            return kwargs, result
+
+    hook: Final = OverlappingHook()
+    callback: Final = Mock()
+    queued_executor: Final = Mock()
+    proxy_logging: Final = Mock(post_call_success_hook=AsyncMock(return_value=None))
+
+    def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        callback(response_obj)
+
+    monkeypatch.setattr(litellm, "success_callback", [hook, sync_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm_logging, "customLogger", CustomLogger())
+    monkeypatch.setattr(litellm_logging, "executor", queued_executor)
+    monkeypatch.setattr(thread_pool_executor, "executor", queued_executor)
+    start: Final = datetime(2026, 1, 1)
+    logging_obj: Final = litellm_logging.Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="guardrail-success",
+        function_id="guardrail-success",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    response: Final = ApplyGuardrailResponse(response_text="masked")
+
+    returned: Final = await _emit_guardrail_success_logs(
+        proxy_logging, logging_obj, {}, UserAPIKeyAuth(), response, start
+    )
+    submissions: Final = tuple(queued_executor.submit.call_args_list)
+    assert submissions
+    hook.barrier = Barrier(len(submissions))
+    with ThreadPoolExecutor(max_workers=len(submissions)) as pool:
+        futures: Final = tuple(pool.submit(call.args[0], *call.args[1:], **call.kwargs) for call in submissions)
+        for future in futures:
+            future.result(timeout=10)
+
+    assert returned is response
+    callback.assert_called_once()
+    assert callback.call_args.args[0] == {"response": {"response_text": "masked"}}

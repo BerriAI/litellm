@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
+    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -4503,7 +4503,7 @@ def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(sanitized) == len(set(sanitized))
     assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
@@ -4517,7 +4517,7 @@ def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_i
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(ids) == len(sanitized)
     assert len(sanitized) == len(set(sanitized))

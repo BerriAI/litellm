@@ -34,7 +34,7 @@ from tests.integration._support.process import OwnedProxy, group_members, owned_
 from tests.integration._support.provider import SharedProvider
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 CLI_SOURCE: Final = "litellm-cli"
 CLI_STATE_PREFIX: Final = "litellm-session-token"
