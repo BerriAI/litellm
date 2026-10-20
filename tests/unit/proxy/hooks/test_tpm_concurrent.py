@@ -3878,8 +3878,9 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
 
 
 @pytest.mark.asyncio
-async def test_unreserved_project_io_covers_empty_and_fallback_usage(rate_limiter):
+async def test_unreserved_project_io_covers_empty_and_fallback_usage(rate_limiter, monkeypatch):
     """Cover the unreserved ITPM/OTPM branches the happy-path summary test skips."""
+    import json
     from typing import Final
 
     handler, _cache = rate_limiter
@@ -3941,6 +3942,20 @@ async def test_unreserved_project_io_covers_empty_and_fallback_usage(rate_limite
     )
     assert len(aggregate_ops) == 2
     assert {op["increment_value"] for op in aggregate_ops} == {9}
+
+    recorded_window_values: list[object] = []
+    original_set_cache: Final = handler.internal_usage_cache.async_set_cache
+
+    async def record_set_cache(key: str, value: object, **kwargs: object) -> object:
+        if key == "fresh-numeric-window":
+            recorded_window_values.append(value)
+        return await original_set_cache(key, value, **kwargs)
+
+    monkeypatch.setattr(handler.internal_usage_cache, "async_set_cache", record_set_cache)
+    await handler._seed_rate_limit_window_if_absent(window_key="fresh-numeric-window", ttl=60)
+    seeded_window: Final = recorded_window_values[0]
+    assert isinstance(seeded_window, int)
+    assert json.dumps(seeded_window) == str(seeded_window)
 
     await handler._seed_rate_limit_window_if_absent(window_key="already-open", ttl=None)
     await handler._seed_rate_limit_window_if_absent(window_key="already-open", ttl=None)

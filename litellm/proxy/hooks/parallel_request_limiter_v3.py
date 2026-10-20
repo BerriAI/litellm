@@ -4592,7 +4592,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         window_ttl: Final = ttl if ttl is not None else self.window_size
         await self.internal_usage_cache.async_set_cache(
             key=window_key,
-            value=str(int(self._get_current_time().timestamp())),
+            value=int(self._get_current_time().timestamp()),
             ttl=window_ttl,
             litellm_parent_otel_span=parent_otel_span,
         )
