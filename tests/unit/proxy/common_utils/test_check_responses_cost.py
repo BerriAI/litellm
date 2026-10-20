@@ -1495,6 +1495,69 @@ async def test_the_billing_event_carries_the_creators_end_user():
 
 
 @pytest.mark.asyncio
+async def test_the_billing_event_carries_the_creating_keys_project_and_every_creator_model_budget():
+    """Project spend and the key, team, and user per-model budgets are counted off the billed event,
+    so it must name them the way the creating request's own metadata would."""
+    from types import SimpleNamespace
+
+    key_budget: Final = {"gpt-5": {"max_budget": 1.0, "budget_duration": "1d"}}
+    team_budget: Final = {"gpt-5": {"max_budget": 2.0, "budget_duration": "7d"}}
+    user_budget: Final = {"gpt-5": {"max_budget": 3.0, "budget_duration": "30d"}}
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-budgets",
+                unified_object_id="resp_budgets",
+                status="queued",
+                created_by="alice",
+                api_key="hash-alice",
+                team_id="team-alpha",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=None,
+            project_id="project-1",
+            model_max_budget=key_budget,
+        )
+    )
+    poller.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            team_alias=None, organization_id=None, spend=0.0, max_budget=None, model_max_budget=team_budget
+        )
+    )
+    poller.prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            user_email=None, user_alias=None, spend=0.0, max_budget=None, model_max_budget=user_budget
+        )
+    )
+
+    await poller.bill_if_finished(response_id="resp_budgets", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert {
+        field: billed.metadata.get(field)
+        for field in (
+            "user_api_key_project_id",
+            "user_api_key_model_max_budget",
+            "user_api_key_team_model_max_budget",
+            "user_api_key_user_model_max_budget",
+        )
+    } == {
+        "user_api_key_project_id": "project-1",
+        "user_api_key_model_max_budget": key_budget,
+        "user_api_key_team_model_max_budget": team_budget,
+        "user_api_key_user_model_max_budget": user_budget,
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("created_by", "billed_user_id"),
     [("alice", "alice"), ("key:hashed-token", None)],
