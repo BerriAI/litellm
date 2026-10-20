@@ -613,12 +613,20 @@ async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_
 
 
 @pytest.mark.asyncio
-async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
-        json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
-    )
+@pytest.mark.parametrize(
+    "reply",
+    (
+        pytest.param({"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}, id="usage"),
+        pytest.param({"error": "Rate limit reached"}, id="rate_limit_text"),
+        pytest.param({"error": "Request timed out"}, id="timeout_text"),
+    ),
+)
+async def test_upstream_reply_without_answers_is_a_server_error(
+    reply: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=reply)
 
-    with pytest.raises(litellm.InternalServerError, match="unexpected response"):
+    with pytest.raises(litellm.InternalServerError, match="unexpected response: DecisionsResponse answers: Field"):
         await litellm.asystemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",

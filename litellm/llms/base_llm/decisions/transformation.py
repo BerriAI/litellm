@@ -418,6 +418,13 @@ def _normalize_systemone_response(payload: object) -> object:
     }
 
 
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}"
+        for detail in error.errors(include_url=False, include_input=False)
+    )
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
     return systemone_response_to_ir(
         _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
@@ -643,7 +650,8 @@ class BaseDecisionsConfig(ABC):
         except ValidationError as error:
             raise BaseLLMException(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
 
     def get_error_class(
