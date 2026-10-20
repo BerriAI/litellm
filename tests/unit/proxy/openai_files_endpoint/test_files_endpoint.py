@@ -262,7 +262,7 @@ def _override_auth(
 ) -> ProxyLogging:
     import litellm.proxy.proxy_server as ps
 
-    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
@@ -285,11 +285,11 @@ def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
     import litellm.proxy.proxy_server as ps
 
     _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
-    afile_content = mocker.AsyncMock()
+    afile_content: Final = mocker.AsyncMock()
     monkeypatch.setattr(litellm, "afile_content", afile_content)
 
     try:
-        response = client.get(
+        response: Final = client.get(
             f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
             headers={"Authorization": "Bearer test-key"},
         )
@@ -330,7 +330,7 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
     monkeypatch.setattr(litellm, "afile_content", afile_content)
 
     try:
-        response = client.get(
+        response: Final = client.get(
             f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
             headers={"Authorization": "Bearer test-key"},
         )
