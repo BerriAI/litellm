@@ -1,4 +1,9 @@
 import json
+import logging
+import struct
+import zlib
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8,6 +13,8 @@ from botocore.exceptions import ClientError, ConnectionClosedError
 
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, client_error_details
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.types.utils import StreamingChatCompletionChunk
 
 
 # --------------------------------------------------------------------------- #
@@ -230,6 +237,123 @@ async def test_aiter_bytes_valid_chunk_followed_by_unicode_error():
         # Verify we got our valid chunk despite the subsequent error
         assert len(chunks) == 1
         assert chunks[0]["text"] == "hello"  # Verify the content of the valid chunk
+
+
+def _event_header(name: str, value: str) -> bytes:
+    return struct.pack("!B", len(name)) + name.encode() + b"\x07" + struct.pack("!H", len(value)) + value.encode()
+
+
+_PAYLOAD_PART_HEADERS: Final = (
+    _event_header(":event-type", "PayloadPart")
+    + _event_header(":content-type", "application/octet-stream")
+    + _event_header(":message-type", "event")
+)
+
+
+def _payload_part(body: str) -> bytes:
+    encoded: Final = body.encode()
+    prelude: Final = struct.pack("!II", 16 + len(_PAYLOAD_PART_HEADERS) + len(encoded), len(_PAYLOAD_PART_HEADERS))
+    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude)) + _PAYLOAD_PART_HEADERS + encoded
+    return message + struct.pack("!I", zlib.crc32(message))
+
+
+def _cut(stream: str, size: int) -> tuple[str, ...]:
+    return tuple(stream[start : start + size] for start in range(0, len(stream), size))
+
+
+def _sse(record: Mapping[str, object]) -> str:
+    return f"data: {json.dumps(record)}\n\n"
+
+
+def _vllm_chunk(choices: list[Mapping[str, object]], **extra: object) -> str:
+    return _sse({"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": choices, **extra})
+
+
+_VLLM_EVENTS: Final = (
+    _vllm_chunk([{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]),
+    _vllm_chunk([{"index": 0, "delta": {"content": "Hel"}, "finish_reason": None}]),
+    _vllm_chunk([{"index": 0, "delta": {"content": "lo!"}, "finish_reason": "stop"}]),
+    _vllm_chunk([], usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}),
+    "data: [DONE]\n\n",
+)
+_VLLM_STREAM: Final = "".join(_VLLM_EVENTS)
+_TGI_EVENTS: Final = tuple(f"data:{json.dumps({'index': 0, 'token': {'text': text}})}\n\n" for text in ("Hel", "lo!"))
+_TGI_STREAM: Final = "".join(_TGI_EVENTS)
+_LMI_STREAM: Final = "".join(f"{json.dumps({'token': {'text': text}})}\n" for text in ("Hel", "lo!"))
+
+
+async def _decode(
+    parts: tuple[str, ...], is_messages_api: bool, mode: str
+) -> list[GChunk | StreamingChatCompletionChunk | None]:
+    decoder: Final = AWSEventStreamDecoder(model="m", is_messages_api=is_messages_api)
+    frames: Final = tuple(map(_payload_part, parts))
+    if mode == "sync":
+        return list(decoder.iter_bytes(iter(frames)))
+
+    async def stream():
+        for frame in frames:
+            yield frame
+
+    return [chunk async for chunk in decoder.aiter_bytes(stream())]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    "parts",
+    [
+        pytest.param(_VLLM_EVENTS, id="one-event-per-part"),
+        pytest.param((*_VLLM_EVENTS[:3], _VLLM_EVENTS[3] + _VLLM_EVENTS[4]), id="usage-and-done-share-a-part"),
+        pytest.param(
+            (_VLLM_EVENTS[0] + _VLLM_EVENTS[1], _VLLM_EVENTS[2] + _VLLM_EVENTS[3], _VLLM_EVENTS[4]),
+            id="event-pairs-share-a-part",
+        ),
+        pytest.param((*_VLLM_EVENTS[:4], "data: [DO", "NE]\n\n"), id="done-split-across-parts"),
+        pytest.param((_VLLM_STREAM,), id="whole-stream-in-one-part"),
+        pytest.param(_cut(_VLLM_STREAM, 7), id="seven-byte-parts"),
+    ],
+)
+async def test_messages_api_stream_keeps_every_chunk_however_sagemaker_cuts_the_parts(parts, mode, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        chunks: Final = await _decode(parts, is_messages_api=True, mode=mode)
+
+    assert None not in chunks
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks if chunk.choices) == "Hello!"
+    assert [(chunk.usage.prompt_tokens, chunk.usage.total_tokens) for chunk in chunks if chunk.usage] == [(7, 10)]
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    "parts",
+    [
+        pytest.param(_TGI_EVENTS, id="tgi-sse-one-event-per-part"),
+        pytest.param((_TGI_STREAM,), id="tgi-sse-whole-stream-in-one-part"),
+        pytest.param(_cut(_TGI_STREAM, 5), id="tgi-sse-five-byte-parts"),
+        pytest.param((_LMI_STREAM,), id="json-lines-whole-stream-in-one-part"),
+        pytest.param(_cut(_LMI_STREAM, 5), id="json-lines-five-byte-parts"),
+        pytest.param(tuple(_LMI_STREAM.split()), id="undelimited-objects-one-per-part"),
+    ],
+)
+async def test_completion_stream_keeps_every_token_however_sagemaker_cuts_the_parts(parts, mode, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        chunks: Final = await _decode(parts, is_messages_api=False, mode=mode)
+
+    assert None not in chunks
+    assert "".join(chunk["text"] for chunk in chunks) == "Hello!"
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_truncated_last_record_is_reported_after_the_complete_ones(mode, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        chunks: Final = await _decode((*_VLLM_EVENTS[:2], _VLLM_EVENTS[2][:20]), is_messages_api=True, mode=mode)
+
+    assert chunks[-1] is None
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Hel"
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
 
 
 class TestSagemakerTransform:

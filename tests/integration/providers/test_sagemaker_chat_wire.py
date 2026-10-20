@@ -26,14 +26,17 @@ from integration.providers._sagemaker_chat_container import (
     REGION,
     SECRET_KEY,
     SERVED_MODEL,
+    USAGE,
     answered_choices,
     assert_signed,
     by_marker,
     container_body,
     container_reply,
+    event_stream_reply,
     marked_prompt,
     marker,
     only_request,
+    vllm_stream_events,
 )
 from pydantic import JsonValue
 
@@ -258,6 +261,70 @@ def test_sagemaker_chat_keeps_the_deployment_aws_credentials_out_of_the_containe
     row: Final = _spend_row(answer.call_id)
     assert (row["status"], row["model_group"]) == ("success", model), row
     assert SECRET_KEY not in string_value(row["stored"]), row
+
+
+def _seven_byte_parts(stream: bytes) -> tuple[bytes, ...]:
+    return tuple(stream[start : start + 7] for start in range(0, len(stream), 7))
+
+
+def _event_pairs(events: tuple[bytes, ...]) -> tuple[bytes, ...]:
+    return tuple(b"".join(events[start : start + 2]) for start in range(0, len(events), 2))
+
+
+_PART_CUTTINGS: Final[Mapping[str, Callable[[tuple[bytes, ...]], tuple[bytes, ...]]]] = MappingProxyType(
+    {
+        "one-event-per-part": lambda events: events,
+        "usage-and-done-share-a-part": lambda events: (*events[:-2], events[-2] + events[-1]),
+        "event-pairs-share-a-part": _event_pairs,
+        "seven-byte-parts": lambda events: _seven_byte_parts(b"".join(events)),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamedAnswer:
+    call_id: str
+    text: str
+    usages: tuple[tuple[int, int, int], ...]
+
+
+async def _chat_openai_stream_with_usage(gateway: Gateway, model: str, prompt: str) -> _StreamedAnswer:
+    async with async_openai_client(gateway) as client:
+        stream: Final = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            stream=True,
+            stream_options={"include_usage": True},
+            extra_body=dict(NO_CACHE),
+        )
+        chunks: Final = [chunk async for chunk in stream]
+    return _StreamedAnswer(
+        stream.response.headers["x-litellm-call-id"],
+        "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices),
+        tuple(
+            (chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
+            for chunk in chunks
+            if chunk.usage
+        ),
+    )
+
+
+@pytest.mark.parametrize("cutting", tuple(_PART_CUTTINGS))
+def test_sagemaker_chat_vllm_stream_reaches_the_caller_whole_however_sagemaker_cuts_its_payload_parts(
+    gateway: Gateway, cutting: str
+) -> None:
+    identity: Final = f"sagemaker-chat-{uuid.uuid4().hex}"
+    parts: Final = _PART_CUTTINGS[cutting](vllm_stream_events(identity))
+    expected_usage: Final = (USAGE["prompt_tokens"], USAGE["completion_tokens"], USAGE["total_tokens"])
+
+    with wire_server(lambda _request: event_stream_reply(parts)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, {})
+        answer: Final = asyncio.run(_chat_openai_stream_with_usage(gateway, model, marked_prompt()))
+        only_request(wire)
+    assert (answer.text, answer.usages) == ("".join(CONTENT), (expected_usage,)), answer
+    stored: Final = JSON_OBJECT.validate_json(string_value(_spend_row(answer.call_id)["stored"]))
+    assert (stored["prompt_tokens"], stored["completion_tokens"], stored["total_tokens"]) == expected_usage, stored
 
 
 @dataclass(frozen=True, slots=True)

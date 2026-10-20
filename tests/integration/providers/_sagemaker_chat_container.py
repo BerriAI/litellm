@@ -16,6 +16,7 @@ SECRET_KEY: Final = "synthetic-secret-key-for-testing"
 REGION: Final = "us-east-1"
 PROMPT: Final = "synthetic inference component request"
 CONTENT: Final = ("sagemaker ", "wire control")
+USAGE: Final[Mapping[str, int]] = MappingProxyType({"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15})
 NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MARKER_PREFIX: Final = "marker-"
@@ -83,13 +84,34 @@ def _payload_part(body: bytes) -> bytes:
 def container_reply(identity: str, stream: bool) -> Reply:
     if not stream:
         return Reply(body=_completion(identity))
-    chunks: Final = (
+    return event_stream_reply(
+        (
+            _chunk(identity, {"role": "assistant", "content": CONTENT[0]}, None),
+            _chunk(identity, {"content": CONTENT[1]}, None),
+            _chunk(identity, {}, "stop", usage=dict(USAGE)),
+        )
+    )
+
+
+def event_stream_reply(payloads: tuple[bytes, ...]) -> Reply:
+    return Reply(chunks=tuple(map(_payload_part, payloads)), content_type="application/vnd.amazon.eventstream")
+
+
+def vllm_stream_events(identity: str) -> tuple[bytes, ...]:
+    usage_event: Final = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": SERVED_MODEL,
+        "choices": [],
+        "usage": dict(USAGE),
+    }
+    return (
         _chunk(identity, {"role": "assistant", "content": CONTENT[0]}, None),
         _chunk(identity, {"content": CONTENT[1]}, None),
-        _chunk(identity, {}, "stop", usage={"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}),
-    )
-    return Reply(
-        chunks=tuple(_payload_part(chunk) for chunk in chunks), content_type="application/vnd.amazon.eventstream"
+        _chunk(identity, {}, "stop"),
+        f"data: {json.dumps(usage_event, separators=(',', ':'))}\n\n".encode(),
+        b"data: [DONE]\n\n",
     )
 
 
