@@ -444,6 +444,47 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookDoesNotInventAProviderHandoff:
+    """A failure the proxy raised before any provider call (here an auth error) is logged through
+    _handle_logging_proxy_only_error, which fires pre_call for the callbacks. That must not stamp a
+    handoff instant onto the request, or every downstream reader (preprocessing latency, the
+    dispatched check behind the failure-row estimate) sees a provider call that never happened."""
+
+    @pytest.mark.asyncio
+    async def test_proxy_only_failure_lifts_no_first_api_call_start_time(self):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="pre-handoff-auth-failure",
+            function_id="pre-handoff",
+        )
+        request_data: Final[dict[str, object]] = {"litellm_logging_obj": logging_obj, "model": "gpt-4.1", "metadata": {}}
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "_dispatch_proxy_only_failure_handlers", new=AsyncMock()),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("Authentication Error, invalid key"),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                error_type=ProxyErrorTypes.auth_error,
+            )
+
+        assert request_data.get("first_api_call_start_time") is None
+        assert "api_call_start_time" not in logging_obj.model_call_details
+
+
 class TestPostCallFailureHookLiftsRecoveredPartialSpend:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered. The streaming handler stashes that recovered usage and
