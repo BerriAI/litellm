@@ -5033,3 +5033,98 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
     )
     for request_body, expected_end_user_id in cases:
         assert get_end_user_id_from_request_body(request_body) == expected_end_user_id
+
+
+_BUCKET_ALLOWLIST: Final = {"allowed_client_side_s3_buckets": ["team-batch-bucket"]}
+_ENDPOINT_ALLOWLIST: Final = {"allowed_client_side_s3_endpoint_urls": ["https://s3.us-west-2.amazonaws.com"]}
+
+
+def _batches_body_is_safe(body: dict[str, object], general_settings: dict[str, object]) -> bool:
+    return is_request_body_safe(
+        request_body=body,
+        general_settings=general_settings,
+        llm_router=None,
+        model="",
+        route="/v1/batches",
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("s3_bucket_name", "team-batch-bucket"),
+        ("s3_output_bucket_name", "team-batch-bucket"),
+        ("allow_legacy_cloud_file_ids", True),
+        ("s3_endpoint_url", "https://s3.us-west-2.amazonaws.com"),
+    ],
+)
+def test_storage_setting_in_request_body_is_rejected_without_an_allowlist(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="Rejected Request") as error:
+        _batches_body_is_safe({field: value}, {})
+
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_on_the_proxy_allowlist_is_accepted(field: str) -> None:
+    assert _batches_body_is_safe({field: "team-batch-bucket"}, _BUCKET_ALLOWLIST) is True
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_off_the_proxy_allowlist_is_rejected_and_names_the_setting(field: str) -> None:
+    with pytest.raises(ValueError, match=field) as error:
+        _batches_body_is_safe({field: "someone-elses-bucket"}, _BUCKET_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_buckets" in str(error.value)
+
+
+def test_endpoint_on_the_proxy_allowlist_is_accepted() -> None:
+    assert _batches_body_is_safe({"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST) is True
+
+
+def test_endpoint_off_the_proxy_allowlist_is_rejected_and_names_the_setting() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url") as error:
+        _batches_body_is_safe({"s3_endpoint_url": "https://attacker.example"}, _ENDPOINT_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_endpoint_urls" in str(error.value)
+
+
+def test_bucket_allowlist_admits_neither_an_endpoint_nor_the_legacy_file_flag() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "s3_endpoint_url": "team-batch-bucket"},
+            _BUCKET_ALLOWLIST,
+        )
+    with pytest.raises(ValueError, match="allow_legacy_cloud_file_ids"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "allow_legacy_cloud_file_ids": True},
+            _BUCKET_ALLOWLIST,
+        )
+
+
+def test_endpoint_allowlist_does_not_admit_a_bucket() -> None:
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"s3_bucket_name": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST)
+
+
+def test_bucket_nested_in_extra_body_is_checked_against_the_allowlist() -> None:
+    assert _batches_body_is_safe({"extra_body": {"s3_bucket_name": "team-batch-bucket"}}, _BUCKET_ALLOWLIST) is True
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"extra_body": {"s3_bucket_name": "someone-elses-bucket"}}, _BUCKET_ALLOWLIST)
+
+
+def test_proxy_wide_client_side_credentials_still_admit_any_bucket() -> None:
+    assert (
+        _batches_body_is_safe(
+            {"s3_bucket_name": "any-bucket", "allow_legacy_cloud_file_ids": True},
+            {"allow_client_side_credentials": True},
+        )
+        is True
+    )
+
+
+def test_other_blocked_fields_do_not_point_at_the_storage_allowlist() -> None:
+    with pytest.raises(ValueError, match="api_base") as error:
+        _batches_body_is_safe({"api_base": "https://attacker.example"}, _BUCKET_ALLOWLIST)
+
+    assert "allowed_client_side" not in str(error.value)

@@ -29745,6 +29745,16 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed Client Side S3 Buckets
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_buckets?: string[] | null;
+            /**
+             * Allowed Client Side S3 Endpoint Urls
+             * @description Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_endpoint_urls?: string[] | null;
+            /**
              * Allowed File Extensions
              * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
              */
