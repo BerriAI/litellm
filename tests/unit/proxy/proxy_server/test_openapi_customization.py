@@ -21,7 +21,7 @@ from typing import Final
 import httpx
 import pytest
 from fastapi import FastAPI
-from pydantic import BaseModel, GetJsonSchemaHandler
+from pydantic import BaseModel, ConfigDict, GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
@@ -297,6 +297,8 @@ async def test_a_request_is_answered_while_a_cold_openapi_json_builds(monkeypatc
     build_saw_the_answer: Final = threading.Event()
 
     class HoldsTheDocsBuild(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
         @classmethod
         def __get_pydantic_json_schema__(cls, schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
             build_started.set()
