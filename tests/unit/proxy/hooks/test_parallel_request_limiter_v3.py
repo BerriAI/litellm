@@ -3,6 +3,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import contextvars
 import logging
 import sys
 import time
@@ -948,7 +949,7 @@ async def test_max_parallel_requests_not_reset_by_window_roll_v3():
     _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
 
-    for _ in range(2):
+    async def admitted_request() -> None:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -956,14 +957,20 @@ async def test_max_parallel_requests_not_reset_by_window_roll_v3():
             call_type="",
         )
 
+    for _ in range(2):
+        await contextvars.Context().run(asyncio.create_task, admitted_request())
+
     controller.advance(handler.window_size + 1)
 
     with pytest.raises(HTTPException) as exc_info:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"model": "gpt-3.5-turbo"},
-            call_type="",
+        await contextvars.Context().run(
+            asyncio.create_task,
+            handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            ),
         )
     assert exc_info.value.status_code == 429
     assert "max_parallel_requests" in exc_info.value.detail
@@ -999,11 +1006,14 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
 
     for _ in range(3):
         with pytest.raises(HTTPException):
-            await handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=local_cache,
-                data={"model": "gpt-3.5-turbo"},
-                call_type="",
+            await contextvars.Context().run(
+                asyncio.create_task,
+                handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=local_cache,
+                    data={"model": "gpt-3.5-turbo"},
+                    call_type="",
+                ),
             )
     assert get_request_stash().parallel_slot == acquisition
 
@@ -1090,11 +1100,14 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     handler.parallel_acquire_script = fake_acquire_over_limit
 
     with pytest.raises(HTTPException) as exc_info:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"model": "gpt-3.5-turbo"},
-            call_type="",
+        await contextvars.Context().run(
+            asyncio.create_task,
+            handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            ),
         )
     assert exc_info.value.status_code == 429
     assert "max_parallel_requests" in exc_info.value.detail
@@ -4472,6 +4485,200 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     )
 
 
+async def _release_parallel_slot_via_success_event(
+    handler: PROXY_MaxParallelRequestsHandler_v3,
+    api_key: str,
+) -> None:
+    await handler.async_log_success_event(
+        kwargs={"standard_logging_object": {"metadata": {"user_api_key_hash": api_key}}},
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)),
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+    )
+
+
+@pytest.mark.parametrize("redis_backend", [False, True], ids=["memory", "redis-script"])
+@pytest.mark.asyncio
+async def test_reentering_pre_call_reuses_one_parallel_slot(redis_backend: bool) -> None:
+    api_key: Final = hash_token("sk-double-pre-call")
+    redis: Final = _ScriptedRedis() if redis_backend else None
+    handler: Final = (
+        _handler_with_redis(redis)
+        if redis is not None
+        else _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    )
+    cache: Final = handler.internal_usage_cache.dual_cache
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    counter_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    async def gauge_in_flight() -> int:
+        if redis is not None:
+            return len(redis.parallel_slot_ids_by_key.get(counter_key, set()))
+        return handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=counter_key, local_only=True))
+
+    async def request() -> None:
+        data: Final[dict[str, object]] = {"model": "gpt-3.5-turbo"}
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+        assert await gauge_in_flight() == 1
+        await _release_parallel_slot_via_success_event(handler, api_key)
+        assert await gauge_in_flight() == 0
+
+    for _ in range(3):
+        await contextvars.copy_context().run(asyncio.create_task, request())
+
+
+@pytest.mark.asyncio
+async def test_double_pre_call_admits_one_parallel_slot() -> None:
+    api_key: Final = hash_token("sk-double-pre-call-one")
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    counter_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    async def request() -> None:
+        data: Final[dict[str, object]] = {"model": "gpt-3.5-turbo"}
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+        assert (
+            handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=counter_key, local_only=True))
+            == 1
+        )
+        await _release_parallel_slot_via_success_event(handler, api_key)
+        assert (
+            handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=counter_key, local_only=True))
+            == 0
+        )
+
+    await contextvars.copy_context().run(asyncio.create_task, request())
+
+
+@pytest.mark.asyncio
+async def test_double_pre_call_appends_a_new_api_key_parallel_gauge() -> None:
+    first_api_key: Final = hash_token("sk-double-pre-call-first")
+    second_api_key: Final = hash_token("sk-double-pre-call-second")
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    first_auth: Final = UserAPIKeyAuth(api_key=first_api_key, max_parallel_requests=2)
+    second_auth: Final = UserAPIKeyAuth(api_key=second_api_key, max_parallel_requests=2)
+    data: Final[dict[str, object]] = {"model": "gpt-3.5-turbo"}
+    first_counter_key: Final = f"{{api_key:{first_api_key}}}:max_parallel_requests"
+    second_counter_key: Final = f"{{api_key:{second_api_key}}}:max_parallel_requests"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=first_auth,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+    first_stash: Final = get_request_stash()
+    assert first_stash is not None
+    first_slot: Final = first_stash.parallel_slot
+    await handler.async_pre_call_hook(
+        user_api_key_dict=second_auth,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=first_counter_key, local_only=True))
+        == 1
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=second_counter_key, local_only=True))
+        == 1
+    )
+    assert first_slot is not None
+    assert stash.parallel_slot == {
+        "slot_id": first_slot["slot_id"],
+        "counter_keys": [first_counter_key, second_counter_key],
+    }
+
+    await _release_parallel_slot_via_success_event(handler, first_api_key)
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=first_counter_key, local_only=True))
+        == 0
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=second_counter_key, local_only=True))
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_double_pre_call_rejection_releases_the_first_api_key_gauge() -> None:
+    first_api_key: Final = hash_token("sk-double-pre-call-rejected-first")
+    second_api_key: Final = hash_token("sk-double-pre-call-rejected-second")
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    first_auth: Final = UserAPIKeyAuth(api_key=first_api_key, max_parallel_requests=1)
+    second_auth: Final = UserAPIKeyAuth(api_key=second_api_key, max_parallel_requests=1)
+    data: Final[dict[str, object]] = {"model": "gpt-3.5-turbo"}
+    first_counter_key: Final = f"{{api_key:{first_api_key}}}:max_parallel_requests"
+    second_counter_key: Final = f"{{api_key:{second_api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_slots(cache, second_counter_key, ["other-request"])
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=first_auth,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=second_auth,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=first_counter_key, local_only=True))
+        == 1
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=second_counter_key, local_only=True))
+        == 1
+    )
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=exc_info.value,
+        user_api_key_dict=second_auth,
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=first_counter_key, local_only=True))
+        == 0
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=second_counter_key, local_only=True))
+        == 1
+    )
+
+
 @pytest.mark.asyncio
 async def test_read_only_gauge_check_counts_without_acquiring_v3():
     """
@@ -6833,6 +7040,7 @@ class _ScriptedRedis:
         self.batch_call_args: list[list[object]] = []
         self.increments: list[tuple[str, float]] = []
         self.guarded_increments: list[tuple[list[str], list[object]]] = []
+        self.parallel_slot_ids_by_key: dict[str, set[str]] = {}
 
     async def async_increment(self, key: str, value: float, **kwargs):
         self.increments.append((key, value))
@@ -6857,12 +7065,16 @@ class _ScriptedRedis:
             if script == v3.BATCH_COUNTER_READ_SCRIPT:
                 return [int(time.time()) if key.endswith(":window") else self.stored_counter_value for key in keys]
             if script == v3.PARALLEL_COUNT_SCRIPT:
-                return [0 for _ in keys]
+                return [len(self.parallel_slot_ids_by_key.get(key, set())) for key in keys]
             if script == v3.PARALLEL_ACQUIRE_SCRIPT:
-                return [0, *[1 for _ in keys]]
+                for index, key in enumerate(keys):
+                    self.parallel_slot_ids_by_key.setdefault(key, set()).add(str(args[index * 3 + 2]))
+                return [0, *[len(self.parallel_slot_ids_by_key.get(key, set())) for key in keys]]
             if script == v3.PARALLEL_RELEASE_SCRIPT:
                 self.released_slots.append((list(keys), list(args)))
-                return [0 for _ in keys]
+                for key, slot_id in zip(keys, args):
+                    self.parallel_slot_ids_by_key.get(key, set()).discard(str(slot_id))
+                return [len(self.parallel_slot_ids_by_key.get(key, set())) for key in keys]
             raise AssertionError(f"unexpected script: {script[:60]}")
 
         return run

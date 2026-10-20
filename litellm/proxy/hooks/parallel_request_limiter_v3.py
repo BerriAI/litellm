@@ -579,6 +579,14 @@ class RateLimitDescriptor(TypedDict):
     rate_limit: RateLimitDescriptorRateLimitObject | None
 
 
+def _without_parallel_limit(descriptor: RateLimitDescriptor) -> RateLimitDescriptor:
+    rate_limit: Final = descriptor["rate_limit"]
+    if rate_limit is None:
+        return descriptor
+    stripped: Final[RateLimitDescriptorRateLimitObject] = {**rate_limit, "max_parallel_requests": None}
+    return {**descriptor, "rate_limit": stripped}
+
+
 class ParallelRequestGauge(TypedDict):
     counter_key: str
     limit: int
@@ -4170,6 +4178,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        held_parallel_slot: Final = stash.parallel_slot
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -4219,7 +4228,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 for d in descriptors
                 if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
             ]
-            parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
+            held_counter_keys: Final[frozenset[str]] = (
+                frozenset(held_parallel_slot["counter_keys"]) if held_parallel_slot is not None else frozenset()
+            )
+            new_parallel_counter_keys: Final = tuple(
+                counter_key for counter_key in parallel_counter_keys if counter_key not in held_counter_keys
+            )
+            parallel_slot_id: Final = (
+                held_parallel_slot["slot_id"]
+                if held_parallel_slot is not None
+                else (uuid.uuid4().hex if parallel_counter_keys else None)
+            )
 
             first_pass_descriptors: Final = (
                 descriptors
@@ -4228,8 +4247,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 )
             )
+            rate_limit_descriptors: Final = (
+                first_pass_descriptors
+                if held_parallel_slot is None
+                else tuple(
+                    _without_parallel_limit(descriptor)
+                    if self.create_rate_limit_keys(descriptor["key"], descriptor["value"], "max_parallel_requests")
+                    in held_counter_keys
+                    else descriptor
+                    for descriptor in first_pass_descriptors
+                )
+            )
             response: Final = await self.should_rate_limit(
-                descriptors=first_pass_descriptors,
+                descriptors=rate_limit_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
@@ -4243,7 +4273,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             else:
                 stash.rate_limit_response = response
-                if parallel_slot_id is not None:
+                if held_parallel_slot is not None and new_parallel_counter_keys:
+                    stash.parallel_slot = ParallelSlotAcquisition(
+                        slot_id=held_parallel_slot["slot_id"],
+                        counter_keys=[*held_parallel_slot["counter_keys"], *new_parallel_counter_keys],
+                    )
+                elif held_parallel_slot is None and parallel_slot_id is not None:
                     stash.parallel_slot = ParallelSlotAcquisition(
                         slot_id=parallel_slot_id,
                         counter_keys=parallel_counter_keys,
