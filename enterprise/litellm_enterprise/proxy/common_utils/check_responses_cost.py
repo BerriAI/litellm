@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Final, cast
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
+    ResponseCreator,
 )
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -59,7 +60,9 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_CALLBACK_LIST_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
+_CALLBACK_LIST_FIELDS: Final = frozenset({"success_callback", "failure_callback"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,7 @@ class BilledBackgroundResponse:
     custom_llm_provider: str | None
     litellm_params: Mapping[str, object]
     metadata: Mapping[str, object]
+    creator_logging: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,10 +98,44 @@ def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
     return unpriced
 
 
+def _string_callbacks(callbacks: object) -> tuple[str, ...]:
+    if not isinstance(callbacks, list):
+        return ()
+    return tuple(
+        callback for callback in _CALLBACK_LIST_ADAPTER.validate_python(callbacks) if isinstance(callback, str)
+    )
+
+
+def creator_logging_fields(creator: ResponseCreator) -> Mapping[str, object]:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        return key_and_team_logging_fields(
+            user_api_key_dict=UserAPIKeyAuth(
+                metadata=dict(creator.key_metadata),
+                team_id=creator.team_id,
+                team_metadata=dict(creator.team_metadata),
+            ),
+            proxy_config=proxy_config,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"CheckResponsesCost: could not read the creator's logging settings, so only the proxy's "
+            f"callbacks get the billed event: {e}"
+        )
+        return MappingProxyType({})
+
+
 async def log_billed_background_response(billed: BilledBackgroundResponse) -> BilledCharge:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import split_dynamic_success_callbacks
 
+    sync_callbacks, async_callbacks = split_dynamic_success_callbacks(
+        _string_callbacks(billed.creator_logging.get("success_callback"))
+    )
     logging_obj: Final = LiteLLMLogging(
         model=billed.model,
         messages=[{"role": "user", "content": "<retrieve_response>"}],
@@ -106,6 +144,9 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
         start_time=datetime.now(),
         litellm_call_id=str(uuid.uuid4()),
         function_id=str(uuid.uuid4()),
+        dynamic_success_callbacks=sync_callbacks,
+        dynamic_async_success_callbacks=async_callbacks,
+        kwargs={key: value for key, value in billed.creator_logging.items() if key not in _CALLBACK_LIST_FIELDS},
     )
     logging_obj.update_environment_variables(
         litellm_params={**billed.litellm_params, "metadata": dict(billed.metadata)},
@@ -301,6 +342,7 @@ class CheckResponsesCost:
         response: ResponsesAPIResponse,
     ) -> BilledBackgroundResponse:
         deployment: Final = target.deployment
+        creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
         return BilledBackgroundResponse(
             response=response.model_copy(update={"id": job.unified_object_id}),
             model=deployment.litellm_params.model if deployment is not None else (response.model or ""),
@@ -310,12 +352,13 @@ class CheckResponsesCost:
             litellm_params=_deployment_litellm_params(deployment) if deployment is not None else MappingProxyType({}),
             metadata=MappingProxyType(
                 {
-                    **(await self._creator_attribution.response_metadata(job, job.unified_object_id)),
+                    **creator.metadata,
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
                 }
             ),
+            creator_logging=creator_logging_fields(creator),
         )
 
     async def _bill_once(

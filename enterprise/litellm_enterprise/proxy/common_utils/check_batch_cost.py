@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tupl
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
+    row_metadata,
 )
 
 import litellm
@@ -82,11 +83,6 @@ def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.L
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return TeamRepository(prisma_client).table
-
-
-def _row_metadata(row: object) -> dict[str, object]:
-    metadata: Final = getattr(row, "metadata", None)
-    return cast(dict[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
 
 
 class CheckBatchCost:
@@ -1022,7 +1018,9 @@ class CheckBatchCost:
         if (has_key_row and key_row is None) or (team_id and team_row is None):
             return True
         settings: Final = get_dynamic_logging_metadata(
-            UserAPIKeyAuth(metadata=_row_metadata(key_row), team_metadata=_row_metadata(team_row), team_id=team_id),
+            UserAPIKeyAuth(
+                metadata=dict(row_metadata(key_row)), team_metadata=dict(row_metadata(team_row)), team_id=team_id
+            ),
             proxy_config,
         )
         callback_vars: Final = (settings.callback_vars if settings is not None else None) or {}

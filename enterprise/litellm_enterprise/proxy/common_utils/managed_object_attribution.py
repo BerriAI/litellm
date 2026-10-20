@@ -96,6 +96,14 @@ class _CreatorRows:
     user: prisma_models.LiteLLM_UserTable | None
 
 
+@dataclass(frozen=True, slots=True)
+class ResponseCreator:
+    metadata: Mapping[str, object]
+    key_metadata: Mapping[str, object]
+    team_id: str | None
+    team_metadata: Mapping[str, object]
+
+
 class ManagedObjectCreatorAttribution:
     """Rebuilds the spend-tracking metadata of whoever created a managed object, so the poll
     job's spend row is attributed like the creating request: key hash, team, organization,
@@ -109,6 +117,8 @@ class ManagedObjectCreatorAttribution:
     to increment organization spend, so leaving it out drops the cost from org accounting.
     A background response also carries its end user and the key, team, and user budgets, the
     way the read that billed it before did, and never names a key-scoped creator as its user.
+    Its creator's key and team metadata come along too, so the billed event reaches the key's
+    and team's logging callbacks like that read did.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -119,17 +129,22 @@ class ManagedObjectCreatorAttribution:
         rows: Final = await self._rows(job, object_id)
         return {"user_api_key_user_id": job.created_by, **_shared_metadata(job, rows)}
 
-    async def response_metadata(self, job: ManagedObjectRow, object_id: str) -> Mapping[str, object]:
+    async def response_creator(self, job: ManagedObjectRow, object_id: str) -> ResponseCreator:
         rows: Final = await self._rows(job, object_id)
         end_user_id: Final = getattr(job, "end_user_id", None)
-        return {
-            "user_api_key_user_id": _creator_user_id(job.created_by),
-            **_shared_metadata(job, rows),
-            **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-            **_budget_fields(rows.key, "user_api_key_spend", "user_api_key_max_budget"),
-            **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
-            **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
-        }
+        return ResponseCreator(
+            metadata={
+                "user_api_key_user_id": _creator_user_id(job.created_by),
+                **_shared_metadata(job, rows),
+                **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
+                **_budget_fields(rows.key, "user_api_key_spend", "user_api_key_max_budget"),
+                **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
+                **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
+            },
+            key_metadata=row_metadata(rows.key),
+            team_id=getattr(job, "team_id", None),
+            team_metadata=row_metadata(rows.team),
+        )
 
     async def _rows(self, job: ManagedObjectRow, object_id: str) -> _CreatorRows:
         return _CreatorRows(
@@ -194,6 +209,11 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
         **({"user_api_key_org_id": org_id} if org_id is not None else {}),
         **({"tags": tags} if tags else {}),
     }
+
+
+def row_metadata(row: object) -> Mapping[str, object]:
+    metadata: Final = getattr(row, "metadata", None)
+    return cast(Mapping[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
 
 
 def _is_cli_session_key(api_key: str, created_by: str | None) -> bool:
