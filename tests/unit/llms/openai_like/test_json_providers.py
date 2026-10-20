@@ -402,7 +402,7 @@ class TestRuninfra:
             "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
             "runinfra/ornith-ai/Ornith-1.5-35B-A3B": (1e-07, 4e-07, 1e-08),
             "runinfra/zai-org/GLM-5.3-Flash": (1.1e-07, 4.5e-07, 3e-08),
-            "runinfra/zai-org/GLM-5.3": (1.4e-06, 4.4e-06, 1.4e-07),
+            "runinfra/zai-org/GLM-5.3": (1.3e-06, 4.2e-06, 1.3e-07),
         }
         # Every RunInfra entry is pinned here, so a retired model left in the
         # cost map, or a new one added without its prices, reddens this test.

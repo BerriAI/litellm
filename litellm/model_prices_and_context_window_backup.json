@@ -62487,14 +62487,14 @@
         "supports_vision": true
     },
     "runinfra/zai-org/GLM-5.3": {
-        "cache_read_input_token_cost": 1.4e-07,
-        "input_cost_per_token": 1.4e-06,
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 1.3e-06,
         "litellm_provider": "runinfra",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 4.4e-06,
+        "output_cost_per_token": 4.2e-06,
         "source": "https://runinfra.ai/inference-api/glm-5-3",
         "supported_endpoints": [
             "/v1/chat/completions"
