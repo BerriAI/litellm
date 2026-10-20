@@ -401,6 +401,53 @@ async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, d
 
 
 @pytest.mark.asyncio
+async def test_openai_decisions_honors_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://onprem.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="backend-secret-key",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_systemone_honors_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://onprem.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions=_QUESTIONS,
+        api_key="backend-secret-key",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_api_base_wins_over_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="test-key",
+        api_base="https://api.openai.com/v1",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+
+
+@pytest.mark.asyncio
 async def test_systemone_falls_back_to_plain_pricing_without_decisions_row(
     respx_mock: respx.MockRouter,
 ) -> None:

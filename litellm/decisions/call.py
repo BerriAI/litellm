@@ -454,6 +454,10 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    if api_base is None:
+        base_url_alias: Final = kwargs.get("base_url")
+        if isinstance(base_url_alias, str) and base_url_alias:
+            api_base = base_url_alias
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
