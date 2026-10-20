@@ -9,8 +9,10 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, wait
+from copy import deepcopy
+from functools import partial
 from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
@@ -39,6 +41,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -441,6 +444,195 @@ def test_token_counter_with_tools(message_count_pair):
         assert (
             expected_tokens == counted_tokens
         ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
+
+
+_WEATHER_FUNCTION: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string", "description": "City name"}},
+        "required": ["location"],
+    },
+}
+_TIME_FUNCTION: Final = {
+    "name": "get_time",
+    "description": "Get the local time for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+_WEB_SEARCH_FUNCTION: Final = {
+    "name": "web_search",
+    "description": "Search the web",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+
+def _openai_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": function}
+
+
+def _anthropic_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}
+
+
+_USER_MESSAGES: Final = ({"role": "user", "content": "What is the weather in Paris today?"},)
+_SYSTEM_AND_USER_MESSAGES: Final = ({"role": "system", "content": "You are a helpful assistant."}, *_USER_MESSAGES)
+
+
+_chat_template_count: Final = partial(token_counter_new, chat_template_tools=True)
+
+
+@pytest.mark.parametrize("tool_shape", [_openai_tool, _anthropic_tool])
+@pytest.mark.parametrize(
+    ("model", "messages", "functions", "billed_prompt_tokens"),
+    [
+        # usage.prompt_tokens billed for this request by Azure AI Foundry DeepSeek-V4-Flash-0731,
+        # Databricks databricks-qwen35-122b-a10b and DashScope qwen3.5-plus on 2026-10-17
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION,), 295),
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 348),
+        ("DeepSeek-V4-Flash-0731", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 300),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION,), 289),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 352),
+        ("databricks-qwen35-122b-a10b", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 296),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION,), 284),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 342),
+    ],
+)
+def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
+    tool_shape: Callable[[Mapping[str, object]], dict[str, object]],
+    model: str,
+    messages: tuple[dict[str, str], ...],
+    functions: tuple[Mapping[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    counted: Final = _chat_template_count(
+        model=model,
+        messages=list(messages),
+        tools=[tool_shape(function) for function in functions],
+    )
+
+    assert abs(counted - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+@pytest.mark.parametrize(
+    ("model", "counted_like"),
+    [
+        ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
+        ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
+        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
+        ("qwen3-235b-a22b", "deepseek-v3.2"),
+    ],
+)
+def test_token_counter_counts_tools_by_the_models_chat_template_family(model: str, counted_like: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION), _openai_tool(_TIME_FUNCTION)]
+
+    assert _chat_template_count(model=model, messages=list(_USER_MESSAGES), tools=tools) == _chat_template_count(
+        model=counted_like, messages=list(_USER_MESSAGES), tools=tools
+    )
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "builtin_tool",
+    [
+        {"type": "web_search_preview"},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"name": "web_search"},
+    ],
+)
+def test_token_counter_skips_tools_not_sent_as_functions_for_chat_template_families(
+    model: str, builtin_tool: dict[str, object]
+):
+    weather_tool: Final = _openai_tool(_WEATHER_FUNCTION)
+
+    assert _chat_template_count(
+        model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool]
+    ) == _chat_template_count(model=model, messages=list(_USER_MESSAGES))
+    assert _chat_template_count(
+        model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool, weather_tool]
+    ) == _chat_template_count(model=model, messages=list(_USER_MESSAGES), tools=[weather_tool])
+
+
+def _responses_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", **function}
+
+
+def _gemini_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"function_declarations": [function]}
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize("function", [_WEATHER_FUNCTION, _WEB_SEARCH_FUNCTION])
+@pytest.mark.parametrize("tool_shape", [_responses_tool, _gemini_tool])
+def test_token_counter_counts_function_tools_like_chat_completions_tools_for_chat_template_families(
+    model: str, function: Mapping[str, object], tool_shape: Callable[[Mapping[str, object]], dict[str, object]]
+):
+    assert _chat_template_count(
+        model=model, messages=list(_USER_MESSAGES), tools=[tool_shape(function)]
+    ) == _chat_template_count(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
+
+
+# Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
+# these tool_choice values on 2026-10-17, the same as without one
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert _chat_template_count(
+        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == _chat_template_count(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "anthropic_tool",
+    [
+        {"name": "get_weather", "input_schema": _WEATHER_FUNCTION["parameters"]},
+        _anthropic_tool(_WEATHER_FUNCTION),
+        {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        _anthropic_tool(_WEB_SEARCH_FUNCTION),
+    ],
+)
+def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
+    model: str, anthropic_tool: dict[str, object]
+):
+    sent_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([deepcopy(anthropic_tool)])  # pyright: ignore[reportArgumentType]  # raw Anthropic tool dict
+
+    assert _chat_template_count(
+        model=model, messages=list(_USER_MESSAGES), tools=[anthropic_tool]
+    ) == _chat_template_count(model=model, messages=list(_USER_MESSAGES), tools=sent_tools)
+
+
+# Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
+# request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
+# either way (both read on Hugging Face on 2026-10-17)
+@pytest.mark.parametrize(
+    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+)
+def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
+    model: str, implicit_system_turn_tokens: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    system_cost_with_tools: Final = _chat_template_count(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES), tools=tools
+    ) - _chat_template_count(model=model, messages=list(_USER_MESSAGES), tools=tools)
+    system_cost_without_tools: Final = _chat_template_count(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES)
+    ) - _chat_template_count(model=model, messages=list(_USER_MESSAGES))
+
+    assert system_cost_with_tools == system_cost_without_tools - implicit_system_turn_tokens
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b", "qwen3.5-plus"])
+def test_token_counter_keeps_openai_tool_framing_for_chat_template_families_unless_asked(model: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION), _openai_tool(_TIME_FUNCTION)]
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools) == token_counter_new(
+        model="mistral-large-latest", messages=list(_USER_MESSAGES), tools=tools
+    )
 
 
 class NeedsToleranceUpdateError(Exception):

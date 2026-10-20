@@ -2546,6 +2546,7 @@ def token_counter(
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
+    chat_template_tools: bool = False,
 ) -> int:
     """
     The same as `litellm.litellm_core_utils.token_counter`.
@@ -2572,6 +2573,7 @@ def token_counter(
         tool_choice,
         use_default_image_token_count,
         default_token_count,
+        chat_template_tools,
     )
 
 

@@ -13922,6 +13922,7 @@ async def _local_token_estimate(
         messages=messages,
         tools=tools,
         custom_tokenizer=tokenizer,
+        chat_template_tools=True,
     )
     total_tokens: Final = await (
         count if provider_failure is None else _estimate_or_provider_error(count, provider_failure)
