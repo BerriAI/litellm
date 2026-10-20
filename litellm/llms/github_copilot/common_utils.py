@@ -37,7 +37,7 @@ DEFAULT_COPILOT_EDITOR_VERSION: Final = "vscode/1.115.0"
 DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION: Final = EDITOR_PLUGIN_VERSION
 DEFAULT_COPILOT_USER_AGENT: Final = USER_AGENT
 
-_COPILOT_AUTH_HEADER_CONFIG = (
+_COPILOT_AUTH_HEADER_CONFIG: Final = (
     ("accept", "GITHUB_COPILOT_ACCEPT", "application/json"),
     ("content-type", "GITHUB_COPILOT_CONTENT_TYPE", "application/json"),
     ("copilot-integration-id", "GITHUB_COPILOT_INTEGRATION_ID", DEFAULT_COPILOT_INTEGRATION_ID),
@@ -45,7 +45,7 @@ _COPILOT_AUTH_HEADER_CONFIG = (
     ("editor-plugin-version", "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION", DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION),
     ("user-agent", "GITHUB_COPILOT_USER_AGENT", DEFAULT_COPILOT_USER_AGENT),
 )
-_COPILOT_REQUEST_HEADER_CONFIG = _COPILOT_AUTH_HEADER_CONFIG + (
+_COPILOT_REQUEST_HEADER_CONFIG: Final = _COPILOT_AUTH_HEADER_CONFIG + (
     ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", "conversation-panel"),
     ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", API_VERSION),
     (
@@ -133,7 +133,7 @@ class InvalidAPIBaseError(GithubCopilotError):
 
 
 def _get_copilot_header_value(environment_variable: str, default: str | None) -> str | None:
-    value = os.getenv(environment_variable)
+    value: Final = os.getenv(environment_variable)
     if value is None:
         return default
     return value or None

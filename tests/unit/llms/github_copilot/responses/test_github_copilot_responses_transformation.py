@@ -26,6 +26,16 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
+STORED_ACCESS_TOKEN = "stored-oauth-access-token"
+
+
+@pytest.fixture
+def stored_access_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", raising=False)
+    (tmp_path / "access-token").write_text(STORED_ACCESS_TOKEN)
+
+
 @pytest.fixture(autouse=True)
 def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
     """Pin litellm.model_cost to the bundled local backup so tests don't depend
@@ -97,8 +107,8 @@ class TestGithubCopilotResponsesAPITransformation:
 
         assert url == f"{DEFAULT_GITHUB_COPILOT_API_BASE}/responses"
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
+    @pytest.mark.usefixtures("stored_access_token")
+    def test_validate_environment_default_headers(self, monkeypatch):
         for environment_variable in (
             "GITHUB_COPILOT_OPENAI_INTENT",
             "GITHUB_COPILOT_API_VERSION",
@@ -106,15 +116,11 @@ class TestGithubCopilotResponsesAPITransformation:
         ):
             monkeypatch.delenv(environment_variable, raising=False)
 
-        mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
-        mock_authenticator_class.return_value = mock_auth_instance
-
         config = GithubCopilotResponsesAPIConfig()
         headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
         next_headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
 
-        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["Authorization"] == f"Bearer {STORED_ACCESS_TOKEN}"
         assert headers["accept"] == "application/json"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
@@ -127,13 +133,8 @@ class TestGithubCopilotResponsesAPITransformation:
         assert str(uuid.UUID(headers["x-request-id"])) == headers["x-request-id"]
         assert next_headers["x-request-id"] != headers["x-request-id"]
 
-    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
-        "litellm.llms.github_copilot.responses.transformation.Authenticator"
-    )
-    def test_validate_environment_headers_from_environment(self, mock_authenticator_class):
-        mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
-        mock_authenticator_class.return_value = mock_auth_instance
+    @pytest.mark.usefixtures("stored_access_token")
+    def test_validate_environment_headers_from_environment(self):
         environment = {
             "GITHUB_COPILOT_ACCEPT": "application/vnd.github+json",
             "GITHUB_COPILOT_CONTENT_TYPE": "application/custom+json",
@@ -151,7 +152,7 @@ class TestGithubCopilotResponsesAPITransformation:
                 headers={}, model="gpt-5.1-codex", litellm_params={}
             )
 
-        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["Authorization"] == f"Bearer {STORED_ACCESS_TOKEN}"
         assert headers["accept"] == "application/vnd.github+json"
         assert headers["content-type"] == "application/custom+json"
         assert headers["copilot-integration-id"] == "custom-integration"
@@ -162,13 +163,8 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["x-github-api-version"] == "2099-01-01"
         assert headers["x-vscode-user-agent-library-version"] == "custom-library"
 
-    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
-        "litellm.llms.github_copilot.responses.transformation.Authenticator"
-    )
-    def test_empty_environment_header_omits_default(self, mock_authenticator_class):
-        mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
-        mock_authenticator_class.return_value = mock_auth_instance
+    @pytest.mark.usefixtures("stored_access_token")
+    def test_empty_environment_header_omits_default(self):
 
         with patch.dict(os.environ, {"GITHUB_COPILOT_USER_AGENT": ""}):
             headers = GithubCopilotResponsesAPIConfig().validate_environment(
