@@ -229,6 +229,8 @@ graph LR
 | `send_weekly_spend_report` | weekly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
 | `send_monthly_spend_report` | monthly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
 
+With `store_model_in_db` enabled, deployment reconciliation removes Router entries absent from both the database and `model_list`. Plugins that own runtime-injected deployments can set a non-empty `model_info.managed_by` marker, such as `"plugin"`, and leave `model_info.db_model` as `False`. These deployments survive reconciliation even when `model_list` is populated or explicitly empty, and their IDs remain in the returned desired set. The plugin is responsible for removing its deployments when they are no longer needed. DB deployments missing from the database are still removed, even if they carry an owner marker. The existing protection for non-DB deployments when `model_list` is missing or null remains unchanged
+
 **Cost Attribution Flow:**
 1. LLM response returns to `utils.py` wrapper after `litellm.acompletion()` completes
 2. `update_response_metadata()` (`litellm_core_utils/llm_response_utils/response_metadata.py`) is called

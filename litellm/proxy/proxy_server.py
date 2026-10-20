@@ -7756,12 +7756,12 @@ class ProxyConfig:
 
         - Create all up list of model id's (db + config)
         - Compare all up list to router model id's
-        - Remove any that are missing
+        - Remove missing deployments unless a non-DB deployment declares managed_by
 
         Return:
-        - frozenset[str] - the ids the db + config say should be served after this
-          reconcile, so a caller can tell an id this evicted on purpose from one that
-          went missing. None when no reconcile ran and that set is therefore unknown.
+        - frozenset[str] - the ids the db + config or an external owner say should be
+          served after this reconcile, so a caller can distinguish intentional eviction
+          from a missing deployment. None when no reconcile ran and that set is unknown.
         """
         global user_config_file_path, llm_router
         combined_id_list: Final = []
@@ -7830,10 +7830,19 @@ class ProxyConfig:
                 len(kept_config_ids),
             )
 
+        externally_managed_ids: Final[frozenset[str]] = frozenset(
+            model_id
+            for model_id in router_model_ids
+            if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
+            and deployment.model_info.db_model is False
+            and deployment.model_info.get("managed_by")
+        )
+        desired_ids: Final = frozenset(combined_id_list) | kept_config_ids | externally_managed_ids
+
         for model_id in router_model_ids:
-            if model_id not in combined_id_list and model_id not in kept_config_ids:
+            if model_id not in desired_ids:
                 llm_router.delete_deployment(id=model_id)
-        return frozenset(combined_id_list) | kept_config_ids
+        return desired_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
