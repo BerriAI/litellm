@@ -2359,7 +2359,6 @@ def test_register_model_with_scientific_notation():
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
@@ -8743,6 +8742,7 @@ def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
         "open_ai_text_completion_models",
         set(litellm.open_ai_text_completion_models),
     )
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
 
 def test_aget_valid_models():

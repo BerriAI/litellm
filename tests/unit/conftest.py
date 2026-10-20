@@ -288,6 +288,8 @@ def isolate_litellm_globals() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
+    original_model_cost: Final = litellm.model_cost
+    original_model_cost_entries: Final = dict(original_model_cost)
     original_live_routers: Final = frozenset(litellm_router_module._live_routers)
     original_runtime_registered_model_cost: Final = {
         model_key: dict(model_value)
@@ -303,6 +305,8 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         litellm_router_module._live_routers.add(router)
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    original_model_cost.clear()
+    original_model_cost.update(original_model_cost_entries)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 
