@@ -6,7 +6,7 @@ from collections.abc import Collection, Iterator, Mapping
 from functools import lru_cache
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
@@ -473,7 +473,11 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 )
 
 
-_PROXY_ALLOWLIST_SETTING_BY_PARAM: Final = MappingProxyType(
+_ClientSideAllowlistSetting: TypeAlias = Literal[
+    "allowed_client_side_s3_buckets", "allowed_client_side_s3_endpoint_urls"
+]
+
+_PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSetting]] = MappingProxyType(
     {
         "s3_bucket_name": "allowed_client_side_s3_buckets",
         "s3_output_bucket_name": "allowed_client_side_s3_buckets",
@@ -488,14 +492,12 @@ class _ClientSideStorageAllowlist(BaseModel):
     allowed_client_side_s3_buckets: tuple[str, ...] = ()
     allowed_client_side_s3_endpoint_urls: tuple[str, ...] = ()
 
-    def admits(self, param: str, value: object) -> bool:
-        match param:
-            case "s3_bucket_name" | "s3_output_bucket_name":
+    def admits(self, setting: _ClientSideAllowlistSetting, value: object) -> bool:
+        match setting:
+            case "allowed_client_side_s3_buckets":
                 return value in self.allowed_client_side_s3_buckets
-            case "s3_endpoint_url":
+            case "allowed_client_side_s3_endpoint_urls":
                 return value in self.allowed_client_side_s3_endpoint_urls
-            case _:
-                return False
 
 
 def _banned_param_error(param: str) -> ValueError:
@@ -542,9 +544,9 @@ def _check_banned_params(
             # Proxy-wide opt-in: every banned param is permitted, exit
             # entirely so the rest of the loop doesn't waste work.
             return
-        if param in _PROXY_ALLOWLIST_SETTING_BY_PARAM and _ClientSideStorageAllowlist.model_validate(
-            general_settings
-        ).admits(param, body[param]):
+        if (
+            setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
             continue
         if (
             _allow_model_level_clientside_configurable_parameters(
