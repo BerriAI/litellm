@@ -16,14 +16,14 @@ def _pdf_page(content: bytes) -> SimpleNamespace:
 
 
 @pytest.mark.benchmark
-def test_unterminated_pdf_literal_string_scan():
+def test_unterminated_pdf_literal_string_scan():  # test-quality-ok: CodSpeed performance benchmark
     page: Final = _pdf_page(b"(" * (4 * 1024 * 1024))
 
     _price_pdf_pages((page,), len)
 
 
 @pytest.mark.benchmark
-def test_pdf_string_operand_scan_after_escaped_parentheses():
+def test_pdf_string_operand_scan_after_escaped_parentheses():  # test-quality-ok: CodSpeed performance benchmark
     path_operator: Final = b"10 10 m 20 20 l S\n"
     padding_repetitions: Final = 64 * 1024 // len(path_operator)
     padding_bytes: Final = padding_repetitions * len(path_operator)
@@ -34,7 +34,7 @@ def test_pdf_string_operand_scan_after_escaped_parentheses():
 
 
 @pytest.mark.benchmark
-def test_pdf_invocation_scan_ignores_unterminated_comments():
+def test_pdf_invocation_scan_ignores_unterminated_comments():  # test-quality-ok: CodSpeed performance benchmark
     page: Final = _pdf_page(b"/a %" * (4 * 1024 * 1024 // 4))
 
     _price_pdf_pages((page,), len)
@@ -49,7 +49,7 @@ def test_pdf_invocation_scan_ignores_unterminated_comments():
     ],
     ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
 )
-def test_pdf_invocation_scan_with_crlf_comments(comments: bytes):
+def test_pdf_invocation_scan_with_crlf_comments(comments: bytes):  # test-quality-ok: CodSpeed performance benchmark
     page: Final = _pdf_page(b"BT /F1 " + comments + b"12 Tf (hello) Tj ET")
 
     _price_pdf_pages((page,), len)
