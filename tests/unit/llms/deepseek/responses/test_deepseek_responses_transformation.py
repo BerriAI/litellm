@@ -260,6 +260,24 @@ def test_legacy_and_unknown_models_keep_chat_bridge(model: str | None) -> None:
     assert ProviderConfigManager.get_provider_responses_api_config(provider="deepseek", model=model) is None
 
 
+def test_native_deepseek_does_not_advertise_websocket_transport() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider="deepseek", model="deepseek-flash")
+    assert config is not None
+    assert config.supports_native_websocket() is False
+
+
+def test_native_deepseek_requires_file_search_emulation() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider="deepseek", model="deepseek-flash")
+    assert config is not None
+    assert config.supports_native_file_search() is False
+
+
+def test_native_deepseek_does_not_accept_encrypted_agent_messages() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider="deepseek", model="deepseek-flash")
+    assert config is not None
+    assert config.supports_encrypted_agent_messages() is False
+
+
 def test_stateless_api_rejects_previous_response_id(respx_mock: respx.MockRouter) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="previous_response_id"):
         litellm.responses(model="deepseek/deepseek-flash", input="continue", previous_response_id="resp_previous")
