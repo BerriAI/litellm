@@ -5,7 +5,7 @@ use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
-    formats::messages::MessagesRequest,
+    formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
@@ -60,6 +60,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -67,11 +68,8 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             .filter(|value| !value.trim().is_empty())
             .or_else(|| {
                 WORKSPACE_FIELDS.iter().find_map(|field| {
-                    params
-                        .extra
-                        .get(*field)?
-                        .as_str()
-                        .filter(|value| !value.trim().is_empty())
+                    workspace_value(optional_params.extra.get(*field))
+                        .or_else(|| workspace_value(params.extra.get(*field)))
                 })
             });
         let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS)
@@ -182,6 +180,10 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
     }
 }
 
+fn workspace_value(value: Option<&Value>) -> Option<&str> {
+    value?.as_str().filter(|value| !value.trim().is_empty())
+}
+
 fn platform_region(
     base: Option<&str>,
     params: &LitellmParams,
@@ -260,6 +262,7 @@ mod tests {
                     vec![],
                     Some("key"),
                     "claude-test",
+                    &MessagesOptionalParams::default(),
                     &LitellmParams::default(),
                     &|_| None
                 )
@@ -280,6 +283,7 @@ mod tests {
                 ],
                 Some("explicit"),
                 "claude-test",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &|name| (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into()),
             )
@@ -345,7 +349,14 @@ mod tests {
             .get_complete_url(None, "claude-test", &params, false, &env)
             .unwrap();
         let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .validate_environment(vec![], None, "claude-test", &params, &env)
+            .validate_environment(
+                vec![],
+                None,
+                "claude-test",
+                &MessagesOptionalParams::default(),
+                &params,
+                &env,
+            )
             .unwrap();
         assert_eq!(
             url,

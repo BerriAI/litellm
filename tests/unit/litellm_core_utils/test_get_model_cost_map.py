@@ -8,12 +8,15 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
+from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils import get_model_cost_map as get_model_cost_map_module
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -1246,3 +1249,16 @@ def test_get_backup_model_cost_map():
         print("inside backup")
         content = json.load(f)
         print("content", content)
+
+
+@pytest.mark.parametrize("backup", [b'["only-in-the-backup"]', b'"only-in-the-backup"', b"null"])
+def test_a_bundled_backup_that_is_not_a_json_object_is_rejected_without_quoting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backup: bytes
+):
+    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(backup)
+    monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path)
+
+    with pytest.raises(ValidationError) as rejected:
+        GetModelCostMap.load_local_model_cost_map_with_revision()
+
+    assert "only-in-the-backup" not in str(rejected.value)
