@@ -191,6 +191,11 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
 # Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
+MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
+MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
+    "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
+)
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = get_env_int(
     "MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024
 )  # 1MB = 1024KB
@@ -252,6 +257,13 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKE
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
+MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
+)
+MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS", 5.0
+)
 MCP_METADATA_TIMEOUT: Final = get_env_float("LITELLM_MCP_METADATA_TIMEOUT", 10.0)
 MCP_HEALTH_CHECK_TIMEOUT: Final = get_env_float("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", 10.0)
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
@@ -1042,7 +1054,7 @@ openai_compatible_endpoints: Final[list[str]] = [
 ]
 
 
-openai_compatible_providers: Final[list] = [
+openai_compatible_providers: Final[list[str]] = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -1633,6 +1645,7 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"

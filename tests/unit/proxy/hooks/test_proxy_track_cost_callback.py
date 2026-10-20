@@ -96,6 +96,65 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_each_earlier_billed_attempt_gets_its_own_spend_row():
+    """A timed-out request that the router retried writes one row per billed attempt: the final
+    attempt under the request id, every earlier Timeout attempt under ``<id>-attempt-<n>`` with its
+    own cost, attempt number and deployment."""
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    logger = ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u1", team_id="t1")
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    request_data = {
+        "model": "gpt-4.1",
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {"id": "call-1", "model_id": "dep-final"},
+        "metadata": {
+            "attempted_retries": 2,
+            "model_info": {"id": "dep-final", "input_cost_per_token": 0.5},
+            "previous_models": ({"exception_type": "Timeout"}, {"exception_type": "Timeout"}),
+        },
+        "combined_usage_object": usage,
+        "response_cost": 0.5,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-a", usage=usage, response_cost=0.25),
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-final", usage=usage, response_cost=0.5),
+        ),
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=litellm.Timeout("Request timed out.", model="gpt-4.1", llm_provider="openai"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    rows = [call.kwargs for call in mock_update_database.call_args_list]
+    assert [row["response_cost"] for row in rows] == [0.5, 0.25, 0.5]
+    final_row, attempt_0, attempt_1 = (row["kwargs"] for row in rows)
+    assert final_row["litellm_call_id"] == "call-1"
+    assert final_row["litellm_params"]["metadata"]["attempted_retries"] == 2
+    assert attempt_0["litellm_call_id"] == "call-1-attempt-0"
+    assert attempt_0["standard_logging_object"]["id"] == "call-1-attempt-0"
+    assert attempt_0["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_0["litellm_params"]["metadata"]["model_info"]["id"] == "dep-a"
+    assert "previous_models" not in attempt_0["litellm_params"]["metadata"]
+    assert "billed_failed_attempts" not in attempt_0
+    assert attempt_0["combined_usage_object"] is usage
+    assert attempt_1["litellm_call_id"] == "call-1-attempt-1"
+    assert attempt_1["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_1["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    assert final_row["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    for row in rows:
+        assert row["token"] == "test_api_key"
+        assert row["user_id"] == "u1"
+        assert row["team_id"] == "t1"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
     """
     LIT-5650 regression: on a pre_call guardrail block the unified guardrail
