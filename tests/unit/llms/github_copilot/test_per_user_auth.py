@@ -1,6 +1,8 @@
 """Unit tests for per-user GitHub Copilot OAuth connections (per_user_auth)."""
 
+import asyncio
 import datetime
+import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Final
@@ -976,6 +978,46 @@ async def test_messages_go_to_the_plan_host_github_reports_for_the_token(
                 **credential_kwargs,
             )
     _assert_plan_host_served_both_calls(requests, lookups, mode, "v1/messages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["shared", "per_user"])
+async def test_concurrent_requests_on_a_cold_cache_share_one_plan_lookup(
+    per_user_credential, tmp_path, monkeypatch, mode
+):
+    credential_kwargs = _credential_kwargs_for(mode, tmp_path, monkeypatch)
+    lookups: list[httpx.Request] = []
+
+    async def answer_plan_slowly(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return answer_plan(PLAN_COPILOT_HOST)(request)
+
+    with github_http(_copilot_surface_responder(_responses_payload()), answer_plan_slowly, lookups) as requests:
+        await asyncio.gather(
+            *(litellm.aresponses(model=_SURFACE_MODELS["responses"], input="hi", **credential_kwargs) for _ in range(5))
+        )
+    assert len(lookups) == 1
+    assert [str(request.url) for request in requests] == [f"{PLAN_COPILOT_HOST}/responses"] * 5
+
+
+@pytest.mark.parametrize(
+    ("plan_lookup", "lookups_after_a_minute"),
+    [
+        (lambda request: httpx.Response(200, text="not json", request=request), 2),
+        (answer_plan(PLAN_COPILOT_HOST, status_code=500), 2),
+        (answer_plan(PLAN_COPILOT_HOST), 1),
+    ],
+    ids=["malformed_body_is_retried", "server_error_is_retried", "plan_host_is_kept"],
+)
+def test_a_failed_plan_lookup_is_retried_a_minute_later(tmp_path, monkeypatch, plan_lookup, lookups_after_a_minute):
+    _shared_login(tmp_path, monkeypatch)
+    lookups: list[httpx.Request] = []
+    started: Final = time.time()
+    with github_http(_copilot_surface_responder(_responses_payload()), plan_lookup, lookups):
+        litellm.responses(model="github_copilot/gpt-5.3-codex", input="hi")
+        monkeypatch.setattr(time, "time", lambda: started + 61)
+        litellm.responses(model="github_copilot/gpt-5.3-codex", input="hi")
+    assert len(lookups) == lookups_after_a_minute
 
 
 def _refuse_connection(request: httpx.Request) -> httpx.Response:

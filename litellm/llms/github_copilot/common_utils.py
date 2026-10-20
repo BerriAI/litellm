@@ -2,9 +2,11 @@
 Constants for Copilot integration
 """
 
+import asyncio
 import hashlib
 import os
 from collections.abc import Callable, Mapping, MutableMapping
+from functools import partial
 from typing import (
     Final,
     Protocol,
@@ -89,6 +91,9 @@ _PLAN_API_BASES: Final = cast(  # cast-ok: pins the untyped module cache to _Pla
     _PlanApiBaseCache,
     InMemoryCache(max_size_in_memory=1000, default_ttl=_PLAN_API_BASE_TTL_SECONDS),
 )
+_PLAN_API_BASE_LOOKUPS: Final[  # mutable-ok: single-flight registry of in-progress plan host lookups per token
+    dict[str, "asyncio.Task[None]"]
+] = {}
 
 
 class GithubCopilotError(BaseLLMException):
@@ -233,7 +238,7 @@ def _plan_api_base_from(response: httpx.Response) -> tuple[str, int]:
     try:
         endpoints: Final = _COPILOT_USER.validate_python(response.json()).get("endpoints")
     except ValueError:
-        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_TTL_SECONDS
+        return DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_RETRY_SECONDS
     endpoints_api: Final = endpoints.get("api") if endpoints is not None else None
     return _trusted_plan_api_base(endpoints_api) or DEFAULT_GITHUB_COPILOT_API_BASE, _PLAN_API_BASE_TTL_SECONDS
 
@@ -292,9 +297,29 @@ def prefetch_copilot_plan_api_base(github_token: str, api_base: str | None = Non
         _remember_plan_api_base(_plan_api_base_key(github_token), _lookup_plan_api_base(github_token))
 
 
+async def _alookup_and_remember_plan_api_base(key: str, github_token: str) -> None:
+    _remember_plan_api_base(key, await _alookup_plan_api_base(github_token))
+
+
+def _forget_plan_api_base_lookup(key: str, lookup: "asyncio.Task[None]") -> None:
+    if _PLAN_API_BASE_LOOKUPS.get(key) is lookup:
+        _PLAN_API_BASE_LOOKUPS.pop(key, None)
+
+
+def _plan_api_base_lookup(key: str, github_token: str) -> "asyncio.Task[None]":
+    loop: Final = asyncio.get_running_loop()
+    in_flight: Final = _PLAN_API_BASE_LOOKUPS.get(key)
+    if in_flight is not None and in_flight.get_loop() is loop:
+        return in_flight
+    lookup: Final = loop.create_task(_alookup_and_remember_plan_api_base(key, github_token))
+    _PLAN_API_BASE_LOOKUPS[key] = lookup
+    lookup.add_done_callback(partial(_forget_plan_api_base_lookup, key))
+    return lookup
+
+
 async def aprefetch_copilot_plan_api_base(github_token: str, api_base: str | None = None) -> None:
     if _plan_api_base_is_needed(github_token, api_base):
-        _remember_plan_api_base(_plan_api_base_key(github_token), await _alookup_plan_api_base(github_token))
+        await asyncio.shield(_plan_api_base_lookup(_plan_api_base_key(github_token), github_token))
 
 
 def get_copilot_api_base(api_base: str | None = None, github_token: Callable[[], str | None] | None = None) -> str:
