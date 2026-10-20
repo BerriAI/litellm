@@ -5,6 +5,7 @@ import sys
 from collections.abc import Collection, Iterator, Mapping
 from functools import lru_cache
 from logging import Logger
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request, status
@@ -20,7 +21,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -35,9 +36,14 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    Deployment,
+    reject_server_owned_wif_fields,
+    server_owned_wif_fields_present,
+)
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
@@ -244,16 +250,20 @@ def _allow_model_level_clientside_configurable_parameters(
 reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 _CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+_LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 
 def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
-    """Raise ``ValueError`` if a request body picks the federated identity by credential name.
+    """Raise ``ValueError`` if a request body picks a server-owned identity by credential name.
 
     ``load_credentials_from_list`` merges a named credential's values into the call, so a body
     naming a federated credential moves the token exchange onto that credential's federation rule
     and organization exactly as sending the federation fields inline would, which
-    ``reject_server_owned_wif_params`` already refuses. Attaching one is a deployment decision, so
-    it is refused with no client-side opt-in to relax it, the same as the inline form.
+    ``reject_server_owned_wif_params`` already refuses, and a body naming one whose ``api_key`` is
+    an ``oidc/`` secret reference gets the proxy to read that secret for a call it shapes. Attaching
+    either is a deployment decision, so it is refused with no client-side opt-in to relax it, the
+    same as the inline form.
 
     Only credentials already loaded into memory can be resolved here, which is every credential the
     proxy would resolve for the call itself: ``load_credentials_from_list`` reads the same list.
@@ -269,7 +279,8 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation ({wif_fields[0]}), which a request body cannot choose. "
+            f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+            f"reference ({wif_fields[0]}), which a request body cannot choose. "
             "A proxy admin attaches it to a deployment."
         )
 
@@ -278,6 +289,7 @@ _DEPLOYMENT_MANAGEMENT_ROUTES: Final[frozenset[str]] = frozenset(
     ("/model/new", "/model/update", "/model/delete", "/health/test_connection")
 )
 _DEPLOYMENT_ID_UPDATE_ROUTE: Final = re.compile(r"^/model/[^/]+/update$")
+_MCP_SERVER_MANAGEMENT_ROUTE: Final = re.compile(r"^/v1/mcp/server(?:/.*)?$")
 
 
 def route_manages_deployments(route: str | None) -> bool:
@@ -294,6 +306,10 @@ def route_manages_deployments(route: str | None) -> bool:
     return route is not None and (
         route in _DEPLOYMENT_MANAGEMENT_ROUTES or _DEPLOYMENT_ID_UPDATE_ROUTE.fullmatch(route) is not None
     )
+
+
+def route_manages_mcp_servers(route: str | None) -> bool:
+    return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -411,6 +427,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
+    "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
@@ -437,6 +455,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
+    # Per-user GitHub Copilot connection slots: the mode is decided by the
+    # stored credential's values and the caller's connection by the proxy's own
+    # secret_fields, so a body-supplied value could only spoof either.
+    "github_copilot_auth_type",
+    "user_provider_credentials",
+    "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -447,19 +471,25 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 
 
 def _check_banned_params(
-    body: dict,
+    body: Mapping[str, object],
     general_settings: dict,
     llm_router: Router | None,
     model: str,
     *,
     manages_deployments: bool = False,
+    mcp_server_fields_allowed: bool = False,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
-    reject_server_owned_wif_params(body)
+    wif_body: Final[Mapping[str, object]] = (
+        MappingProxyType({key: value for key, value in body.items() if key not in oauth_token_exchange_litellm_params})
+        if mcp_server_fields_allowed
+        else body
+    )
+    reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
@@ -527,6 +557,29 @@ def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[
             else:
                 for target_list in values:
                     yield from _iter_fallback_targets(target_list, depth + 1)
+
+
+def _reject_client_chosen_federation(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
+    reject_server_owned_wif_params(litellm_params)
+    if not manages_deployments:
+        reject_federated_credential_reference(litellm_params)
+
+
+def _iter_user_config_litellm_params(user_config: object) -> Iterator[Mapping[str, object]]:
+    config: Final = _coerce_metadata_to_dict(user_config)
+    if config is None:
+        return
+    if (defaults := _coerce_metadata_to_dict(config.get("default_litellm_params"))) is not None:
+        yield defaults
+    model_list: Final = config.get("model_list")
+    if not isinstance(model_list, list):
+        return
+    for deployment in model_list:
+        if (
+            isinstance(deployment, Mapping)
+            and (params := _coerce_metadata_to_dict(deployment.get("litellm_params"))) is not None
+        ):
+            yield params
 
 
 def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
@@ -604,7 +657,14 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
-    _check_banned_params(request_body, general_settings, llm_router, model, manages_deployments=manages_deployments)
+    _check_banned_params(
+        request_body,
+        general_settings,
+        llm_router,
+        model,
+        manages_deployments=manages_deployments,
+        mcp_server_fields_allowed=route_manages_mcp_servers(route),
+    )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
@@ -629,21 +689,63 @@ def is_request_body_safe(
                 _reject_url_valued_fallback_target(target_model)
         elif isinstance(target, str):
             _reject_url_valued_fallback_target(target)
+    for user_config_params in _iter_user_config_litellm_params(request_body.get("user_config")):
+        _reject_client_chosen_federation(user_config_params, manages_deployments=manages_deployments)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        reject_server_owned_wif_params(litellm_params)
-        if not manages_deployments:
-            reject_federated_credential_reference(litellm_params)
+        _reject_request_credential_params(litellm_params, manages_deployments=manages_deployments)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata,
-                general_settings,
-                llm_router,
-                model,
-                manages_deployments=manages_deployments,
+                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
             )
+    for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
+        reject_api_key_secret_reference(user_config_params)
     return True
+
+
+def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
+    if manages_deployments:
+        reject_server_owned_wif_fields(litellm_params)
+    else:
+        reject_server_owned_wif_params(litellm_params)
+        reject_federated_credential_reference(litellm_params)
+    for nested_params in _nested_configs(litellm_params):
+        reject_api_key_secret_reference(nested_params)
+
+
+def _user_config_litellm_params(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    user_config: Final = _coerce_metadata_to_dict(request_body.get("user_config"))
+    if user_config is None:
+        return ()
+    entries: Final = _mappings_in(user_config.get("model_list")) + _mappings_in(user_config.get("search_tools"))
+    nested: Final = tuple(
+        litellm_params
+        for entry in entries
+        if (litellm_params := _coerce_metadata_to_dict(entry.get("litellm_params"))) is not None
+    )
+    defaults: Final = _coerce_metadata_to_dict(user_config.get("default_litellm_params"))
+    return nested if defaults is None else (*nested, defaults)
+
+
+def _nested_configs(params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        nested for key in _NESTED_CONFIG_KEYS if (nested := _coerce_metadata_to_dict(params.get(key))) is not None
+    )
+
+
+def _mappings_in(value: object) -> tuple[Mapping[str, object], ...]:
+    entries: Final = _LIST_ENTRIES.validate_python(value) if isinstance(value, list) else ()
+    return tuple(mapping for entry in entries if (mapping := _coerce_metadata_to_dict(entry)) is not None)
+
+
+def carries_client_side_overrides(request_body: object) -> bool:
+    if not isinstance(request_body, dict):
+        return False
+    try:
+        return not is_request_body_safe(request_body=request_body, general_settings={}, llm_router=None, model="")
+    except ValueError:
+        return True
 
 
 def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
@@ -660,7 +762,7 @@ def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     if isinstance(value, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(value)
+        parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
         if isinstance(parsed, dict):
             return parsed
     return None
@@ -1696,7 +1798,7 @@ def _coerce_user_id_to_str(value: object) -> str | None:
         # behind the flag preserves backwards compatibility for deployments
         # that intentionally pass JSON-encoded user identifiers.
         if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
-            parsed: Final[object] = safe_json_loads(stripped)
+            parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(stripped))
             if isinstance(parsed, (dict, list)):
                 return None
         return stripped
@@ -1762,7 +1864,7 @@ def get_end_user_id_from_request_body(
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
-            parsed: Final = safe_json_loads(value)
+            parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
             return parsed if isinstance(parsed, dict) else {}
         return {}
 
@@ -2081,8 +2183,10 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
     (``request.scope["endpoint"]``). Because routing has already run by the time auth
     dependencies execute, this reflects the handler that actually serves the request:
-    a custom path colliding with a built-in route resolves to the built-in handler,
-    which carries no marker, so model-access checks are never wrongly skipped.
+    an exact-path collision or a built-in that is not a ``/<prefix>/{name:path}``
+    catch-all still resolves to the built-in handler, which carries no marker. A
+    configured route shadowed by such a catch-all is dispatched ahead of it unless
+    ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set.
     """
     if request is None:
         return False
@@ -2117,10 +2221,12 @@ def get_model_from_request(
     ``model`` field there names an upstream model, not a LiteLLM-managed one, and
     enforcing key/team model allowlists against it would reject valid requests. The
     check reads the FastAPI-resolved endpoint (``request.scope["endpoint"]``), not the
-    request path, so a custom path that collides with a built-in route never
-    suppresses model-access checks: on a collision the built-in handler is dispatched
-    and does not carry the marker. Built-in provider passthrough routes
-    (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
+    request path, so only a dispatched configured handler suppresses model-access
+    checks: exact-path collisions and built-ins that are not ``/<prefix>/{name:path}``
+    catch-alls still resolve to the built-in handler, which carries no marker. A
+    configured route shadowed by such a catch-all is dispatched ahead of it unless
+    ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set. Built-in provider passthrough
+    routes (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
     if request_dispatched_to_pass_through_endpoint(request):
         return None

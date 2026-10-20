@@ -29,9 +29,10 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -102,10 +103,68 @@ def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_
     )
 
 
+def langfuse_trace_metadata(metadata: object, proxy_server_request: object) -> Mapping[str, object]:
+    entries: Final = _object_mapping(metadata) or _NO_METADATA
+    request: Final = _object_mapping(proxy_server_request)
+    headers: Final = _object_mapping(request.get("headers")) if request is not None else None
+    if headers is None:
+        return entries
+    header_entries: Final = {
+        key.removeprefix("langfuse_"): value
+        for key, value in _widened_items(headers)
+        if isinstance(key, str) and key.startswith("langfuse_")
+    }
+    return MappingProxyType({**entries, **header_entries})
+
+
+def langfuse_trace_id(
+    metadata: Mapping[str, object],
+    standard_trace_id: object,
+    litellm_trace_id: object,
+    litellm_call_id: object,
+    proxy_server_request: object,
+) -> object:
+    existing_trace_id: Final = metadata.get("existing_trace_id")
+    if existing_trace_id is not None:
+        return existing_trace_id
+    metadata_trace_id: Final = metadata.get("trace_id")
+    trace_id: Final = (
+        metadata_trace_id
+        if metadata_trace_id is not None
+        else standard_trace_id
+        if standard_trace_id is not None
+        else litellm_trace_id or litellm_call_id
+    )
+    if _is_session_header_trace(trace_id, metadata.get("session_id"), proxy_server_request):
+        return litellm_call_id or trace_id
+    return trace_id
+
+
 class _UsageObject(Protocol):
     """Token-count surface the Langfuse logger reads off a response usage payload."""
 
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
+
+
+def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
+    """Chat-shaped view of a response's usage.
+
+    /v1/responses carries ResponseAPIUsage (input_tokens/output_tokens), and an
+    assembled /v1/responses stream carries a plain dict of chat usage fields.
+    Any other usage object, or a dict whose token counts are not integers, is
+    returned unchanged.
+    """
+    if isinstance(raw_usage, ResponseAPIUsage):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+    usage_fields: Final = _object_mapping(raw_usage)
+    if usage_fields is None or not (
+        ResponseAPILoggingUtils.is_response_api_usage(usage_fields) or "prompt_tokens" in usage_fields
+    ):
+        return raw_usage
+    try:
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields)
+    except ValueError:
+        return raw_usage
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:
@@ -658,33 +717,19 @@ class LangFuseLogger:
             # Add default langfuse tags
             tags = self.add_default_langfuse_tags(tags=tags, kwargs=kwargs, metadata=metadata)
 
+            call_trace_id: Final = langfuse_trace_id(
+                metadata=clean_metadata,
+                standard_trace_id=standard_logging_object.get("trace_id")
+                if standard_logging_object is not None
+                else None,
+                litellm_trace_id=kwargs.get("litellm_trace_id"),
+                litellm_call_id=litellm_call_id,
+                proxy_server_request=litellm_params.get("proxy_server_request"),
+            )
             session_id: Final = clean_metadata.pop("session_id", None)
             trace_name = cast(str | None, clean_metadata.pop("trace_name", None))
-            trace_id = clean_metadata.pop("trace_id", None)
-            # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
-            # This allows standard trace_id to be used when provided in standard_logging_object
-            if trace_id is None and standard_logging_object is not None:
-                trace_id = cast(str | None, standard_logging_object.get("trace_id"))
-            # Fallback to litellm_call_id if no trace_id found
-            if trace_id is None:
-                trace_id = kwargs.get("litellm_trace_id") or litellm_call_id
+            clean_metadata.pop("trace_id", None)
             existing_trace_id: Final = clean_metadata.pop("existing_trace_id", None)
-            # If existing_trace_id is provided, use it as the trace_id to return
-            # This allows continuing an existing trace while still returning the correct trace_id
-            if existing_trace_id is not None:
-                trace_id = existing_trace_id
-            call_trace_id: Final = (
-                litellm_call_id or trace_id
-                if existing_trace_id is None
-                and _is_session_header_trace(trace_id, session_id, litellm_params.get("proxy_server_request"))
-                else trace_id
-            )
-            if call_trace_id != trace_id:
-                verbose_logger.debug(
-                    "Langfuse: trace_id %s came from a session header; using call id %s so each call gets its own trace",
-                    trace_id,
-                    call_trace_id,
-                )
             requested_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
             update_trace_keys: Final = (
                 requested_trace_keys if _as_steering_flag(litellm.langfuse_enable_update_trace_keys) else ()
@@ -815,7 +860,8 @@ class LangFuseLogger:
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
                     generation_id = _logging_id(start_time, response_obj)
-                _usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _raw_usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _usage_obj: Final = _chat_usage(_raw_usage_obj)
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.

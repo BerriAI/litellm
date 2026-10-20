@@ -19,6 +19,11 @@ pub enum Error {
         provider: &'static str,
         environment_variable: &'static str,
     },
+    #[error("Missing {provider} {} - {}", .spec.setting, .spec.guidance())]
+    MissingParam {
+        provider: &'static str,
+        spec: &'static crate::ParamSpec,
+    },
     #[error("Missing {provider} API Base - {guidance}")]
     MissingApiBase {
         provider: &'static str,

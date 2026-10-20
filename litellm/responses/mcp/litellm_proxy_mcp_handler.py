@@ -1,4 +1,3 @@
-import re
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
@@ -6,6 +5,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Type
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
+from typing_extensions import TypedDict as ExtraItemsTypedDict
+from typing_extensions import Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -18,6 +19,12 @@ from litellm.proxy._experimental.mcp_server.utils import (
     strip_known_server_prefix,
 )
 from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
+from litellm.responses.mcp.tool_precheck import (
+    LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
+    may_name_litellm_mcp_gateway,
+    names_gateway_explicitly,
+    proxy_path_mcp_name,
+)
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -42,8 +49,9 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 
@@ -58,27 +66,8 @@ class MCPToolResult(TypedDict):
     name: str | None
 
 
-LITELLM_PROXY_MCP_SERVER_URL: Final = "litellm_proxy"
-LITELLM_PROXY_MCP_SERVER_URL_PREFIX: Final = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
-
-_PROXY_MCP_PATH_RE: Final = re.compile(r"^https?://.+/mcp/([^/]+)$")
-
-
-def _mcp_server_url(tool: ToolParam) -> str | None:
-    if not isinstance(tool, dict) or tool.get("type") != "mcp":
-        return None
-    server_url: Final = tool.get("server_url")
-    return server_url if isinstance(server_url, str) else None
-
-
-def _names_gateway_explicitly(tool: ToolParam) -> bool:
-    return (_mcp_server_url(tool) or "").startswith(LITELLM_PROXY_MCP_SERVER_URL)
-
-
-def _proxy_path_mcp_name(tool: ToolParam) -> str | None:
-    server_url: Final = _mcp_server_url(tool)
-    match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)
-    return None if match is None else match.group(1)
+class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
@@ -126,7 +115,7 @@ async def _gateway_served_names(
 async def _served_mcp_path_names(
     tools: Collection[ToolParam], served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]]
 ) -> frozenset[str]:
-    names: Final = frozenset(name for name in map(_proxy_path_mcp_name, tools) if name is not None)
+    names: Final = frozenset(name for name in map(proxy_path_mcp_name, tools) if name is not None)
     return await served_names(names) if names else frozenset[str]()
 
 
@@ -155,17 +144,15 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def should_use_litellm_mcp_gateway(tools: Iterable[ToolParam] | None) -> bool:
-        """True when a tool may name this gateway: server_url "litellm_proxy..." or an http(s) URL ending in
-        /mcp/<name>. `_split_mcp_tools` then settles which of the latter the gateway actually serves."""
-        return any(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) is not None for tool in tools or ())
+        return may_name_litellm_mcp_gateway(tools)
 
     _should_use_litellm_mcp_gateway = should_use_litellm_mcp_gateway
 
     @staticmethod
     def _parse_mcp_tools(tools: Iterable[Mapping[str, object]] | None) -> SplitTools:
         items: Final = tuple(tools or ())
-        gateway_tools: Final[list[ToolParam]] = [tool for tool in items if _names_gateway_explicitly(tool)]
-        other_tools: Final[list[ToolParam]] = [tool for tool in items if not _names_gateway_explicitly(tool)]
+        gateway_tools: Final[list[ToolParam]] = [tool for tool in items if names_gateway_explicitly(tool)]
+        other_tools: Final[list[ToolParam]] = [tool for tool in items if not names_gateway_explicitly(tool)]
         return gateway_tools, other_tools
 
     @staticmethod
@@ -178,7 +165,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
             [
                 {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"}
-                if (name := _proxy_path_mcp_name(tool)) in served
+                if (name := proxy_path_mcp_name(tool)) in served
                 else tool
                 for tool in items
             ]
@@ -194,7 +181,7 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> tuple[bool, ...]:
         items: Final = tuple(tools or ())
         served: Final = await _served_mcp_path_names(items, served_names)
-        return tuple(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) in served for tool in items)
+        return tuple(names_gateway_explicitly(tool) or proxy_path_mcp_name(tool) in served for tool in items)
 
     @staticmethod
     async def _apply_toolset_permissions(
@@ -251,6 +238,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
         granted_toolsets: "GrantedToolsetIds | None" = None,
+        request_trace_id: str | None = None,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -336,6 +324,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
+            request_trace_id=request_trace_id,
             request_tags=request_tags,
             raw_headers=raw_headers,
         )
@@ -467,6 +456,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        request_trace_id: str | None = None,
     ) -> tuple[list[MCPTool], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -498,6 +488,7 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_server_auth_headers=mcp_server_auth_headers,
             request_tags=request_tags,
             raw_headers=raw_headers,
+            request_trace_id=request_trace_id,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -722,6 +713,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
+        request_trace_id: str | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -780,7 +772,11 @@ class LiteLLM_Proxy_MCP_Handler:
                         },
                     }
                 ]
-                tool_logging_call_id = litellm_call_id or str(uuid.uuid4())
+                tool_logging_call_id = (
+                    f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}"
+                    if request_trace_id and litellm_call_id
+                    else litellm_call_id or str(uuid.uuid4())
+                )
                 logging_metadata: dict[str, object] = {
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
@@ -806,6 +802,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
                 if litellm_trace_id:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
+                if request_trace_id:
+                    logging_metadata["existing_trace_id"] = request_trace_id
                 if request_tags:
                     logging_metadata["tags"] = request_tags
                 if typed_user_api_key_auth is not None:
@@ -1145,7 +1143,7 @@ class LiteLLM_Proxy_MCP_Handler:
         model: str,
         all_tools: Sequence[ResponsesToolParam] | None,
         response_id: str | None,
-        **call_params: Any,
+        **call_params: Unpack[_AresponsesOptions],
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         """Make follow-up response API call with tool results."""
         return await aresponses(
@@ -1195,7 +1193,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_server_map: dict[str, str],
         served_tools: Sequence[MCPTool] | None = None,
         **kwargs,
-    ) -> Any:
+    ) -> "MCPEnhancedStreamingIterator":
         """
         Create MCP enhanced streaming response that handles the full MCP workflow.
 
@@ -1317,14 +1315,14 @@ class LiteLLM_Proxy_MCP_Handler:
     _create_tool_execution_events = create_tool_execution_events
 
     @staticmethod
-    def prepare_initial_call_params(call_params: Mapping[str, object], should_auto_execute: bool) -> dict[str, Any]:
+    def prepare_initial_call_params(call_params: Mapping[str, object], should_auto_execute: bool) -> _AresponsesOptions:
         """
         Prepare call parameters for the initial LLM call.
 
         For auto-execute scenarios, we need to disable streaming for the initial call
         so we can process the tool calls before streaming the final response.
         """
-        initial_params: Final = dict(call_params)
+        initial_params: Final = _AresponsesOptions(**call_params)
 
         if should_auto_execute:
             # Disable streaming for initial call when auto-executing tools
@@ -1337,14 +1335,14 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def prepare_follow_up_call_params(
         call_params: Mapping[str, object], original_stream_setting: bool
-    ) -> dict[str, Any]:
+    ) -> _AresponsesOptions:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = dict(call_params)
+        follow_up_params: Final = _AresponsesOptions(**call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting
