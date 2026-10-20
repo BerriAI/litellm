@@ -128,6 +128,7 @@ from .compaction_items import (
     provider_compaction_summary,
     provider_takes_compaction_blocks,
     requests_compaction,
+    with_answered_turns_after_newest_compaction,
     without_items_before_compaction,
 )
 from .custom_tools import (
@@ -455,6 +456,16 @@ def with_compaction_items_as_params(input: str | ResponseInputParam) -> str | Re
     return cast(  # cast-ok: the same input items, a compaction item replayed from SDK output dumped to its param dict
         ResponseInputParam, [_as_input_param(item) for item in input]
     )
+
+
+def _input_to_read(
+    input: str | ResponseInputParam, only_since_compaction: bool, native_compaction: bool
+) -> str | ResponseInputParam:
+    if only_since_compaction:
+        return without_items_before_compaction(input)
+    if native_compaction:
+        return with_answered_turns_after_newest_compaction(input)
+    return input
 
 
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
@@ -1116,7 +1127,7 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         dumped_input: Final = with_compaction_items_as_params(input)
-        read_input: Final = without_items_before_compaction(dumped_input) if only_since_compaction else dumped_input
+        read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=read_input if item_cache_control else without_item_cache_control(read_input),

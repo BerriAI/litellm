@@ -2,8 +2,7 @@ import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from types import MappingProxyType
+from itertools import chain, groupby
 from typing import Final, TypeVar
 
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
@@ -200,22 +199,68 @@ def _call_id(item: object) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
-def _with_its_earlier_call(item: _Item, earlier_calls: Mapping[str, _Item]) -> tuple[_Item, ...]:
-    call_id: Final = _call_id(item)
-    call: Final = None if call_id is None else earlier_calls.get(call_id)
-    return (item,) if call is None else (call, item)
+def _is_turn_item(item: object) -> bool:
+    fields: Final = _json_object(item)
+    item_type: Final = None if fields is None else fields.get("type", "message")
+    if fields is None or not isinstance(item_type, str):
+        return False
+    if item_type == "message":
+        return fields.get("role") == "assistant"
+    return item_type == "reasoning" or (_call_id(fields) is not None and not item_type.endswith("_output"))
 
 
-def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:
+def _turn_indices_answered_later(turn: tuple[tuple[int, object], ...], answered: frozenset[str]) -> tuple[int, ...]:
+    if not any(_call_id(item) in answered for _, item in turn):
+        return ()
+    return tuple(index for index, item in turn if _call_id(item) is None or _call_id(item) in answered)
+
+
+def _is_turn_entry(entry: tuple[int, object]) -> bool:
+    return _is_turn_item(entry[1])
+
+
+def _earlier_turn_indices_answered_later(earlier: Sequence[object], answered: frozenset[str]) -> tuple[int, ...]:
+    turns: Final = (tuple(turn) for is_turn, turn in groupby(enumerate(earlier), key=_is_turn_entry) if is_turn)
+    return tuple(chain.from_iterable(_turn_indices_answered_later(turn, answered) for turn in turns))
+
+
+def _call_ids(items: Sequence[object]) -> frozenset[str]:
+    return frozenset(call_id for item in items if (call_id := _call_id(item)) is not None)
+
+
+def _keeps_every_item(item: object) -> bool:
+    return True
+
+
+def _with_answered_turns_after_newest_compaction(
+    input: Sequence[_Item], keeps_earlier_item: Callable[[object], bool]
+) -> tuple[_Item, ...]:
     newest: Final = next(
         (index for index in range(len(input) - 1, 0, -1) if compaction_summary(input[index]) is not None), 0
     )
-    earlier_calls: Final = MappingProxyType(
-        {call_id: item for item in input[:newest] if (call_id := _call_id(item)) is not None}
+    later: Final = input[newest:]
+    moved: Final = _earlier_turn_indices_answered_later(input[:newest], _call_ids(later))
+    moved_call_ids: Final = _call_ids([input[index] for index in moved])
+    first_answer: Final = next(
+        (index for index, item in enumerate(later) if _call_id(item) in moved_call_ids), len(later)
     )
     return (
-        *(item for item in input[:newest] if _is_instruction_item(item)),
-        *chain.from_iterable(_with_its_earlier_call(item, earlier_calls) for item in input[newest:]),
+        *(item for index, item in enumerate(input[:newest]) if index not in moved and keeps_earlier_item(item)),
+        *later[:first_answer],
+        *(input[index] for index in moved),
+        *later[first_answer:],
+    )
+
+
+def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:
+    return _with_answered_turns_after_newest_compaction(input, _is_instruction_item)
+
+
+def with_answered_turns_after_newest_compaction(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    return (
+        list(_with_answered_turns_after_newest_compaction(input, _keeps_every_item))
+        if isinstance(input, list)
+        else input
     )
 
 

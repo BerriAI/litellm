@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
@@ -6703,6 +6704,72 @@ def test_summary_replay_keeps_a_call_its_compaction_item_replaces_when_a_later_o
     assert dict(messages[1]) == _SUMMARY_AS_TEXT
     assert [tool_call["id"] for tool_call in messages[2]["tool_calls"]] == [output["call_id"]]
     assert messages[3]["tool_call_id"] == output["call_id"]
+
+
+_ANSWERED_THINKING: Final = {"type": "thinking", "thinking": "Need Osaka weather.", "signature": "sig_osaka"}
+_CHECKING_OSAKA: Final = {
+    "type": "message",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "Checking Osaka."}],
+}
+
+
+def _reasoning_item(item_id: str, thinking: Mapping[str, str]) -> Mapping[str, object]:
+    return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": encode_thinking_blocks([thinking])}
+
+
+def test_summary_replay_keeps_only_the_reasoning_of_the_turn_whose_call_a_later_output_answers() -> None:
+    tokyo_thinking: Final = {"type": "thinking", "thinking": "Need Tokyo weather.", "signature": "sig_tokyo"}
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                _reasoning_item("rs_tokyo", tokyo_thinking),
+                {"type": "function_call", "call_id": "call_tokyo", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_tokyo", "output": "Sun."},
+                _reasoning_item("rs_osaka", _ANSWERED_THINKING),
+                _CHECKING_OSAKA,
+                {"type": "function_call", "call_id": "call_osaka", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call", "call_id": "call_kyoto", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_kyoto", "output": "Clouds."},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"type": "function_call_output", "call_id": "call_osaka", "output": "Rain."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(),
+    )["messages"]
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert dict(messages[0]) == _SUMMARY_AS_TEXT
+    assert messages[1]["thinking_blocks"] == [_ANSWERED_THINKING]
+    assert [tool_call["id"] for tool_call in messages[1]["tool_calls"]] == ["call_osaka"]
+
+
+def test_native_compaction_replay_moves_a_call_its_compaction_item_splits_from_its_output_after_the_block() -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                _reasoning_item("rs_osaka", _ANSWERED_THINKING),
+                _CHECKING_OSAKA,
+                {"type": "function_call", "call_id": "call_osaka", "name": "get_weather", "arguments": "{}"},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"type": "function_call_output", "call_id": "call_osaka", "output": "Rain."},
+            ],
+        ),
+        responses_api_request=_COMPACTION_REQUESTED,
+    )["messages"]
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "assistant", "tool"]
+    assert messages[0]["content"] == "Plan a Tokyo trip."
+    assert messages[1]["provider_specific_fields"] == {"compaction_blocks": [_COMPACTION_BLOCK]}
+    assert messages[2]["thinking_blocks"] == [_ANSWERED_THINKING]
+    assert [tool_call["id"] for tool_call in messages[2]["tool_calls"]] == ["call_osaka"]
+    assert messages[3]["tool_call_id"] == "call_osaka"
 
 def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
