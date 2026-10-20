@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAILyriaTextToSpeechConfig,
     VertexAITextToSpeechConfig,
@@ -30,6 +31,44 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
+
+@pytest.mark.parametrize(
+    ("voice", "multi_speaker"),
+    (
+        ("aLlOy", False),
+        ({"name": "aLlOy"}, False),
+        ({"voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}}, False),
+        (
+            {
+                "multi_speaker_voice_config": {
+                    "speaker_voice_configs": [
+                        {"speaker": "reader", "voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}}
+                    ]
+                }
+            },
+            True,
+        ),
+    ),
+)
+def test_gemini_cloud_tts_maps_openai_voice_names_in_all_voice_forms(
+    voice: str | dict[str, object], multi_speaker: bool
+) -> None:
+    config: Final = VertexAITextToSpeechConfig()
+    model: Final = "gemini-3.1-flash-tts-preview"
+    _, params = config.map_openai_params(model=model, voice=voice, optional_params={"response_format": "mp3"})
+    mapped_voice: Final = OPENAI_TO_GEMINI_TTS_VOICES["alloy"]
+    expected_voice: Final = {
+        "languageCode": config.DEFAULT_LANGUAGE_CODE,
+        "modelName": model,
+        **(
+            {"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "reader", "speakerId": mapped_voice}]}}
+            if multi_speaker
+            else {"name": mapped_voice}
+        ),
+    }
+
+    assert params["vertex_voice_dict"] == expected_voice
 
 
 class TestVertexAITextToSpeechConfig:

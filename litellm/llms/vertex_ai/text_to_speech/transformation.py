@@ -236,6 +236,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         voice: Mapping[str, object],
     ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
+
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
@@ -286,7 +288,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 speaker_configs.append(
                     {
                         "speakerAlias": speaker_alias,
-                        "speakerId": speaker_id,
+                        "speakerId": OPENAI_TO_GEMINI_TTS_VOICES.get(speaker_id.lower(), speaker_id),
                     }
                 )
         return speaker_configs
@@ -319,11 +321,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         model: str,
         voice: str | Mapping[str, object],
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
+
         if isinstance(voice, str):
             return voice, {
                 "languageCode": self.DEFAULT_LANGUAGE_CODE,
                 "modelName": model,
-                "name": voice,
+                "name": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice),
             }
 
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
@@ -347,7 +351,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             return None, {
                 "languageCode": language_code,
                 "modelName": model_name,
-                "name": voice_name,
+                "name": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name),
             }
         return None, {
             **voice,

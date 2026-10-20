@@ -20,6 +20,7 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
     normalize_gemini_speech_config,
 )
@@ -98,6 +99,20 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
     ("3168x1344", "21:9", "2K"),
     ("6336x2688", "21:9", "4K"),
 )
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    (
+        {"name": "aLlOy"},
+        {"speech_config": {"voice_name": "aLlOy"}},
+        {"voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}},
+    ),
+)
+def test_gemini_structured_speech_config_maps_openai_voice_names(speech_config: Mapping[str, object]) -> None:
+    assert normalize_gemini_speech_config(speech_config) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}}
+    }
 
 
 def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():

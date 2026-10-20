@@ -240,7 +240,11 @@ def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping
                 pending.append((child_items := list[object](), _SPEECH_CONFIG_ITEMS.validate_python(item)))
                 child = child_items
             else:
-                child = item
+                child = (
+                    OPENAI_TO_GEMINI_TTS_VOICES.get(item.lower(), item)
+                    if normalized_key == "voiceName" and isinstance(item, str)
+                    else item
+                )
 
             if isinstance(target, dict):
                 assert isinstance(normalized_key, str)
@@ -272,11 +276,13 @@ def normalize_gemini_speech_config(
     )
     if "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
         return {key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice")}
-    if voice_name is None:
+    if not isinstance(voice_name, str):
         return {**normalized}
     return {
         **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
-        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}},
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
     }
 
 
