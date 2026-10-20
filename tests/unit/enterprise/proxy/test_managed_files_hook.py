@@ -1142,45 +1142,56 @@ async def test_should_skip_non_file_unified_id_on_output_file_id():
 
 
 @pytest.mark.asyncio
-async def test_afile_content_passes_trusted_model_credentials_to_router():
-    """
-    afile_content must hand the deployment's credential snapshot to the router
-    call as an immutable server-side mapping. Cloud-storage providers (Bedrock
-    S3) validate file ids against the bucket in that snapshot, so without it
-    unified-id content retrieval only works when AWS_S3_BUCKET_NAME is set.
-    """
-    from types import MappingProxyType
+async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch):
+    """Unified-id content retrieval must validate and fetch the s3:// file against the
+    deployment's s3_bucket_name, with no AWS_S3_BUCKET_NAME env set."""
+    import httpx
+    import respx
+
+    import litellm
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ],
+        num_retries=0,
+    )
 
     managed_files = _make_managed_files_instance()
     unified_file_id = "unified-file-id"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
     managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(
-        return_value={unified_file_id: {"model-123": s3_uri}}
-    )
+    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
 
-    mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_content = AsyncMock(return_value=MagicMock())
+    with respx.mock:
+        route = respx.get(
+            "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+        ).mock(return_value=httpx.Response(200, content=b'{"recordId":"req-1"}'))
 
-    await managed_files.afile_content(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
+        response = await managed_files.afile_content(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
 
-    call_kwargs = mock_router.afile_content.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert response.content == b'{"recordId":"req-1"}'
 
 
 def _managed_deletion_file_id(provider_file_id):
@@ -1250,7 +1261,6 @@ async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
             llm_router=router,
-            _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
         )
 
     assert len(route.calls) == 1
@@ -1276,7 +1286,6 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
         file_id=unified_file_id,
         litellm_parent_otel_span=None,
         llm_router=router,
-        _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
     )
 
     assert response.id == unified_file_id
@@ -1901,45 +1910,6 @@ async def test_post_call_hook_leaves_litellm_executed_batches_untouched(llm_batc
     assert managed_files.store_unified_object_id.await_count == (1 if stores else 0)
     if not stores:
         assert response.id == original_id
-
-
-@pytest.mark.asyncio
-async def test_afile_delete_passes_trusted_model_credentials_to_router():
-    """
-    afile_delete must hand the deployment's credential snapshot to the router
-    call, since Bedrock validates the s3:// file id against the bucket in it.
-    """
-    from types import MappingProxyType
-
-    managed_files = _make_managed_files_instance()
-    unified_file_id = "unified-file-id"
-    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
-    managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
-    managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
-
-    mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_delete = AsyncMock(return_value=MagicMock())
-
-    await managed_files.afile_delete(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
-
-    call_kwargs = mock_router.afile_delete.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
 
 
 @pytest.mark.asyncio

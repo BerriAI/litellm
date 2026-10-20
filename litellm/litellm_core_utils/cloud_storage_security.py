@@ -1,8 +1,7 @@
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
@@ -17,7 +16,6 @@ BEDROCK_MANAGED_S3_PREFIXES: Final = (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
 MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
-_MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
@@ -118,12 +116,7 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
 def should_allow_legacy_cloud_file_ids(
     litellm_params: Mapping[str, object] | None = None,
 ) -> bool:
-    value = None
-    if isinstance(litellm_params, Mapping):
-        trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-        if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-            value = cast(Mapping[str, Any], trusted_model_credentials).get("allow_legacy_cloud_file_ids")
-
+    value: Final = litellm_params.get("allow_legacy_cloud_file_ids") if litellm_params is not None else None
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

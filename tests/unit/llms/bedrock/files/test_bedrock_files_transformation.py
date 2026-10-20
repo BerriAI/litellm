@@ -9,7 +9,6 @@ from contextlib import AsyncExitStack, closing
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
@@ -2353,7 +2352,7 @@ class TestBedrockFileContentTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params: Final = _trusted_bucket_snapshot(
+        litellm_params: Final = _deployment_bucket_params(
             s3_bucket_name="in-bucket/pfx",
             s3_output_bucket_name="out-bucket/outpfx",
         )
@@ -2543,7 +2542,7 @@ class TestBedrockFileContentTransformation:
     def test_transform_file_content_request_requires_configured_bucket(
         self, monkeypatch
     ):
-        """Without a server-configured bucket (env or snapshot), the request must fail
+        """Without a bucket (on the call or in env), the request must fail
         before any S3 call rather than guessing a bucket from the file id."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2568,30 +2567,24 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
-    def _trusted(self, **deployment_litellm_params) -> dict:
-        """Build the trusted snapshot the way the proxy does: deployment
-        litellm_params funneled through ``CredentialLiteLLMParams`` (the strict
-        allowlist ``get_deployment_credentials_with_provider`` applies) before
-        retrieval ever sees them. Injecting a raw ``MappingProxyType`` would
-        bypass that filter and hide whether a bucket field actually survives
-        into the snapshot in production."""
-        from types import MappingProxyType
-
+    def _deployment_params(self, **deployment_litellm_params) -> dict:
+        """Deployment litellm_params funneled through ``CredentialLiteLLMParams``
+        (the strict allowlist ``get_deployment_credentials_with_provider`` applies)
+        the way the proxy hands them to retrieval, so a bucket field dropped from
+        that allowlist fails these tests."""
         from litellm.types.router import CredentialLiteLLMParams
 
-        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
+        credentials = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
             exclude_none=True
         )
-        params = self._litellm_params()
-        params["_litellm_internal_model_credentials"] = MappingProxyType(snapshot)
-        return params
+        return {**self._litellm_params(), **credentials}
 
     def test_retrieves_from_distinct_output_bucket(self, monkeypatch):
         """Batch outputs can land in a separate s3_output_bucket_name. Retrieval
         must validate the file id against the output bucket too, not just the
         input bucket, or the very outputs the feature serves are unreachable.
-        The snapshot is built through the production credential filter, so this
-        fails if s3_output_bucket_name is dropped from that allowlist."""
+        The params go through the production credential filter, so this fails
+        if s3_output_bucket_name is dropped from that allowlist."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -2602,7 +2595,7 @@ class TestBedrockFileContentTransformation:
                 "file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"
             },
             optional_params={},
-            litellm_params=self._trusted(
+            litellm_params=self._deployment_params(
                 s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
             ),
         )
@@ -2613,8 +2606,8 @@ class TestBedrockFileContentTransformation:
         )
 
     def test_output_bucket_falls_back_to_env(self, monkeypatch):
-        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when not in
-        the trusted snapshot, mirroring the input-bucket env fallback."""
+        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when the
+        call has none, mirroring the input-bucket env fallback."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "in-bucket")
@@ -2646,7 +2639,7 @@ class TestBedrockFileContentTransformation:
                 "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
             },
             optional_params={},
-            litellm_params=self._trusted(
+            litellm_params=self._deployment_params(
                 s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
             ),
         )
@@ -2671,7 +2664,7 @@ class TestBedrockFileContentTransformation:
                     "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
                 },
                 optional_params={},
-                litellm_params=self._trusted(
+                litellm_params=self._deployment_params(
                     s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
                 ),
             )
@@ -2696,22 +2689,16 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
-    def test_bucket_resolved_from_trusted_model_credentials(self, monkeypatch):
-        """Per-model s3_bucket_name must be honored via the server-side credential snapshot."""
-        from types import MappingProxyType
-
+    def test_bucket_resolved_from_call_s3_bucket_name(self, monkeypatch):
+        """An s3_bucket_name on the call is honored without AWS_S3_BUCKET_NAME."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
-        litellm_params = self._litellm_params()
-        litellm_params["_litellm_internal_model_credentials"] = MappingProxyType(
-            {"s3_bucket_name": "my-bucket"}
-        )
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
             file_content_request={"file_id": self.S3_URI},
             optional_params={},
-            litellm_params=litellm_params,
+            litellm_params={**self._litellm_params(), "s3_bucket_name": "my-bucket"},
         )
 
         assert url == self.EXPECTED_URL
@@ -3228,13 +3215,11 @@ def _bedrock_s3_params() -> dict:
     }
 
 
-def _trusted_bucket_snapshot(**deployment_litellm_params) -> dict:
-    from types import MappingProxyType
-
+def _deployment_bucket_params(**deployment_litellm_params) -> dict:
     from litellm.types.router import CredentialLiteLLMParams
 
-    snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
-    return {**_bedrock_s3_params(), "_litellm_internal_model_credentials": MappingProxyType(snapshot)}
+    credentials = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
+    return {**_bedrock_s3_params(), **credentials}
 
 
 class TestBedrockFileDeletionTransformation:
@@ -3289,7 +3274,7 @@ class TestBedrockFileDeletionTransformation:
 
         assert url == self.EXPECTED_URL
 
-    def test_transform_delete_file_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+    def test_transform_delete_file_request_uses_call_bucket(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -3297,7 +3282,7 @@ class TestBedrockFileDeletionTransformation:
         url, _ = BedrockFilesConfig().transform_delete_file_request(
             file_id=self.S3_URI,
             optional_params={},
-            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            litellm_params=_deployment_bucket_params(s3_bucket_name="my-bucket"),
         )
 
         assert url == self.EXPECTED_URL
@@ -3597,7 +3582,7 @@ class TestBedrockFileListTransformation:
             "GET", f"{url}?list-type=2&prefix=LLM%20AI%20Projects%2Flitellm-b", signed_headers
         )
 
-    def test_transform_list_files_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+    def test_transform_list_files_request_uses_call_bucket(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -3605,7 +3590,7 @@ class TestBedrockFileListTransformation:
         url, params = BedrockFilesConfig().transform_list_files_request(
             purpose=None,
             optional_params={},
-            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            litellm_params=_deployment_bucket_params(s3_bucket_name="my-bucket"),
         )
 
         assert url == self.BUCKET_URL
@@ -3698,7 +3683,7 @@ class TestBedrockFileListTransformation:
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
         assert [file.id for file in files] == list(self.BATCH_IDS)
 
-    def test_file_list_uses_trusted_snapshot_bucket_without_env(self, monkeypatch):
+    def test_file_list_uses_call_bucket_without_env(self, monkeypatch):
         import httpx
         import respx
 
@@ -3713,7 +3698,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         assert route.called
@@ -3768,7 +3753,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(
+        litellm_params = _deployment_bucket_params(
             s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket/team-a"
         )
 
@@ -3854,7 +3839,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(s3_output_bucket_name="my-output-bucket")
+        litellm_params = _deployment_bucket_params(s3_output_bucket_name="my-output-bucket")
 
         url, params = BedrockFilesConfig().transform_list_files_request(
             purpose="batch_output", optional_params={}, litellm_params=litellm_params
@@ -3881,7 +3866,7 @@ class TestBedrockFileListTransformation:
             raw_response=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING),
             logging_obj=MagicMock(),
             litellm_params={
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
                 LIST_FILES_PURPOSE_PARAM: "batch_output",
             },
         )
@@ -3905,7 +3890,7 @@ class TestBedrockFileListTransformation:
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
                 purpose="batch_output",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
 
         assert route.called
@@ -3932,7 +3917,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
 
         assert (input_route.call_count, output_route.call_count) == (1, 1)
@@ -3964,7 +3949,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
             requested_urls = [str(call.request.url) for call in respx.calls]
 
@@ -3977,7 +3962,7 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == [*self.PAGED_IDS, self.OUTPUT_BUCKET_ID]
 
     @pytest.mark.parametrize(
-        ("purpose", "bucket_snapshot"),
+        ("purpose", "bucket_params"),
         [
             pytest.param(None, {"s3_bucket_name": "my-bucket"}, id="outputs-share-the-input-bucket"),
             pytest.param(
@@ -3988,7 +3973,7 @@ class TestBedrockFileListTransformation:
         ],
     )
     def test_file_list_leaves_the_output_bucket_alone_unless_an_unfiltered_list_needs_it(
-        self, monkeypatch, purpose, bucket_snapshot
+        self, monkeypatch, purpose, bucket_params
     ):
         import httpx
         import respx
@@ -4005,7 +3990,7 @@ class TestBedrockFileListTransformation:
             )
 
             files = litellm.file_list(
-                custom_llm_provider="bedrock", purpose=purpose, **_trusted_bucket_snapshot(**bucket_snapshot)
+                custom_llm_provider="bedrock", purpose=purpose, **_deployment_bucket_params(**bucket_params)
             )
 
         assert (input_route.call_count, output_route.call_count) == (1, 0)
@@ -4021,7 +4006,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-bucket/out")
+        litellm_params = _deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-bucket/out")
         config = BedrockFilesConfig()
         config.transform_list_files_request(purpose=None, optional_params={}, litellm_params=litellm_params)
         litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM)
@@ -4132,7 +4117,7 @@ class TestBedrockFileListTransformation:
                 custom_llm_provider="bedrock",
                 purpose="batch",
                 timeout=12,
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_paged_listing(first_page, last_page, files)
@@ -4154,7 +4139,7 @@ class TestBedrockFileListTransformation:
                 custom_llm_provider="bedrock",
                 purpose="batch",
                 timeout=12,
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_paged_listing(first_page, last_page, files)
@@ -4211,7 +4196,7 @@ class TestBedrockFileListTransformation:
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_capped_listing(route, files)
@@ -4232,7 +4217,7 @@ class TestBedrockFileListTransformation:
             files = await litellm.afile_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_capped_listing(route, files)
@@ -4323,7 +4308,7 @@ def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_para
 
     litellm_params = {
         **_SPLIT_IDENTITY_PARAMS,
-        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "s3_bucket_name": "safe-bucket",
     }
     BedrockFilesConfig().transform_file_content_request(
         file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
