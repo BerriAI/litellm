@@ -1197,17 +1197,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             # Operates on defensive copies so the client-facing request and response are not modified in-place
-            kwargs = safe_deep_copy(kwargs)
-            result = safe_deep_copy(result)
+            kwargs_copy: Final = safe_deep_copy(kwargs)
+            result_copy: Final = safe_deep_copy(result)
 
-            messages: Final[list | None] = kwargs.get("messages", None)
+            messages: Final[list | None] = kwargs_copy.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
-                return kwargs, result
+                return kwargs_copy, result_copy
 
-            presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
+            presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs_copy)
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -1219,7 +1219,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             text=content,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
-                            request_data=kwargs,
+                            request_data=kwargs_copy,
                         )
                     )  # need to pass separately b/c presidio has context window limits
                     task_mappings.append((msg_idx, None))  # None indicates string content
@@ -1233,7 +1233,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 text=text_str,
                                 output_parse_pii=False,
                                 presidio_config=presidio_config,
-                                request_data=kwargs,
+                                request_data=kwargs_copy,
                             )
                         )
                         task_mappings.append((msg_idx, int(content_idx)))
@@ -1254,20 +1254,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
-            kwargs["messages"] = messages
+            kwargs_copy["messages"] = messages
 
             if (
-                isinstance(result, ModelResponse)
-                and result.choices
-                and not isinstance(result.choices[0], StreamingChoices)
+                isinstance(result_copy, ModelResponse)
+                and result_copy.choices
+                and not isinstance(result_copy.choices[0], StreamingChoices)
             ):
-                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
-            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
+                await self._process_response_for_pii(response=result_copy, request_data=kwargs_copy, mode="mask")
+            elif isinstance(result_copy, dict) and self._is_anthropic_message_response(result_copy):
                 await self._process_anthropic_response_for_pii(
-                    response=result,
-                    request_data=kwargs,
+                    response=result_copy,
+                    request_data=kwargs_copy,
                     mode="mask",
                 )
+
+            return kwargs_copy, result_copy
 
         return kwargs, result
 
