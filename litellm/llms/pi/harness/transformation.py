@@ -22,6 +22,15 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.exceptions import ModelNotMappedError
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import PiOptions, PiThinkingLevel
@@ -141,6 +150,17 @@ PI_PROVIDER_COMPAT: Final[Mapping[str, object]] = MappingProxyType({"supportsSto
 PI_CACHE_CONTROL_COMPAT: Final[Mapping[str, str]] = MappingProxyType({"cacheControlFormat": "anthropic"})
 
 PI_DEFAULT_MAX_TOKENS: Final = 16384
+
+LITELLM_THINKING_BUDGETS: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "minimal": max(DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET, ANTHROPIC_MIN_THINKING_BUDGET_TOKENS),
+        "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+        "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+        "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+        "max": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    }
+)
 
 SESSION_CWD_SEPARATOR: Final = "@"
 
@@ -330,16 +350,23 @@ def mapped_model_info(model: str, through_gateway: bool) -> ModelInfo | None:
         return None
 
 
-def model_limits(info: ModelInfo | None) -> Mapping[str, int]:
-    """contextWindow from LiteLLM's model map, since pi assumes 128000 otherwise, and maxTokens capped at pi's own
-    16384 default. pi sends maxTokens as max_completion_tokens on every call, and the gateway reserves that many
-    tokens against the key's TPM limit, so the model's full output cap would starve keys with lower limits."""
-    if info is None:
-        return MappingProxyType({})
-    max_output: Final = info.get("max_output_tokens")
+def max_output_tokens(info: ModelInfo | None, thinking: PiThinkingLevel | None) -> int | None:
+    """pi's own 16384 default plus the thinking budget LiteLLM sends for the level, within the model's output cap.
+    pi sends maxTokens as max_completion_tokens on every call and the gateway reserves that many tokens against the
+    key's TPM limit, so the model's full output cap would starve keys with lower limits, while Anthropic budget
+    thinking needs max_tokens above the budget, which is how pi sizes its own Anthropic calls."""
+    budget: Final = LITELLM_THINKING_BUDGETS.get(thinking, 0) if thinking else 0
+    max_output: Final = info.get("max_output_tokens") if info is not None else None
+    if isinstance(max_output, int):
+        return min(max_output, PI_DEFAULT_MAX_TOKENS + budget)
+    return PI_DEFAULT_MAX_TOKENS + budget if budget else None
+
+
+def model_limits(info: ModelInfo | None, thinking: PiThinkingLevel | None) -> Mapping[str, int]:
+    """contextWindow from LiteLLM's model map, since pi assumes 128000 otherwise, and maxTokens per max_output_tokens."""
     limits: Final = (
-        ("contextWindow", info.get("max_input_tokens")),
-        ("maxTokens", min(max_output, PI_DEFAULT_MAX_TOKENS) if isinstance(max_output, int) else None),
+        ("contextWindow", info.get("max_input_tokens") if info is not None else None),
+        ("maxTokens", max_output_tokens(info, thinking)),
     )
     return MappingProxyType({key: value for key, value in limits if isinstance(value, int)})
 
@@ -365,7 +392,9 @@ def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | Non
             "api": "openai-completions",
             "apiKey": f"${PI_TOKEN_ENV}",
             "compat": PI_PROVIDER_COMPAT,
-            "models": (MappingProxyType({"id": model, **model_limits(info), **model_compat(info), **reasoning}),),
+            "models": (
+                MappingProxyType({"id": model, **model_limits(info, thinking), **model_compat(info), **reasoning}),
+            ),
         }
     )
     return json.dumps({"providers": {PI_PROVIDER_ID: provider}}, default=_plain_json)

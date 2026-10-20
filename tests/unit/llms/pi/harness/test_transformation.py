@@ -27,6 +27,7 @@ from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessH
 from litellm.harness.options import HarnessOptions, OpenCodeOptions, PiOptions, PiThinkingLevel
 from litellm.harness.sandbox.base import CompletedRun
 from litellm.harness.types import Event, Harness, PermissionMode, Reasoning, Text, ToolCall, ToolResult
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.harness.transformation import (
     HarnessSessionSetup,
     HarnessTurnError,
@@ -534,6 +535,25 @@ def test_pi_asks_for_no_more_output_tokens_than_the_model_or_its_own_default(max
     )
 
 
+@pytest.mark.parametrize("info", [get_model_info(MODEL), None], ids=["mapped", "unmapped"])
+@pytest.mark.parametrize("thinking", ["minimal", "low", "medium", "high", "xhigh", "max"])
+def test_thinking_budget_leaves_pi_its_default_room_for_the_answer(
+    thinking: PiThinkingLevel, info: ModelInfo | None
+) -> None:
+    declared: Final = json.loads(build_models_json(MODEL, "http://h:1/v1", thinking, info))["providers"]["litellm"]
+    sent: Final = AnthropicConfig().map_openai_params(
+        {"reasoning_effort": thinking, "max_completion_tokens": declared["models"][0]["maxTokens"]},
+        {},
+        MODEL,
+        drop_params=False,
+    )
+    assert sent["max_tokens"] - sent["thinking"]["budget_tokens"] >= PI_DEFAULT_MAX_TOKENS, (
+        "Anthropic answers 400 unless max_tokens is above the thinking budget LiteLLM sends for the level, "
+        "so a budget as large as pi's default left thinking=max with no request it could make"
+    )
+    assert sent["max_tokens"] <= get_model_info(MODEL)["max_output_tokens"]
+
+
 def test_model_that_supports_prompt_caching_asks_pi_for_cache_control_marks() -> None:
     assert get_model_info(MODEL).get("supports_prompt_caching") is True
     declared: Final = setup_models(setup_for(make_ctx()))["providers"]["litellm"]["models"][0]
@@ -587,7 +607,8 @@ def test_thinking_declares_a_reasoning_model_only_when_a_level_is_requested(
     thinking: PiThinkingLevel | None, declared_model: Mapping[str, object]
 ) -> None:
     models: Final = setup_models(setup_for(make_ctx(options=PiOptions(thinking=thinking))))
-    assert models["providers"]["litellm"]["models"] == [declared_model], (
+    declared: Final = {key: value for key, value in models["providers"]["litellm"]["models"][0].items() if key != "maxTokens"}
+    assert declared == {key: value for key, value in declared_model.items() if key != "maxTokens"}, (
         "pi drops --thinking to off unless the model declares reasoning, and drops xhigh/max to high "
         "unless thinkingLevelMap names them; declaring reasoning with no level makes pi send its default effort"
     )

@@ -1,7 +1,7 @@
 import json
 import sys
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -13,12 +13,16 @@ from litellm.harness.endpoint import (
     SSEUsageParser,
     UsageTracker,
     compute_cost,
-    usage_from_body,
+    usage_from_mapping,
+    usage_mapping_of_body,
 )
 from litellm.harness.errors import HarnessInstallFailed
 from litellm.harness.context import GatewayTarget
 from litellm.harness.types import Harness, Usage
 from litellm.types.utils import ModelResponse, ModelResponseStream
+
+REAL_COST_PER_TOKEN = litellm.cost_per_token
+CACHED_MODEL = "claude-haiku-5-5"
 
 GATEWAY = GatewayTarget(api_base="https://gw.example.com", api_key="sk-gateway-secret")
 
@@ -82,7 +86,7 @@ def no_real_cost(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         litellm,
         "cost_per_token",
-        lambda model, prompt_tokens, completion_tokens: (
+        lambda model, prompt_tokens, completion_tokens, **cache_tokens: (
             prompt_tokens * 0.001,
             completion_tokens * 0.002,
         ),
@@ -294,6 +298,95 @@ async def test_sdk_messages_stream_handles_dicts_and_bytes(
     assert (ep.usage.input_tokens, ep.usage.output_tokens) == (4, 9)
 
 
+async def chunks_of(chunks: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.parametrize(
+    ("path", "sdk", "chunks"),
+    [
+        (
+            "/v1/messages",
+            (litellm.anthropic.messages, "acreate"),
+            [
+                {
+                    "type": "message_start",
+                    "message": {
+                        "usage": {
+                            "input_tokens": 100,
+                            "cache_read_input_tokens": 800,
+                            "cache_creation_input_tokens": 100,
+                            "output_tokens": 1,
+                        }
+                    },
+                },
+                {"type": "message_delta", "usage": {"output_tokens": 10}},
+            ],
+        ),
+        (
+            "/chat/completions",
+            (litellm, "acompletion"),
+            [
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 10,
+                        "prompt_tokens_details": {"cached_tokens": 800, "cache_creation_tokens": 100},
+                    },
+                }
+            ],
+        ),
+        (
+            "/v1/responses",
+            (litellm, "aresponses"),
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "usage": {
+                            "input_tokens": 1000,
+                            "output_tokens": 10,
+                            "input_tokens_details": {"cached_tokens": 800, "cache_creation_tokens": 100},
+                        }
+                    },
+                }
+            ],
+        ),
+    ],
+    ids=["messages", "chat", "responses"],
+)
+async def test_sdk_stream_cost_prices_cached_prompt_tokens_like_litellm(
+    monkeypatch: pytest.MonkeyPatch, path: str, sdk: tuple[Any, str], chunks: list[dict[str, Any]]
+) -> None:
+    async def fake_sdk(**kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        return chunks_of(chunks)
+
+    monkeypatch.setattr(litellm, "cost_per_token", REAL_COST_PER_TOKEN)
+    monkeypatch.setattr(*sdk, fake_sdk)
+    async with ModelEndpoint(Harness.PI, CACHED_MODEL, None) as ep:
+        async with httpx.AsyncClient(base_url=ep.url) as client:
+            await client.post(path, json={"stream": True}, headers=auth(ep))
+    cached_price: Final = sum(
+        REAL_COST_PER_TOKEN(
+            model=CACHED_MODEL,
+            prompt_tokens=1000,
+            completion_tokens=10,
+            usage_object=litellm.Usage(
+                prompt_tokens=1000,
+                completion_tokens=10,
+                total_tokens=1010,
+                prompt_tokens_details={"cached_tokens": 800, "cache_creation_tokens": 100},
+            ),
+        )
+    )
+    assert cached_price < sum(REAL_COST_PER_TOKEN(model=CACHED_MODEL, prompt_tokens=1000, completion_tokens=10))
+    assert ep.usage.cost == pytest.approx(cached_price), (
+        "SDK mode priced cached prompt tokens at the full input price, overstating the cost of every cached turn"
+    )
+
+
 async def test_sdk_error_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing(**kwargs: Any) -> Any:
         raise litellm.RateLimitError(
@@ -330,12 +423,12 @@ def test_load_server_deps_maps_import_error(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_usage_helpers() -> None:
-    assert usage_from_body({"usage": {"prompt_tokens": 1, "completion_tokens": 2}}) == (
+    assert usage_from_mapping(usage_mapping_of_body({"usage": {"prompt_tokens": 1, "completion_tokens": 2}})) == (
         1,
         2,
     )
-    assert usage_from_body({"response": {"usage": {"input_tokens": 3}}}) == (3, 0)
-    assert usage_from_body("nope") == (0, 0)
+    assert usage_from_mapping(usage_mapping_of_body({"response": {"usage": {"input_tokens": 3}}})) == (3, 0)
+    assert usage_from_mapping(usage_mapping_of_body("nope")) == (0, 0)
 
     parser = SSEUsageParser()
     for i in range(0, len(ANTHROPIC_SSE), 7):  # split across arbitrary chunk borders
