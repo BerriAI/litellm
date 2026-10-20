@@ -15,6 +15,7 @@ from typing import Final
 
 import pytest
 from opentelemetry import trace as trace_api
+from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -1161,6 +1162,14 @@ class TestFanOut:
 ARIZE_TEAM_PARAMS = {"arize_space_id": "space-team", "arize_api_key": "key-team"}
 
 
+def caller_context(trace_id: int) -> Context:
+    return trace_api.set_span_in_context(
+        trace_api.NonRecordingSpan(
+            trace_api.SpanContext(trace_id=trace_id, span_id=1, is_remote=True, trace_flags=trace_api.TraceFlags(0x01))
+        )
+    )
+
+
 def arize_destination(**rates: str) -> OtelDestination:
     destination = destination_for("arize", {**ARIZE_TEAM_PARAMS, **rates})
     assert destination is not None, "the fixture must resolve for the test to mean anything"
@@ -1777,11 +1786,7 @@ class TestTenantSampling:
             set_request_destinations(destinations)
             tracer: Final = get_tracer(provider, "litellm")
             for trace_id in trace_ids:
-                remote = trace_api.SpanContext(
-                    trace_id=trace_id, span_id=1, is_remote=True, trace_flags=trace_api.TraceFlags(0x01)
-                )
-                parent = trace_api.set_span_in_context(trace_api.NonRecordingSpan(remote))
-                with tracer.start_as_current_span("POST /v1/chat/completions", context=parent):
+                with tracer.start_as_current_span("POST /v1/chat/completions", context=caller_context(trace_id)):
                     with tracer.start_as_current_span("chat gpt-4") as span:
                         if failed:
                             span.set_status(Status(StatusCode.ERROR, "upstream 500"))
