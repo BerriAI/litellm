@@ -1,5 +1,5 @@
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from types import MethodType
 from typing import TYPE_CHECKING, Final
 
@@ -387,18 +387,13 @@ class LoggingCallbackManager:
         same_class: Final = (candidate for candidate in candidates if type(candidate).__name__ in class_names)
         return tuple(candidate for candidate in same_class if self._get_custom_logger_key(candidate) in keys)
 
-    def without_registered_custom_logger_keys(self, candidates: Iterable[CustomLogger]) -> tuple[CustomLogger, ...]:
-        candidate_tuple: Final = tuple(candidates)
-        class_names: Final = frozenset(type(candidate).__name__ for candidate in candidate_tuple)
-        with _callback_lists_lock:
-            same_class: Final = tuple(
-                callback for callback in litellm.callbacks if type(callback).__name__ in class_names
-            )
-        registered_keys: Final = frozenset(
-            self._get_custom_logger_key(callback) for callback in same_class if isinstance(callback, CustomLogger)
-        )
-        return tuple(
-            candidate for candidate in candidate_tuple if self._get_custom_logger_key(candidate) not in registered_keys
+    def without_custom_logger_keys(
+        self, callbacks: Iterable[str | Callable[..., object] | CustomLogger], keys: frozenset[str]
+    ) -> Iterator[str | Callable[..., object] | CustomLogger]:
+        return (
+            callback
+            for callback in callbacks
+            if not (isinstance(callback, CustomLogger) and self._get_custom_logger_key(callback) in keys)
         )
 
     def _reset_all_callbacks(self):

@@ -244,6 +244,7 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
 @pytest.fixture(autouse=True)
 def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
+    original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
     original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
@@ -255,6 +256,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     _flush_client_caches()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
+    litellm_router_module._routers_holding_global_callbacks.clear()
     for name in RESET_TO_NONE_GLOBALS:
         setattr(litellm, name, None)
     for name in MODULE_LEVEL_CLIENTS:
@@ -269,6 +271,8 @@ def isolate_litellm_globals() -> Iterator[None]:
     litellm.__dict__.update(original_clients)
     for name, value in (original_callbacks | original_reset | original_restored).items():
         setattr(litellm, name, value)
+    litellm_router_module._routers_holding_global_callbacks.clear()
+    litellm_router_module._routers_holding_global_callbacks.update(original_callback_holders)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled

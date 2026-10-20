@@ -322,7 +322,6 @@ from litellm.router_utils.reasoning_effort_capability import (
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
 )
-from litellm.router_utils.router_callbacks.retire_after_request import RetireRoutingStateAfterRequest
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     find_deployment_metadata,
     get_counted_usage_tokens,
@@ -1640,9 +1639,12 @@ class Router:
         # Stop contributing to cost-map rebuilds straight away rather than waiting
         # for this router to be collected.
         _live_routers.discard(self)
+        self.retire_routing_state()
+        self._release_global_callbacks()
+
+    def _release_global_callbacks(self) -> None:
         with _routers_holding_global_callbacks_lock:
             _routers_holding_global_callbacks.discard(self)
-        self.retire_routing_state()
         slack_alerting_loggers: Final = self._slack_alerting_loggers()
         adaptive_router_hooks: Final = self._adaptive_router_hooks()
         vacated_keys: Final = litellm.logging_callback_manager.drop_callbacks(
@@ -1667,15 +1669,34 @@ class Router:
         if adaptive_survivor is not None and vacated_keys & adaptive_keys:
             adaptive_survivor._sync_adaptive_router_hooks()
 
+    def serve_through_request_logging(self) -> None:
+        self._request_scoped_callbacks = (*self._global_callback_candidates(), *self._request_adaptive_router_hooks())
+        self._release_global_callbacks()
+
     def bind_to_request_logging(self, logging_obj: LiteLLMLogging) -> None:
-        self._request_scoped_callbacks = litellm.logging_callback_manager.without_registered_custom_logger_keys(
-            self._global_callback_candidates()
+        for callback in self._request_scoped_callbacks:
+            logging_obj.replace_global_callback(callback)
+
+    def _request_adaptive_router_hooks(self) -> tuple[CustomLogger, ...]:
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
         )
-        for callback in (*self._request_scoped_callbacks, RetireRoutingStateAfterRequest(self.retire_routing_state)):
-            logging_obj.add_dynamic_callback(callback)
+
+        return tuple(
+            AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy)
+            for tagged in chain.from_iterable(self.adaptive_routers.values())
+        )
 
     def _routing_callbacks(self) -> Iterable[object]:
-        return chain(litellm.callbacks, self._request_scoped_callbacks)
+        if not self._request_scoped_callbacks:
+            return litellm.callbacks
+        replaced_keys: Final = frozenset(
+            map(litellm.logging_callback_manager.get_custom_logger_key, self._request_scoped_callbacks)
+        )
+        return chain(
+            litellm.logging_callback_manager.without_custom_logger_keys(litellm.callbacks, replaced_keys),
+            self._request_scoped_callbacks,
+        )
 
     def retire_routing_state(self) -> None:
         for strategy in (*self._global_callback_candidates(), *self._override_selectors.values()):

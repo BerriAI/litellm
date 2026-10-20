@@ -1,8 +1,11 @@
 import asyncio
+import gc
 import threading
+import weakref
 import httpx
 import litellm
 import pytest
+import redis
 import respx
 
 
@@ -17,7 +20,12 @@ from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import (
+    ProxyModelNotFoundError,
+    UserConfigRouters,
+    route_request,
+    user_config_routers,
+)
 from litellm.types.router import RouterRateLimitError
 
 
@@ -1992,6 +2000,12 @@ async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_
     assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth
 
 
+@pytest.fixture(autouse=True)
+def discard_cached_user_config_routers() -> Iterator[None]:
+    yield
+    user_config_routers.clear()
+
+
 @pytest.fixture
 def fake_redis_port() -> Iterator[int]:
     server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
@@ -2008,20 +2022,29 @@ async def _wait_out_a_rate_limit_minute_rollover() -> None:
         await asyncio.sleep(seconds_left)
 
 
-def _proxy_logging_obj() -> LiteLLMLoggingObj:
-    return LiteLLMLoggingObj(
-        model="rate-limited",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=False,
-        call_type="acompletion",
+def _proxy_logging_obj(model: str = "rate-limited") -> LiteLLMLoggingObj:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
         start_time=datetime.now(),
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
         litellm_call_id=str(uuid4()),
-        function_id="user-config",
     )
+    assert isinstance(logging_obj, LiteLLMLoggingObj)
+    return logging_obj
+
+
+def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        **deployment_limits,
+        "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test", "mock_response": "ok"},
+    }
 
 
 async def _user_config_request_outcome(
-    redis_port: int,
+    redis_port: int | None,
     routing_settings: Mapping[str, object],
     deployment_limits: Mapping[str, int],
     logging_obj: LiteLLMLoggingObj | None,
@@ -2033,15 +2056,8 @@ async def _user_config_request_outcome(
         **({"litellm_logging_obj": logging_obj} if logging_obj is not None else {}),
         "user_config": {
             **routing_settings,
-            "redis_host": "127.0.0.1",
-            "redis_port": redis_port,
-            "model_list": [
-                {
-                    "model_name": "rate-limited",
-                    **deployment_limits,
-                    "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test", "mock_response": "ok"},
-                }
-            ],
+            **({"redis_host": "127.0.0.1", "redis_port": redis_port} if redis_port is not None else {}),
+            "model_list": [_mock_deployment("rate-limited", **deployment_limits)],
         },
     }
     try:
@@ -2053,8 +2069,17 @@ async def _user_config_request_outcome(
     return "200"
 
 
-def _no_router_callbacks_left() -> bool:
-    return all(getattr(litellm, list_name) == [] for list_name in ("callbacks", "input_callback"))
+async def _tpm_for_three_requests() -> int:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    probe: Final = await litellm.acompletion(model="openai/gpt-5.5", messages=messages, mock_response="ok")
+    assert isinstance(probe, litellm.ModelResponse)
+    probe_usage: Final = getattr(probe, "usage", None)
+    assert isinstance(probe_usage, litellm.Usage)
+    return 2 * probe_usage.total_tokens + litellm.token_counter(messages=messages)
+
+
+def _global_router_callbacks() -> tuple[list[object], list[object]]:
+    return list(litellm.callbacks), list(litellm.input_callback)
 
 
 @pytest.mark.parametrize(
@@ -2067,17 +2092,20 @@ def _no_router_callbacks_left() -> bool:
     ],
 )
 @pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
+@pytest.mark.parametrize("with_redis", [True, False])
 @pytest.mark.asyncio
 async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     fake_redis_port: int,
     routing_settings: Mapping[str, object],
     deployment_limits: Mapping[str, int],
     arrives_with_logging_obj: bool,
+    with_redis: bool,
 ) -> None:
     await _wait_out_a_rate_limit_minute_rollover()
+    callbacks_before: Final = _global_router_callbacks()
     outcomes: Final = [
         await _user_config_request_outcome(
-            fake_redis_port,
+            fake_redis_port if with_redis else None,
             routing_settings,
             deployment_limits,
             _proxy_logging_obj() if arrives_with_logging_obj else None,
@@ -2087,7 +2115,7 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
 
     assert outcomes[0] == "200"
     assert "429" in outcomes, outcomes
-    assert _no_router_callbacks_left(), (litellm.callbacks, litellm.input_callback)
+    assert _global_router_callbacks() == callbacks_before
 
 
 @pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
@@ -2095,12 +2123,7 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
 async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_limit(
     fake_redis_port: int, arrives_with_logging_obj: bool
 ) -> None:
-    messages: Final = [{"role": "user", "content": "hi"}]
-    probe: Final = await litellm.acompletion(model="openai/gpt-5.5", messages=messages, mock_response="ok")
-    assert isinstance(probe, litellm.ModelResponse)
-    probe_usage: Final = getattr(probe, "usage", None)
-    assert isinstance(probe_usage, litellm.Usage)
-    tpm_for_three_requests: Final = 2 * probe_usage.total_tokens + litellm.token_counter(messages=messages)
+    tpm_for_three_requests: Final = await _tpm_for_three_requests()
 
     def request() -> Coroutine[None, None, str]:
         return _user_config_request_outcome(
@@ -2115,3 +2138,121 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
     later_outcomes: Final = [await request() for _ in range(2)]
 
     assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
+
+
+@pytest.mark.asyncio
+async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_port: int) -> None:
+    def request() -> Coroutine[None, None, str]:
+        return _user_config_request_outcome(
+            fake_redis_port, {"routing_strategy": "usage-based-routing-v2"}, {"rpm": 2}, _proxy_logging_obj()
+        )
+
+    await _wait_out_a_rate_limit_minute_rollover()
+    outcomes: Final = await asyncio.gather(*(request() for _ in range(4)))
+
+    assert outcomes.count("200") <= 2, outcomes
+    assert "429" in outcomes, outcomes
+
+
+@pytest.mark.parametrize(
+    "routing_strategy, limited_by",
+    [("usage-based-routing-v2", "rpm"), ("usage-based-routing-v2", "tpm"), ("usage-based-routing", "rpm")],
+)
+@pytest.mark.parametrize("proxy_router_shares_redis", [True, False])
+@pytest.mark.asyncio
+async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_unchanged(
+    fake_redis_port: int, routing_strategy: str, limited_by: str, proxy_router_shares_redis: bool
+) -> None:
+    deployment_limits: Final = {"rpm": 3} if limited_by == "rpm" else {"tpm": await _tpm_for_three_requests()}
+
+    def request() -> Coroutine[None, None, str]:
+        return _user_config_request_outcome(
+            fake_redis_port, {"routing_strategy": routing_strategy}, deployment_limits, _proxy_logging_obj()
+        )
+
+    async def outcomes() -> list[str]:
+        first_instance: Final = [await request() for _ in range(2)]
+        user_config_routers.clear()
+        second_instance: Final = [await request() for _ in range(3)]
+        return [*first_instance, *second_instance]
+
+    await _wait_out_a_rate_limit_minute_rollover()
+    alone: Final = await outcomes()
+    user_config_routers.clear()
+    await asyncio.sleep(0.3)
+    redis.Redis(host="127.0.0.1", port=fake_redis_port).flushall()
+    proxy_router: Final = litellm.Router(
+        routing_strategy=routing_strategy,
+        model_list=[_mock_deployment("proxy-model")],
+        redis_host="127.0.0.1" if proxy_router_shares_redis else None,
+        redis_port=fake_redis_port if proxy_router_shares_redis else None,
+    )
+    try:
+        beside_proxy_router: Final = await outcomes()
+    finally:
+        proxy_router.discard()
+
+    assert "429" in alone, alone
+    assert beside_proxy_router == alone
+
+
+@pytest.mark.asyncio
+async def test_user_config_adaptive_router_learns_from_proxy_requests() -> None:
+    user_config: Final = {
+        "model_list": [
+            _mock_deployment("smart"),
+            _mock_deployment("fast"),
+            {
+                "model_name": "adaptive",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {"available_models": ["smart", "fast"]},
+                },
+            },
+        ]
+    }
+    await (
+        await route_request(
+            {
+                "model": "adaptive",
+                "messages": [{"role": "user", "content": "write a sorting function"}],
+                "metadata": {"session_id": "session-1"},
+                "litellm_logging_obj": _proxy_logging_obj("adaptive"),
+                "user_config": user_config,
+            },
+            None,
+            None,
+            "acompletion",
+        )
+    )
+    await asyncio.sleep(0.3)
+
+    router: Final = user_config_routers.get(user_config, lambda: pytest.fail("the user_config router was not reused"))
+    snapshot: Final = await router.adaptive_routers["adaptive"][0].strategy.get_state_snapshot()
+    assert snapshot["feedback_contexts_live"] == 1, snapshot
+
+
+@pytest.mark.asyncio
+async def test_user_config_routers_discard_the_least_recently_used_router_past_capacity() -> None:
+    routers: Final = UserConfigRouters(max_size=2)
+
+    def config(model_name: str) -> dict[str, object]:
+        return {"routing_strategy": "usage-based-routing-v2", "model_list": [_mock_deployment(model_name)]}
+
+    def build(model_name: str) -> litellm.Router:
+        return litellm.Router(**config(model_name))
+
+    def must_be_cached() -> litellm.Router:
+        pytest.fail("a cached router was rebuilt")
+
+    first_handler: Final = weakref.ref(routers.get(config("first"), lambda: build("first")).lowesttpm_logger_v2)
+    second_handler: Final = weakref.ref(routers.get(config("second"), lambda: build("second")).lowesttpm_logger_v2)
+    routers.get(config("first"), must_be_cached)
+    routers.get(config("third"), lambda: build("third"))
+    await asyncio.sleep(0.2)
+    gc.collect()
+
+    assert routers.get(config("first"), must_be_cached) is not None
+    assert first_handler() is not None
+    assert second_handler() is None
+    routers.clear()

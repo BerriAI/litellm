@@ -592,6 +592,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prometheusLogger, \
         slack_app
     custom_pricing: bool = False
+    replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
@@ -846,6 +847,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.dynamic_async_failure_callbacks = self._with_dynamic_callback(
             self.dynamic_async_failure_callbacks, callback
         )
+
+    def replace_global_callback(self, callback: CustomLogger) -> None:
+        self.add_dynamic_callback(callback)
+        self.replaced_global_callback_keys = self.replaced_global_callback_keys | {
+            litellm.logging_callback_manager.get_custom_logger_key(callback)
+        }
 
     @staticmethod
     def _with_dynamic_callback(
@@ -4468,9 +4475,18 @@ class Logging(LiteLLMLoggingBaseClass):
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
         global_callbacks: list[str | Callable[..., object] | CustomLogger],
     ) -> list[str | Callable[..., object] | CustomLogger]:
+        kept_global_callbacks: Final = (
+            list(
+                litellm.logging_callback_manager.without_custom_logger_keys(
+                    global_callbacks, self.replaced_global_callback_keys
+                )
+            )
+            if self.replaced_global_callback_keys
+            else global_callbacks
+        )
         if dynamic_success_callbacks is None:
-            return list(global_callbacks)
-        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
+            return list(kept_global_callbacks)
+        return list(dict.fromkeys(dynamic_success_callbacks + kept_global_callbacks))
 
     def _remove_internal_litellm_callbacks(self, callbacks: list) -> list:
         """
