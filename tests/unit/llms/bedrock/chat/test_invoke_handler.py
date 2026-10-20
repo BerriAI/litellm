@@ -1880,3 +1880,84 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
         "Hi I am Anthropic, I am a helpful assistant"
     )
     assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)
+
+
+_PLACE_JSON_MODE_REQUEST: Final = json.dumps(
+    {
+        "tools": [
+            {
+                "name": "json_tool_call",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+                    "required": ["city", "country"],
+                    "additionalProperties": True,
+                },
+            }
+        ]
+    }
+)
+
+_CUT_JSON_TOOL_STREAM: Final = b"".join(
+    _bedrock_event_stream_frame(event)
+    for event in (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_cut_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 528, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_cut_1", "name": "json_tool_call", "input": {}},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"city"'}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ': "Paris", '}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '"country": "France"}'},
+        },
+    )
+)
+
+
+def _cut_json_tool_stream_decoder() -> AWSEventStreamDecoder:
+    return _stream_decoder(
+        "anthropic",
+        model="anthropic.claude-haiku-5-5",
+        json_mode=True,
+        sync_stream=True,
+        response_format_schema=response_format_schema_from_request(_PLACE_JSON_MODE_REQUEST, json_mode=True),
+    )
+
+
+def _streamed_content(chunks: Sequence[object]) -> str:
+    return "".join(
+        chunk.choices[0].delta.content or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream) and chunk.choices
+    )
+
+
+def test_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    chunks: Final = list(_cut_json_tool_stream_decoder().iter_bytes(iter([_CUT_JSON_TOOL_STREAM])))
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield _CUT_JSON_TOOL_STREAM
+
+    chunks: Final = [chunk async for chunk in _cut_json_tool_stream_decoder().aiter_bytes(_chunks())]
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}

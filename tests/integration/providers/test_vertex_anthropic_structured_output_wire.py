@@ -1819,25 +1819,32 @@ def test_vertex_chat_without_response_format_sends_no_tool_and_no_output_config(
         assert not {"tools", "output_config", "output_format"} & sent.body.keys(), sent.body
 
 
-@pytest.mark.parametrize(
-    "output_format",
-    [5, [], {}, "x" * 5000],
-    ids=["int", "list", "empty", "5kb"],
-)
-def test_vertex_messages_malformed_output_format_reaches_the_caller_as_the_peer_400(
+def test_vertex_messages_empty_output_format_reaches_the_caller_as_the_peer_400(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("native")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, marker, output_format={}))
+        assert response.status_code == 400, response.text
+        assert _BAD_FORMAT in response.text, response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert "output_format" not in sent.body, sent.body
+        assert object_value(sent.body["output_config"])["format"] == {}, sent.body
+        assert gateway.request("GET", "/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize("output_format", [5, [], "x" * 5000], ids=["int", "list", "5kb"])
+def test_vertex_messages_non_object_output_format_is_refused_without_reaching_the_peer(
     gateway: Gateway, output_format: JsonValue
 ) -> None:
-    marker, marker_hex = _marker("native")
+    marker, _ = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
         response: Final = gateway.request(
             "POST", "/v1/messages", _messages_body(model, marker, output_format=output_format)
         )
         assert response.status_code == 400, response.text
-        assert _BAD_FORMAT in response.text, response.text
-        sent: Final = _one_delivery(wire, marker_hex)
-        assert "output_format" not in sent.body, sent.body
-        assert object_value(sent.body["output_config"])["format"] == output_format, sent.body
+        assert "needs `output_format` to be a JSON object" in response.text, response.text
+        assert _delivered(wire) == ()
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 

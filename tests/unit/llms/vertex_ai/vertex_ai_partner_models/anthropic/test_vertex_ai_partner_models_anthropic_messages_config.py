@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -535,6 +536,44 @@ def test_messages_request_moves_output_format_into_output_config():
 
     assert "output_format" not in result
     assert result["output_config"] == {"effort": "high", "format": output_format}
+
+
+_CALLER_OUTPUT_CONFIG: Final = {
+    "effort": "high",
+    "format": {"type": "json_schema", "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
+}
+
+
+def _messages_request_with_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
+    return VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": copy.deepcopy(_CALLER_OUTPUT_CONFIG),
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_drops_a_malformed_output_format_under_drop_params(output_format: object):
+    result = _messages_request_with_output_format(output_format, drop_params=True)
+
+    assert "output_format" not in result
+    assert result["output_config"] == _CALLER_OUTPUT_CONFIG
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_rejects_a_malformed_output_format_without_drop_params(output_format: object):
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _messages_request_with_output_format(output_format, drop_params=False)
+
+    assert error.value.status_code == 400
 
 
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():

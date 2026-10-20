@@ -23,7 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
+    response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
     type_to_response_format_param,
@@ -163,6 +164,7 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -2436,6 +2438,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=litellm_params.get("drop_params") is True,
                 output_key="top_k",
             )
+        output_format: Final = request_params.get("output_format")
+        if (
+            output_format is not None
+            and not isinstance(output_format, Mapping)
+            and drops_unsupported_params(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params"))
+        ):
+            request_params.pop("output_format")
 
         data: Final = {
             "model": model,
@@ -3166,7 +3175,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
         if split_answer is not None:
-            return litellm.Message(content=json.dumps(split_answer))
+            return litellm.Message(content=response_format_answer_json(split_answer))
         try:
             payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
@@ -3174,7 +3183,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
             return litellm.Message(
-                content=json.dumps(
+                content=response_format_answer_json(
                     unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
                 )
             )
