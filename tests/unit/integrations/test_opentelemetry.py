@@ -48,9 +48,10 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
-from litellm.proxy._types import SpanAttributes
+from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
@@ -5502,6 +5503,105 @@ class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
                 traceback_str=None,
             )
         )
+
+
+_PROXY_KEY_ERROR: Final = "Authentication Error, invalid proxy key"
+
+
+def _proxy_key_exception() -> ProxyException:
+    return ProxyException(message=_PROXY_KEY_ERROR, type="auth_error", param="None", code=401)
+
+
+def _fail_proxy_request(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    asyncio.run(
+        otel.async_post_call_failure_hook(
+            request_data={},
+            original_exception=_proxy_key_exception(),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=otel.tracer.start_span("Received Proxy Server Request")),
+        )
+    )
+
+
+def _fail_management_request(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    now: Final = datetime.now()
+    asyncio.run(
+        otel.async_management_endpoint_failure_hook(
+            logging_payload=ManagementEndpointLoggingPayload(
+                route="/key/generate", request_data={}, exception=_proxy_key_exception(), start_time=now, end_time=now
+            ),
+            parent_otel_span=otel.tracer.start_span("Received Proxy Server Request"),
+        )
+    )
+
+
+def _fail_service_call(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    now: Final = datetime.now()
+    asyncio.run(
+        otel.async_service_failure_hook(
+            payload=ServiceLoggerPayload(
+                is_error=True,
+                error="redis connection refused",
+                service=ServiceTypes.REDIS,
+                duration=0.1,
+                call_type="async_get_cache",
+                event_metadata=None,
+            ),
+            error="redis connection refused",
+            parent_otel_span=otel.tracer.start_span("Received Proxy Server Request"),
+            start_time=now,
+            end_time=now,
+        )
+    )
+
+
+def _fail_phoenix_call(provider: TracerProvider) -> None:
+    logger: Final = ArizePhoenixLogger(callback_name="arize_phoenix", tracer_provider=provider)
+    start: Final = datetime.now(timezone.utc)
+    logger._handle_failure(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "error_information": {"error_class": "NotFoundError", "error_message": "model not found"},
+            },
+            "exception": Exception("model not found"),
+        },
+        None,
+        start,
+        start + timedelta(seconds=1),
+    )
+
+
+@pytest.mark.parametrize(
+    ("fail", "expected_description"),
+    [
+        (_fail_proxy_request, _PROXY_KEY_ERROR),
+        (_fail_management_request, _PROXY_KEY_ERROR),
+        (_fail_service_call, "redis connection refused"),
+        (_fail_phoenix_call, "model not found"),
+    ],
+    ids=["proxy_request", "management_request", "service_call", "arize_phoenix"],
+)
+def test_every_error_span_carries_the_error_message_in_its_status(
+    fail: Callable[[TracerProvider], None], expected_description: str
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    fail(provider)
+
+    error_spans: Final = [s for s in exporter.get_finished_spans() if s.status.status_code == trace.StatusCode.ERROR]
+    assert error_spans
+    assert {s.status.description for s in error_spans} == {expected_description}
 
 
 class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):

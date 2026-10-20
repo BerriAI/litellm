@@ -933,7 +933,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
-            service_logging_span.set_status(Status(StatusCode.ERROR))
+            service_logging_span.set_status(Status(StatusCode.ERROR, error or None))
             service_logging_span.end(end_time=_end_time_ns)
 
     async def async_post_call_failure_hook(
@@ -948,8 +948,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         parent_otel_span: Final = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
-            parent_otel_span.set_status(Status(StatusCode.ERROR))
-
             # Stamp team attributes onto the SERVER (root) span too, so the
             # trace root is team-filterable on the failure path like the
             # child exception span below.
@@ -971,13 +969,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 original_exception=original_exception,
                 traceback_str=traceback_str,
             )
-            self._record_exception_on_span(
+            server_error_message: Final = self._record_exception_on_span(
                 span=parent_otel_span,
                 kwargs={
                     "exception": original_exception,
                     "standard_logging_object": {"error_information": error_information},
                 },
             )
+            parent_otel_span.set_status(Status(StatusCode.ERROR, server_error_message))
 
             # _record_exception_on_span only stamps when error_code is set;
             # bare TypeError etc. has none, and the span is about to be ended.
@@ -1006,7 +1005,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 team_id=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
             )
-            exception_logging_span.set_status(Status(StatusCode.ERROR))
+            exception_logging_span.set_status(Status(StatusCode.ERROR, server_error_message))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
             # Emit guardrail spans for any guardrail invocations that
@@ -3537,8 +3536,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 key="exception",
                 value=str(_exception),
             )
-            management_endpoint_span.set_status(Status(StatusCode.ERROR))
-            management_endpoint_span.end(end_time=_end_time_ns)
 
             # The management wrapper has no other hook that closes the SERVER span.
             from litellm.litellm_core_utils.litellm_logging import (
@@ -3548,14 +3545,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             error_information: Final = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=_exception,
             )
-            parent_otel_span.set_status(Status(StatusCode.ERROR))
-            self._record_exception_on_span(
+            server_error_message: Final = self._record_exception_on_span(
                 span=parent_otel_span,
                 kwargs={
                     "exception": _exception,
                     "standard_logging_object": {"error_information": error_information},
                 },
             )
+            management_endpoint_span.set_status(Status(StatusCode.ERROR, server_error_message))
+            management_endpoint_span.end(end_time=_end_time_ns)
+            parent_otel_span.set_status(Status(StatusCode.ERROR, server_error_message))
             parent_otel_span.end(end_time=_end_time_ns)
 
     def create_litellm_proxy_request_started_span(
