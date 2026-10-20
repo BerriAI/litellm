@@ -9216,6 +9216,27 @@ def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_no
     assert "reasoning_effort" not in sent
 
 
+@pytest.mark.parametrize("declared", [["none"], []])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_keeps_adaptive_thinking_but_drops_a_budget_effort_the_claude_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], declared: list[str]
+) -> None:
+    model_info: Final = {"reasoning_effort_levels": declared}
+
+    dropped: Final = body_sent(
+        respx_mock,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        drop_params=True,
+    )
+    adaptive_alone: Final = body_sent(
+        respx_mock, model_info, thinking={"type": "adaptive", "display": "summarized"}, drop_params=True
+    )
+
+    assert "output_config" not in dropped
+    assert dropped == adaptive_alone
+
+
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 @pytest.mark.parametrize("budget_tokens", [500, 9000])
 def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(

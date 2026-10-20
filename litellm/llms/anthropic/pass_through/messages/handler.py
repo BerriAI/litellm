@@ -31,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.router_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
-    deployment_rounds_reasoning_effort,
+    deployment_reasoning_effort_levels,
     keeps_effort,
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
@@ -188,7 +188,7 @@ def _with_deployment_output_effort(
     requested_output: Final = as_str_mapping(params.get("output_config"))
     caller_output: Final = None if requested_output is None else resolve(requested_output)
     caller_params: Final = params if requested_output is None else _with_output_config(params, caller_output)
-    if not deployment_rounds_reasoning_effort(deployment_model_info):
+    if deployment_reasoning_effort_levels(deployment_model_info) is None:
         return caller_params
     if requested_output is not None and keeps_effort(requested_output, caller_output):
         return _with_output_config(translate(params), caller_output)

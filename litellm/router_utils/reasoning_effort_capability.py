@@ -166,12 +166,6 @@ def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
     return declared is not None and any(level in _STRENGTH_RANK for level in declared)
 
 
-def deployment_rounds_thinking_budget(deployment_model_info: object, custom_llm_provider: str) -> bool:
-    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
-        return deployment_reasoning_effort_levels(deployment_model_info) is not None
-    return deployment_rounds_reasoning_effort(deployment_model_info)
-
-
 def with_adaptive_thinking_as_effort(
     params: Mapping[str, object], *, model: str, custom_llm_provider: str, drop_params: bool
 ) -> Mapping[str, object]:
@@ -215,13 +209,15 @@ def adaptive_thinking_beside_effort(
     model: str,
     custom_llm_provider: str,
     drop_params: bool,
-) -> AnthropicThinkingParam | None:
-    if effort is None or effort == "none":
+) -> Mapping[object, object] | AnthropicThinkingParam | None:
+    if effort == "none":
         return None
     translated: Final = with_adaptive_thinking_as_effort(
         {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     )
-    return thinking if "output_config" in translated else None
+    if "output_config" not in translated:
+        return None
+    return thinking if effort is not None else validated_object_mapping(translated.get("thinking"))
 
 
 def adaptive_thinking_without_effort(
@@ -366,7 +362,7 @@ def resolve_chat_reasoning(
 
     explicit: Final = resolve(reasoning_effort)
     output: Final = resolve(output_config).value
-    if thinking is None or not deployment_rounds_thinking_budget(deployment_model_info, custom_llm_provider):
+    if thinking is None or deployment_reasoning_effort_levels(deployment_model_info) is None:
         return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
     explicit_kept: Final = keeps_effort(reasoning_effort, explicit.value)
     if not explicit_kept and not keeps_effort(output_config, output):

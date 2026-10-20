@@ -723,6 +723,24 @@ async def test_native_messages_drop_params_leave_the_thinking_budget_to_set_the_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("declared", [["none"], []])
+async def test_native_messages_drop_params_drop_a_budget_effort_the_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, declared: list[str]
+) -> None:
+    model_info: Final = {"reasoning_effort_levels": declared}
+
+    sent: Final = await _native_opus_body_sent(
+        respx_mock,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        drop_params=True,
+    )
+
+    assert "output_config" not in sent
+    assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [False, True])
 async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thinking_budget(
     respx_mock: respx.MockRouter, drop_params: bool
