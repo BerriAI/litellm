@@ -1454,8 +1454,8 @@ class TestTenantSampling:
         }
 
     def test_a_span_two_levels_down_that_outlives_many_other_spans_still_closes_its_request(self):
-        """A classifier call under the route span that stays open while the worker starts
-        more spans than it tracks at once still counts against its own request, so the
+        """A classifier call under the route span that stays open while the worker serves
+        more requests than it tracks at once still counts against its own request, so the
         request is decided once it ends, on its own outcome."""
         dest_exporter: Final = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
@@ -1472,7 +1472,7 @@ class TestTenantSampling:
             with tracer.start_as_current_span("POST /v1/chat/completions") as root:
                 with tracer.start_as_current_span("route gpt-4"):
                     with tracer.start_as_current_span("chat classifier"):
-                        for _ in range(otel_providers._MAX_OPEN_SPANS + 1):
+                        for _ in range(otel_providers._MAX_OPEN_REQUESTS + 1):
                             contextvars.Context().run(other_request)
                 with tracer.start_as_current_span("chat gpt-4"):
                     pass
@@ -1487,13 +1487,13 @@ class TestTenantSampling:
             "chat gpt-4",
         }
 
-    def test_a_request_whose_spans_fall_out_of_the_open_span_bound_is_still_decided(self):
-        """A request still open while the worker holds more open spans than it tracks is
-        decided as each of its spans ends, rather than held for want of a span it can no
-        longer place."""
+    def test_a_failure_two_levels_down_reaches_its_request_however_many_spans_are_open(self):
+        """A classifier call that fails while another request holds more spans open than
+        the worker tracks requests marks its own request, which is then kept at the error
+        rate as a whole."""
         dest_exporter: Final = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
-        destinations: Final = (arize_destination(arize_success_sampling_rate="1.0"),)
+        destinations: Final = (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),)
         others: Final = contextvars.Context()
 
         def open_other_request():
@@ -1503,7 +1503,7 @@ class TestTenantSampling:
             parent: Final = trace_api.set_span_in_context(root)
             return (
                 root,
-                *(tracer.start_span("chat flood", context=parent) for _ in range(otel_providers._MAX_OPEN_SPANS)),
+                *(tracer.start_span("chat flood", context=parent) for _ in range(otel_providers._MAX_OPEN_REQUESTS)),
             )
 
         def run():
@@ -1511,8 +1511,10 @@ class TestTenantSampling:
             tracer: Final = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions"):
                 with tracer.start_as_current_span("route gpt-4"):
-                    with tracer.start_as_current_span("chat classifier"):
-                        return others.run(open_other_request)
+                    with tracer.start_as_current_span("chat classifier") as classifier:
+                        held_open: Final = others.run(open_other_request)
+                        classifier.set_status(Status(StatusCode.ERROR, "classifier timed out"))
+            return held_open
 
         held_open: Final = in_fresh_context(run)
 
@@ -1523,6 +1525,37 @@ class TestTenantSampling:
         }
         for span in held_open:
             span.end()
+
+    def test_the_fan_out_forgets_a_span_once_it_ends_and_a_request_once_it_is_pushed_out(self):
+        """The request lookup holds only spans still open, and only those of the requests
+        the fan-out still counts, so neither ended spans nor a flood of open requests grow
+        it past the open request bound."""
+        fan_out: Final = TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: SimpleSpanProcessor(InMemorySpanExporter())
+        )
+        provider: Final = TracerProvider()
+        provider.add_span_processor(fan_out)
+
+        def run():
+            set_request_destinations((arize_destination(arize_success_sampling_rate="1.0"),))
+            tracer: Final = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+            assert (fan_out._roots, dict(fan_out._open)) == ({}, {})
+            root: Final = tracer.start_span("POST /v1/chat/completions", context=trace_api.Context())
+            tracer.start_span("route gpt-4", context=trace_api.set_span_in_context(root))
+            return tuple(
+                tracer.start_span(f"POST {index}", context=trace_api.Context())
+                for index in range(otel_providers._MAX_OPEN_REQUESTS)
+            )
+
+        held_open: Final = in_fresh_context(run)
+
+        assert len(fan_out._roots) == otel_providers._MAX_OPEN_REQUESTS
+        for span in held_open:
+            span.end()
+        assert (fan_out._roots, dict(fan_out._open)) == ({}, {})
 
     def test_a_span_starting_under_an_ended_span_below_the_root_follows_its_request(self):
         """A post-call write started under the route span after its failed request ended

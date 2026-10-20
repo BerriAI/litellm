@@ -496,7 +496,6 @@ _MAX_PENDING_TREES: Final = 1024
 _MAX_PENDING_SPANS_PER_TREE: Final = 512
 _MAX_REMEMBERED_VERDICTS: Final = 4096
 _MAX_OPEN_REQUESTS: Final = 16384
-_MAX_OPEN_SPANS: Final = 16384
 
 
 class _PendingTree:
@@ -693,8 +692,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
         self._pending: OrderedDict[_RequestKey, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by request
-        self._open: OrderedDict[_RequestKey, int] = OrderedDict()  # mutable-ok: bounded, spans in flight by request
-        self._roots: OrderedDict[int, _RequestKey] = OrderedDict()  # mutable-ok: bounded, request by open span id
+        self._open: OrderedDict[_RequestKey, set[int]] = OrderedDict()  # mutable-ok: bounded, open span ids by request
+        self._roots: dict[int, _RequestKey] = {}  # mutable-ok: holds only the spans ``_open`` holds, request by span id
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
@@ -706,11 +705,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if context is not None:
                 self._span_roots[span] = request[1]
                 self._roots[context.span_id] = request
-                while len(self._roots) > _MAX_OPEN_SPANS:
-                    self._open.pop(self._roots.popitem(last=False)[1], None)
-            self._open[request] = self._open.get(request, 0) + 1
+                self._open.setdefault(request, set()).add(context.span_id)
             while len(self._open) > _MAX_OPEN_REQUESTS:
-                self._open.popitem(last=False)
+                for forgotten in self._open.popitem(last=False)[1]:
+                    self._roots.pop(forgotten, None)
 
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
@@ -737,7 +735,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 continue
             for held_span, held_destination in self._route(request, span, destination, failed):
                 self._forward(held_span, held_destination)
-        for held_span, held_destination in self._settle(request, failed):
+        for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)
 
     def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
@@ -816,7 +814,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         with self._lock:
             return self._decide_locked(request)
 
-    def _settle(self, request: _RequestKey, failed: bool) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+    def _settle(
+        self, request: _RequestKey, span: ReadableSpan, failed: bool
+    ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         """What the request's held tree exports once the span that just ended was the last
         of its request still open. The model-call span ends in the post-call callback,
         after the server span, so a tree is decided when its request goes quiet rather than
@@ -828,8 +828,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             tree: Final = self._pending.get(request)
             if tree is not None and failed:
                 tree.failed = True
-            still_open: Final = self._open.pop(request, 1) - 1
-            if still_open > 0:
+            still_open: Final = self._open.pop(request, set())
+            if span.context is not None:
+                still_open.discard(span.context.span_id)
+            if still_open:
                 self._open[request] = still_open
                 return ()
             return self._decide_locked(request)
