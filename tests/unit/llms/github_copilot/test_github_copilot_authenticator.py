@@ -69,6 +69,8 @@ class TestGitHubCopilotAuthenticator:
             "http://localhost:8080",
             "http://127.0.0.1:8080",
             "http://[::1]:8080",
+            "http://copilot-relay:8080",
+            "http://10.0.0.1:8080",
         ),
     )
     def test_get_api_base_prefers_environment(self, api_base):
@@ -78,8 +80,6 @@ class TestGitHubCopilotAuthenticator:
     @pytest.mark.parametrize(
         "api_base",
         (
-            "http://configured.example.com",
-            "http://10.0.0.1:8080",
             "ftp://api.githubcopilot.com",
             "https://user:password@api.githubcopilot.com",
             "https://api.githubcopilot.com?tenant=example",
@@ -92,7 +92,9 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_base_rejects_invalid_configuration(self, api_base):
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
-            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot GITHUB_COPILOT_API_BASE must be an HTTPS URL"),
+            pytest.raises(
+                InvalidAPIBaseError, match="GitHub Copilot GITHUB_COPILOT_API_BASE must be an HTTP or HTTPS URL"
+            ),
         ):
             get_copilot_api_base()
 
@@ -100,7 +102,9 @@ class TestGitHubCopilotAuthenticator:
         with patch.dict(os.environ, {}, clear=True):
             assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
 
-    @pytest.mark.parametrize("api_base", ("https://deployment.example.com", "http://localhost:9000"))
+    @pytest.mark.parametrize(
+        "api_base", ("https://deployment.example.com", "http://localhost:9000", "http://deployment.example.com")
+    )
     def test_get_api_base_prefers_deployment_endpoint(self, api_base):
         with patch.dict(
             os.environ,
@@ -112,7 +116,6 @@ class TestGitHubCopilotAuthenticator:
     @pytest.mark.parametrize(
         "api_base",
         [
-            "http://deployment.example.com",
             "ftp://deployment.example.com",
             "https://user:pw@deployment.example.com",
             "https://deployment.example.com?q=1",
@@ -128,7 +131,7 @@ class TestGitHubCopilotAuthenticator:
                 {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
                 clear=True,
             ),
-            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot api_base must be an HTTPS URL"),
+            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot api_base must be an HTTP or HTTPS URL"),
         ):
             get_copilot_api_base(api_base)
 
@@ -140,33 +143,36 @@ class TestGitHubCopilotAuthenticator:
             assert get_copilot_api_base(deployment_base) == DEFAULT_GITHUB_COPILOT_API_BASE
         assert caplog.text == ""
 
-    def test_get_api_base_warns_when_only_an_enterprise_token_exchange_url_is_set(self, caplog):
+    def test_get_api_base_refuses_an_enterprise_token_exchange_url_without_a_copilot_base(self):
         with (
             patch.dict(
                 os.environ,
                 {"GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token"},
                 clear=True,
             ),
-            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises(InvalidAPIBaseError, match="Set GITHUB_COPILOT_API_BASE"),
         ):
-            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
-        assert "GITHUB_COPILOT_API_KEY_URL is no longer used" in caplog.text
-        assert "Set GITHUB_COPILOT_API_BASE" in caplog.text
+            get_copilot_api_base()
 
     @pytest.mark.parametrize(
-        "environment",
+        ("environment", "expected"),
         (
-            {"GITHUB_COPILOT_API_KEY_URL": "https://api.github.com/copilot_internal/v2/token"},
-            {
-                "GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token",
-                "GITHUB_COPILOT_API_BASE": "https://copilot-api.octo.ghe.com",
-            },
+            (
+                {"GITHUB_COPILOT_API_KEY_URL": "https://api.github.com/copilot_internal/v2/token"},
+                DEFAULT_GITHUB_COPILOT_API_BASE,
+            ),
+            (
+                {
+                    "GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token",
+                    "GITHUB_COPILOT_API_BASE": "https://copilot-api.octo.ghe.com",
+                },
+                "https://copilot-api.octo.ghe.com",
+            ),
         ),
     )
-    def test_get_api_base_does_not_warn_when_the_token_exchange_url_needs_no_action(self, environment, caplog):
-        with patch.dict(os.environ, environment, clear=True), caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            get_copilot_api_base()
-        assert caplog.text == ""
+    def test_get_api_base_accepts_a_token_exchange_url_that_needs_no_action(self, environment, expected):
+        with patch.dict(os.environ, environment, clear=True):
+            assert get_copilot_api_base() == expected
 
     def test_get_github_headers(self, authenticator):
         with patch.dict(os.environ, {}, clear=True):

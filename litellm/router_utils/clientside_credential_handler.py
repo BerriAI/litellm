@@ -82,12 +82,14 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
-def caller_endpoint_keys_to_drop(deployment_litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+def github_copilot_caller_endpoint_keys(
+    deployment_litellm_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+) -> tuple[str, ...]:
     model: Final = deployment_litellm_params.get("model")
     is_github_copilot: Final = deployment_litellm_params.get("custom_llm_provider") == "github_copilot" or (
         isinstance(model, str) and model.startswith("github_copilot/")
     )
-    return ("api_base", "base_url") if is_github_copilot else ()
+    return tuple(key for key in ("api_base", "base_url") if is_github_copilot and request_kwargs.get(key))
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

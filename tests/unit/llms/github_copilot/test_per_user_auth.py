@@ -19,6 +19,7 @@ from litellm.exceptions import (
     ServiceUnavailableError,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.github_copilot.common_utils import InvalidAPIBaseError
 from litellm.llms.github_copilot.per_user_auth import (
     GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
     GithubCopilotUserSession,
@@ -528,38 +529,59 @@ def test_per_user_request_uses_the_deployment_base_else_the_configured_base(
     assert lookups == []
 
 
-@pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
-@pytest.mark.parametrize("mode", ["shared", "per_user"])
-def test_gateway_caller_endpoint_never_receives_the_github_token(
-    per_user_credential, tmp_path, monkeypatch, surface, mode
-):
-    _shared_login(tmp_path, monkeypatch)
-    per_user = mode == "per_user"
-    router = litellm.Router(
+def _copilot_router(surface, mode, **deployment_params):
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "copilot",
                 "litellm_params": {
                     "model": _SURFACE_MODELS[surface],
                     "api_base": "https://deployment.example.com/v1",
-                    **({"litellm_credential_name": "copilot-cred"} if per_user else {}),
+                    **({"litellm_credential_name": "copilot-cred"} if mode == "per_user" else {}),
+                    **deployment_params,
                 },
             }
         ]
     )
+
+
+def _call_with_caller_endpoint(router, surface, mode):
+    return _call_surface(
+        router,
+        surface,
+        model="copilot",
+        api_base="https://caller.example.com/v1",
+        base_url="https://caller.example.com/v1",
+        **({"secret_fields": _secret_fields("user-a", "stored-github-token")} if mode == "per_user" else {}),
+    )
+
+
+@pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
+@pytest.mark.parametrize("mode", ["shared", "per_user"])
+def test_caller_endpoint_on_a_copilot_deployment_answers_400(per_user_credential, tmp_path, monkeypatch, surface, mode):
+    _shared_login(tmp_path, monkeypatch)
+    router = _copilot_router(surface, mode)
+    with (
+        github_http(_copilot_surface_responder(_surface_payload(surface))) as requests,
+        pytest.raises(BadRequestError, match="do not accept api_base or base_url from the caller"),
+    ):
+        _call_with_caller_endpoint(router, surface, mode)
+    assert requests == []
+
+
+@pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
+@pytest.mark.parametrize("mode", ["shared", "per_user"])
+def test_caller_endpoint_on_a_copilot_deployment_is_dropped_under_drop_params(
+    per_user_credential, tmp_path, monkeypatch, surface, mode
+):
+    _shared_login(tmp_path, monkeypatch)
+    router = _copilot_router(surface, mode, drop_params=True)
     with github_http(_copilot_surface_responder(_surface_payload(surface))) as requests:
-        _call_surface(
-            router,
-            surface,
-            model="copilot",
-            api_base="https://attacker.example.com/v1",
-            base_url="https://attacker.example.com/v1",
-            **({"secret_fields": _secret_fields("user-a", "stored-github-token")} if per_user else {}),
-        )
+        _call_with_caller_endpoint(router, surface, mode)
     assert [str(request.url) for request in requests] == [
         f"https://deployment.example.com/v1/{_SURFACE_PATHS[surface]}"
     ]
-    expected_token = "stored-github-token" if per_user else "shared-copilot-token"
+    expected_token = "stored-github-token" if mode == "per_user" else "shared-copilot-token"
     assert requests[0].headers["authorization"] == f"Bearer {expected_token}"
 
 
@@ -929,9 +951,11 @@ def test_requests_go_to_the_plan_host_github_reports_for_the_token(
     with github_http(
         _copilot_surface_responder(_surface_payload(surface)), answer_plan(PLAN_COPILOT_HOST), lookups
     ) as requests:
-        for _ in range(2):
-            _call_surface(litellm, surface, model=_SURFACE_MODELS[surface], **credential_kwargs)
+        responses = [
+            _call_surface(litellm, surface, model=_SURFACE_MODELS[surface], **credential_kwargs) for _ in range(2)
+        ]
     _assert_plan_host_served_both_calls(requests, lookups, mode, _SURFACE_PATHS[surface])
+    assert [response._hidden_params["api_base"] for response in responses] == [PLAN_COPILOT_HOST] * 2
 
 
 @pytest.mark.asyncio
@@ -986,6 +1010,22 @@ def test_requests_use_the_default_host_when_github_reports_no_usable_plan_host(t
     with github_http(_copilot_surface_responder(_responses_payload()), plan_lookup) as requests:
         litellm.responses(model="github_copilot/gpt-5.3-codex", input="hi")
     assert [str(request.url) for request in requests] == [f"{DEFAULT_COPILOT_HOST}/responses"]
+
+
+@pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
+def test_enterprise_token_exchange_url_without_a_copilot_base_sends_nothing(tmp_path, monkeypatch, surface):
+    _shared_login(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", "https://api.octo.ghe.com/copilot_internal/v2/token")
+    lookups: list[httpx.Request] = []
+    with (
+        github_http(
+            _copilot_surface_responder(_surface_payload(surface)), answer_plan(PLAN_COPILOT_HOST), lookups
+        ) as requests,
+        pytest.raises(InvalidAPIBaseError, match="Set GITHUB_COPILOT_API_BASE"),
+    ):
+        _call_surface(litellm, surface, model=_SURFACE_MODELS[surface])
+    assert requests == []
+    assert lookups == []
 
 
 def test_provider_resolution_never_looks_up_the_plan_host(tmp_path, monkeypatch):

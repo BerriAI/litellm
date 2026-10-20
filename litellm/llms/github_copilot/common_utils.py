@@ -3,7 +3,6 @@ Constants for Copilot integration
 """
 
 import hashlib
-import ipaddress
 import os
 from collections.abc import Callable, Mapping, MutableMapping
 from typing import (
@@ -18,7 +17,6 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -170,15 +168,6 @@ def _hostname(url: str) -> str | None:
         return None
 
 
-def _is_loopback(hostname: str) -> bool:
-    if hostname == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
 def _is_valid_api_base(api_base: str) -> bool:
     try:
         parsed_api_base: Final = urlsplit(api_base)
@@ -188,7 +177,7 @@ def _is_valid_api_base(api_base: str) -> bool:
     hostname: Final = parsed_api_base.hostname
     return (
         hostname is not None
-        and (scheme == "https" or (scheme == "http" and _is_loopback(hostname)))
+        and scheme in ("http", "https")
         and parsed_api_base.username is None
         and parsed_api_base.password is None
         and not parsed_api_base.query
@@ -196,13 +185,15 @@ def _is_valid_api_base(api_base: str) -> bool:
     )
 
 
-def _warn_if_token_exchange_url_is_set() -> None:
+def _reject_enterprise_token_exchange_url() -> None:
     api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL")
     if api_key_url and _hostname(api_key_url) != _GITHUB_API_HOST:
-        verbose_logger.warning(
-            "GITHUB_COPILOT_API_KEY_URL is no longer used, so GitHub Copilot requests go to %s. "
-            "Set GITHUB_COPILOT_API_BASE to your Copilot API host, such as https://copilot-api.<subdomain>.ghe.com",
-            DEFAULT_GITHUB_COPILOT_API_BASE,
+        raise InvalidAPIBaseError(
+            status_code=500,
+            message=(
+                "GITHUB_COPILOT_API_KEY_URL is no longer used. Set GITHUB_COPILOT_API_BASE to your Copilot API host, "
+                "such as https://copilot-api.<subdomain>.ghe.com"
+            ),
         )
 
 
@@ -213,15 +204,12 @@ def _configured_copilot_api_base_source(api_base: str | None) -> tuple[str, str 
 def _configured_copilot_api_base(api_base: str | None) -> str | None:
     source, configured_api_base = _configured_copilot_api_base_source(api_base)
     if not configured_api_base:
-        _warn_if_token_exchange_url_is_set()
+        _reject_enterprise_token_exchange_url()
         return None
     if not _is_valid_api_base(configured_api_base):
         raise InvalidAPIBaseError(
             status_code=500,
-            message=(
-                f"GitHub Copilot {source} must be an HTTPS URL, or HTTP on a loopback host, "
-                "without credentials, query, or fragment"
-            ),
+            message=(f"GitHub Copilot {source} must be an HTTP or HTTPS URL without credentials, query, or fragment"),
         )
     return configured_api_base
 
@@ -265,8 +253,10 @@ def _remember_plan_api_base(key: str, resolved: tuple[str, int]) -> None:
 
 
 def _plan_api_base_is_needed(github_token: str, api_base: str | None) -> bool:
-    _, configured_api_base = _configured_copilot_api_base_source(api_base)
-    return not configured_api_base and _cached_plan_api_base(_plan_api_base_key(github_token)) is None
+    return (
+        _configured_copilot_api_base(api_base) is None
+        and _cached_plan_api_base(_plan_api_base_key(github_token)) is None
+    )
 
 
 def _lookup_plan_api_base(github_token: str) -> tuple[str, int]:

@@ -13,10 +13,11 @@ from litellm.types.utils import ModelResponse
 from ..authenticator import Authenticator
 from ..common_utils import (
     GetAPIKeyError,
+    InvalidAPIBaseError,
     get_copilot_api_base,
     get_copilot_default_headers,
 )
-from ..per_user_auth import require_github_copilot_user_session
+from ..per_user_auth import GithubCopilotUserSession, require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -33,8 +34,14 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
-    def api_base_without_login(self, api_base: str | None = None) -> str:
-        return get_copilot_api_base(api_base)
+    def api_base_without_login(self, user_session: GithubCopilotUserSession | None = None) -> str | None:
+        try:
+            return get_copilot_api_base(
+                None,
+                lambda: user_session.token if user_session is not None else self.authenticator.stored_access_token(),
+            )
+        except InvalidAPIBaseError:
+            return None
 
     def _get_openai_compatible_provider_info(
         self,
