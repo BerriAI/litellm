@@ -16,6 +16,7 @@ from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _get_budget_reservation_from_metadata,
@@ -29,6 +30,7 @@ from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
@@ -152,6 +154,127 @@ async def test_each_earlier_billed_attempt_gets_its_own_spend_row():
         assert row["token"] == "test_api_key"
         assert row["user_id"] == "u1"
         assert row["team_id"] == "t1"
+
+
+def _deployment(model_name: str, model_id: str, model: str, api_base: str | None) -> Deployment:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model=model, api_base=api_base),
+        model_info={"id": model_id},
+    )
+
+
+_TIMED_OUT_AT: Final = datetime(2026, 10, 20, 21, 24, 48, tzinfo=timezone.utc)
+
+
+async def _spend_log_payloads_of_a_retried_timeout_across_a_fallback() -> list[SpendLogsPayload]:
+    """The spend-log payloads a timed-out request writes when attempt 0 and 1 ran on the anthropic
+    deployment of group ``essay`` and the request then fell back to the openai deployment of group
+    ``essay-fallback``: the final row first, then one row per earlier billed attempt."""
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    deployments = {
+        "dep-anthropic": _deployment("essay", "dep-anthropic", "anthropic/claude-sonnet-4-6", None),
+        "dep-openai": _deployment("essay-fallback", "dep-openai", "openai/gpt-4.1", "https://api.openai.com/v1"),
+    }
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    request_data = {
+        "model": "anthropic/claude-sonnet-4-6",
+        "custom_llm_provider": "anthropic",
+        "litellm_call_id": "call-1",
+        "litellm_params": {"api_base": "https://api.anthropic.com/v1/messages"},
+        "standard_logging_object": {
+            "id": "call-1",
+            "model": "anthropic/claude-sonnet-4-6",
+            "custom_llm_provider": "anthropic",
+            "api_base": "https://api.anthropic.com/v1/messages",
+            "model_id": "dep-anthropic",
+            "model_group": "essay",
+            "metadata": {},
+            "hidden_params": {},
+            "model_map_information": {},
+        },
+        "metadata": {"attempted_retries": 1, "model_group": "essay", "model_info": {"id": "dep-anthropic"}},
+        "combined_usage_object": usage,
+        "response_cost": 7.2e-05,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=1, deployment_id="dep-anthropic", usage=usage, response_cost=7.2e-05),
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-openai", usage=usage, response_cost=4.8e-05),
+        ),
+    }
+    exception = litellm.Timeout("Request timed out.", model="gpt-4.1", llm_provider="openai")
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger(deployment_lookup=deployments.get).async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exception,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", user_id="u1"),
+        )
+    return [
+        get_logging_payload(
+            kwargs=call.kwargs["kwargs"],
+            response_obj=exception,
+            start_time=_TIMED_OUT_AT,
+            end_time=_TIMED_OUT_AT + timedelta(seconds=11),
+        )
+        for call in mock_update_database.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_are_attributed_to_the_deployment_that_billed_them():
+    """Regression since #47416: an earlier attempt that ran on another deployment was written with the
+    final row's model, provider and api_base. Each attempt row names the deployment it ran on."""
+    final_row, attempt_0, attempt_1 = await _spend_log_payloads_of_a_retried_timeout_across_a_fallback()
+
+    assert (final_row["model"], final_row["custom_llm_provider"], final_row["model_id"]) == (
+        "anthropic/claude-sonnet-4-6",
+        "anthropic",
+        "dep-anthropic",
+    )
+    assert final_row["api_base"] == "https://api.anthropic.com/v1/messages"
+    assert (attempt_0["model"], attempt_0["custom_llm_provider"], attempt_0["model_id"], attempt_0["model_group"]) == (
+        "anthropic/claude-sonnet-4-6",
+        "anthropic",
+        "dep-anthropic",
+        "essay",
+    )
+    assert (attempt_1["model"], attempt_1["custom_llm_provider"], attempt_1["model_id"], attempt_1["model_group"]) == (
+        "openai/gpt-4.1",
+        "openai",
+        "dep-openai",
+        "essay-fallback",
+    )
+    assert attempt_1["api_base"] == "https://api.openai.com/v1"
+    assert attempt_1["request_id"] == "call-1-attempt-1"
+    assert attempt_1["spend"] == 4.8e-05
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_add_spend_but_not_requests_to_daily_spend():
+    """Regression since #47416: one caller request with N billed earlier attempts counted N+1 requests in
+    the daily spend tables. The attempt rows keep their spend, tokens and model usage and count zero requests."""
+    payloads = await _spend_log_payloads_of_a_retried_timeout_across_a_fallback()
+    prisma = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="failure")
+
+    daily = [
+        await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
+            payload=payload, prisma_client=prisma, type="user"
+        )
+        for payload in payloads
+    ]
+
+    assert all(row is not None for row in daily)
+    assert [row["api_requests"] for row in daily if row is not None] == [1, 0, 0]
+    assert [row["failed_requests"] for row in daily if row is not None] == [1, 0, 0]
+    assert [row["spend"] for row in daily if row is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
+    assert [row["prompt_tokens"] for row in daily if row is not None] == [24, 24, 24]
+    model_usage = [build_model_usage_transaction(payload) for payload in payloads]
+    assert all(usage is not None for usage in model_usage), "attempt spend must still reach daily model usage"
+    assert [usage.spend for usage in model_usage if usage is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
 
 
 @pytest.mark.asyncio
