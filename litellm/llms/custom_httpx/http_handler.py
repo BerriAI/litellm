@@ -305,8 +305,6 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve, http2)
-# Value: ssl.SSLContext
 _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 
 
@@ -416,7 +414,6 @@ def get_ssl_configuration(
 
     SSL contexts are cached to avoid creating duplicate contexts with the same configuration,
     which reduces memory allocation and improves performance.
-    http2 clients get their own cached context because httpcore sets ALPN protocols on it.
 
     Args:
         ssl_verify: SSL verification setting. Can be:

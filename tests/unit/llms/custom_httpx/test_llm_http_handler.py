@@ -10,9 +10,11 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpcore
 import httpx
 import pytest
 from botocore.credentials import RefreshableCredentials
+from h2.events import ConnectionTerminated
 
 import litellm
 from litellm._logging import verbose_logger
@@ -5391,3 +5393,54 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     sent: Final = received[0]
     assert "safeguards" not in json.loads(sent.content)
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
+
+
+_EMPTY_SEARCH_PAGE: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": "q",
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+
+
+def _close_with_goaway(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("GOAWAY", request=request) from httpcore.RemoteProtocolError(ConnectionTerminated())
+
+
+def _hang_up(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+
+
+def _answer_search(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=_EMPTY_SEARCH_PAGE)
+
+
+async def _search_through(transport: httpx.MockTransport, is_async: bool) -> object:
+    search_kwargs: Final = {"vector_store_id": "vs_1", "query": "q", "custom_llm_provider": "openai", "api_key": "sk-test"}
+    if not is_async:
+        with httpx.Client(transport=transport) as sync_client:
+            return litellm.vector_stores.search(**search_kwargs, client=HTTPHandler(client=sync_client))
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        client: Final = AsyncHTTPHandler()
+        await client.close()
+        client.client = async_client
+        return await litellm.vector_stores.asearch(**search_kwargs, client=client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_again_once_after_an_http2_goaway(is_async: bool) -> None:
+    sends: Final = iter((_close_with_goaway, _answer_search))
+    response: Final = await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert response["search_query"] == "q"
+    assert next(sends, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_once_when_the_connection_drops_without_a_goaway(is_async: bool) -> None:
+    sends: Final = iter((_hang_up, _answer_search))
+    with pytest.raises(litellm.InternalServerError, match="Server disconnected"):
+        await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert next(sends) is _answer_search
