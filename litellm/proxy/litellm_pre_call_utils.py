@@ -119,6 +119,10 @@ _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
 
 
+def _is_scheduler_queued_route(path: str) -> bool:
+    return path.rstrip("/").endswith("/completions")
+
+
 def _trace_id_from_traceparent(traceparent: str) -> str | None:
     """Extract the trace-id from a W3C Trace Context traceparent header, e.g.
     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
@@ -1724,13 +1728,6 @@ class LiteLLMProxyRequestSetup:
         if num_retries is not None:
             data["num_retries"] = num_retries
 
-        setup: Final = LiteLLMProxyRequestSetup
-        priority: Final = setup._get_case_insensitive_header(  # pyright: ignore[reportUnknownMemberType]  # legacy dict
-            headers, "x-litellm-priority"
-        )
-        if priority is not None:
-            data["priority"] = priority
-
         keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
         if keepalive_seconds is not None:
             data["keepalive_seconds"] = keepalive_seconds
@@ -2503,6 +2500,11 @@ async def add_litellm_data_to_request(
             general_settings=general_settings,
         )
     )
+
+    if _is_scheduler_queued_route(request.url.path):
+        request_priority: Final = _headers.get("x-litellm-priority")
+        if request_priority is not None:
+            data["priority"] = request_priority  # rebind-ok: data is an out-param
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
