@@ -46,12 +46,16 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def graceful_stop_seconds() -> float:
+    return 30.0
+
+
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=graceful_stop_seconds())
     except subprocess.TimeoutExpired:
         return False
     return True
