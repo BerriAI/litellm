@@ -1709,6 +1709,9 @@ if TYPE_CHECKING:
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
     )
+    from .llms.cloudflare.extraction.transformation import (
+        CloudflareExtractionConfig as CloudflareExtractionConfig,
+    )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )

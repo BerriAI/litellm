@@ -385,6 +385,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
     from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
     from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+    from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
@@ -9318,6 +9319,12 @@ class ProviderConfigManager:
             return litellm.OpenAIDecisionsConfig()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
+        return None
+
+    @staticmethod
+    def get_provider_extraction_config(model: str, provider: LlmProviders) -> BaseExtractionConfig | None:
+        if provider == LlmProviders.CLOUDFLARE:
+            return litellm.CloudflareExtractionConfig()
         return None
 
     @staticmethod
