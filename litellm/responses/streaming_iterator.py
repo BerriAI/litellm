@@ -284,7 +284,7 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
-def _map_stream_error_to_exception(
+def map_stream_error_to_exception(
     error_obj: object,
     model: str,
     custom_llm_provider: str,
@@ -713,7 +713,7 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             error_obj,
             self.model or "",
             self.custom_llm_provider or "",
@@ -2204,7 +2204,7 @@ class _ResponsesWsTurn:
         )
         if failed_event is None:
             return None
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=connection_logging_obj
         )
 

@@ -11,6 +11,7 @@ import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
 
+import anyio
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import aclose_superseded_attempt
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
@@ -725,6 +727,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         chunks = _collect_with_logging(_gen(), _logging_obj_with_failure_hook(recorder))
         assert chunks[-1]["type"] == "error"
         (failure,) = recorder.received
+        assert isinstance(failure, litellm.RateLimitError)
         assert failure.status_code == 429
         assert "Rate limit reached for gpt-5.5, try again in 20s." in failure.message
 
@@ -764,7 +767,14 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         ]
         assert consumer.delivered_when_hook_fired == (len(consumer.delivered),)
 
-    def test_a_consumer_that_closes_the_stream_on_the_error_event_recovers_it_without_the_hook(self):
+    @pytest.mark.parametrize(
+        ("close", "expected_reports"),
+        [
+            pytest.param(lambda sse: sse.aclose(), 1, id="client_closes"),
+            pytest.param(aclose_superseded_attempt, 0, id="fallback_takes_over"),
+        ],
+    )
+    def test_closing_the_stream_on_the_error_event_reports_unless_a_fallback_takes_over(self, close, expected_reports):
         recorder = _FailureHookRecorder()
 
         async def _close_on_the_error_event() -> None:
@@ -774,9 +784,35 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
             sse = wrapper.async_anthropic_sse_wrapper()
             async for frame in sse:
                 if frame.startswith(b"event: error\n"):
-                    await sse.aclose()
+                    await close(sse)
                     return
             pytest.fail("the stream ended without an error event")
 
         asyncio.run(_close_on_the_error_event())
-        assert recorder.received == ()
+        assert len(recorder.received) == expected_reports
+
+    def test_a_client_disconnect_during_the_failure_hook_lets_the_hook_finish(self):
+        hook_started = anyio.Event()
+        finished: list[Exception] = []
+
+        async def _slow_hook(failure: Exception) -> None:
+            hook_started.set()
+            await anyio.sleep(0.05)
+            finished.append(failure)
+
+        async def _disconnect_mid_hook() -> None:
+            wrapper = AnthropicResponsesStreamWrapper(
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_slow_hook)
+            )
+
+            async def _consume() -> None:
+                async for _ in wrapper.async_anthropic_sse_wrapper():
+                    pass
+
+            async with anyio.create_task_group() as task_group:
+                task_group.start_soon(_consume)
+                await hook_started.wait()
+                task_group.cancel_scope.cancel()
+
+        asyncio.run(_disconnect_mid_hook())
+        assert len(finished) == 1

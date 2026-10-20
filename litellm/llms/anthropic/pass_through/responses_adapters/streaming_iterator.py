@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+import anyio
 from pydantic import ConfigDict, field_validator
 
 from litellm import verbose_logger
@@ -21,7 +22,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 )
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
-from litellm.responses.streaming_iterator import stream_error_status_and_message
+from litellm.responses.streaming_iterator import map_stream_error_to_exception, stream_error_status_and_message
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -375,16 +376,24 @@ class AnthropicResponsesStreamWrapper:
 
         if event_type == "response.failed":
             failed: Final = _FailedResponseEvent.model_validate(event)
-            status_code, message = stream_error_status_and_message(
-                failed.response.error if failed.response is not None else None
-            )
+            upstream_error: Final = failed.response.error if failed.response is not None else None
+            status_code, message = stream_error_status_and_message(upstream_error)
             verbose_logger.error(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed (%s): %s",
                 self.model,
                 status_code,
                 message,
             )
-            self._fail_stream(status_code, message)
+            self._fail_stream(
+                status_code,
+                message,
+                failure=map_stream_error_to_exception(
+                    upstream_error,
+                    self.model,
+                    getattr(self.responses_stream, "custom_llm_provider", None) or "",
+                    logging_obj=self.litellm_logging_obj,
+                ),
+            )
             return
 
         # ---- response completed -> message_delta + message_stop ----
@@ -447,7 +456,7 @@ class AnthropicResponsesStreamWrapper:
         )
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
-    async def _report_failure_once_the_error_event_was_consumed(self) -> None:
+    async def _report_unreported_failure(self) -> None:
         failure: Final = self._unreported_failure
         if failure is None:
             return
@@ -458,7 +467,8 @@ class AnthropicResponsesStreamWrapper:
         if on_failure is None:
             return
         try:
-            await on_failure(failure)
+            with anyio.CancelScope(shield=True):
+                await on_failure(failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",
@@ -473,7 +483,7 @@ class AnthropicResponsesStreamWrapper:
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
-            await self._report_failure_once_the_error_event_was_consumed()
+            await self._report_unreported_failure()
             raise StopAsyncIteration
 
         if not self._sent_message_start:
@@ -519,5 +529,11 @@ class AnthropicResponsesStreamWrapper:
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """Yield SSE-encoded bytes for each Anthropic event chunk."""
         safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
-        async for chunk in self:
-            yield anthropic_sse_frame(await safeguard_results.observe(chunk))
+        try:
+            async for chunk in self:
+                yield anthropic_sse_frame(await safeguard_results.observe(chunk))
+        finally:
+            from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
+
+            if not closing_superseded_attempt():
+                await self._report_unreported_failure()

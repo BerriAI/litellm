@@ -1510,9 +1510,9 @@ def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_
 
 
 def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
-    from litellm.responses.streaming_iterator import _map_stream_error_to_exception
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
-    mapped_exception = _map_stream_error_to_exception(
+    mapped_exception = map_stream_error_to_exception(
         {
             "code": "context_length_exceeded",
             "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
