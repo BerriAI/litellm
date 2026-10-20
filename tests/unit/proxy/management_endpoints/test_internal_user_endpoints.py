@@ -5123,11 +5123,11 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mocker.patch("litellm.store_audit_logs", True)
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=_capture,
     )
 

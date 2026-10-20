@@ -5523,13 +5523,13 @@ async def test_team_member_delete_writes_deleted_audit_log_for_member_keys(
 
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     with (
         patch("litellm.store_audit_logs", True),
         patch(
-            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
             new=_capture,
         ),
     ):
@@ -5598,12 +5598,12 @@ async def test_delete_team_writes_deleted_audit_log_for_team_keys(
     )
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     monkeypatch.setattr("litellm.store_audit_logs", True)
     monkeypatch.setattr(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         _capture,
     )
     await delete_team(

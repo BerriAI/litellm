@@ -62,6 +62,8 @@ OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
 DELETED_TEAM_RECORDS_SQL: Final = 'SELECT team_id FROM "LiteLLM_DeletedTeamTable" WHERE team_id = %s'
 DELETED_KEY_RECORDS_SQL: Final = 'SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s'
 TEAM_MODEL_IDS_SQL: Final = """SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_info->>'team_id' = %s"""
+BACKENDS_BLOCKED_BY_SQL: Final = "SELECT pid FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
+USER_ROLE_SQL: Final = 'SELECT user_role FROM "LiteLLM_UserTable" WHERE user_id = %s'
 DELETED_AUDIT_ROWS_SQL: Final = """
 SELECT table_name, action, object_id, changed_by, changed_by_api_key
 FROM "LiteLLM_AuditLog"
@@ -69,7 +71,7 @@ WHERE object_id IN (%s, %s) AND action = 'deleted'
 ORDER BY table_name
 """
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_WORKER_PIDS: Final = TypeAdapter(tuple[int, ...])
+_PIDS: Final = TypeAdapter(tuple[int, ...])
 
 
 def _hashed(key: str) -> str:
@@ -86,6 +88,14 @@ def _admin_group_config(tmp_path: Path, admin_alias: str) -> Path:
 
 def _roles_of(candidate: Gateway, users: tuple[str, ...]) -> frozenset[str]:
     return frozenset(user_role(candidate, user) for user in users)
+
+
+def _backends_blocked_by(holder: int) -> tuple[int, ...]:
+    return _PIDS.validate_python([row["pid"] for row in read_rows(BACKENDS_BLOCKED_BY_SQL, (str(holder),))])
+
+
+def _stored_roles(users: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(string_value(read_rows(USER_ROLE_SQL, (user,))[0]["user_role"]) for user in users)
 
 
 def _models_status(candidate: Gateway, key: str) -> int:
@@ -107,7 +117,7 @@ def _deleted_audit_rows(team: str, hashed_key: str) -> list[dict[str, JsonValue]
 
 def _worker_startups(log: Path) -> tuple[tuple[int, ...], int]:
     text: Final = log.read_text()
-    return _WORKER_PIDS.validate_python(_STARTED_WORKER.findall(text)), text.count("Application startup complete.")
+    return _PIDS.validate_python(_STARTED_WORKER.findall(text)), text.count("Application startup complete.")
 
 
 @contextmanager
@@ -200,7 +210,7 @@ def test_a_member_added_while_the_admin_group_delete_waits_on_the_team_lock_is_d
             eventually(lambda: waiters_on_lock_held_by(holder), lambda waiting: waiting == 1, seconds=30)
             delete: Final = pool.submit(delete_group, candidate, team)
             eventually(lambda: waiters_on_lock_held_by(holder), lambda waiting: waiting == 2, seconds=30)
-            assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
+            assert _stored_roles(users) == frozenset({PROXY_ADMIN})
         replaced: Final = put.result()
         deleted: Final = delete.result()
 
@@ -239,8 +249,10 @@ def test_a_member_added_while_the_admin_group_delete_holds_the_team_lock_is_refu
         with held_user_row(users[0]) as holder:
             delete: Final = pool.submit(delete_group, candidate, team)
             eventually(lambda: waiters_on_rows_locked_by(holder), lambda waiting: waiting == 1, seconds=30)
+            (deleting,) = _backends_blocked_by(holder)
             added: Final = pool.submit(add_to_group, candidate, team, (late,))
-            assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
+            eventually(lambda: _backends_blocked_by(deleting), lambda blocked: len(blocked) == 1, seconds=30)
+            assert _stored_roles(users) == frozenset({PROXY_ADMIN})
         deleted: Final = delete.result()
 
         assert deleted.status_code == 204, deleted.text
