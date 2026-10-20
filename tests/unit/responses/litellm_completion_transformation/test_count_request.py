@@ -5,7 +5,11 @@ import pytest
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.responses.litellm_completion_transformation.count_request import ChatCountRequest, chat_count_request
+from litellm.responses.litellm_completion_transformation.count_request import (
+    ChatCountBridgeError,
+    ChatCountRequest,
+    chat_count_request,
+)
 
 _MARK: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
 _MARKED_RESPONSES_REQUEST: Final[dict[str, JsonValue]] = {
@@ -54,3 +58,70 @@ async def test_claude_count_request_leaves_out_every_cache_control_mark(drop_par
     assert "cache_control" not in counted
     for kept in ("Weather in SF?", "And in LA?", "call_1", "sunny", "get_weather"):
         assert kept in counted
+
+
+_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+_QUESTION: Final[dict[str, JsonValue]] = {"role": "user", "content": "Weather in SF?"}
+
+
+async def _claude_count(
+    responses_request: dict[str, JsonValue], policy: DropPolicy
+) -> ChatCountRequest | ChatCountBridgeError | None:
+    return await chat_count_request(
+        model="claude-opus-5-5",
+        custom_llm_provider="anthropic",
+        api_base=None,
+        responses_request={"model": "claude-opus-5-5", **responses_request},
+        policy=policy,
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_counts_additional_tools_input_items_as_tools_like_inference() -> None:
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    hoisted: Final = await _claude_count(
+        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, _QUESTION]}, policy
+    )
+
+    assert isinstance(hoisted, ChatCountRequest)
+    assert hoisted.tools is not None
+    assert hoisted == await _claude_count({"input": [_QUESTION], "tools": [_WEATHER_TOOL]}, policy)
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_drops_a_malformed_tool_flag_under_drop_params_like_inference() -> None:
+    policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+
+    flagged: Final = await _claude_count(
+        {"input": [_QUESTION], "tools": [{**_WEATHER_TOOL, "defer_loading": "yes"}]}, policy
+    )
+
+    assert isinstance(flagged, ChatCountRequest)
+    assert flagged == await _claude_count({"input": [_QUESTION], "tools": [_WEATHER_TOOL]}, policy)
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_rejects_a_malformed_tool_flag_without_drop_params() -> None:
+    flagged: Final = await _claude_count(
+        {"input": [_QUESTION], "tools": [{**_WEATHER_TOOL, "defer_loading": "yes"}]},
+        DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+
+    assert isinstance(flagged, ChatCountBridgeError)
+    assert "defer_loading" in flagged.message
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_leaves_out_tools_the_deployment_drops() -> None:
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset({"tools"}))
+
+    dropped: Final = await _claude_count({"input": [_QUESTION], "tools": [_WEATHER_TOOL]}, policy)
+
+    assert isinstance(dropped, ChatCountRequest)
+    assert dropped.tools is None
+    assert dropped == await _claude_count({"input": [_QUESTION]}, policy)

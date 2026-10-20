@@ -1,15 +1,17 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # input items are forwarded as sent, as inference does
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.file_search.emulated_handler import replace_file_search_tools
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.main import previous_response_client_ids
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
 _COUNTED_CHAT_PARAMS: Final = (
@@ -63,6 +65,21 @@ def _unmarked_entries(value: object) -> object:
         if isinstance(value, list)
         else value
     )
+
+
+def _with_hoisted_additional_tools(responses_request: Mapping[str, object]) -> Mapping[str, object]:
+    responses_input: Final = responses_request.get("input")
+    if not isinstance(responses_input, list):
+        return responses_request
+    input_items: Final = cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
+    hoisted: Final = hoist_additional_tools(input_items, None)
+    if not hoisted.hoisted:
+        return responses_request
+    return {
+        **responses_request,
+        "input": hoisted.input,
+        "tools": [*_ITEMS.validate_python(responses_request.get("tools") or ()), *hoisted.hoisted],
+    }
 
 
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -123,13 +140,19 @@ async def chat_count_request(
         return None
     try:
         chat_body: Final = await _with_previous_turns(
-            responses_batch_body_to_chat_body(_with_emulated_file_search(responses_request), custom_llm_provider),
+            responses_batch_body_to_chat_body(
+                _with_emulated_file_search(_with_hoisted_additional_tools(responses_request)),
+                custom_llm_provider,
+                policy.drop_params,
+            ),
             model,
             custom_llm_provider,
             responses_request,
             policy,
         )
-        tools: Final = tuple(map(_unmarked, _mappings(chat_body.get("tools"))))
+        tools: Final = (
+            () if "tools" in policy.additional_drop_params else tuple(map(_unmarked, _mappings(chat_body.get("tools"))))
+        )
         return ChatCountRequest(
             messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
