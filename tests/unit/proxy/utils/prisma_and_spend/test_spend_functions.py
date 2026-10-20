@@ -985,6 +985,31 @@ async def test_update_spend_logs_job_requeues_whole_batch_when_postgres_is_out_o
     } == {"create_many_calls": 1, "queue_after": ["r1", "r2", "r3"], "backoff_sleeps": []}
 
 
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_propagates_non_prisma_encoding_errors(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+) -> None:
+    proxy_logging: Final = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [
+        make_spend_log_row(request_id="r1"),
+        make_spend_log_row(request_id="r2"),
+    ]
+    encoding_error: Final = UnicodeEncodeError("utf-8", "a", 0, 1, "unexpected encoding failure")
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=encoding_error)
+
+    with pytest.raises(UnicodeEncodeError) as raised:
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    assert raised.value is encoding_error
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
+
+
 def _tool_usage_transaction(request_id: str) -> object:
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
