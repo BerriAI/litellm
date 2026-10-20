@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
-_VERTEX_HEADER_ONLY_BETAS: Final = frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
+_VERTEX_HEADER_ONLY_BETAS: Final = frozenset(
+    {ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value, ANTHROPIC_BETA_HEADER_VALUES.INLINE_TOOLS_2026_09_15.value}
+)
 
 
 _BETA_VALUE: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
@@ -30,16 +32,25 @@ _BETA_VALUE: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str 
 _REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
 
 
-def _beta_names(value: object) -> frozenset[str]:
+def _beta_names(value: object) -> frozenset[str] | None:
     try:
         parsed: Final = _BETA_VALUE.validate_python(value)
-    except ValidationError as error:
-        raise AnthropicError(
-            status_code=400,
-            message=f"anthropic_beta must be a string or a list of strings, got {type(value).__name__}",
-        ) from error
+    except ValidationError:
+        return None
     names: Final = parsed.split(",") if isinstance(parsed, str) else parsed or ()
     return frozenset(name.strip() for name in names if name.strip())
+
+
+def _client_betas(value: object, field: str, drop_params: bool) -> frozenset[str]:
+    names: Final = _beta_names(value)
+    if names is not None:
+        return names
+    if drop_params:
+        return frozenset()
+    raise AnthropicError(
+        status_code=400,
+        message=f"{field} must be a string or a list of strings, got {type(value).__name__}",
+    )
 
 
 class VertexAIError(Exception):
@@ -162,12 +173,17 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             if requires_native_compaction_beta("vertex_ai", params, _REQUEST_MESSAGES.validate_python(data["messages"]))
             else frozenset[str]()
         )
+        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
         extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(params.get("extra_headers") or {})
         data.pop("extra_headers", None)
-        injected_betas: Final = frozenset(beta_set) | _beta_names(extra_headers.get("anthropic-beta"))
-        client_body_betas: Final = _beta_names(_NON_DEFAULT_PARAMS.validate_python(data).get("anthropic_beta"))
+        injected_betas: Final = frozenset(beta_set) | _client_betas(
+            extra_headers.get("anthropic-beta"), "The anthropic-beta header", drop_params
+        )
+        client_body_betas: Final = _client_betas(
+            _NON_DEFAULT_PARAMS.validate_python(data).get("anthropic_beta"), "anthropic_beta", drop_params
+        )
 
-        body_betas: Final = (injected_betas | client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
+        body_betas: Final = (injected_betas or client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
         if body_betas:
             data["anthropic_beta"] = sorted(body_betas)
         elif "anthropic_beta" in data:
@@ -176,7 +192,11 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             injected_betas
             | compaction_betas
             | (client_body_betas & _VERTEX_HEADER_ONLY_BETAS)
-            | _beta_names(_NON_DEFAULT_PARAMS.validate_python(headers).get("anthropic-beta"))
+            | _client_betas(
+                _NON_DEFAULT_PARAMS.validate_python(headers).get("anthropic-beta"),
+                "The anthropic-beta header",
+                drop_params,
+            )
         )
         if header_betas:
             headers["anthropic-beta"] = ",".join(sorted(header_betas))

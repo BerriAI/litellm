@@ -794,6 +794,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     COMPACT_2026_01_12 = "compact-2026-01-12"
     COMPACT_2026_09_04 = "compact-2026-09-04"
+    INLINE_TOOLS_2026_09_15 = "inline-tools-2026-09-15"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"

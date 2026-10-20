@@ -132,7 +132,9 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
-def _validate_vertex_headers(client_headers, messages, optional_params=None):
+def _validate_vertex_headers(
+    client_headers: dict[str, str], messages: list[object], optional_params: dict[str, object] | None = None
+) -> dict[str, str]:
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
     litellm_params = {
         "vertex_ai_project": "test-project",
@@ -829,7 +831,7 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
     assert missing == []
 
 
-_SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so far", "signature": "sig"}
 
 
 @pytest.mark.parametrize(
@@ -849,22 +851,25 @@ _SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "
     ids=["compaction_param", "signed_compaction_block"],
 )
 def test_native_compaction_reaches_vertex_with_compact_2026_09_04_beta(
-    local_beta_headers_config, client_headers, optional_params, messages
-):
+    local_beta_headers_config: None,
+    client_headers: dict[str, str],
+    optional_params: dict[str, object],
+    messages: list[object],
+) -> None:
     """Vertex serves on-demand compaction only behind compact-2026-09-04 (Google Cloud: beta on
     https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05)
     and answers 400 "compaction: Extra inputs are not permitted" without it, so the beta rides
     along with the `compaction` param or a signed compaction block exactly once, whether or not
     the client sent it, and survives the Vertex beta filter."""
-    headers = _validate_vertex_headers(client_headers, messages, optional_params)
+    headers: Final = _validate_vertex_headers(client_headers, messages, optional_params)
 
-    filtered = update_headers_with_filtered_beta(headers=headers, provider="vertex_ai")
+    filtered: Final = update_headers_with_filtered_beta(headers=headers, provider="vertex_ai")
 
     assert filtered["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
 
 
-def test_no_compaction_signal_leaves_compact_2026_09_04_beta_out():
-    headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
+def test_no_compaction_signal_leaves_compact_2026_09_04_beta_out() -> None:
+    headers: Final = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
 
     assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")
 
@@ -882,7 +887,7 @@ _VERTEX_MESSAGE_RESPONSE: Final = {
 
 
 @pytest.mark.asyncio
-async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config):
+async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config: None) -> None:
     """A /v1/messages compaction request to a Vertex Claude deployment reaches Vertex with the beta in the
     anthropic-beta request header and never in the body, the shape Vertex accepts (live, 2026-10-05)."""
     mock_response: Final = MagicMock()

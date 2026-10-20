@@ -430,8 +430,10 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
 
 def test_vertex_ai_anthropic_inline_tools_beta_survives_the_chat_beta_filter(local_beta_headers_config: None) -> None:
     """The chat path runs the Vertex beta filter over both the header and the `anthropic_beta` body field right
-    before the request goes out, so inline-tools-2026-09-15 must survive both (source and date in
-    tests/unit/test_anthropic_beta_headers_filtering.py)."""
+    before the request goes out, so inline-tools-2026-09-15 must survive it as the header (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py) and stay out of the body field, which Vertex rejects
+    with 400 "Unexpected value(s) `inline-tools-2026-09-15` for the `anthropic_beta` parameter" (live, global,
+    claude-sonnet-5-5, 2026-10-20)."""
     config: Final = VertexAIAnthropicConfig()
     headers: Final[dict[str, str]] = {}
     optional_params: Final[dict[str, object]] = {
@@ -452,7 +454,7 @@ def test_vertex_ai_anthropic_inline_tools_beta_survives_the_chat_beta_filter(loc
     )
 
     assert filtered_headers["anthropic-beta"].split(",").count("inline-tools-2026-09-15") == 1
-    assert "inline-tools-2026-09-15" in filtered_request["anthropic_beta"]
+    assert "inline-tools-2026-09-15" not in filtered_request.get("anthropic_beta", [])
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_merged_with_auto_betas():
@@ -1189,7 +1191,18 @@ def test_refusal_stop_details_kept_through_vertex_anthropic_transform():
     assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
 
 
-_SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+_CLEAR_TOOL_USES: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+
+def _vertex_request(optional_params: dict[str, object], headers: dict[str, str], litellm_params: dict[str, object] | None = None) -> dict:
+    return VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"max_tokens": 100, "is_vertex_request": True, **optional_params},
+        litellm_params=litellm_params or {},
+        headers=headers,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1214,18 +1227,17 @@ _SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "
     ids=["compaction_param", "signed_compaction_block_sent_back"],
 )
 def test_vertex_ai_anthropic_native_compaction_adds_compact_2026_09_04_beta(
-    local_beta_headers_config, optional_params, messages
-):
+    local_beta_headers_config: None, optional_params: dict[str, object], messages: list[dict[str, object]]
+) -> None:
     """The chat path skips the Anthropic beta injection for Vertex requests, so the Vertex config
     adds compact-2026-09-04 itself (Google Cloud: beta on
     https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05)
     as the HTTP header only, since Vertex answered 400 "Unexpected value(s) `compact-2026-09-04`
     for the `anthropic_beta` parameter" with the name in the body field (us-east5,
     claude-sonnet-4-6, 2026-10-05), and the header must survive the Vertex beta filter."""
-    config = VertexAIAnthropicConfig()
-    headers = {}
+    headers: Final[dict[str, str]] = {}
 
-    result = config.transform_request(
+    result: Final = VertexAIAnthropicConfig().transform_request(
         model="claude-opus-4-6",
         messages=messages,
         optional_params=optional_params,
@@ -1240,77 +1252,77 @@ def test_vertex_ai_anthropic_native_compaction_adds_compact_2026_09_04_beta(
     assert "compact-2026-09-04" not in filtered_body.get("anthropic_beta", [])
 
 
-def test_vertex_ai_anthropic_no_compaction_signal_leaves_compact_2026_09_04_beta_out():
-    headers = {}
+def test_vertex_ai_anthropic_no_compaction_signal_leaves_compact_2026_09_04_beta_out() -> None:
+    headers: Final[dict[str, str]] = {}
 
-    result = VertexAIAnthropicConfig().transform_request(
-        model="claude-opus-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={"max_tokens": 100, "is_vertex_request": True},
-        litellm_params={},
-        headers=headers,
-    )
+    result: Final = _vertex_request({}, headers)
 
     assert "compact-2026-09-04" not in result.get("anthropic_beta", [])
     assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")
 
 
-def test_vertex_ai_anthropic_client_sent_compact_2026_09_04_stays_out_of_the_body_field(local_beta_headers_config):
-    headers = {}
+def test_vertex_ai_anthropic_client_sent_compact_2026_09_04_stays_out_of_the_body_field(
+    local_beta_headers_config: None,
+) -> None:
+    headers: Final[dict[str, str]] = {}
 
-    result = VertexAIAnthropicConfig().transform_request(
-        model="claude-opus-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={
-            "max_tokens": 100,
-            "is_vertex_request": True,
+    result: Final = _vertex_request(
+        {
             "compaction": {"type": "summarize"},
             "extra_headers": {"anthropic-beta": "compact-2026-09-04,interleaved-thinking-2025-05-14"},
         },
-        litellm_params={},
-        headers=headers,
+        headers,
     )
 
     assert headers["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
     assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
 
 
-def test_vertex_ai_anthropic_compaction_keeps_the_betas_the_client_sent_as_headers(local_beta_headers_config):
-    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+def test_vertex_ai_anthropic_compaction_keeps_the_betas_the_client_sent_as_headers(
+    local_beta_headers_config: None,
+) -> None:
+    headers: Final = {"anthropic-beta": "context-1m-2025-08-07"}
 
-    result = VertexAIAnthropicConfig().transform_request(
-        model="claude-opus-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={"max_tokens": 100, "is_vertex_request": True, "compaction": {"type": "summarize"}},
-        litellm_params={},
-        headers=headers,
-    )
+    result: Final = _vertex_request({"compaction": {"type": "summarize"}}, headers)
 
     assert sorted(headers["anthropic-beta"].split(",")) == ["compact-2026-09-04", "context-1m-2025-08-07"]
     assert "anthropic_beta" not in result
 
 
-def test_vertex_ai_anthropic_client_sent_body_compact_2026_09_04_moves_to_the_header(local_beta_headers_config):
-    """Vertex rejects `compact-2026-09-04` inside the body `anthropic_beta` field with 400 "Unexpected value(s)"
-    (live, 2026-10-05), so a client that opts in through that field still gets the beta as a header and keeps
-    its other betas in the body."""
-    headers = {}
+@pytest.mark.parametrize("header_only_beta", ["compact-2026-09-04", "inline-tools-2026-09-15"])
+def test_vertex_ai_anthropic_client_sent_body_header_only_beta_moves_to_the_header(
+    local_beta_headers_config: None, header_only_beta: str
+) -> None:
+    """Vertex rejects these betas inside the body `anthropic_beta` field with 400 "Unexpected value(s)" and
+    accepts them as the header (live, global, claude-sonnet-5-5, 2026-10-20), so a client that opts in through that field still
+    gets the beta as a header and keeps its other betas in the body."""
+    headers: Final[dict[str, str]] = {}
 
-    result = VertexAIAnthropicConfig().transform_request(
-        model="claude-opus-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={
-            "max_tokens": 100,
-            "is_vertex_request": True,
-            "compaction": {"type": "summarize"},
-            "anthropic_beta": ["compact-2026-09-04", "interleaved-thinking-2025-05-14"],
-        },
-        litellm_params={},
-        headers=headers,
+    result: Final = _vertex_request(
+        {"anthropic_beta": [header_only_beta, "interleaved-thinking-2025-05-14"]}, headers
     )
 
-    assert headers["anthropic-beta"] == "compact-2026-09-04"
+    assert headers["anthropic-beta"] == header_only_beta
     assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
+
+
+@pytest.mark.parametrize(
+    "client_beta,header",
+    [
+        ("context-1m-2025-08-07", "context-management-2025-06-27"),
+        ("inline-tools-2026-09-15", "context-management-2025-06-27,inline-tools-2026-09-15"),
+    ],
+    ids=["body_beta", "header_only_beta"],
+)
+def test_vertex_ai_anthropic_litellm_betas_replace_the_client_body_betas(
+    local_beta_headers_config: None, client_beta: str, header: str
+) -> None:
+    headers: Final[dict[str, str]] = {}
+
+    result: Final = _vertex_request({"context_management": _CLEAR_TOOL_USES, "anthropic_beta": [client_beta]}, headers)
+
+    assert result["anthropic_beta"] == ["context-management-2025-06-27"]
+    assert headers["anthropic-beta"] == header
 
 
 @pytest.mark.parametrize(
@@ -1318,33 +1330,56 @@ def test_vertex_ai_anthropic_client_sent_body_compact_2026_09_04_moves_to_the_he
     [["interleaved-thinking-2025-05-14"], ("interleaved-thinking-2025-05-14",)],
     ids=["list", "sdk_tuple"],
 )
-def test_vertex_ai_anthropic_client_sent_body_betas_stay_out_of_the_header(anthropic_beta):
-    headers = {}
+def test_vertex_ai_anthropic_client_sent_body_betas_stay_out_of_the_header(anthropic_beta: object) -> None:
+    headers: Final[dict[str, str]] = {}
 
-    result = VertexAIAnthropicConfig().transform_request(
-        model="claude-opus-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={"max_tokens": 100, "is_vertex_request": True, "anthropic_beta": anthropic_beta},
-        litellm_params={},
-        headers=headers,
-    )
+    result: Final = _vertex_request({"anthropic_beta": anthropic_beta}, headers)
 
     assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
     assert "anthropic-beta" not in headers
 
 
-@pytest.mark.parametrize("anthropic_beta", [5, [1, 2], {"beta": "x"}], ids=["int", "list_of_ints", "dict"])
-def test_vertex_ai_anthropic_malformed_anthropic_beta_answers_400(anthropic_beta):
+_MALFORMED_BETAS: Final = pytest.mark.parametrize(
+    "malformed", [5, [1, 2], {"beta": "x"}], ids=["int", "list_of_ints", "dict"]
+)
+_MALFORMED_BETA_SOURCES: Final = pytest.mark.parametrize(
+    "source,field",
+    [("anthropic_beta", "anthropic_beta"), ("extra_headers", "The anthropic-beta header")],
+    ids=["body_field", "extra_header"],
+)
+
+
+def _malformed_beta_params(source: str, malformed: object) -> dict[str, object]:
+    if source == "extra_headers":
+        return {"extra_headers": {"anthropic-beta": malformed}}
+    return {"anthropic_beta": malformed}
+
+
+@_MALFORMED_BETAS
+@_MALFORMED_BETA_SOURCES
+def test_vertex_ai_anthropic_malformed_anthropic_beta_answers_400_naming_its_field(
+    malformed: object, source: str, field: str
+) -> None:
     with pytest.raises(AnthropicError) as excinfo:
-        VertexAIAnthropicConfig().transform_request(
-            model="claude-opus-4-6",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={"max_tokens": 100, "is_vertex_request": True, "anthropic_beta": anthropic_beta},
-            litellm_params={},
-            headers={},
-        )
+        _vertex_request(_malformed_beta_params(source, malformed), {})
 
     assert excinfo.value.status_code == 400
+    assert excinfo.value.message.startswith(f"{field} must be")
+
+
+@_MALFORMED_BETAS
+@_MALFORMED_BETA_SOURCES
+@pytest.mark.parametrize("auto_beta", [False, True], ids=["alone", "next_to_litellm_beta"])
+def test_vertex_ai_anthropic_malformed_anthropic_beta_is_dropped_under_drop_params(
+    local_beta_headers_config: None, malformed: object, source: str, field: str, auto_beta: bool
+) -> None:
+    headers: Final[dict[str, str]] = {}
+    params: Final = {**_malformed_beta_params(source, malformed), **({"context_management": _CLEAR_TOOL_USES} if auto_beta else {})}
+
+    result: Final = _vertex_request(params, headers, litellm_params={"drop_params": True})
+
+    assert result.get("anthropic_beta") == (["context-management-2025-06-27"] if auto_beta else None)
+    assert headers.get("anthropic-beta") == ("context-management-2025-06-27" if auto_beta else None)
 
 
 _VERTEX_MESSAGE_RESPONSE: Final = {
@@ -1359,7 +1394,7 @@ _VERTEX_MESSAGE_RESPONSE: Final = {
 }
 
 
-def test_vertex_ai_anthropic_completion_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config):
+def test_vertex_ai_anthropic_completion_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config: None) -> None:
     """A chat completion with `compaction` on a Vertex Claude deployment reaches Vertex with the beta in the
     anthropic-beta request header and never in the body field, the shape Vertex accepts (live, 2026-10-05)."""
     mock_response: Final = MagicMock()
