@@ -17,7 +17,7 @@ import pytest
 # Add the project root to Python path
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _resolve_cache_read_cost_rate,
+    resolve_explicit_cache_read_cost_rate,
     calculate_prompt_caching_savings,
     generic_cost_per_token,
     get_token_type_cost_breakdown,
@@ -55,7 +55,7 @@ class TestDashscopeCostCalculator:
         prompt_tokens_details: dict[str, int | str],
     ):
         assert (
-            _resolve_cache_read_cost_rate(
+            resolve_explicit_cache_read_cost_rate(
                 model_info={
                     "key": "qwen-cache-rate-guard-test",
                     "explicit_cache_read_input_token_cost": 1e-07,
@@ -207,7 +207,7 @@ class TestDashscopeCostCalculator:
             prompt_tokens_details={"cached_tokens": 600, "cache_type": "ephemeral"},
         )
 
-        cache_rate = _resolve_cache_read_cost_rate(
+        cache_rate = resolve_explicit_cache_read_cost_rate(
             model_info=model_info,
             usage=usage,
             current_time=current_time,
@@ -216,7 +216,7 @@ class TestDashscopeCostCalculator:
         assert cache_rate == expected_cache_rate
 
     def test_provider_neutral_cache_rate_resolver_handles_service_tier_rate(self):
-        cache_rate = _resolve_cache_read_cost_rate(
+        cache_rate = resolve_explicit_cache_read_cost_rate(
             model_info={
                 "key": "qwen-service-tier-mode-rate-test",
                 "explicit_cache_read_input_token_cost_priority": 3e-07,
@@ -377,21 +377,16 @@ class TestDashscopeCostCalculator:
         ("explicit_cache_rate", "expected_cache_rate"),
         [(1e-07, 1e-07), ("1e-7", 1e-07), (0.0, 0.0), ("0", 0.0)],
     )
-    def test_dashscope_tiered_pricing_uses_model_level_explicit_cache_read_rate(
+    def test_dashscope_flat_explicit_cache_read_rate_wins_even_at_zero(
         self, explicit_cache_rate: float | str, expected_cache_rate: float
     ) -> None:
-        litellm.model_cost["dashscope/qwen-tiered-model-explicit-rate-test"] = {
+        litellm.model_cost["dashscope/qwen-flat-explicit-zero-rate-test"] = {
             "litellm_provider": "dashscope",
             "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 2e-07,
             "explicit_cache_read_input_token_cost": explicit_cache_rate,
-            "tiered_pricing": [
-                {
-                    "range": [0, 1000],
-                    "input_cost_per_token": 1e-06,
-                    "output_cost_per_token": 4e-06,
-                    "cache_read_input_token_cost": 2e-07,
-                }
-            ],
         }
         usage = Usage(
             prompt_tokens=1000,
@@ -400,11 +395,47 @@ class TestDashscopeCostCalculator:
         )
 
         prompt_cost, _ = dashscope_cost_per_token(
-            model="qwen-tiered-model-explicit-rate-test",
+            model="qwen-flat-explicit-zero-rate-test",
             usage=usage,
         )
 
         assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * expected_cache_rate), rel_tol=1e-10)
+
+    def test_dashscope_tier_without_an_explicit_rate_bills_that_tiers_cache_read_rate(self):
+        litellm.model_cost["dashscope/qwen-two-tier-explicit-fallback-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "explicit_cache_read_input_token_cost": 4e-08,
+            "tiered_pricing": [
+                {
+                    "range": [0, 1000],
+                    "input_cost_per_token": 4e-07,
+                    "output_cost_per_token": 1.6e-06,
+                    "cache_read_input_token_cost": 8e-08,
+                },
+                {
+                    "range": [1000, 10000],
+                    "input_cost_per_token": 1.2e-06,
+                    "output_cost_per_token": 4.8e-06,
+                    "cache_read_input_token_cost": 2.4e-07,
+                },
+            ],
+        }
+        usage = Usage(
+            prompt_tokens=3000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 2000, "cache_type": "ephemeral"},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-two-tier-explicit-fallback-test", usage=usage)
+        breakdown = get_token_type_cost_breakdown(
+            model="qwen-two-tier-explicit-fallback-test",
+            custom_llm_provider="dashscope",
+            usage=usage,
+        )
+
+        assert math.isclose(breakdown.cache_read_cost, 2000 * 2.4e-07, rel_tol=1e-10)
+        assert math.isclose(prompt_cost, (1000 * 1.2e-06) + breakdown.cache_read_cost, rel_tol=1e-10)
 
     def test_dashscope_prompt_caching_savings_uses_explicit_cache_read_rate(self):
         model_info: ModelInfo = {

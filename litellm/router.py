@@ -9815,6 +9815,7 @@ class Router:
             "cache_creation_input_token_cost_above_200k_tokens",
             "cache_read_input_token_cost",
             "cache_read_input_token_cost_above_200k_tokens",
+            "explicit_cache_read_input_token_cost",
         )
         if all(model_info.get(f) is not None for f in cache_fields):
             return

@@ -356,7 +356,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
     )
 
 
-def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
+def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict[str, object] | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
         return None
@@ -545,7 +545,7 @@ class TokenRates:
         return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
 
 
-def _resolve_cache_read_cost_rate(
+def resolve_explicit_cache_read_cost_rate(
     model_info: ModelInfo,
     usage: Usage,
     current_time: datetime | None,
@@ -585,10 +585,10 @@ def _resolve_cache_read_cost_rate(
     cache_read_cost_rate: Final = (
         tier_rate(tier, cache_read_cost_key)
         if tier is not None and tier_has_explicit_rate
-        else model_cache_read_cost_rate
-        if model_cache_read_cost_rate is not None
         else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
         if tier is not None
+        else model_cache_read_cost_rate
+        if model_cache_read_cost_rate is not None
         else _get_cost_per_unit(
             model_info,
             _get_service_tier_cost_key("cache_read_input_token_cost", service_tier),
@@ -635,12 +635,7 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     return off_peak
 
 
-def apply_off_peak_pricing(
-    model_info: ModelInfo,
-    current_time: datetime | None,
-    rates: TokenRates,
-    cache_read_cost_key: str = "cache_read_input_token_cost",
-) -> TokenRates:
+def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
     """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
     off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
     windows. An off-peak rate replaces the rate that would otherwise apply rather than
@@ -654,19 +649,10 @@ def apply_off_peak_pricing(
     if off_peak is None:
         return rates
     off_peak_reasoning_rate: Final = _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
-    mode_specific_cache_read_rate: Final = _parse_off_peak_rate(off_peak.get(cache_read_cost_key))
-    generic_cache_read_rate: Final = (
-        _parse_off_peak_rate(off_peak.get("cache_read_input_token_cost"))
-        if cache_read_cost_key != "cache_read_input_token_cost"
-        else None
-    )
-    cache_read_rate: Final = (
-        mode_specific_cache_read_rate if mode_specific_cache_read_rate is not None else generic_cache_read_rate
-    )
     return TokenRates(
         input_rate=_off_peak_rate(off_peak, "input_cost_per_token", rates.input_rate),
         output_rate=_off_peak_rate(off_peak, "output_cost_per_token", rates.output_rate),
-        cache_read_rate=rates.cache_read_rate if cache_read_rate is None else cache_read_rate,
+        cache_read_rate=_off_peak_rate(off_peak, "cache_read_input_token_cost", rates.cache_read_rate),
         cache_creation_rate=_off_peak_rate(off_peak, "cache_creation_input_token_cost", rates.cache_creation_rate),
         reasoning_rate=rates.reasoning_rate if off_peak_reasoning_rate is None else off_peak_reasoning_rate,
     )
@@ -1531,7 +1517,7 @@ def generic_cost_per_token(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
-    resolved_cache_read_cost: Final = _resolve_cache_read_cost_rate(
+    resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
         model_info=resolved_model_info,
         usage=usage,
         current_time=billing_time,
@@ -1738,7 +1724,7 @@ def _cost_map_billed_rates(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
-    provider_cache_read_cost_rate: Final = _resolve_cache_read_cost_rate(
+    provider_cache_read_cost_rate: Final = resolve_explicit_cache_read_cost_rate(
         model_info=model_info,
         usage=usage,
         current_time=billing_time,
@@ -1896,7 +1882,7 @@ def calculate_prompt_caching_savings(
         current_time=billed_at,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
-    provider_cache_read_cost: Final = _resolve_cache_read_cost_rate(
+    provider_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
         model_info=model_info,
         usage=usage,
         current_time=billed_at,

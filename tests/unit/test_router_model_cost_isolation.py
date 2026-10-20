@@ -923,6 +923,48 @@ def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
         _restore_model_cost_entries(model_keys)
 
 
+def test_partial_custom_pricing_inherits_builtin_explicit_cache_read_rate():
+    backend_model = "dashscope/qwen-explicit-cache-inherit-backend"
+    deploy_id = "qwen-deploy-partial-pricing"
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: litellm.model_cost.get(backend_model),
+    }
+    litellm.model_cost[backend_model] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_creation_input_token_cost": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "qwen-custom",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "input_cost_per_token": 2.5e-06,
+                        "output_cost_per_token": 7.5e-06,
+                    },
+                }
+            ],
+        )
+
+        entry = litellm.model_cost[deploy_id]
+        assert entry.get("explicit_cache_read_input_token_cost") == 2.5e-07
+        assert entry.get("cache_read_input_token_cost") == 5e-07
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_inherit_builtin_cache_pricing_fills_only_missing_fields():
     """Direct unit test of the helper: missing cache fields are filled from the
     backend model's built-in entry, while an explicitly set cache field and the

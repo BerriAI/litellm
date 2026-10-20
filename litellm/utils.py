@@ -3554,12 +3554,11 @@ def _registration_base(
     if not fallback.matched_builtin and (
         value.get("cache_creation_input_token_cost") is None
         and value.get("cache_read_input_token_cost") is None
-        and value.get("explicit_cache_read_input_token_cost") is None
         and value.get("tiered_pricing") is None
         and (value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None)
     ):
         verbose_logger.warning(
-            "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost, cache_read_input_token_cost, and explicit_cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+            "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
             warning_display_name or key,
         )
     return _RegistrationWrite(key=key, entry=dict(fallback.entry))
