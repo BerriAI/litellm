@@ -19,6 +19,7 @@ from poc.guarded_model import (
     valid_cost,
 )
 from poc.label import parse_jev_response, parse_label_response
+from poc.prepare import agent_rows
 from poc.policy import (
     PolicyConfig,
     build_capability_map,
@@ -614,3 +615,42 @@ def test_input_estimate_covers_tool_overhead_and_tracks_observed_prompt_growth()
     assert estimate_input_tokens(9000, 5000, 7000, config) == 11000
     assert estimate_input_tokens(5100, 5000, 5200, config) == 6124
     assert estimate_input_tokens(4000, 5000, 7000, config) == 7000
+
+
+def test_agent_rows_follows_dataset_order_and_excludes_gold_and_test_fields() -> None:
+    shared_fields = {
+        "repo": "owner/repo",
+        "base_commit": "commit",
+        "problem_statement": "Fix behavior",
+        "version": "1.0",
+        "created_at": "2020-01-01",
+        "patch": "gold patch",
+        "test_patch": "gold test patch",
+        "FAIL_TO_PASS": ["tests/test_case.py"],
+    }
+    dataset_rows = [
+        {"instance_id": "task-second", **shared_fields},
+        {"instance_id": "task-first", **shared_fields},
+    ]
+
+    rows = agent_rows(dataset_rows, ("task-first", "task-second"))
+
+    assert [row["instance_id"] for row in rows] == ["task-second", "task-first"]
+    assert all(
+        set(row)
+        == {
+            "instance_id",
+            "repo",
+            "base_commit",
+            "problem_statement",
+            "version",
+            "created_at",
+        }
+        for row in rows
+    )
+    assert all("patch" not in row and "test_patch" not in row and "FAIL_TO_PASS" not in row for row in rows)
+
+
+def test_agent_rows_fails_when_a_frozen_task_is_missing() -> None:
+    with pytest.raises(ValueError, match="Frozen task IDs are missing"):
+        agent_rows(({"instance_id": "present"},), ("missing",))

@@ -1,0 +1,111 @@
+{
+ "seed": "litellm-capability-routing-pilot-v1",
+ "rule": "sort dev ids by sha256(seed+id); take first 5 with public swebench eval image",
+ "candidates": [
+  {
+   "instance_id": "pvlib__pvlib-python-1395",
+   "image": "swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest",
+   "exists": true,
+   "size": 1692788107,
+   "digest": "sha256:c7b51f4978926d54a788c54ac4d96e6c4c4e2cd2ee62736b30e91c9fd0891f10"
+  },
+  {
+   "instance_id": "sqlfluff__sqlfluff-884",
+   "image": "swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884:latest",
+   "exists": true,
+   "size": 1038961212,
+   "digest": "sha256:ca28dab1d331c1c7e4908784576a7e1f3b11387dbaa4a8db466ce42a0eda6bec"
+  },
+  {
+   "instance_id": "pylint-dev__astroid-1614",
+   "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614:latest",
+   "exists": true,
+   "size": 977627664,
+   "digest": "sha256:7206ea531b6c8b02f7a8e1760d732e4651f95307781f12f55e4b88e982610159"
+  },
+  {
+   "instance_id": "pvlib__pvlib-python-1165",
+   "image": "swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165:latest",
+   "exists": true,
+   "size": 1720675327,
+   "digest": "sha256:71e033964894077384c0c27a04ae0271e28eaad35602aa7570d40c683f1967d1"
+  },
+  {
+   "instance_id": "pydicom__pydicom-1031",
+   "image": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031:latest",
+   "exists": true,
+   "size": 1623110388,
+   "digest": "sha256:0b962e881760f4b8bf3cdbfc695624c90906198ccf1e2410cd639f6adc6e340b"
+  },
+  {
+   "instance_id": "pylint-dev__astroid-1164",
+   "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1164:latest",
+   "exists": true,
+   "size": 977029021,
+   "digest": "sha256:2aaa44d8f0abfaa47e2b7b378b204e2341d7a98525888c58f64ec83fced446eb"
+  },
+  {
+   "instance_id": "pylint-dev__astroid-2240",
+   "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-2240:latest",
+   "exists": true,
+   "size": 978175766,
+   "digest": "sha256:0bc107e0e3eedcf47322c8ed22ec961cf08b9b394688b0f1c86113378b4d768d"
+  },
+  {
+   "instance_id": "pydicom__pydicom-793",
+   "image": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-793:latest",
+   "exists": true,
+   "size": 1132897477,
+   "digest": "sha256:9ad524560667adaa8367dad49c1dbad7aa9778c692c26c8c68edd507fe64f942"
+  },
+  {
+   "instance_id": "pvlib__pvlib-python-1157",
+   "image": "swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1157:latest",
+   "exists": false,
+   "size": null,
+   "digest": null
+  },
+  {
+   "instance_id": "pvlib__pvlib-python-1191",
+   "image": "swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1191:latest",
+   "exists": true,
+   "size": 1725700379,
+   "digest": "sha256:0678cd6b58ff5b69756945921942444856a5038f82da465259d5a49bf95e7aad"
+  },
+  {
+   "instance_id": "pylint-dev__astroid-927",
+   "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-927:latest",
+   "exists": true,
+   "size": 977323274,
+   "digest": "sha256:9ca6c5ea2a9f260e64f7a2fca563fb60a6d2a58bff54f62a3fd3dc75937deba5"
+  },
+  {
+   "instance_id": "pydicom__pydicom-900",
+   "image": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-900:latest",
+   "exists": true,
+   "size": 1132917193,
+   "digest": "sha256:e6ca9a40b5a43f0648d6197a9c5ad66c19137812a83337d758a3c166aadd732d"
+  },
+  {
+   "instance_id": "pydicom__pydicom-1000",
+   "image": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1000:latest",
+   "exists": true,
+   "size": 1133581628,
+   "digest": "sha256:e26f22c2bb3e3db1ecb93a467c68260fa97c094676d86f820f43259481e25d90"
+  },
+  {
+   "instance_id": "pylint-dev__astroid-1616",
+   "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1616:latest",
+   "exists": true,
+   "size": 977625544,
+   "digest": "sha256:4685f3bf018042458da5aa31cbb06cca716f526a4ff2c23e095630328402b90e"
+  },
+  {
+   "instance_id": "sqlfluff__sqlfluff-1577",
+   "image": "swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-1577:latest",
+   "exists": false,
+   "size": null,
+   "digest": null
+  }
+ ]
+}

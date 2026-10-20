@@ -6,7 +6,7 @@ Five frozen SWE-bench dev tasks (`tasks.json`) are solved by mini-swe-agent 2.4.
 
 The router picks a cheaper model only when, on the shared graded task IDs, a one-sided Hoeffding lower bound on the paired success difference is at least minus the tolerance and the paired mean cost is lower. With five tasks it falls back to the Opus reference, by design
 
-Three evaluator images failed gold validation with an unchanged grader, NumPy 2 in both pvlib images and pytest 8 in the pydicom image. `overlays/` holds the version pins applied locally under the original tags. Gold then resolved 5/5 and a no-op patch 0/5. `images_pinned.txt` lists the digests used and `images_pinned_upstream.txt` the upstream ones
+Three evaluator images failed gold validation with an unchanged grader, NumPy 2 in both pvlib images and pytest 8 in the pydicom image. `overlays/` holds the version pins applied locally under the original tags. Gold then resolved 5/5 and a no-op patch 0/5. `images_pinned_upstream.txt` records upstream registry manifest digests, while `images_pinned.txt` separates those from local image IDs. `selection_candidates.json` preserves historical selection provenance
 
 ## Reproduction
 
@@ -14,26 +14,40 @@ Run these commands from this directory. `pip_freeze.txt` is authoritative for th
 
 ```sh
 uv venv
-uv pip install mini-swe-agent==2.4.6 swebench==5.0.2 litellm==1.106.1 mcp==2.3.0 scipy pyyaml datasets
+uv pip install -r pip_freeze.txt
 source .venv/bin/activate
 ```
 
-Pull the five pinned task images
+Pull each upstream image by its registry manifest digest, tag it locally, and inspect the recorded repository digests. Each inspection output must contain the listed `image@sha256:<upstream digest>` entry before building overlays
 
 ```sh
-docker pull swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest
-docker pull swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884:latest
-docker pull swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614:latest
-docker pull swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165:latest
-docker pull swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031:latest
-```
+docker pull swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395@sha256:c7b51f4978926d54a788c54ac4d96e6c4c4e2cd2ee62736b30e91c9fd0891f10
+docker tag swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395@sha256:c7b51f4978926d54a788c54ac4d96e6c4c4e2cd2ee62736b30e91c9fd0891f10 swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest
+docker image inspect --format '{{json .RepoDigests}}' swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest
 
-For each overlay, tag the upstream image and build the pinned image under its original tag
+docker pull swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884@sha256:ca28dab1d331c1c7e4908784576a7e1f3b11387dbaa4a8db466ce42a0eda6bec
+docker tag swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884@sha256:ca28dab1d331c1c7e4908784576a7e1f3b11387dbaa4a8db466ce42a0eda6bec swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884:latest
+docker image inspect --format '{{json .RepoDigests}}' swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884:latest
+
+docker pull swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614@sha256:7206ea531b6c8b02f7a8e1760d732e4651f95307781f12f55e4b88e982610159
+docker tag swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614@sha256:7206ea531b6c8b02f7a8e1760d732e4651f95307781f12f55e4b88e982610159 swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614:latest
+docker image inspect --format '{{json .RepoDigests}}' swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614:latest
+
+docker pull swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165@sha256:71e033964894077384c0c27a04ae0271e28eaad35602aa7570d40c683f1967d1
+docker tag swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165@sha256:71e033964894077384c0c27a04ae0271e28eaad35602aa7570d40c683f1967d1 swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165:latest
+docker image inspect --format '{{json .RepoDigests}}' swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165:latest
+
+docker pull swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031@sha256:0b962e881760f4b8bf3cdbfc695624c90906198ccf1e2410cd639f6adc6e340b
+docker tag swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031@sha256:0b962e881760f4b8bf3cdbfc695624c90906198ccf1e2410cd639f6adc6e340b swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031:latest
+docker image inspect --format '{{json .RepoDigests}}' swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031:latest
+```
 
 ```sh
 docker tag <img> routing_poc/orig.<name>:latest
 docker build -f overlays/Dockerfile.<name> -t <img> .
 ```
+
+For the three overlays, preserve the upstream tag first, then build the local image under that tag. These local builds have image IDs but no upstream registry manifest digest
 
 ```sh
 docker tag swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest routing_poc/orig.pvlib_1776_pvlib-python-1395:latest
@@ -59,6 +73,8 @@ Prepare or verify the pinned dataset
 python -m poc.prepare
 python -m poc.prepare --check
 ```
+
+The original selection rule sorted SWE-bench dev IDs by `sha256(seed + instance_id)` using seed `litellm-capability-routing-pilot-v1`, then took the first five with a public evaluation image. `selection_candidates.json` records that historical provenance only. Reproduction uses the frozen IDs and order in `tasks.json`, loads the pinned dev revision, and projects only the six agent fields into `agent_dataset/train.jsonl`. It does not reselect tasks, query Docker Hub, or write `tasks.json`
 
 Create a gateway virtual key scoped to the five models below with `max_budget` 15. Store the key in `.private/pilot_key` with mode `0600`, then export the gateway URL. Never commit or print the key
 
