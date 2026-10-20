@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -390,6 +390,12 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
+class _SystemonePayload(BaseModel):
+    answers: Mapping[str, object]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 _MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
@@ -404,9 +410,11 @@ def _normalize_answer(value: object) -> Mapping[str, object]:
 
 
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    response: Final = _MAPPING.validate_python(payload)
-    answers: Final = _MAPPING.validate_python(response.get("answers"))
-    normalized: Final = {**response, "answers": {name: _normalize_answer(answer) for name, answer in answers.items()}}
+    response: Final = _SystemonePayload.model_validate(payload)
+    normalized: Final = {
+        **(response.model_extra or {}),
+        "answers": {name: _normalize_answer(answer) for name, answer in response.answers.items()},
+    }
     return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
 
 

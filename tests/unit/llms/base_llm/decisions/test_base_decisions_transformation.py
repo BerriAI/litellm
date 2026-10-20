@@ -333,3 +333,18 @@ def test_invalid_provider_response_is_an_api_error(payload: object, provider: st
     with pytest.raises(BaseLLMException, match="unexpected response") as error:
         config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
     assert error.value.status_code == 500
+
+
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+def test_provider_response_without_answers_names_the_missing_field(provider: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate({"state": "text", "questions": {"a": {"type": "noul", "instructions": "Is it?"}}})
+    )
+    with pytest.raises(BaseLLMException, match="unexpected response") as error:
+        config.transform_decisions_response(
+            "drex-v2.0", provider, httpx.Response(200, json={"model": "drex-v2.0", "usage": {}}), request
+        )
+    assert error.value.status_code == 500
+    assert "answers" in error.value.message
