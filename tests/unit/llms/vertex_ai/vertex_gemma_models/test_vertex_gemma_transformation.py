@@ -1320,7 +1320,7 @@ def _gemma_cached_access_token():
     """Serve a fake token from the handler's credential cache so no auth round-trip runs."""
     from types import SimpleNamespace
 
-    from litellm.main import vertex_gemma_chat_completion
+    from litellm.native.chat_providers.handlers import vertex_gemma_chat_completion
 
     cache = vertex_gemma_chat_completion._credentials_project_mapping
     key = (_FAKE_GEMMA_CREDENTIALS, "test")
