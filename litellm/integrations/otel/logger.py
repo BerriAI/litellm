@@ -594,6 +594,7 @@ class OpenTelemetryV2(CustomLogger):
             payload,
             capture_content=self._capture_span_content(),
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
+            completion_start_seconds=call.completion_start_seconds,
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
