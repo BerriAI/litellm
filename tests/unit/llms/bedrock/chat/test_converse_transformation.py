@@ -10739,3 +10739,89 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+_INLINE_THINKING_TEXT: Final = "<thinking>step 1, step 2</thinking>Final answer: 42"
+
+
+def _converse_response(content_blocks: list[ContentBlock]) -> ModelResponse:
+    raw_response: Final = httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": content_blocks}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30},
+            "metrics": {"latencyMs": 1},
+        },
+        request=httpx.Request(
+            "POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-opus-5-5/converse"
+        ),
+    )
+    return AmazonConverseConfig()._transform_response(
+        model="us.anthropic.claude-opus-5-5",
+        response=raw_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+
+def test_converse_moves_leading_thinking_tag_to_reasoning_content_by_default() -> None:
+    message: Final = _converse_response([{"text": _INLINE_THINKING_TEXT}]).choices[0].message
+
+    assert (message.content, message.reasoning_content) == ("Final answer: 42", "step 1, step 2")
+
+
+def test_converse_keeps_leading_thinking_tag_in_content_when_inline_extraction_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+    response: Final = _converse_response([{"text": _INLINE_THINKING_TEXT}])
+
+    assert response.choices[0].message.model_dump() == {
+        "content": _INLINE_THINKING_TEXT,
+        "role": "assistant",
+        "tool_calls": None,
+        "function_call": None,
+        "provider_specific_fields": None,
+    }
+    details: Final = response.usage.completion_tokens_details
+    assert (details.reasoning_tokens, details.text_tokens) == (0, 20), "all 20 output tokens are answer text"
+
+
+def test_converse_still_surfaces_native_reasoning_block_when_inline_extraction_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+    message: Final = (
+        _converse_response(
+            [
+                {"reasoningContent": {"reasoningText": {"text": "native reasoning", "signature": "sig"}}},
+                {"text": _INLINE_THINKING_TEXT},
+            ]
+        )
+        .choices[0]
+        .message
+    )
+
+    assert (message.content, message.reasoning_content) == (_INLINE_THINKING_TEXT, "native reasoning")
+    assert message.thinking_blocks == [{"type": "thinking", "thinking": "native reasoning", "signature": "sig"}]
+
+
+def test_converse_non_streaming_content_matches_streaming_when_inline_extraction_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+    streamed: Final = AWSEventStreamDecoder(model="us.anthropic.claude-opus-5-5").converse_chunk_parser(
+        {"contentBlockIndex": 0, "delta": {"text": _INLINE_THINKING_TEXT}}
+    )
+    non_streamed: Final = _converse_response([{"text": _INLINE_THINKING_TEXT}])
+
+    assert non_streamed.choices[0].message.content == streamed.choices[0].delta.content == _INLINE_THINKING_TEXT
