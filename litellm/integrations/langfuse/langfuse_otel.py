@@ -63,10 +63,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
-        from opentelemetry.sdk.trace import ReadableSpan
+        from opentelemetry import trace
 
-        # A span that already carries attributes (a caller's active span) does not get the caller identity.
-        fresh: Final = not (isinstance(span, ReadableSpan) and span.attributes)
+        # The caller's active span, which LiteLLM writes onto instead of starting its own, gets no caller identity.
+        own_span: Final = span is not trace.get_current_span()
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
         span.set_attribute("langfuse.observation.type", "generation")
 
@@ -74,7 +74,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        if fresh:
+        if own_span:
             LangfuseOtelLogger._set_request_metadata_attributes(
                 span=span, kwargs=_MAPPING_ADAPTER.validate_python(kwargs)
             )

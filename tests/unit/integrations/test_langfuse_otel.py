@@ -2,12 +2,14 @@ import base64
 import json
 import os
 from collections.abc import Mapping
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -720,13 +722,15 @@ class TestLangfuseOtelIntegration:
         max_span_attributes: int | None,
         carried: dict[str, str] | None = None,
         added_after: Mapping[str, str | int] = MappingProxyType({}),
+        active: bool = False,
     ) -> ReadableSpan:
         exporter: Final = InMemorySpanExporter()
         provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=max_span_attributes))
         provider.add_span_processor(SimpleSpanProcessor(exporter))
         span: Final = provider.get_tracer("langfuse-otel-test").start_span("litellm_request", attributes=carried)
         response_obj: Final = {"id": "chatcmpl-1", "choices": [{"message": {"role": "assistant", "content": "hello"}}]}
-        LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
+        with trace.use_span(span, end_on_exit=False) if active else nullcontext():
+            LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
         span.set_attributes(added_after)
         span.end()
         (finished,) = exporter.get_finished_spans()
@@ -786,13 +790,13 @@ class TestLangfuseOtelIntegration:
             kept_identity.append(len(set(failed_span.attributes or {}) & identity_keys))
         assert kept_identity == list(range(len(identity_keys) + 1))
 
-    def test_request_metadata_skips_a_span_that_already_carries_attributes(self) -> None:
+    @pytest.mark.parametrize("carried", [None, {"caller.attribute": "kept"}], ids=["bare", "with_attributes"])
+    def test_request_metadata_skips_the_callers_active_span(self, carried: dict[str, str] | None) -> None:
         attributes: Final = dict(
-            self._exported_span(self._tool_call_kwargs(), SpanLimits.UNSET, {"caller.attribute": "kept"}).attributes
-            or {}
+            self._exported_span(self._tool_call_kwargs(), SpanLimits.UNSET, carried, active=True).attributes or {}
         )
 
-        assert attributes["caller.attribute"] == "kept"
+        assert {key: attributes[key] for key in carried or {}} == (carried or {})
         assert attributes["langfuse.observation.type"] == "generation"
         assert "langfuse.observation.metadata" not in attributes
         assert not [key for key in attributes if key.startswith("langfuse.trace.metadata.")]
@@ -1376,3 +1380,38 @@ def test_langfuse_otel_does_not_start_proxy_request_span() -> None:
     finally:
         langfuse_provider.shutdown()
         generic_provider.shutdown()
+
+
+def test_langfuse_otel_success_writes_identity_onto_its_own_span_and_never_onto_the_callers() -> None:
+    langfuse_exporter: Final = InMemorySpanExporter()
+    langfuse_provider: Final = TracerProvider()
+    langfuse_provider.add_span_processor(SimpleSpanProcessor(langfuse_exporter))
+    app_exporter: Final = InMemorySpanExporter()
+    app_provider: Final = TracerProvider()
+    app_provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        logger: Final = LangfuseOtelLogger(callback_name="langfuse_otel", tracer_provider=langfuse_provider)
+    response_obj: Final = {"id": "chatcmpl-1", "choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+    started_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    try:
+        with app_provider.get_tracer("app").start_as_current_span("app.operation"):
+            logger._handle_success(
+                TestLangfuseOtelIntegration._tool_call_kwargs(), response_obj, started_at, started_at
+            )
+        logger._handle_success(TestLangfuseOtelIntegration._tool_call_kwargs(), response_obj, started_at, started_at)
+
+        (app_span,) = app_exporter.get_finished_spans()
+        (own_span,) = [span for span in langfuse_exporter.get_finished_spans() if span.name == "litellm_request"]
+        app_attributes: Final = dict(app_span.attributes or {})
+        own_attributes: Final = dict(own_span.attributes or {})
+        assert app_attributes["langfuse.observation.type"] == "generation"
+        identity_prefixes: Final = ("langfuse.observation.metadata", "langfuse.trace.metadata.")
+        assert not [key for key in app_attributes if key.startswith(identity_prefixes)]
+        assert json.loads(str(own_attributes["langfuse.observation.metadata"])) == {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_team_id": "team-1",
+        }
+        assert own_attributes["langfuse.trace.metadata.user_api_key_team_id"] == "team-1"
+    finally:
+        langfuse_provider.shutdown()
+        app_provider.shutdown()
