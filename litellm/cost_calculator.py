@@ -2252,6 +2252,27 @@ def response_cost_calculator(
                     if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
 
+            if (
+                isinstance(response_object, ModelResponse)
+                and custom_llm_provider == "openai"
+                and not custom_pricing
+                and base_model is None
+            ):
+                reported_usage_cost: Final[object] = getattr(getattr(response_object, "usage", None), "cost", None)
+                if (
+                    isinstance(reported_usage_cost, (int, float))
+                    and not isinstance(reported_usage_cost, bool)
+                    and math.isfinite(reported_usage_cost)
+                    and reported_usage_cost >= 0
+                ):
+                    discounted_usage_cost: Final = _apply_cost_discount(
+                        base_cost=float(reported_usage_cost),
+                        custom_llm_provider=custom_llm_provider,
+                        model=model,
+                        region_name=region_name,
+                    )[0]
+                    return _apply_cost_margin(discounted_usage_cost, custom_llm_provider)[0]
+
             response_cost = completion_cost(
                 completion_response=response_object,
                 model=model,

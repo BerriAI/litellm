@@ -10302,3 +10302,151 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("reported_cost", [0.0, 0.037])
+@respx.mock
+async def test_openai_completion_records_reported_usage_cost(
+    monkeypatch: pytest.MonkeyPatch, async_mode: bool, reported_cost: float
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post("https://reported-cost.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream-cost",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "reported-cost-model",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": reported_cost},
+            },
+        )
+    )
+    request: Final = {
+        "model": "openai/reported-cost-model",
+        "api_base": "https://reported-cost.example/v1",
+        "api_key": "sk-unit-test",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    response: Final = await litellm.acompletion(**request) if async_mode else litellm.completion(**request)
+    assert response._hidden_params["response_cost"] == pytest.approx(reported_cost)
+
+
+@pytest.mark.parametrize("reported_cost", [0.0, 0.037])
+@pytest.mark.parametrize("has_catalog_price", [False, True])
+def test_openai_reported_usage_cost_reaches_spend_log(
+    monkeypatch: pytest.MonkeyPatch, reported_cost: float, has_catalog_price: bool
+) -> None:
+    model: Final = "openai/reported-usage-cost-fixture"
+    if has_catalog_price:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
+        )
+    started: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=started,
+        litellm_call_id="reported-usage-cost",
+        function_id="reported-usage-cost",
+    )
+    logging_obj.update_from_kwargs(kwargs={}, optional_params={}, litellm_params={"custom_llm_provider": "openai"})
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-reported-cost",
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(reported_cost)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(reported_cost)
+
+
+@pytest.mark.parametrize("pricing_policy", ["automatic", "custom", "base", "cache"])
+@pytest.mark.parametrize("reported_cost", [None, -0.037, float("nan"), float("inf"), 0.037])
+def test_openai_reported_usage_cost_respects_pricing_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_policy: str,
+    reported_cost: float | None,
+) -> None:
+    model: Final = "openai/reported-usage-pricing-fixture"
+    base_model: Final = "openai/reported-usage-base-fixture"
+    input_rate: Final = 2e-6
+    output_rate: Final = 6e-6
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        base_model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate * 2,
+            "output_cost_per_token": output_rate * 2,
+        },
+    )
+    response: Final = ModelResponse(
+        model=model, usage=Usage(prompt_tokens=100, completion_tokens=20, cost=reported_cost)
+    )
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        custom_pricing=pricing_policy == "custom",
+        base_model=base_model if pricing_policy == "base" else None,
+        cache_hit=pricing_policy == "cache",
+    )
+    token_cost: Final = (100 * input_rate + 20 * output_rate) * (2 if pricing_policy == "base" else 1)
+    expected: Final = (
+        0.0
+        if pricing_policy == "cache"
+        else reported_cost
+        if pricing_policy == "automatic" and reported_cost == 0.037
+        else token_cost
+    )
+    assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("reported_cost", [0.0, 0.037])
+@pytest.mark.parametrize("discount", [0.0, 0.2])
+def test_openai_reported_usage_cost_applies_discount_before_margin(
+    monkeypatch: pytest.MonkeyPatch, reported_cost: float, discount: float
+) -> None:
+    margin: Final = 0.1
+    fixed_amount: Final = 0.001
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": discount})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"percentage": margin, "fixed_amount": fixed_amount}})
+    response: Final = ModelResponse(
+        model="openai/reported-cost-with-margin",
+        usage=Usage(prompt_tokens=100, completion_tokens=20, cost=reported_cost),
+    )
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="openai/reported-cost-with-margin",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+    assert cost == pytest.approx(reported_cost * (1 - discount) * (1 + margin) + fixed_amount)
