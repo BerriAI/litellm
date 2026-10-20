@@ -89,6 +89,7 @@ def test_flash_model_info_keeps_legacy_lookup_available() -> None:
     assert info["supports_vision"] is True
     assert info["supports_video_input"] is True
     assert info["supports_max_reasoning_effort"] is True
+    assert info["reasoning_effort_levels"] == ["low", "medium", "high", "xhigh", "max"]
     assert litellm.get_model_info("minimax/MiniMax-M2.1")["litellm_provider"] == "minimax"
 
 
