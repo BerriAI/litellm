@@ -76,6 +76,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "use_xai_oauth",
             "github_copilot_auth_type",
+            "github_copilot_host",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             "responses_api_version",

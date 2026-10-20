@@ -3320,12 +3320,12 @@ async def _resolve_user_provider_credentials_for_request(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 
-    from .credential_endpoints.user_provider_credentials import aget_user_provider_tokens
+    from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
 
     if prisma_client is None:
         return
     try:
-        tokens: Final = await aget_user_provider_tokens(
+        connections: Final = await aget_user_provider_credentials(
             prisma_client=prisma_client,
             cache=user_api_key_cache,
             user_id=user_id,
@@ -3340,7 +3340,7 @@ async def _resolve_user_provider_credentials_for_request(
     secret_fields: Final = data.get("secret_fields")
     if not isinstance(secret_fields, dict):
         return
-    secret_fields["user_provider_credentials"] = RedactedDict(dict(tokens))
+    secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
     secret_fields["user_provider_credentials_user_id"] = user_id
 
 

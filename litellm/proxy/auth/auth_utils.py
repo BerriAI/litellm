@@ -461,6 +461,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # stored credential's values and the caller's connection by the proxy's own
     # secret_fields, so a body-supplied value could only spoof either.
     "github_copilot_auth_type",
+    "github_copilot_host",
     "user_provider_credentials",
     "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived

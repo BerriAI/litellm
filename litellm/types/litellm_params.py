@@ -91,6 +91,7 @@ class ProviderConnection:
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
     github_copilot_auth_type: str | None = None
+    github_copilot_host: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None

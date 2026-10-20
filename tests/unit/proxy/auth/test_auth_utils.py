@@ -5087,7 +5087,7 @@ def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expec
 
 @pytest.mark.parametrize(
     "field",
-    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+    ["github_copilot_auth_type", "github_copilot_host", "user_provider_credentials", "github_copilot_user_session"],
 )
 def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
     """The per-user Copilot mode is decided by the stored credential's values and the caller's
