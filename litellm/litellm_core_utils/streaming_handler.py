@@ -1534,7 +1534,7 @@ class CustomStreamWrapper:
                 return _ProviderChunkEarlyReturn(None)
             completion_obj["content"] = response_obj["text"]
             self.intermittent_finish_reason = response_obj.get("finish_reason", None)
-            self.received_any_finish_reason |= self.intermittent_finish_reason is not None
+            self.received_any_finish_reason |= response_obj["finish_reason"] is not None
             if response_obj["is_finished"]:
                 if response_obj["finish_reason"] == "error":
                     raise Exception(
