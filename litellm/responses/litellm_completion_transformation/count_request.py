@@ -22,6 +22,8 @@ _COUNTED_CHAT_PARAMS: Final = (
 _ITEMS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _MAPPINGS: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(tuple[Mapping[str, object], ...])
 _JSON_PARAMS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+_ENTRY: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_MARKED_ENTRY_LISTS: Final = frozenset({"content", "tool_calls"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,25 @@ def _plain(item: object) -> object:
 
 def _mappings(value: object) -> tuple[Mapping[str, object], ...]:
     return _MAPPINGS.validate_python(tuple(_plain(item) for item in _ITEMS.validate_python(value or ())))
+
+
+def _unmarked(entry: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: _unmarked_entries(value) if key in _MARKED_ENTRY_LISTS else value
+        for key, value in entry.items()
+        if key != "cache_control"
+    }
+
+
+def _unmarked_entries(value: object) -> object:
+    return (
+        [
+            _unmarked(_ENTRY.validate_python(item)) if isinstance(item, Mapping) else item
+            for item in _ITEMS.validate_python(value)
+        ]
+        if isinstance(value, list)
+        else value
+    )
 
 
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -108,9 +129,9 @@ async def chat_count_request(
             responses_request,
             policy,
         )
-        tools: Final = _mappings(chat_body.get("tools"))
+        tools: Final = tuple(map(_unmarked, _mappings(chat_body.get("tools"))))
         return ChatCountRequest(
-            messages=_mappings(chat_body.get("messages")),
+            messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
             params=_counted_params(chat_body, tools, policy),
         )

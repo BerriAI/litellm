@@ -634,6 +634,72 @@ async def test_counter_rejects_a_chat_tool_without_a_name_without_calling_anthro
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
+_CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": _WEATHER_SCHEMA},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    (
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "name": "ana",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0K"}},
+                    ],
+                }
+            ],
+            None,
+            id="native-image-block",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "SF"}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"}]},
+            ],
+            [_CHAT_WEATHER_TOOL],
+            id="native-tool-result-block",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Open the docs"}],
+            [
+                {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+                _CHAT_WEATHER_TOOL,
+            ],
+            id="computer-use-preview-tool",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Ask the wiki"}],
+            [{"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"}, _CHAT_WEATHER_TOOL],
+            id="mcp-tool",
+        ),
+    ),
+)
+async def test_counter_rejects_input_chat_translation_would_leave_out_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]] | None,
+) -> None:
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, tools, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},

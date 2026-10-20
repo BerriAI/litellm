@@ -177,6 +177,52 @@ async def test_claude_runtime_404_retries_with_system_and_tools_on_mantle() -> N
     }
 
 
+def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
+    invoke_model: Final = _JSON_BODY.validate_json(request.content)["input"]
+    assert isinstance(invoke_model, dict)
+    encoded: Final = invoke_model["invokeModel"]
+    assert isinstance(encoded, dict) and isinstance(encoded["body"], str)
+    return _JSON_BODY.validate_json(base64.b64decode(encoded["body"]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_params",
+    [
+        {"tool_choice": "required"},
+        {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+            }
+        },
+    ],
+)
+async def test_mantle_fallback_counts_the_options_bedrock_runtime_counts(chat_params: dict[str, JsonValue]) -> None:
+    runtime_counts: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    mantle_counts: Final = _Bedrock(runtime=(404, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
+    request: Final = {
+        "model_to_use": "global.anthropic.claude-opus-4-8",
+        "messages": [{"role": "user", "content": "Weather in SF?"}],
+        "contents": None,
+        "deployment": DEPLOYMENT,
+        "request_model": "claude-opus-4-8",
+        "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        "messages_format": "openai",
+        "chat_params": chat_params,
+    }
+
+    await _counter(runtime_counts).count_tokens(**request)
+    await _counter(mantle_counts).count_tokens(**request)
+
+    assert mantle_counts.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    invoke_body: Final = _invoke_body(runtime_counts.requests[0])
+    mantle_body: Final = _JSON_BODY.validate_json(mantle_counts.requests[1].content)
+    counted: Final = {name: invoke_body[name] for name in ("thinking", "tool_choice", "output_config") if name in invoke_body}
+    assert counted
+    assert {name: mantle_body.get(name) for name in counted} == counted
+
+
 @pytest.mark.asyncio
 async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sends() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
@@ -205,11 +251,7 @@ async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sen
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 412)
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
-    invoke_model: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)["input"]
-    assert isinstance(invoke_model, dict)
-    encoded: Final = invoke_model["invokeModel"]
-    assert isinstance(encoded, dict) and isinstance(encoded["body"], str)
-    body: Final = _JSON_BODY.validate_json(base64.b64decode(encoded["body"]))
+    body: Final = _invoke_body(bedrock.requests[0])
     assert body["tools"] == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
     assert body["messages"] == [
         {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},

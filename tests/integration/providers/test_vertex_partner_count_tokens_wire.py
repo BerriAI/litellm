@@ -19,7 +19,13 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.providers._count_tokens_system_lift import RESPONSES_TOOL_USE, counted_fields
+from integration.providers._count_tokens_system_lift import (
+    RESPONSES_REQUEST_OPTIONS,
+    RESPONSES_TOOL_USE,
+    count_request_fields,
+    counted_fields,
+    inference_count_fields,
+)
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
@@ -941,3 +947,20 @@ def test_responses_endpoint_on_the_same_deployment_still_generates(gateway: Gate
         (sent,) = wire.drain()
         assert sent.target == _MESSAGE_TARGET, sent.target
         assert marker in sent.body.decode(), sent.body
+
+
+def test_responses_input_tokens_counts_the_structured_output_responses_inference_sends(gateway: Gateway) -> None:
+    request_body: Final = RESPONSES_REQUEST_OPTIONS["text-format"]
+    with wire_server(_peer(_strict)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url)
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": model, "max_output_tokens": 4096}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", {**request_body, "model": model})
+        assert _payload(response)["input_tokens"] == _PEER_COUNT, response.text
+        requests: Final = wire.drain()
+        (inference,) = (request for request in requests if request.target == _MESSAGE_TARGET)
+        (counted,) = _count_bodies(requests)
+        expected: Final = inference_count_fields(_JSON_OBJECT.validate_json(inference.body))
+        assert count_request_fields(counted) == expected, (counted, expected)

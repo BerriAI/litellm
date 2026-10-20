@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -32,9 +33,12 @@ from integration.providers._count_tokens_system_lift import (
     LIFTED,
     MID_SYSTEM,
     REMINDER,
+    RESPONSES_TOOLS,
     STRING_CASE,
     USER,
     USER_TEXT,
+    WEATHER_QUESTION,
+    WEATHER_SCHEMA,
     LiftCase,
     accepts_count_body,
     async_openai_client,
@@ -504,9 +508,7 @@ def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, ma
         assert mantle.drain() == ()
 
 
-def test_google_count_tokens_forwards_system_and_tools_to_mantle(
-    counting_proxy: OwnedProxy, mantle_port: int
-) -> None:
+def test_google_count_tokens_forwards_system_and_tools_to_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     system_text: Final = "Use the provided tool"
     tool_schema: Final = {"type": "object", "properties": {"location": {"type": "string"}}}
@@ -1131,9 +1133,7 @@ def test_messages_count_tokens_errors_when_mantle_is_unreachable(counting_proxy:
         assert len(_runtime_count_targets(runtime)) == 1
 
 
-def test_messages_count_tokens_errors_when_mantle_never_answers(
-    counting_proxy: OwnedProxy, mantle_port: int
-) -> None:
+def test_messages_count_tokens_errors_when_mantle_never_answers(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     held: Final[SimpleQueue[str]] = SimpleQueue()
     release: Final = threading.Event()
@@ -1565,3 +1565,116 @@ def test_utils_token_counter_local_mode_never_calls_either_peer(counting_proxy: 
         model: Final = _deployment(scenario, runtime.url)
         assert _local_count(gateway, _full(model)) > 0
         assert runtime.drain() == () and mantle.drain() == ()
+
+
+_FORCED_TOOL_CHOICE: Final[dict[str, JsonValue]] = {
+    "input": WEATHER_QUESTION,
+    "tools": RESPONSES_TOOLS,
+    "tool_choice": {"type": "function", "name": "get_weather"},
+}
+_CHAT_TOOLS: Final[list[JsonValue]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Look up the current weather for a city",
+            "parameters": WEATHER_SCHEMA,
+        },
+    }
+]
+_WEATHER_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": WEATHER_QUESTION}]
+_TOOL_USE_FIELDS: Final = ("tools", "tool_choice")
+
+
+def _tool_use_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {field: body[field] for field in _TOOL_USE_FIELDS if field in body}
+
+
+def _invoke_count_body(request: Request) -> dict[str, JsonValue]:
+    count_input: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(request.body)["input"])
+    invoke_model: Final = _JSON_OBJECT.validate_python(count_input["invokeModel"])
+    encoded: Final = invoke_model["body"]
+    assert isinstance(encoded, str), invoke_model
+    return _JSON_OBJECT.validate_json(base64.b64decode(encoded))
+
+
+def _converse_count_tools(request: Request) -> JsonValue:
+    count_input: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(request.body)["input"])
+    converse: Final = _JSON_OBJECT.validate_python(count_input["converse"])
+    return _JSON_OBJECT.validate_python(converse["toolConfig"])["tools"]
+
+
+def _requests_to(requests: Sequence[Request], pattern: re.Pattern[str]) -> tuple[Request, ...]:
+    return tuple(request for request in requests if pattern.match(target_of(request)))
+
+
+def test_responses_input_tokens_sends_both_bedrock_counters_the_tool_use_invoke_inference_sends(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        counted_model: Final = _deployment(scenario, runtime.url)
+        invoked_model: Final = _deployment(scenario, runtime.url, f"invoke/{_OPUS}")
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**_FORCED_TOOL_CHOICE, "model": invoked_model, "max_output_tokens": 16}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**_FORCED_TOOL_CHOICE, "model": counted_model}
+        )
+        assert _payload(response)["input_tokens"] == _MANTLE_COUNT, response.text
+        requests: Final = runtime.drain()
+        (invoked,) = _requests_to(requests, _INVOKE_TARGET)
+        (runtime_count,) = _requests_to(requests, _COUNT_TARGET)
+        (mantle_count,) = _mantle_bodies(mantle)
+        expected: Final = _tool_use_fields(_JSON_OBJECT.validate_json(invoked.body))
+        assert set(expected) == set(_TOOL_USE_FIELDS), expected
+        assert _tool_use_fields(_invoke_count_body(runtime_count)) == expected
+        assert _tool_use_fields(mantle_count) == expected, mantle_count
+
+
+def _counting_every_model(request: Request) -> Reply:
+    if _COUNT_TARGET.match(target_of(request)):
+        return _json_reply(200, {"inputTokens": _RUNTIME_COUNT})
+    return runtime_generation(request)
+
+
+_NOVA_COUNTS: Final[Mapping[str, tuple[str, dict[str, JsonValue], str]]] = MappingProxyType(
+    {
+        "utils-token-counter": (
+            "/utils/token_counter?call_endpoint=true",
+            {"messages": _WEATHER_MESSAGES, "tools": _CHAT_TOOLS},
+            "total_tokens",
+        ),
+        "responses-input-tokens": (
+            "/v1/responses/input_tokens",
+            {"input": WEATHER_QUESTION, "tools": RESPONSES_TOOLS},
+            "input_tokens",
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("route", _NOVA_COUNTS.keys())
+def test_nova_count_sends_the_tool_specs_converse_inference_sends(counting_proxy: OwnedProxy, route: str) -> None:
+    path, body, count_field = _NOVA_COUNTS[route]
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_counting_every_model) as runtime, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, runtime.url, _NOVA)
+        generated: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": _WEATHER_MESSAGES, "tools": _CHAT_TOOLS, "max_tokens": 16},
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request("POST", path, {**body, "model": model})
+        assert _payload(response)[count_field] == _RUNTIME_COUNT, response.text
+        requests: Final = runtime.drain()
+        (converse,) = (request for request in requests if target_of(request) == f"/model/{_NOVA}/converse")
+        (counted,) = _requests_to(requests, _COUNT_TARGET)
+        inference_tools: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(converse.body)["toolConfig"])
+        assert _converse_count_tools(counted) == inference_tools["tools"], counted.body

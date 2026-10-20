@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
@@ -152,6 +152,41 @@ def _is_chat_tool(tool: Mapping[str, object]) -> bool:
     return is_flat_responses_tool(tool) or (tool.get("type") == "function" and "function" in tool)
 
 
+def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
+    content: Final = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, list):
+        return False
+    blocks: Final = _SYSTEM_BLOCKS.validate_python(content)
+    return any(isinstance(block, dict) and block.get("type") not in ValidUserMessageContentTypes for block in blocks)
+
+
+def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
+    from litellm.llms.anthropic.pass_through.adapters.transformation import is_provider_native_tool_dict
+
+    name: Final = tool.get("name")
+    return not (_is_chat_tool(tool) or is_provider_native_tool_dict(tool) or (isinstance(name, str) and name.strip()))
+
+
+def _untranslatable_input(
+    messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]]
+) -> ChatCountTranslationError | None:
+    invalid_index: Final = next(
+        (index for index, message in enumerate(messages) if _has_non_chat_user_block(message)), None
+    )
+    if invalid_index is not None:
+        return ChatCountTranslationError(
+            message=f"Invalid user message at index {invalid_index}. "
+            "Please ensure all user messages are valid OpenAI chat completion messages."
+        )
+    unnamed_tool: Final = next(filter(_gets_placeholder_name, tools), None)
+    if unnamed_tool is not None:
+        return ChatCountTranslationError(
+            message=f"Invalid request for token counting: tool type {unnamed_tool.get('type')!r} "
+            "has no Chat Completions equivalent"
+        )
+    return None
+
+
 def _system_messages(system: object) -> tuple[Mapping[str, object], ...]:
     message: Final[Mapping[str, object]] = {"role": "system", "content": system}
     return (message,) if isinstance(system, (str, list)) and system else ()
@@ -223,6 +258,9 @@ def anthropic_fields_for_chat_tool_use(
         and not any(map(_needs_chat_translation, messages))
     ):
         return None
+    untranslatable: Final = _untranslatable_input(messages, counted_tools)
+    if untranslatable is not None:
+        return untranslatable
     from litellm.exceptions import BadRequestError
     from litellm.llms.anthropic.common_utils import AnthropicError
 
