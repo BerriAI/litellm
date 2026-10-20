@@ -2255,6 +2255,8 @@ def response_cost_calculator(
             if (
                 isinstance(response_object, ModelResponse)
                 and custom_llm_provider == "openai"
+                and litellm_logging_obj is not None
+                and litellm_logging_obj.stream is False
                 and not custom_pricing
                 and base_model is None
             ):

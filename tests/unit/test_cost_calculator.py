@@ -10417,6 +10417,15 @@ def test_openai_reported_usage_cost_respects_pricing_policy(
         custom_pricing=pricing_policy == "custom",
         base_model=base_model if pricing_policy == "base" else None,
         cache_hit=pricing_policy == "cache",
+        litellm_logging_obj=Logging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="reported-cost-pricing-policy",
+            function_id="reported-cost-pricing-policy",
+        ),
     )
     token_cost: Final = (100 * input_rate + 20 * output_rate) * (2 if pricing_policy == "base" else 1)
     expected: Final = (
@@ -10448,5 +10457,58 @@ def test_openai_reported_usage_cost_applies_discount_before_margin(
         custom_llm_provider="openai",
         call_type="completion",
         optional_params={},
+        litellm_logging_obj=Logging(
+            model="openai/reported-cost-with-margin",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="reported-cost-margin",
+            function_id="reported-cost-margin",
+        ),
     )
     assert cost == pytest.approx(reported_cost * (1 - discount) * (1 + margin) + fixed_amount)
+
+
+@pytest.mark.parametrize("stream_context", ["absent", "streaming", "unspecified", "non_streaming"])
+def test_openai_reported_usage_cost_requires_non_streaming_context(
+    monkeypatch: pytest.MonkeyPatch, stream_context: str
+) -> None:
+    model: Final = "openai/reported-usage-stream-context"
+    input_rate: Final = 1e-6
+    output_rate: Final = 2e-6
+    reported_cost: Final = 0.037
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        },
+    )
+    logging_obj: Final = (
+        None
+        if stream_context == "absent"
+        else Logging(
+            model=model,
+            messages=[],
+            stream=False if stream_context == "non_streaming" else True if stream_context == "streaming" else None,
+            call_type="completion",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="reported-cost-stream-context",
+            function_id="reported-cost-stream-context",
+        )
+    )
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, cost=reported_cost))
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+    expected: Final = reported_cost if stream_context == "non_streaming" else 10 * input_rate + 5 * output_rate
+    assert cost == pytest.approx(expected)
