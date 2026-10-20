@@ -58,10 +58,12 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -385,6 +387,7 @@ class BaseResponsesAPIStreamingIterator:
         self._output_started = False
         self._generated_content = ""
         self._generated_tool_arguments = ""
+        self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
@@ -544,6 +547,10 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = get_openai_response_types()
+                if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED:
+                    _created: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if isinstance(_created, ResponsesAPIResponse):
+                        self._created_response = _created
                 if openai_responses_api_chunk and _chunk_type in (
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
@@ -1029,6 +1036,34 @@ class BaseResponsesAPIStreamingIterator:
         self._pending_logging_tasks = ()
         if pending:
             await asyncio.wait(pending)
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        """
+        The response.incomplete event to bill when the client went away mid-stream,
+        the same shape the success handler assembles for a natural end of stream.
+        Its response is the response.created payload (it carries the served
+        service_tier) plus the text and tool arguments relayed so far, with counted
+        usage since the provider never sent any. None when nothing was relayed yet
+        or the stream already reached its terminal event and billed itself.
+        """
+        created: Final = self._created_response
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        if self.completed_response is not None or created is None or not generated:
+            return None
+        usage: Final = _estimate_usage_safely(
+            self.model or "", self.request_data.get("input"), self.request_data, generated
+        )
+        if usage is None:
+            return None
+        partial: Final = created.model_copy(
+            update={
+                "status": "incomplete",
+                "usage": usage,
+                "output": _partial_output_items(self._generated_content),
+            }
+        )
+        _stamp_responses_usage_cost(partial, self.logging_obj)
+        return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1559,6 +1594,37 @@ def _add_text_like_part_events(
                 refusal=refusal,
             )
         )
+
+
+@runtime_checkable
+class _BillsPartialStreamOnDisconnect(Protocol):
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None: ...
+
+
+def _partial_responses_incomplete_event_on_disconnect(stream: object) -> ResponseIncompleteEvent | None:
+    """Ask the stream behind a proxy or router wrapper for the partial response to bill, if it can build one."""
+    if not isinstance(stream, _BillsPartialStreamOnDisconnect):
+        return None
+    try:
+        partial: Final = stream.partial_response_on_disconnect()
+    except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
+        verbose_logger.debug("Failed to build partial Responses API response for disconnect billing: %s", e)
+        return None
+    return partial if isinstance(partial, ResponseIncompleteEvent) else None
+
+
+def _partial_output_items(generated_text: str) -> list[GenericResponseOutputItem]:
+    if not generated_text:
+        return []
+    return [
+        GenericResponseOutputItem(
+            type="message",
+            id=f"msg_{uuid.uuid4()}",
+            status="incomplete",
+            role="assistant",
+            content=[OutputText(type="output_text", text=generated_text, annotations=[])],
+        )
+    ]
 
 
 def _billed_terminal_response(
