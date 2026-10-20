@@ -61,6 +61,7 @@ from litellm.types.utils import GenericImageParsingChunk
 from .common_utils import (
     converse_redacted_content,
     convert_content_list_to_str,
+    has_blank_redacted_data,
     infer_content_type_from_url_and_content,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
@@ -2557,7 +2558,7 @@ def _replayable_thinking_blocks(
     return [
         _without_keys(_with_native_redacted_data(block), keys_to_drop)
         for block in thinking_blocks
-        if not (is_unsignable_thinking_block(block) or (drop_params and _has_blank_redacted_data(block)))
+        if not (is_unsignable_thinking_block(block) or (drop_params and has_blank_redacted_data(block)))
     ]
 
 
@@ -2571,20 +2572,12 @@ def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatComple
             return None
 
 
-def _has_blank_redacted_data(block: object) -> bool:
-    match block:
-        case {"type": "redacted_thinking", "data": str() as data}:
-            return not data.strip()
-        case {"type": "redacted_thinking"}:
-            return True
-        case _:
-            return False
-
-
 def _thinking_identity(item: object) -> tuple[object, ...] | None:
     match item:
         case {"type": "redacted_thinking", "data": str() as data}:
             return ("redacted_thinking", native_redacted_thinking_data(data))
+        case {"type": "thinking", "signature": str() as signature} if signature:
+            return ("thinking", signature)
         case {"type": "thinking" | "redacted_thinking"}:
             fields: Final = cast(Mapping[str, object], item)  # cast-ok: the mapping pattern matched
             return (fields.get("type"), fields.get("thinking"), fields.get("signature"))
@@ -2595,7 +2588,7 @@ def _thinking_identity(item: object) -> tuple[object, ...] | None:
 _Replayed: Final = TypeVar("_Replayed")
 
 
-def _with_missing_thinking_blocks(
+def with_missing_thinking_blocks(
     content: Iterable[_Replayed], thinking_blocks: Sequence[_Replayed]
 ) -> tuple[_Replayed, ...]:
     content_items: Final = tuple(content)
@@ -2639,7 +2632,7 @@ def _thinking_in_replay_order(
     content_items: Final = content if isinstance(content, list) else ()
     return tuple(
         block
-        for item in _with_missing_thinking_blocks(content_items, thinking_blocks or ())
+        for item in with_missing_thinking_blocks(content_items, thinking_blocks or ())
         if (block := _as_thinking_block(item)) is not None
     )
 
@@ -3055,7 +3048,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
+                    for m in with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks

@@ -49,7 +49,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
-from .common_utils import is_unsignable_thinking_block
+from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block
 
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
@@ -267,7 +267,9 @@ def _block_index_by_message(blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> M
 
 def _thinking_block_renders(block: object) -> bool:
     """A thinking block the converter keeps: one Anthropic can verify, so never bridged encrypted reasoning."""
-    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not is_unsignable_thinking_block(block)
+    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not (
+        is_unsignable_thinking_block(block) or has_blank_redacted_data(block)
+    )
 
 
 def _assistant_part_renders(part: object) -> bool:

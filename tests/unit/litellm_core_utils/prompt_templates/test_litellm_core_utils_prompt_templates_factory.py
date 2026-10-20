@@ -574,6 +574,9 @@ SPLIT_REASONING: Final = pytest.mark.parametrize(
 )
 
 
+COPY_TEXT: Final = pytest.mark.parametrize("copy_text", ["", "First"], ids=["emptied", "trimmed"])
+
+
 def _assistant_with_split_reasoning(
     reasoning: Sequence[Mapping[str, object]], in_content: Sequence[int], in_thinking_blocks: Sequence[int], text: str
 ) -> Mapping[str, object]:
@@ -629,6 +632,42 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
         {"text": assistant_text},
         {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@COPY_TEXT
+async def test_bedrock_converse_sends_a_signed_block_once_when_thinking_blocks_holds_other_text(
+    use_async: bool, copy_text: str
+):
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "First.", "signature": "sig-1"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    reasoning: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{**reasoning[0], "thinking": copy_text}, reasoning[1]],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [*({"reasoningContent": block} for block in bedrock_reasoning_blocks), {"text": "hello"}],
+    }
 
 
 @pytest.mark.asyncio
@@ -986,6 +1025,25 @@ def test_anthropic_messages_pt_keeps_reasoning_order_across_content_and_thinking
     result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
     assert result[1] == {"role": "assistant", "content": [*reasoning, {"type": "text", "text": "hello"}]}
+
+
+@COPY_TEXT
+def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_holds_other_text(copy_text: str):
+    signed: Final = {"type": "thinking", "thinking": "First.", "signature": "sig-1"}
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [signed, redacted, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{**signed, "thinking": copy_text}, redacted],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
 
 @REASONING_PLACEMENTS
