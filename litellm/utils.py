@@ -217,6 +217,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -3286,6 +3287,42 @@ def supports_mid_conversation_system(model: str, custom_llm_provider: str | None
     return supports_factory(
         model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_system"
     )
+
+
+class _DeploymentModelInfo(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    model_info: Mapping[str, object] | None = None
+
+
+def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None:
+    """The deployment's own ``model_info`` read off its litellm params."""
+    return _DeploymentModelInfo.model_validate(litellm_params).model_info
+
+
+def _deployment_declared_mid_conversation_system_support(model_info: object) -> bool | None:
+    match model_info:
+        case {"supports_mid_conversation_system": bool(declared)}:
+            return declared
+        case _:
+            return None
+
+
+def declared_mid_conversation_system_support(
+    model: str, custom_llm_provider: str | None, model_info: object
+) -> bool | None:
+    """
+    The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
+    cost map declares for the model, else None when neither sets it.
+    """
+    deployment_declared: Final = _deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return deployment_declared
+    if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):
+        return False
+    if supports_mid_conversation_system(model, custom_llm_provider):
+        return True
+    return None
 
 
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:

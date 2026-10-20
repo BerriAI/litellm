@@ -182,6 +182,62 @@ def test_responses_call_folds_developer_items_into_instructions() -> None:
     )
 
 
+def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_later_system_items(
+    declare_mid_conversation_system,
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/accepts-later-system", True)
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/accepts-later-system"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/accepts-later-system",
+            instructions="You are Codex",
+            input=[
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert body["instructions"] == "You are Codex"
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_info", "closing_role"),
+    [(None, "system"), ({"id": "deployment-1", "supports_mid_conversation_system": False}, "user")],
+)
+def test_responses_call_sends_the_closing_developer_item_as_a_user_turn_only_for_a_declared_system_first_deployment(
+    model_info: Mapping[str, object] | None, closing_role: str
+) -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            input=[
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "message", "role": "assistant", "content": "Paris"},
+                {"role": "developer", "content": "Reply with PONG."},
+            ],
+            model_info=model_info,
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert body["instructions"] == "Answer with exactly one word."
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": "Paris"},
+        {"role": closing_role, "content": "Reply with PONG.", "type": "message"},
+    )
+
+
 def test_responses_call_folds_instructions_and_developer_item_into_instructions_with_reasoning_replayed() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):

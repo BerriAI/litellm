@@ -6,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
+from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -187,7 +188,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """
         if isinstance(system_param, str):
             # If it's a string and starts with billing header, filter it out
-            if system_param.startswith("x-anthropic-billing-header:"):
+            if system_param.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
                 return None
             return system_param
         elif isinstance(system_param, list):
@@ -198,7 +199,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith("x-anthropic-billing-header:"):
+                    if content_type == "text" and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
                         continue
                     filtered_list.append(content_block)
                 else:
