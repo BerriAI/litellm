@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
-# BedrockFilesTransformation._get_s3_object_name). A uuid4 is always 36 hex/dash
+# _batch_s3_object_name in litellm/llms/bedrock/files/transformation.py). A uuid4 is always 36 hex/dash
 # characters, so it can be stripped off the end unambiguously even though the
 # model name itself may contain dashes.
 _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
