@@ -71188,7 +71188,6 @@
         "supports_audio_input": true,
         "provider_specific_entry": {
             "realtime_ga_only": 1,
-            "transcription_deployment_api": 1,
             "transcription_json_or_text_only": 1,
             "transcription_usage_duration": 1
         },

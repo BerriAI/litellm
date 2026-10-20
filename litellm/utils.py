@@ -1658,7 +1658,22 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
             if result is not None:
                 modified_kwargs = result
 
-    return modified_kwargs
+    return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)
+
+
+def _unstreamed_when_post_call_guardrails_apply(
+    kwargs: dict[str, object], call_type: CallTypes | None
+) -> dict[str, object]:
+    if call_type is not CallTypes.atranscription or kwargs.get("stream") is not True:
+        return kwargs
+    unstreamed: Final = {**kwargs, "stream": False}
+    custom_guardrail_class: Final = _get_cached_custom_guardrail()
+    if not any(
+        isinstance(callback, custom_guardrail_class) and callback.runs_post_call_deployment_hook(unstreamed)
+        for callback in litellm.callbacks
+    ):
+        return kwargs
+    return unstreamed
 
 
 async def async_post_call_success_deployment_hook(

@@ -115,7 +115,6 @@ def managed_inference_request(
     cli_model: str | None,
     path_model: object = None,
     query_model: object = None,
-    intent: str | None = None,
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
@@ -124,11 +123,8 @@ def managed_inference_request(
     if route in _MANAGED_REALTIME_ROUTES:
         from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
 
-        requested_model: Final = query_model if query_model is not None else body.get("model")
-        model: Final = (
-            resolve_realtime_route_model(None, intent, route.endswith("/realtime/translations"))
-            if requested_model is None
-            else requested_model
+        model: Final = resolve_realtime_route_model(
+            query_model if isinstance(query_model, str) else None, None, route.endswith("/realtime/translations")
         )
         if not isinstance(model, str) or not model:
             raise_identity_failure(

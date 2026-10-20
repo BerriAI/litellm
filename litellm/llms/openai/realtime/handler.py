@@ -5,18 +5,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 import ssl
-from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager
-from types import MappingProxyType, TracebackType
 from typing import Any, Final, cast
-
-from openai import AsyncOpenAI, omit
-from openai.resources.realtime.realtime import (
-    AsyncRealtimeConnection,
-    AsyncRealtimeConnectionManager,
-)
-from openai.types.websocket_connection_options import WebsocketConnectionOptions as WebSocketConnectionOptions
-from typing_extensions import NotRequired, ReadOnly
 
 from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -33,54 +22,6 @@ from ....litellm_core_utils.realtime_streaming import (
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
-
-
-class _RealtimeConnectionOptions(WebSocketConnectionOptions):
-    open_timeout: NotRequired[ReadOnly[float]]
-    ssl: NotRequired[ReadOnly[bool | str | ssl.SSLContext | None]]
-
-
-class OpenAIRealtimeConnectionAdapter:
-    def __init__(self, connection: AsyncRealtimeConnection) -> None:
-        self._connection = connection
-
-    async def send(self, message: str) -> None:
-        await self._connection.send_raw(message)
-
-    async def recv(self, decode: bool = True) -> str | bytes:
-        message: Final = await self._connection.recv_bytes()
-        if decode:
-            return message.decode("utf-8")
-        return message
-
-    async def close(self) -> None:
-        await self._connection.close()
-
-
-class OpenAIRealtimeSDKConnectionManager:
-    def __init__(
-        self,
-        manager: AsyncRealtimeConnectionManager,
-        owned_client: AsyncOpenAI | None = None,
-    ) -> None:
-        self._manager = manager
-        self._owned_client = owned_client
-
-    async def __aenter__(self) -> OpenAIRealtimeConnectionAdapter:
-        connection: Final = await self._manager.__aenter__()
-        return OpenAIRealtimeConnectionAdapter(connection)
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        try:
-            await self._manager.__aexit__(exc_type, exc, traceback)
-        finally:
-            if self._owned_client is not None:
-                await self._owned_client.close()
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -188,43 +129,6 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """Return a per-session usage meter, or None when billing needs no metering."""
         return None
 
-    def _create_connection_manager(
-        self,
-        api_base: str,
-        api_key: str,
-        model: str,
-        query_params: RealtimeQueryParams,
-        headers: Mapping[str, str],
-        timeout: float | None,
-        realtime_mode: str,
-        ssl_config: bool | str | ssl.SSLContext | None,
-        client: object | None,
-        url: str,
-    ) -> AbstractAsyncContextManager[object]:
-        import websockets
-
-        timeout_options: Final[_RealtimeConnectionOptions] = {"open_timeout": timeout} if timeout is not None else {}
-        ssl_options: Final[_RealtimeConnectionOptions] = {"ssl": ssl_config} if url.startswith("wss://") else {}
-        connection_options: Final[_RealtimeConnectionOptions] = {
-            "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-            **ssl_options,
-            **timeout_options,
-        }
-        if realtime_mode == "translation" or not isinstance(client, AsyncOpenAI):
-            return websockets.connect(url, additional_headers=headers, **connection_options)
-        openai_client: Final = client
-        model_query: Final = query_params.get("model")
-        extra_query: Final = MappingProxyType({key: value for key, value in query_params.items() if key != "model"})
-        sdk_model: Final = omit if query_params.get("intent") == "transcription" else model_query or model
-        sdk_connection_manager: Final = openai_client.realtime.connect(
-            model=sdk_model,
-            extra_query=extra_query,
-            extra_headers=headers,
-            websocket_connection_options=connection_options,
-            max_retries=0,
-        )
-        return OpenAIRealtimeSDKConnectionManager(sdk_connection_manager)
-
     async def async_realtime(
         self,
         model: str,
@@ -278,25 +182,15 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            connection_manager: Final = self._create_connection_manager(
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                query_params=query_params,
-                headers=headers,
-                timeout=timeout,
-                realtime_mode=realtime_mode,
-                ssl_config=ssl_config,
-                client=client,
-                url=url,
-            )
-
-            async with connection_manager as backend_ws:
+            async with websockets.connect(
+                url,
+                additional_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_config,
+            ) as backend_ws:
                 realtime_streaming: Final = RealTimeStreaming(
                     websocket,
-                    cast(  # cast-ok: both SDK and websockets adapters implement the streaming connection interface
-                        ClientConnection, backend_ws
-                    ),
+                    cast(ClientConnection, backend_ws),
                     logging_obj,
                     model=model,
                     user_api_key_dict=user_api_key_dict,

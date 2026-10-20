@@ -1832,8 +1832,6 @@ class PromptTokensDetailsWrapper(
     image_tokens: int | None = None
     """Image tokens sent to the model."""
 
-    cached_tokens_details: CachedTokensDetails | None = None
-
     video_tokens: int | None = None
     """Video tokens sent to the model."""
 

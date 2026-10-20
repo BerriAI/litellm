@@ -85,7 +85,7 @@ def _model_params_with_stored_credentials(model_params: Mapping[str, object]) ->
     return MappingProxyType({**credential_values, **model_params})
 
 
-def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
+def with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if session.get("type") == "transcription":
         audio: Final = as_str_mapping(session.get("audio")) or {}
         audio_input: Final = as_str_mapping(audio.get("input")) or {}
@@ -108,11 +108,17 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     return {**session, "model": model_name}
 
 
+_POLICY_PIPELINE_METADATA_KEYS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails")
+
+
 def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
     request_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("metadata") or {})
     internal_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {})
+    policy_pipeline_state: Final = {
+        key: request_metadata[key] for key in _POLICY_PIPELINE_METADATA_KEYS if key in request_metadata
+    }
     guardrails: Final = request_metadata.get("guardrails") or kwargs.get("guardrails")
-    return {**request_metadata, **internal_metadata, **({"guardrails": guardrails} if guardrails else {})}
+    return {**policy_pipeline_state, **internal_metadata, **({"guardrails": guardrails} if guardrails else {})}
 
 
 _HTTP_TRANSLATION_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
@@ -265,16 +271,8 @@ async def acreate_realtime_client_secret(
         and req.session.audio.input.transcription is not None
         else None
     )
-    provider_qualified_model: Final = (
-        req.model
-        if req.model is not None
-        and "/" in req.model
-        and req.model.split("/", 1)[0] in LlmProviders._member_map_.values()
-        else None
-    )
     requested_model_name: Final = (
-        provider_qualified_model
-        or transcription_model
+        transcription_model
         or (req.session.model if req.session is not None else None)
         or req.model
         or "gpt-4o-realtime-preview"
@@ -309,7 +307,7 @@ async def acreate_realtime_client_secret(
     )
     request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
     if isinstance(request_data.get("session"), dict):
-        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+        request_data["session"] = with_resolved_session_model(request_data["session"], model_name)
     elif req.model is not None:
         request_data["session"] = {
             "type": "realtime",
@@ -390,7 +388,7 @@ async def acreate_realtime_translation_client_secret(
         exclude_none=True,
         exclude={"model"},
     )
-    request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    request_data["session"] = with_resolved_session_model(request_data["session"], model_name)
     request_data["session"].pop("type", None)
     return await base_llm_http_handler.async_realtime_translation_client_secret_handler(
         api_base=resolved_api_base,
@@ -520,7 +518,7 @@ async def arealtime_calls(
         litellm_params=litellm_params,
     )
     if session is not None:
-        session = _with_resolved_session_model(session, model_name)
+        session = with_resolved_session_model(session, model_name)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -571,7 +569,7 @@ async def arealtime_translation_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    session_config: Final = _with_resolved_session_model(
+    session_config: Final = with_resolved_session_model(
         {
             **(session or {}),
             "type": "translation",
@@ -880,7 +878,7 @@ async def _arealtime(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            client=client,
+            client=None,
             timeout=timeout,
             query_params=query_params,
             realtime_mode=realtime_mode,

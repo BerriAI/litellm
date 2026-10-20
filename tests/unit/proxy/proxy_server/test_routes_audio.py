@@ -17,15 +17,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy import proxy_server
+from litellm.proxy.route_llm_request import route_request
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+from litellm.types.utils import TranscriptionResponse
 
 
 @pytest.fixture
@@ -317,11 +320,8 @@ def test_audio_transcription_stream_returns_sse(client, auth_as, patched_transcr
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")
-@pytest.mark.parametrize(
-    "configuration,expected_status",
-    [("default", 400), ("model", 400), ("policy", 400), ("pre_call", 200), ("disabled", 200)],
-)
-def test_streaming_transcription_rejects_applicable_output_guardrails(
+@pytest.mark.parametrize("configuration", ["default", "policy"])
+def test_streaming_transcription_keeps_streaming_with_output_guardrails(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[None]],
     monkeypatch: pytest.MonkeyPatch,
@@ -334,9 +334,6 @@ def test_streaming_transcription_rejects_applicable_output_guardrails(
         default_on=configuration in ("default", "pre_call"),
     )
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    proxy_server.llm_router.get_model_list.return_value = (
-        [{"litellm_params": {"guardrails": ["transcription-output"]}}] if configuration == "model" else []
-    )
     if configuration == "policy":
         pipeline: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="transcription-output")])
         proxy_server.proxy_logging_obj.pre_call_hook.side_effect = lambda **kwargs: {
@@ -406,3 +403,75 @@ def test_streamed_transcription_returns_the_litellm_call_and_model_headers(
     proxy_server.proxy_logging_obj.update_request_status.assert_called_once_with(
         litellm_call_id="streamed-transcription-call", status="success"
     )
+
+
+class _TranscriptRedactor(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="transcript-redactor", event_hook=GuardrailEventHooks.post_call)
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: object, response: object
+    ) -> None:
+        if isinstance(response, TranscriptionResponse):
+            response.text = "[REDACTED]"
+
+
+def _streams_when_asked(request: httpx.Request) -> httpx.Response:
+    if b'name="stream"' in request.content:
+        return httpx.Response(
+            200,
+            content=b'data: {"type":"transcript.text.done","text":"my pin is 1234"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+    return httpx.Response(200, json={"text": "my pin is 1234"})
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+@pytest.mark.parametrize("deployment_guardrails", (["transcript-redactor"], None))
+def test_streamed_transcription_honors_a_deployment_post_call_guardrail(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_guardrails: list[str] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
+    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(side_effect=_streams_when_asked)
+    deployment_params: Final = {
+        "model": "openai/gpt-transcribe",
+        "api_key": "sk-test",
+        "api_base": "https://transcribe-upstream.example/v1",
+    }
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-transcribe",
+                    "litellm_params": (
+                        {**deployment_params, "guardrails": deployment_guardrails}
+                        if deployment_guardrails
+                        else deployment_params
+                    ),
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    if deployment_guardrails:
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json()["text"] == "[REDACTED]"
+    else:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert '"text":"my pin is 1234"' in response.text

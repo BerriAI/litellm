@@ -19,6 +19,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from openai import AsyncOpenAI
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -29,7 +30,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
-from litellm.realtime_api.main import _with_resolved_session_model
+from litellm.realtime_api.main import with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -57,19 +58,19 @@ class _CallCapture:
 
 
 def test_resolves_top_level_session_model():
-    resolved = _with_resolved_session_model({"model": "alias/gpt-realtime"}, "gpt-realtime")
+    resolved = with_resolved_session_model({"model": "alias/gpt-realtime"}, "gpt-realtime")
     assert resolved == {"model": "gpt-realtime"}
 
 
 def test_session_without_model_is_returned_unchanged():
     session = {"type": "realtime", "audio": {"input": {}}}
-    assert _with_resolved_session_model(session, "gpt-realtime") == session
+    assert with_resolved_session_model(session, "gpt-realtime") == session
 
 
 def test_does_not_clobber_flat_transcription_model():
     """The nested transcription model is a different model than the realtime
     conversation model and must not be overwritten with the routing model."""
-    resolved = _with_resolved_session_model(
+    resolved = with_resolved_session_model(
         {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "whisper-1"}},
         "gpt-4o-realtime-preview",
     )
@@ -77,7 +78,7 @@ def test_does_not_clobber_flat_transcription_model():
 
 
 def test_does_not_clobber_nested_audio_transcription_model():
-    resolved = _with_resolved_session_model(
+    resolved = with_resolved_session_model(
         {
             "model": "gpt-4o-realtime-preview",
             "audio": {"input": {"transcription": {"model": "whisper-1"}}},
@@ -89,7 +90,7 @@ def test_does_not_clobber_nested_audio_transcription_model():
 
 def test_original_session_is_not_mutated():
     session = {"model": "alias/gpt-realtime"}
-    _with_resolved_session_model(session, "gpt-realtime")
+    with_resolved_session_model(session, "gpt-realtime")
     assert session == {"model": "alias/gpt-realtime"}
 
 
@@ -392,6 +393,52 @@ async def test_arealtime_live_session_rejects_streaming_only_pre_call_guardrail(
             litellm_logging_obj=FakeLogging(),
             litellm_metadata={"session_id": "live-session"},
             live_session_start={"type": "session.start", "session": {"model": "live-alias"}},
+        )
+
+    assert live_handler.called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata",
+    (
+        {"user_api_key_metadata": {"disable_global_guardrails": True}},
+        {"user_api_key_team_metadata": {"opted_out_global_guardrails": ["default-on-blocker"]}},
+    ),
+)
+async def test_arealtime_key_metadata_cannot_opt_out_of_a_default_on_realtime_guardrail(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: dict[str, object]
+) -> None:
+    class FakeLiveHandler:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def async_live_session(self, **kwargs: object) -> None:
+            self.called = True
+
+    live_handler: Final = FakeLiveHandler()
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", live_handler)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CustomGuardrail(
+                guardrail_name="default-on-blocker",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Guardrails are not supported on OpenAI Live sessions"):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-live-1",
+            websocket=MagicMock(),
+            api_key="fake-key",
+            api_base="https://live-gateway.example/v1",
+            litellm_logging_obj=FakeLogging(),
+            metadata=key_metadata,
+            live_session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
         )
 
     assert live_handler.called is False
@@ -923,6 +970,30 @@ async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_
             litellm_logging_obj=FakeLogging(),
         )
     assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime&intent=chat"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", (None, "transcription"))
+async def test_arealtime_openai_connects_to_api_base_rather_than_the_callers_client_base_url(
+    intent: str | None,
+) -> None:
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    query_params: Final[RealtimeQueryParams] = (
+        {"model": "openai/gateway-realtime", "intent": intent} if intent else {"model": "openai/gateway-realtime"}
+    )
+    with patch("websockets.connect", connect), patch("websockets.asyncio.client.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gateway-realtime",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="fake-key",
+            api_base="https://configured-gateway.example/",
+            client=AsyncOpenAI(api_key="caller-key", base_url="https://caller-client.example/v1"),
+            query_params=query_params,
+            litellm_logging_obj=FakeLogging(),
+        )
+
+    expected_query: Final = "model=gateway-realtime&intent=transcription" if intent else "model=gateway-realtime"
+    assert connect.url == f"wss://configured-gateway.example/v1/realtime?{expected_query}"
 
 
 @pytest.mark.parametrize(
@@ -1525,6 +1596,27 @@ async def test_client_secret_keeps_the_realtime_session_model_when_input_transcr
     assert gateway.session["model"] == "gpt-realtime"
     assert gateway.session["audio"] == {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}
     assert logging_obj.model == "gpt-realtime"
+
+
+@pytest.mark.asyncio
+async def test_client_secret_session_model_wins_over_a_provider_qualified_top_level_model(
+    local_model_cost_map: None,
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheSession()
+    logging_obj: Final = _realtime_http_logging("client_secrets")
+
+    await realtime_main.acreate_realtime_client_secret.__wrapped__(
+        model="openai/gpt-realtime-2.1",
+        session={"type": "realtime", "model": "gpt-realtime-2.1-mini"},
+        api_key="sk-test",
+        api_base="https://upstream.example",
+        litellm_logging_obj=logging_obj,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+    assert gateway.session is not None
+    assert gateway.session["model"] == "gpt-realtime-2.1-mini"
+    assert logging_obj.model == "gpt-realtime-2.1-mini"
 
 
 class _UpstreamThatMustNotBeCalled:

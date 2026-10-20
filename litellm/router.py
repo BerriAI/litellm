@@ -709,9 +709,11 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         typed_session: Final = _SESSION_ADAPTER.validate_python(session)
     except ValidationError:
         return _NO_SESSION_KWARGS
-    if "model" not in typed_session:
+    if "model" not in typed_session and typed_session.get("type") != "transcription":
         return _NO_SESSION_KWARGS
-    return MappingProxyType({"session": {**typed_session, "model": model_name}})
+    from litellm.realtime_api.main import with_resolved_session_model
+
+    return MappingProxyType({"session": with_resolved_session_model(dict(typed_session), model_name)})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks

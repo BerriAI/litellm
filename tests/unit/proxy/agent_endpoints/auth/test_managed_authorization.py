@@ -455,7 +455,7 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
     with pytest.raises(HTTPException, match="explicit or configured model"):
         managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli")
     assert (
-        managed_inference_request(route, {"model": "requested"}, {"completion_model": "allowed-default"}, "cli")[
+        managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli", query_model="requested")[
             "model"
         ]
         == "requested"
@@ -489,19 +489,6 @@ def test_managed_translation_authorizes_the_same_model_as_the_endpoint(route: st
     )
 
     assert admitted["model"] == resolve_realtime_route_model(query_model, None, is_translation=True)
-    assert isinstance(admitted["model"], str) and admitted["model"]
-
-
-@pytest.mark.parametrize("route", ("/realtime", "/v1/realtime", "/openai/v1/realtime"))
-def test_managed_transcription_authorizes_the_same_model_as_the_endpoint(route: str) -> None:
-    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
-    from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
-
-    admitted: Final = managed_inference_request(
-        route, {}, {"completion_model": "unrelated-default"}, "cli", intent="transcription"
-    )
-
-    assert admitted["model"] == resolve_realtime_route_model(None, "transcription", is_translation=False)
     assert isinstance(admitted["model"], str) and admitted["model"]
 
 

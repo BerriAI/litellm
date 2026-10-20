@@ -11,7 +11,6 @@ import httpx
 import pytest
 
 import litellm
-
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -152,16 +151,13 @@ async def test_client_secret_handler_still_targets_client_secrets_url():
 
 
 @pytest.mark.asyncio
-async def test_azure_client_secret_prefers_provider_qualified_routing_model():
-    import litellm
-
+async def test_azure_client_secret_routes_on_a_provider_qualified_session_model():
     mock_response = MagicMock(spec=httpx.Response)
     mock_client = MagicMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=mock_response)
 
     result = await litellm.acreate_realtime_client_secret(
-        model="azure/gpt-realtime-2.1",
-        session={"type": "realtime", "model": "gpt-realtime-2.1"},
+        session={"type": "realtime", "model": "azure/gpt-realtime-2.1"},
         api_base="https://my.openai.azure.com",
         api_key="azure-test-key",
         api_version="v1",

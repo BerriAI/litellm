@@ -8259,7 +8259,12 @@ def _validate_gpt_transcription_request(
     drop_params: object,
 ) -> str | None:
     model_cost_key: Final = next(
-        (key for key in (f"{custom_llm_provider}/{model}", model) if key in litellm.model_cost), None
+        (
+            key
+            for key in (f"{custom_llm_provider}/{model}", model)
+            if (as_str_mapping(litellm.model_cost.get(key)) or {}).get("litellm_provider") == custom_llm_provider
+        ),
+        None,
     )
     model_info: Final = (
         get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_cost_key is not None else None

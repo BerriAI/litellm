@@ -11990,6 +11990,47 @@ async def test_translation_websocket_auth_enforces_the_default_model_budget(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/realtime", "/v1/realtime", "/openai/v1/realtime"))
+async def test_managed_agent_transcription_websocket_without_a_model_is_refused(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.types.agents import AgentResponse
+
+    token: Final = UserAPIKeyAuth(token="test-key")
+    token.managed_agent_policy = AgentResponse.model_validate(
+        {"agent_id": "agent", "agent_name": "Agent", "agent_card_params": {}, "execution_mode": "both"}
+    )
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {**_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate), "prisma_client": None}
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": b"intent=transcription",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await user_api_key_auth_websocket(websocket)
+
+    assert denied.value.status_code == 403
+    assert "Managed inference requires an explicit or configured model" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_one_redis_mget():
     from fastapi import Request
     from starlette.datastructures import URL
