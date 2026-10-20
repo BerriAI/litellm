@@ -76,7 +76,7 @@ proxy = [
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.102.post1",
-    "litellm-enterprise==0.1.71",
+    "litellm-enterprise==0.1.71.post1",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
