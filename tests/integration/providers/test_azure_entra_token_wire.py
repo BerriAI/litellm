@@ -599,7 +599,7 @@ def test_an_oidc_token_beside_a_client_secret_is_the_credential_sent_on_every_ap
     assert answers == (oidc, oidc)
 
 
-def test_an_oidc_token_beside_a_username_and_password_is_the_credential_sent_on_every_api_version(
+def test_an_oidc_token_beside_a_username_and_password_is_the_credential_sent_on_every_api_version_and_route(
     user_gateway: Gateway, azure: Wire
 ) -> None:
     username: Final = _username("oidc-beside-user")
@@ -618,10 +618,11 @@ def test_an_oidc_token_beside_a_username_and_password_is_the_credential_sent_on_
             )
             for api_version in (_LEGACY_API_VERSION, "v1")
         )
-        answers: Final = tuple(_chat_authorization(user_gateway, model) for model in models)
+        chat: Final = tuple(_chat_authorization(user_gateway, model) for model in models)
+        responses: Final = tuple(_responses_authorization(user_gateway, model) for model in models)
 
     oidc: Final = f"Bearer {_exchanged_token(_FEDERATED_ASSERTION)}"
-    assert answers == (oidc, oidc)
+    assert chat + responses == (oidc,) * 4
 
 
 def test_bing_grounding_mints_off_the_event_loop_and_reuses_its_entra_token_across_searches(

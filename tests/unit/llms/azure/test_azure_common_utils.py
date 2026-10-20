@@ -1383,6 +1383,37 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
     assert token == "mock-oidc-token"
 
 
+@pytest.mark.parametrize(
+    "competing_sign_in",
+    [
+        {"azure_username": "test-username", "azure_password": "test-password"},
+        {"azure_ad_token_provider": lambda: "code-provider-token"},
+    ],
+    ids=["username_password", "code_provider"],
+)
+def test_an_oidc_azure_ad_token_wins_over_another_sign_in_on_both_the_sdk_and_direct_http_routes(
+    setup_mocks, competing_sign_in: dict[str, object]
+) -> None:
+    litellm_params: Final = {
+        "azure_ad_token": "oidc/test-token",
+        "client_id": "test-client-id",
+        "tenant_id": "test-tenant-id",
+        **competing_sign_in,
+    }
+
+    direct_http_token: Final = get_azure_ad_token(GenericLiteLLMParams.model_validate(litellm_params))
+    sdk_client_params: Final = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params=litellm_params,
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="v1",
+        is_async=False,
+    )
+
+    assert direct_http_token == sdk_client_params["azure_ad_token_provider"]() == "mock-oidc-token"
+
+
 def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
     """Test get_azure_ad_token with token refresh enabled."""
     # Reset mocks to ensure clean state

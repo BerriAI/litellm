@@ -432,10 +432,10 @@ def get_azure_ad_token(
     Get Azure AD token from various authentication methods.
 
     This function tries different methods to obtain an Azure AD token:
-    1. From an existing token provider
-    2. From Entra ID using tenant_id, client_id, and client_secret
-    3. From username and password
-    4. From OIDC token
+    1. From OIDC token
+    2. From an existing token provider
+    3. From Entra ID using tenant_id, client_id, and client_secret
+    4. From username and password
     5. From a service principal with secret workflow
     6. From DefaultAzureCredential
 
@@ -467,6 +467,15 @@ def get_azure_ad_token(
     if scope is None:
         scope = "https://cognitiveservices.azure.com/.default"
 
+    if client_id and tenant_id and azure_ad_token and azure_ad_token.startswith("oidc/"):
+        verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token=azure_ad_token,
+            azure_client_id=client_id,
+            azure_tenant_id=tenant_id,
+            scope=scope,
+        )
+
     # Try to get token provider from Entra ID
     if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
         verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -487,17 +496,8 @@ def get_azure_ad_token(
             scope=scope,
         )
 
-    # Try to get token from OIDC
-    if client_id and tenant_id and azure_ad_token and azure_ad_token.startswith("oidc/"):
-        verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-        azure_ad_token = get_azure_ad_token_from_oidc(
-            azure_ad_token=azure_ad_token,
-            azure_client_id=client_id,
-            azure_tenant_id=tenant_id,
-            scope=scope,
-        )
     # Try to get token provider from service principal or DefaultAzureCredential
-    elif azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
+    if azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
         verbose_logger.debug(
             "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
