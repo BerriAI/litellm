@@ -198,14 +198,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "narrow the agent's access."
         ),
     )
-    budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
-    user: Any | None = None  # Expanded user object when expand=user is used
-    created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
+    user: object | None = None  # Expanded user object when expand=user is used
+    created_by_user: object | None = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: LiteLLM_ObjectPermissionTable | None = None
     # Team object_permission preloaded in auth (e.g. get_team_object) to avoid
     # per-request object_permission fetches in downstream checks (vector stores, etc.)

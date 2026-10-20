@@ -8,19 +8,39 @@ sensitive information like SSNs, credit cards, API keys, etc.
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from enum import Enum
 from re import Pattern
 from typing import Any, Final
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
+
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
 
-def _load_patterns_from_json() -> dict:
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _PatternEntry(TypedDict):
+    name: ReadOnly[str]
+    display_name: ReadOnly[str]
+    pattern: ReadOnly[str]
+    category: ReadOnly[str]
+    description: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _PatternsFile(TypedDict):
+    patterns: ReadOnly[Sequence[_PatternEntry]]
+
+
+_PATTERNS_FILE: Final = TypeAdapter(_PatternsFile)
+
+
+def _load_patterns_from_json() -> _PatternsFile:
     """Load pattern definitions from patterns.json file"""
     json_path: Final = os.path.join(os.path.dirname(__file__), "patterns.json")
     with open(json_path, "r") as f:
-        return json.load(f)
+        return _PATTERNS_FILE.validate_python(json.load(f))
 
 
 # Load patterns from JSON

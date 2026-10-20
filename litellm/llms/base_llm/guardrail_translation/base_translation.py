@@ -185,7 +185,7 @@ class BaseTranslation(ABC):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> Any:
+    ) -> object:
         """
         Process output streaming response with guardrails.
 
