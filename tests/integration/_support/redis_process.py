@@ -2,18 +2,23 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final, TextIO
 
+from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from tests.integration._support.ports import allocate_port
+
+_MONITOR_RECORD: Final = TypeAdapter(dict[str, JsonValue])
 
 
 @dataclass
@@ -186,3 +191,55 @@ def owned_redis(
         finally:
             if server.process is not None:
                 server.stop()
+
+
+@dataclass(frozen=True, slots=True)
+class RedisCommands:
+    queue: SimpleQueue[str]
+
+    def drain(self) -> tuple[tuple[str, ...], ...]:
+        """Every command MONITOR saw since the last drain, split on spaces into its name and arguments"""
+        lines: Final = tuple(self.queue.get_nowait() for _ in range(self.queue.qsize()))
+        return tuple(tuple(line.split(" ")) for line in lines)
+
+
+@contextmanager
+def redis_commands(host: str, port: int) -> Iterator[RedisCommands]:
+    """Records every command the Redis server at `host:port` executes while the block runs"""
+    commands: Final = RedisCommands(SimpleQueue())
+    started: Final = threading.Event()
+    armed: Final = threading.Event()
+    ready_marker: Final = f"monitor-ready-{uuid.uuid4().hex}"
+    stop_marker: Final = f"monitor-stop-{uuid.uuid4().hex}"
+
+    def capture() -> None:
+        # No socket timeout: a timeout raised inside `listen()` ends the generator, so capture would stop at the
+        # first quiet second. The stop marker sent on exit is what wakes and ends this read.
+        with Redis(host=host, port=port, decode_responses=True) as client:
+            with client.monitor() as monitor:
+                started.set()
+                for raw in monitor.listen():
+                    record: Final = _MONITOR_RECORD.validate_python(raw)
+                    command: Final = record.get("command")
+                    if not isinstance(command, str):
+                        continue
+                    if stop_marker in command:
+                        return
+                    if ready_marker in command:
+                        armed.set()
+                        continue
+                    commands.queue.put(command)
+
+    thread: Final = threading.Thread(target=capture, daemon=True)
+    thread.start()
+    try:
+        assert started.wait(timeout=5), "Redis MONITOR did not start"
+        with Redis(host=host, port=port, socket_timeout=1, decode_responses=True) as client:
+            client.set(ready_marker, "ready", ex=1)
+        assert armed.wait(timeout=5), "Redis MONITOR did not capture its readiness command"
+        yield commands
+    finally:
+        with Redis(host=host, port=port, socket_timeout=1, decode_responses=True) as client:
+            client.set(stop_marker, "stop", ex=1)
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "Redis MONITOR did not reach its stop command"

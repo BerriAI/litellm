@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from itertools import chain
 from typing import Any, Final
@@ -36,6 +38,7 @@ from litellm.router_utils.routing_read_batch import (
     RoutingPrefetch,
     _routing_read_target,  # pyright: ignore[reportPrivateUsage]  # the family rule under test
 )
+from litellm.types.router import RouterRateLimitError
 
 from .test_redis_batch import FakeClient, FakeRedisCache, replies
 
@@ -274,9 +277,9 @@ async def test_without_a_request_scope_descriptor_groups_run_the_script_directly
     assert client.pipelines == []
 
 
-def _deployment(deployment_id: str) -> dict:
+def _deployment(deployment_id: str, model_name: str = _MODEL_GROUP) -> dict:
     return {
-        "model_name": _MODEL_GROUP,
+        "model_name": model_name,
         "litellm_params": {"model": "anthropic/claude-x", "api_key": "test", "mock_response": "pong"},
         "model_info": {"id": deployment_id},
     }
@@ -390,7 +393,7 @@ async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservati
     )
 
     with request_redis_batch_scope():
-        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1])
+        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1], frozenset({"dep-a", "dep-b"}))
         deployment: Final = await router.async_get_available_deployment(
             model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
         )
@@ -401,6 +404,181 @@ async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservati
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert len(fallback_cooldown_mgets) == 1
+
+
+_GROUP_IDS: Final = frozenset({"dep-a", "dep-b"})
+_OTHER_GROUP_IDS: Final = ("other-a", "other-b", "other-c")
+_TEAM_ID: Final = "team-1"
+_TEAM_DEPLOYMENT_ID: Final = "team-dep"
+_KNOWN_IDS: Final = (*sorted(_GROUP_IDS), *_OTHER_GROUP_IDS, _TEAM_DEPLOYMENT_ID)
+_ACTIVE_COOLDOWN: Final = {
+    "exception_received": "429",
+    "status_code": "429",
+    "timestamp": _FAR_FUTURE,
+    "cooldown_time": 60,
+}
+
+
+def _pass_through_deployment(deployment_id: str) -> dict:
+    deployment: Final = _deployment(deployment_id)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "use_in_pass_through": True}}
+
+
+def _router_beside_other_groups(redis_cache: FakeRedisCache, routing_strategy: str = "simple-shuffle") -> Router:
+    team_deployment: Final = {
+        "model_name": f"{_MODEL_GROUP}_{_TEAM_ID}",
+        "litellm_params": {"model": "anthropic/claude-x", "api_key": "test", "mock_response": "pong"},
+        "model_info": {"id": _TEAM_DEPLOYMENT_ID, "team_id": _TEAM_ID, "team_public_model_name": _MODEL_GROUP},
+    }
+    router: Final = Router(
+        model_list=[
+            *(_pass_through_deployment(deployment_id) for deployment_id in sorted(_GROUP_IDS)),
+            *(_deployment(deployment_id, model_name="other") for deployment_id in _OTHER_GROUP_IDS),
+            team_deployment,
+        ],
+        routing_strategy=routing_strategy,
+    )
+    router.update_redis_cache(cache=redis_cache)
+    return router
+
+
+def _cooldown_ids_read(client: FakeClient, redis_cache: FakeRedisCache) -> tuple[frozenset[str], ...]:
+    """The deployment ids whose cooldown keys each Redis read carried, pipelined or direct, for reads carrying any"""
+    pipelined: Final = tuple(
+        command[1:] for command in chain.from_iterable(p.commands for p in client.pipelines) if command[0] == "MGET"
+    )
+    direct: Final = tuple(keys for command, keys in redis_cache.alone if command == "MGET")
+    per_read: Final = tuple(
+        frozenset(model_id for model_id in _KNOWN_IDS if CooldownCache.get_cooldown_cache_key(model_id) in keys)
+        for keys in (*pipelined, *direct)
+    )
+    return tuple(ids for ids in per_read if ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing-v2"])
+async def test_the_armed_routing_read_carries_only_the_requested_groups_cooldown_keys(routing_strategy: str) -> None:
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router_beside_other_groups(redis_cache, routing_strategy)
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    assert deployment["model_info"]["id"] in _GROUP_IDS
+    assert _cooldown_ids_read(client, redis_cache) == (_GROUP_IDS,)
+    assert redis_cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_a_team_routes_armed_read_carries_the_team_deployments_cooldown_keys() -> None:
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router_beside_other_groups(redis_cache)
+    request_kwargs: Final = {"metadata": {"user_api_key_team_id": _TEAM_ID}}
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, request_kwargs)
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs=request_kwargs
+        )
+
+    assert deployment["model_info"]["id"] == _TEAM_DEPLOYMENT_ID
+    assert _cooldown_ids_read(client, redis_cache) == (frozenset({_TEAM_DEPLOYMENT_ID}),)
+    assert redis_cache.alone == []
+
+
+async def _picked(router: Router) -> frozenset[str]:
+    deployment: Final = await router.async_get_available_deployment(
+        model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+    )
+    return frozenset({deployment["model_info"]["id"]})
+
+
+async def _picked_sync(router: Router) -> frozenset[str]:
+    deployment: Final = router.get_available_deployment(
+        model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+    )
+    return frozenset({deployment["model_info"]["id"]})
+
+
+async def _picked_for_pass_through(router: Router) -> frozenset[str]:
+    deployment: Final = router.get_available_deployment_for_pass_through(model=_MODEL_GROUP, request_kwargs={})
+    return frozenset({deployment["model_info"]["id"]})
+
+
+async def _healthy(router: Router) -> frozenset[str]:
+    healthy, _ = await router._async_get_healthy_deployments(  # pyright: ignore[reportPrivateUsage]  # retry and scheduler read
+        model=_MODEL_GROUP, parent_otel_span=None
+    )
+    return frozenset(deployment["model_info"]["id"] for deployment in healthy)
+
+
+async def _weighted_failover_targets(router: Router) -> frozenset[str]:
+    failed: Final = Exception("dep-a failed")
+    failed.failed_deployment_id = "dep-a"  # pyright: ignore[reportAttributeAccessIssue]  # stamped like the router stamps it
+    result: Final = await router._maybe_run_weighted_failover(  # pyright: ignore[reportPrivateUsage]  # same-group retry
+        exception=failed,
+        original_model_group=_MODEL_GROUP,
+        all_deployments=[_deployment(deployment_id) for deployment_id in sorted(_GROUP_IDS)],
+        args=(),
+        kwargs={"metadata": {}},
+        input_kwargs={},
+    )
+    return frozenset() if result is None else frozenset({"retried"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        (_picked, frozenset({"dep-a"})),
+        (_picked_sync, frozenset({"dep-a"})),
+        (_picked_for_pass_through, frozenset({"dep-a"})),
+        (_healthy, frozenset({"dep-a"})),
+        (_weighted_failover_targets, frozenset()),
+    ],
+    ids=["async-pick", "sync-pick", "pass-through-pick", "async-healthy", "weighted-failover"],
+)
+async def test_a_direct_cooldown_read_covers_only_the_groups_deployments_and_still_sees_their_cooldowns(
+    read: Callable[[Router], Awaitable[frozenset[str]]], expected: frozenset[str]
+) -> None:
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router_beside_other_groups(redis_cache)
+    for model_id in ("dep-b", *_OTHER_GROUP_IDS):
+        redis_cache.store[CooldownCache.get_cooldown_cache_key(model_id)] = _ACTIVE_COOLDOWN
+
+    observed: Final = await read(router)
+
+    assert observed == expected
+    assert _cooldown_ids_read(client, redis_cache) == (_GROUP_IDS,)
+
+
+@pytest.mark.asyncio
+async def test_a_cooling_deployment_the_health_check_already_dropped_still_shows_in_the_no_deployment_error() -> None:
+    router: Final = Router(
+        model_list=[_deployment(deployment_id) for deployment_id in sorted(_GROUP_IDS)],
+        enable_health_check_routing=True,
+    )
+    router.health_state_cache.set_deployment_health_states(
+        {"dep-a": {"is_healthy": False, "timestamp": time.time(), "reason": "probe failed"}}
+    )
+    memory: Final = router.cooldown_cache.cooldown_store.in_memory_cache
+    assert memory is not None
+    for model_id in sorted(_GROUP_IDS):
+        memory.set_cache(CooldownCache.get_cooldown_cache_key(model_id), _ACTIVE_COOLDOWN)
+
+    with pytest.raises(RouterRateLimitError) as raised:
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    assert raised.value.cooldown_deployments is not None
+    assert frozenset(info["model_id"] for info in raised.value.cooldown_deployments) == _GROUP_IDS
 
 
 @pytest.mark.asyncio

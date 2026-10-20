@@ -106,6 +106,10 @@ class FakeRedisCache(RedisCache):
         self.alone.append(("MGET", tuple(key_list)))
         return {key: self.store.get(key) for key in key_list}
 
+    def batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct sync read
+        self.alone.append(("MGET", tuple(key_list)))
+        return {key: self.store.get(key) for key in key_list}
+
     async def async_increment(self, key: str, value: float, ttl: int | None = None, **kwargs: object) -> float:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct write
         self.alone.append(("INCRBYFLOAT", key, value))
         self.store[key] = float(self.store.get(key, 0.0)) + value

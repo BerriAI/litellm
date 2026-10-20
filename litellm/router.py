@@ -2164,7 +2164,12 @@ class Router:
             )
             deployments: Final = self.get_model_list(model_name=model)
             if deployments:
-                RoutingPrefetch.arm(self, usage_selector, deployments)
+                RoutingPrefetch.arm(
+                    self,
+                    usage_selector,
+                    deployments,
+                    self.get_candidate_model_ids_for_route(model=model, team_id=get_request_team_id(request_kwargs)),
+                )
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
             verbose_router_logger.debug(
                 "routing read prefetch not armed for %s: %s", _without_line_breaks(model), _without_line_breaks(e)
@@ -8245,17 +8250,15 @@ class Router:
         prev_excluded: Final = set(meta.get("_failover_excluded_ids") or [])
         excluded: Final = prev_excluded | {failed_id}
 
-        all_ids: Final = {
-            (d.get("model_info") or {}).get("id")
-            for d in all_deployments
-            if (d.get("model_info") or {}).get("id") is not None
-        }
+        all_ids: Final = self._deployment_ids(all_deployments)
         # Only consider deployments that are currently healthy (not in cooldown).
         # Using all_ids here would cause a wasteful run_async_fallback invocation
         # that fails with RouterRateLimitError whenever the "remaining" entries
         # are all in cooldown — the inner async_get_healthy_deployments call
         # would find an empty list and raise immediately.
-        cooldown_ids = set(await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None))
+        cooldown_ids = set(
+            await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None, model_ids=all_ids)
+        )
         remaining: Final = (all_ids - cooldown_ids) - excluded
         if not remaining:
             return None
@@ -9712,7 +9715,9 @@ class Router:
             pass
 
         unhealthy_deployments: Final = await async_get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=self._deployment_ids(_all_deployments),
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -14643,13 +14648,17 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
+        request_deployment_ids: Final = self._deployment_ids(request_deployments)
         routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
-            await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            await async_get_cooldown_deployments(
+                litellm_router_instance=self, parent_otel_span=parent_otel_span, model_ids=request_deployment_ids
+            )
             if routing_read_batch is None
             else await routing_read_batch.async_get_cooldown_deployments(
                 litellm_router_instance=self,
                 healthy_deployments=healthy_deployments,
+                model_ids=request_deployment_ids,
                 parent_otel_span=parent_otel_span,
             )
         )
@@ -15918,7 +15927,9 @@ class Router:
         )
 
         cooldown_deployments: Final = get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=self._deployment_ids(request_deployments),
         )
         _pre_cooldown_deployments: Final = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
@@ -16166,7 +16177,9 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
         cooldown_deployments: Final = get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=self._deployment_ids(request_deployments),
         )
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
