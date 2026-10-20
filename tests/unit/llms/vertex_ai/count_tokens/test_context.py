@@ -310,7 +310,7 @@ def _png_server_waiting_for_loop(probe: _LoopProbe) -> Generator[str, None, None
 
 
 async def _run_loop_once_download_starts(probe: _LoopProbe) -> None:
-    await asyncio.to_thread(probe.request_arrived.wait, _LOOP_PROOF_TIMEOUT_SECONDS)
+    assert await asyncio.to_thread(probe.request_arrived.wait, _LOOP_PROOF_TIMEOUT_SECONDS)
     probe.loop_ran.set()
 
 

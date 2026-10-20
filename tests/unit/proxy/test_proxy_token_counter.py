@@ -2675,7 +2675,7 @@ async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(
             request=TokenCountRequest(model="slow-lookup-model", messages=[{"role": "user", "content": "hi"}])
         )
     )
-    await asyncio.to_thread(lookup_started.wait, 5)
+    assert await asyncio.to_thread(lookup_started.wait, 5)
     other_request_ran.set()
     await counting
 
@@ -2854,7 +2854,7 @@ async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_fre
         )
 
     async def prove_loop_progress() -> None:
-        await asyncio.to_thread(lookup_started.wait, _LOOP_PROGRESS_TIMEOUT_SECONDS)
+        assert await asyncio.to_thread(lookup_started.wait, _LOOP_PROGRESS_TIMEOUT_SECONDS)
         loop_progressed.set()
 
     response, _ = await asyncio.gather(count(), prove_loop_progress())
