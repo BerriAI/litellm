@@ -453,7 +453,8 @@ def _sl_attribution_fallback(
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
-    return deployment_params_provider(LiteLLM_Params.model_validate(deployment["litellm_params"]))
+    litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    return deployment_params_provider(litellm_params)
 
 
 def deployment_params_provider(litellm_params: LiteLLM_Params) -> str | None:
