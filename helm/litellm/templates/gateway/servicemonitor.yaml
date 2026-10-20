@@ -1,0 +1,28 @@
+{{- if and .Values.gateway.enabled .Values.gateway.serviceMonitor.enabled }}
+{{- if not .Values.gateway.metricsServer.enabled }}
+{{- fail "gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled: the http port serves /metrics/ behind virtual-key auth, so an unauthenticated scrape gets 401" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "litellm.gateway.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+    {{- with .Values.gateway.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "litellm.gateway.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace | quote }}
+  endpoints:
+    - port: metrics
+      path: /metrics/
+      interval: {{ .Values.gateway.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.gateway.serviceMonitor.scrapeTimeout }}
+      scheme: http
+{{- end }}

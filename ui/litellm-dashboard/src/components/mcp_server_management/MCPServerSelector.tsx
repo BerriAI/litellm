@@ -4,6 +4,8 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import React from "react";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import type { MCPServer } from "@/components/mcp_tools/types";
+import { accessGroupNamesOf } from "./effectiveMcpServers";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
@@ -17,11 +19,26 @@ interface MCPServerSelectorProps {
   placeholder?: string;
   disabled?: boolean;
   teamId?: string | null;
+  userId?: string | null;
   allowNoMcpServers?: boolean;
   allowAllProxyMcpServers?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
+
+export const serversWithinAccessGroups = (
+  servers: readonly MCPServer[],
+  selectedAccessGroups: readonly string[],
+  selectedServers: readonly string[],
+): readonly MCPServer[] => {
+  if (selectedAccessGroups.length === 0) return servers;
+  return servers.filter(
+    (server) =>
+      server.allow_all_keys === true ||
+      selectedServers.includes(server.server_id) ||
+      accessGroupNamesOf(server).some((group) => selectedAccessGroups.includes(group)),
+  );
+};
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   onChange,
@@ -31,16 +48,18 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   placeholder = "Select MCP servers",
   disabled = false,
   teamId,
+  userId,
   allowNoMcpServers = false,
   allowAllProxyMcpServers = false,
 }) => {
-  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
+  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId, userId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
   const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
 
   const loading = serversLoading || groupsLoading || toolsetsLoading;
 
   const accessGroupSet = new Set(accessGroups);
+  const visibleServers = serversWithinAccessGroups(mcpServers, value?.accessGroups ?? [], value?.servers ?? []);
 
   // Combine options: access groups + servers + toolsets
   const options = [
@@ -49,7 +68,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
       value: group,
       description: "Access Group",
     })),
-    ...mcpServers.map((server) => ({
+    ...visibleServers.map((server) => ({
       label: `${server.server_name || server.server_id} (${server.server_id})`,
       value: server.server_id,
       description: "MCP Server",

@@ -14,10 +14,14 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
+import { RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
+const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
+
+const isOn = (value: unknown) => value === true || value === "true";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -31,6 +35,7 @@ export interface generalSettingsItem {
   field_value: any;
   field_description: string;
   stored_in_db: boolean | null;
+  editable?: boolean;
   field_options?: string[] | null;
   field_tab?: string | null;
   field_default_value?: any;
@@ -40,10 +45,29 @@ const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
+const toListValue = (raw: string): string[] | null => {
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  return items.length === 0 ? null : items;
+};
+
+const fromListValue = (value: unknown): string => (Array.isArray(value) ? value.join(", ") : "");
+
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
   onChange: (fieldName: string, newValue: any) => void;
 }> = ({ setting, onChange }) => {
+  if (setting.field_name === "request_tag_mappings") {
+    return (
+      <RequestTagMappingsEditor
+        value={setting.field_value}
+        disabled={setting.editable === false}
+        onChange={(rules) => onChange(setting.field_name, rules)}
+      />
+    );
+  }
   if (setting.field_type === "Integer") {
     return (
       <Input
@@ -90,12 +114,20 @@ const SettingValueEditor: React.FC<{
       </InputGroup>
     );
   }
+  if (setting.field_type === "List") {
+    return (
+      <Input
+        key={String(setting.stored_in_db)}
+        aria-label={setting.field_name}
+        placeholder="Comma-separated values"
+        defaultValue={fromListValue(setting.field_value)}
+        onChange={(event) => onChange(setting.field_name, toListValue(event.target.value))}
+      />
+    );
+  }
   if (setting.field_type === "Select") {
     return (
-      <Select
-        value={setting.field_value || null}
-        onValueChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
-      >
+      <Select value={setting.field_value ?? null} onValueChange={(newValue) => onChange(setting.field_name, newValue)}>
         <SelectTrigger className="min-w-32">
           <SelectValue placeholder="Default" />
         </SelectTrigger>
@@ -120,14 +152,15 @@ export const PromptCachingPanel: React.FC<{
 }> = ({ accessToken, settings, onChange }) => {
   const enableSetting = settings.find((s) => s.field_name === ENABLE_ANTHROPIC_PROMPT_CACHING);
   const ttlSetting = settings.find((s) => s.field_name === ANTHROPIC_PROMPT_CACHING_TTL);
+  const systemFirstSetting = settings.find((s) => s.field_name === OPENAI_SYSTEM_MESSAGES_FIRST);
 
-  // The two rows come from the same registry the General tab reads; if they
+  // The rows come from the same registry the General tab reads; if they
   // are not loaded yet there is nothing to render.
   if (!enableSetting) {
     return null;
   }
 
-  const enabled = enableSetting.field_value === true || enableSetting.field_value === "true";
+  const enabled = isOn(enableSetting.field_value);
 
   // Apply immediately: a toggle and a dropdown are direct controls, so there is
   // no separate Update button. Clearing the ttl resets it to the provider default.
@@ -161,8 +194,8 @@ export const PromptCachingPanel: React.FC<{
             </div>
             <Select
               disabled={!enabled}
-              value={ttlSetting.field_value || null}
-              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+              value={ttlSetting.field_value ?? null}
+              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue)}
             >
               <SelectTrigger className="min-w-40">
                 <SelectValue placeholder="5m (default)" />
@@ -176,6 +209,20 @@ export const PromptCachingPanel: React.FC<{
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        )}
+
+        {systemFirstSetting && (
+          <div className="mt-6 flex items-start justify-between gap-8">
+            <div className="min-w-0 max-w-2xl">
+              <p className="font-medium">System messages first for OpenAI</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{systemFirstSetting.field_description}</p>
+            </div>
+            <Switch
+              aria-label="System messages first for OpenAI"
+              checked={isOn(systemFirstSetting.field_value)}
+              onCheckedChange={(checked) => persist(OPENAI_SYSTEM_MESSAGES_FIRST, checked)}
+            />
           </div>
         )}
       </CardContent>
@@ -204,18 +251,20 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string) => {
+  const handleUpdateField = async (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
+    const setting = generalSettings.find((setting) => setting.field_name === fieldName);
+    const fieldValue = setting?.field_value;
 
-    if (fieldValue == null || fieldValue == undefined) {
+    if (fieldValue == null) {
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      await updateConfigFieldSetting(accessToken, fieldName, fieldValue);
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
@@ -316,13 +365,23 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <span
-                            onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                          <Button
+                            disabled={
+                              value.field_name === "request_tag_mappings" &&
+                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
+                            }
+                            onClick={() => handleUpdateField(value.field_name)}
                           >
-                            <Trash2 className="h-5 w-5 shrink-0" />
-                          </span>
+                            Update
+                          </Button>
+                          {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
+                            <span
+                              onClick={() => handleResetField(value.field_name)}
+                              className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                            >
+                              <Trash2 className="h-5 w-5 shrink-0" />
+                            </span>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
