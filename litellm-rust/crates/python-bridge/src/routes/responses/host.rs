@@ -102,6 +102,15 @@ fn id_scope(
     })
 }
 
+/// Python's `aresponses` stamps the resolved provider into `_hidden_params` once the response id is
+/// encoded, so callbacks can tell which provider served the call (`litellm/responses/main.py`,
+/// mirroring chat completions); a native response carries it the same way
+fn stamp_provider(response: &Bound<'_, PyAny>, provider: Option<&str>) -> PyResult<()> {
+    response
+        .getattr("_hidden_params")?
+        .set_item("custom_llm_provider", provider)
+}
+
 impl PythonBinding for ResponsesPythonHost {
     type Protocol = Responses;
     type Failure = PyErr;
@@ -132,7 +141,9 @@ impl PythonBinding for ResponsesPythonHost {
     ) -> PyResult<Py<PyAny>> {
         let mut response = response;
         ids::encode_response(&mut response, &self.ids);
-        self.host.response(py, &response)
+        let response = self.host.response(py, &response)?;
+        stamp_provider(response.bind(py), self.ids.provider.as_deref())?;
+        Ok(response)
     }
 
     fn encode_stream_head(
