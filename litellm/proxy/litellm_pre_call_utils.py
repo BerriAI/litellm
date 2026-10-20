@@ -5,7 +5,8 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import (
@@ -17,7 +18,7 @@ from typing import (
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
@@ -27,6 +28,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
@@ -41,6 +43,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
+    VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -79,6 +82,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    detach_request_parsed_body,
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
@@ -89,6 +93,7 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -208,8 +213,19 @@ def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
             metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
 
 
+_PROXY_SET_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, BAGGAGE_MAPPED_TAGS_METADATA_KEY})
+_METADATA_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
 def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
+    requester: Final = {key: value for key, value in metadata.items() if key not in _PROXY_SET_METADATA_KEYS}
+    stamp: Final = metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    tags: Final = requester.get("tags")
+    if not isinstance(stamp, BaggageMappedTagsStamp) or not isinstance(tags, list):
+        return copy.deepcopy(requester)
+    sent_tags: Final = [tag for tag in _METADATA_TAGS_ADAPTER.validate_python(tags) if tag not in stamp.tags]
+    without_tags: Final = {key: value for key, value in requester.items() if key != "tags"}
+    return copy.deepcopy({**without_tags, "tags": sent_tags} if sent_tags else without_tags)
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -253,8 +269,10 @@ from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    API_KEY_SECRET_REFERENCE_REJECTION,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
@@ -282,8 +300,11 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as OtelSpan
 
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.proxy.utils import PrismaClient
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -534,6 +555,39 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     raise _invalid_metadata_type_error(field=field, value=value)
 
 
+def _serves_through_db_outage() -> bool:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
+def _tag_budgets_unavailable(message: str) -> ProxyException:
+    return ProxyException(
+        message=message, type=ProxyErrorTypes.no_db_connection, param=None, code=status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+
+
+async def _unbudgeted_mapped_tag(
+    budgeted_tags: tuple[str, ...], prisma_client: "PrismaClient | None", user_api_key_cache: "UserApiKeyCache"
+) -> str | ProxyException | None:
+    from litellm.proxy.auth.auth_checks import read_tag_objects_batch
+
+    if prisma_client is None:
+        return _tag_budgets_unavailable("Baggage tag mappings require a database to check budgeted tags")
+    tag_objects: Final = await read_tag_objects_batch(
+        tag_names=budgeted_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+    )
+    if isinstance(tag_objects, Exception):
+        return _tag_budgets_unavailable("Baggage tag mappings could not read tag budgets from the database")
+    return next((tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None)
+
+
+def _has_tag_budget(tag: "LiteLLM_TagTable | None") -> bool:
+    if tag is None or tag.litellm_budget_table is None:
+        return False
+    return tag.litellm_budget_table.max_budget is not None
+
+
 def _normalized_metadata_slot(
     request_data: MutableMapping[str, object], metadata_variable_name: str
 ) -> dict[str, object]:
@@ -549,6 +603,43 @@ def _normalized_metadata_slot(
     normalized: Final[dict[str, object]] = parsed if isinstance(parsed, dict) else {}
     request_data[metadata_variable_name] = normalized
     return normalized
+
+
+def _metadata_object_or_error(field: str, value: object) -> Mapping[str, object] | ProxyException:
+    if value is None:
+        return {}
+    try:
+        return dict(_normalized_metadata_object(field, value))
+    except ProxyException as invalid_type:
+        return invalid_type
+
+
+@dataclass(frozen=True, slots=True)
+class _BaggageClientBody:
+    body: dict[str, object]  # mutable-ok: the client's cached body, which the base tag merges write into
+
+
+def _detach_auth_metadata_from_client_body(
+    request: Request,
+    request_data: MutableMapping[str, object],  # mutable-ok: auth's own copy takes the normalized metadata objects
+) -> None:
+    client_body: Final = detach_request_parsed_body(request, request_data)
+    request.state.litellm_baggage_client_body = _BaggageClientBody(client_body)  # rebind-ok: mirror tag merges
+    slots: Final = tuple(
+        (field, _metadata_object_or_error(field, request_data[field]))
+        for field in ("metadata", "litellm_metadata")
+        if field in request_data
+    )
+    for field, normalized in slots:
+        request_data[field] = {} if isinstance(normalized, ProxyException) else normalized  # rebind-ok: auth's copy
+
+
+def _metadata_string_tags(metadata_objects: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    tag_lists: Final = (metadata.get("tags") for metadata in metadata_objects)
+    tags: Final = itertools.chain.from_iterable(
+        _OBJECT_LIST_ADAPTER.validate_python(tag_list) for tag_list in tag_lists if isinstance(tag_list, list)
+    )
+    return tuple(tag for tag in tags if isinstance(tag, str))
 
 
 def _strip_untrusted_request_header_controls(
@@ -1129,6 +1220,8 @@ _get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
 
 
 _TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
+_STRING_TAGS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_CLIENT_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
@@ -1671,11 +1764,9 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
-        spend_log_session_id: Final = (
+        caller_session_beside_trace: Final = (
             _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
-            if litellm.request_correlation_in_logs
-            and chain_id is not None
-            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            if chain_id is not None and chain_id == normalized_headers.get("x-litellm-trace-id")
             else None
         )
         if chain_id:
@@ -1737,8 +1828,8 @@ class LiteLLMProxyRequestSetup:
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
-                if spend_log_session_id
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
+                if caller_session_beside_trace
                 else metadata_from_headers
             )
         return data
@@ -1780,6 +1871,14 @@ class LiteLLMProxyRequestSetup:
             user_api_key_auth_metadata=auth_metadata,
         )
         return user_api_key_logged_metadata
+
+    @staticmethod
+    def get_inherited_tags(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...]:
+        """Every tag key, team and project policy contributes, in that order, without repeats"""
+        key_tags: Final = (user_api_key_dict.metadata or MappingProxyType({})).get("tags") or ()  # pyright: ignore[reportUnknownMemberType]  # key metadata is an untyped dict
+        team_tags: Final = (user_api_key_dict.team_metadata or {}).get("tags") or ()
+        project_tags: Final = (user_api_key_dict.project_metadata or {}).get("tags") or ()
+        return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
 
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(
@@ -2036,7 +2135,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def pre_seed_litellm_metadata_for_route(
-        request_data: dict,
+        request_data: MutableMapping[str, object],  # mutable-ok: seed shared request metadata before admission
         route: str,
     ) -> None:
         """Pre-seed ``litellm_metadata`` for routes that track tags there.
@@ -2054,6 +2153,87 @@ class LiteLLMProxyRequestSetup:
         """
         if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
             request_data.setdefault("litellm_metadata", {})
+
+    @staticmethod
+    def pre_auth_tag_merge_targets(
+        request: Request | None,
+        request_data: dict[str, object],  # mutable-ok: auth's request body, which the tag merges write into
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: every body the base tag merges write into
+        client_body: Final[object] = getattr(getattr(request, "state", None), "litellm_baggage_client_body", None)
+        if not isinstance(client_body, _BaggageClientBody) or client_body.body is request_data:
+            return (request_data,)
+        return (request_data, client_body.body)
+
+    @staticmethod
+    async def apply_baggage_tag_mappings_pre_auth(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: enrich the shared request before budget admission
+        general_settings: Mapping[str, object],
+        prisma_client: "PrismaClient | None",
+        user_api_key_cache: "UserApiKeyCache",
+    ) -> None:
+        """Resolve configured baggage tags before the existing tag-budget gate."""
+        from litellm.proxy.common_utils.request_tag_mappings import (
+            REQUEST_TAG_MAPPINGS_ADAPTER,
+            mapping_rejection,
+            resolve_baggage_tag_mappings,
+        )
+
+        raw_rules: Final = general_settings.get("request_tag_mappings")
+        if not isinstance(raw_rules, list) or not raw_rules:
+            return
+        rules: Final = REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_rules)
+        header: Final = ",".join(request.headers.getlist("baggage"))
+        try:
+            mapped: Final = resolve_baggage_tag_mappings(header, rules)
+        except ProxyException:
+            _detach_auth_metadata_from_client_body(request, request_data)
+            raise
+        if not mapped:
+            return
+        client_metadata: Final[object] = request_data.get("metadata")
+        _detach_auth_metadata_from_client_body(request, request_data)
+        budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
+        unbudgeted_tag: Final = (
+            await _unbudgeted_mapped_tag(budgeted_tags, prisma_client, user_api_key_cache) if budgeted_tags else None
+        )
+        if isinstance(unbudgeted_tag, ProxyException) and not _serves_through_db_outage():
+            raise unbudgeted_tag
+        if isinstance(unbudgeted_tag, str):
+            raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
+        client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
+            get_metadata_variable_name_from_kwargs(request_data) == "metadata"
+            and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
+        )
+        mapped_tags: Final = tuple(tag for tag, _ in mapped)
+        request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
+        request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+
+    @staticmethod
+    def apply_authenticated_baggage_tags(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: restore authenticated tags in downstream metadata
+        metadata_key: str | None = None,
+    ) -> None:
+        request_state: Final[object] = getattr(request, "state", None)
+        raw_tags: Final[object] = getattr(request_state, "litellm_baggage_mapped_tags", None)
+        if not isinstance(raw_tags, tuple) or not raw_tags:
+            return
+        tags: Final = _STRING_TAGS_ADAPTER.validate_python(raw_tags)
+        slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
+        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        existing: Final = metadata.get("tags")
+        if existing and not isinstance(existing, list):
+            return
+        existing_tags: Final = _CLIENT_TAGS_ADAPTER.validate_python(existing) if isinstance(existing, list) else ()
+        prior_stamp: Final = metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+        prior_mapped: Final = prior_stamp.tags if isinstance(prior_stamp, BaggageMappedTagsStamp) else ()
+        sent_tags: Final = tuple(tag for tag in existing_tags if tag not in prior_mapped)
+        metadata["tags"] = [*existing_tags, *(tag for tag in tags if tag not in existing_tags)]
+        metadata[BAGGAGE_MAPPED_TAGS_METADATA_KEY] = BaggageMappedTagsStamp(
+            tags=tuple(tag for tag in tags if tag not in sent_tags)
+        )
 
     @staticmethod
     def apply_key_tags_pre_auth(
@@ -2160,7 +2340,7 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -2212,12 +2392,16 @@ async def add_litellm_data_to_request(
         data.pop(_internal_key, None)
     _reject_url_valued_destinations(data)
     _raw_metadata_by_field: Final = {
-        _metadata_field: data.pop(_metadata_field)
+        _metadata_field: _DECODED_JSON.validate_python(data.pop(_metadata_field))
         for _metadata_field in ("metadata", "litellm_metadata")
         if data.get(_metadata_field) is not None
     }
-    for _metadata_field, _raw_metadata in _raw_metadata_by_field.items():
-        data[_metadata_field] = _normalized_metadata_object(_metadata_field, _raw_metadata)
+    _normalized_metadata_by_field: Final = {
+        _metadata_field: _normalized_metadata_object(_metadata_field, _raw_metadata)
+        for _metadata_field, _raw_metadata in _raw_metadata_by_field.items()
+    }
+    data.update(_normalized_metadata_by_field)
+    _client_sent_metadata_tags: Final = _metadata_string_tags(_normalized_metadata_by_field.values())
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
@@ -2505,7 +2689,6 @@ async def add_litellm_data_to_request(
         metadata=data[_metadata_variable_name],
     )
     team_metadata: Final = user_api_key_dict.team_metadata or {}
-    project_metadata: Final = user_api_key_dict.project_metadata or {}
 
     # inherited_tags: every tag key/team/project policy contributed, read
     # directly from those three sources rather than snapshotted off the shared
@@ -2517,12 +2700,10 @@ async def add_litellm_data_to_request(
     # allow_fail_open reads this (rather than subtracting caller_tags from the
     # final merged set) so a caller can't strip an inherited "!"/"&"
     # constraint's protection just by resubmitting its exact value alongside a
-    # conflicting one.
-    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
-    _team_tags: Final = team_metadata.get("tags") or ()
-    _project_tags: Final = project_metadata.get("tags") or ()
-    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
-        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    # conflicting one, and its tag_routing_prefix filter keeps these tags routing
+    # when they are unprefixed.
+    data[_metadata_variable_name]["inherited_tags"] = (  # rebind-ok: matches this file's data[...] mutation idiom
+        LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
     )
 
     ## TEAM-LEVEL METADATA
@@ -2648,15 +2829,14 @@ async def add_litellm_data_to_request(
             tags_to_add=_caller_body_tags,
         )
 
-    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
-    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
-    # anything from key/team/project metadata. Read directly from the header and
-    # body values here, the same way inherited_tags above is read directly from
-    # key/team/project metadata -- neither is derived by inspecting the shared
-    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
-    # have already merged caller header tags into before this function runs.
+    # caller_tags: the tags the request's headers and body carry (x-litellm-tags, body "tags", and body
+    # "metadata.tags" / "litellm_metadata.tags" read before the mapped tags are added below),
+    # never derived from the shared "tags" list.
     data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
-        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+        dict.fromkeys((*(tags or ()), *_client_sent_metadata_tags))
+    )
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+        request=request, request_data=data, metadata_key=_metadata_variable_name
     )
 
     # Team Callbacks controls
@@ -2735,6 +2915,9 @@ async def add_litellm_data_to_request(
             else None
         ),
     )
+
+    if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
+        raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param
@@ -3719,7 +3902,7 @@ def _add_guardrails_from_policies_in_metadata(
 
 def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
+    data: dict[str, object],  # mutable-ok: writes guardrails into the live request dict, same contract as helpers
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
@@ -3777,7 +3960,7 @@ async def move_guardrails_to_metadata(
 
     add_guardrails_from_auth_metadata(
         user_api_key_dict=user_api_key_dict,
-        data=data,
+        data=data,  # pyright: ignore[reportUnknownArgumentType]  # request data retains a legacy dynamic shape
         metadata_variable_name=_metadata_variable_name,
     )
 
@@ -3949,6 +4132,16 @@ def _apply_resolved_guardrails_to_metadata(
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
 
 
+def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_name: str) -> list[str] | None:
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.router_strategy.tag_based_routing import without_baggage_mapped_tags
+
+    tags: Final = without_baggage_mapped_tags(
+        get_tags_from_request_body(request_data), request_data.get(metadata_variable_name)
+    )
+    return list(tags) if tags else None
+
+
 async def add_guardrails_from_policy_engine(
     data: dict,
     metadata_variable_name: str,
@@ -3973,7 +4166,6 @@ async def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
@@ -3991,7 +4183,7 @@ async def add_guardrails_from_policy_engine(
         return
 
     # Extract tags and build context
-    all_tags: Final = get_tags_from_request_body(data) or None
+    all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
     context: Final = PolicyMatchContext(
@@ -4088,13 +4280,25 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                extra_headers=anthropic_api_headers,
+                native_anthropic_messages_only=True,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:

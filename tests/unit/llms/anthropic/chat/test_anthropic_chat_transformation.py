@@ -1375,7 +1375,6 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
-
 @pytest.mark.parametrize(
     ("model", "thinking_params"),
     [
@@ -1388,7 +1387,13 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
             {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
         ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
 )
 def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
@@ -1413,6 +1418,7 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
 
     assert "output_format" in optional_params
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
@@ -2243,6 +2249,38 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+_OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.parametrize(
+    ("output_format", "request_drop_params", "global_drop_params", "forwarded"),
+    [
+        pytest.param("json", True, False, False, id="string_dropped_under_request_drop_params"),
+        pytest.param("json", None, True, False, id="string_dropped_under_global_drop_params"),
+        pytest.param("json", None, False, True, id="string_forwarded_without_drop_params"),
+        pytest.param(_OBJECT_OUTPUT_FORMAT, True, False, True, id="object_kept_under_drop_params"),
+    ],
+)
+def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_drop_params(
+    output_format: object,
+    request_drop_params: bool | None,
+    global_drop_params: bool,
+    forwarded: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result = AnthropicConfig().transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_format": output_format},
+        litellm_params={"drop_params": request_drop_params},
+        headers={},
+    )
+
+    assert result.get("output_format") == (output_format if forwarded else None)
 
 
 def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
@@ -3704,7 +3742,9 @@ def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list
     return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
 
 
-_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."})
+_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(
+    [], {"type": "text", "text": "I have no tool that books flights."}
+)
 
 
 @pytest.mark.parametrize(
@@ -6139,6 +6179,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeMessagesConfig",
+            True,
+        ),
+        ("litellm.llms.databricks.messages.transformation", "DatabricksAnthropicMessagesConfig", False),
+        (
             "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
             "VertexAIAnthropicConfig",
             True,
@@ -7868,6 +7914,24 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"summary": "likes tea"},
             id="tool_name_envelope_on_a_schema_allowing_extra_keys",
         ),
+        pytest.param(
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]},
+            {"payload": {"id": "abc", "rows": 3}},
+            {"payload": {"id": "abc", "rows": 3}},
+            id="key_listed_only_in_required",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="tool_name_envelope_around_an_input_wrapper",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _PER_USER_ANSWER},
+            _PER_USER_ANSWER,
+            id="tool_name_envelope_around_an_answer_with_one_allowed_key",
+        ),
     ],
 )
 def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
@@ -7880,6 +7944,31 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 
     assert message is not None
     assert json.loads(message.content) == expected_content
+
+
+def test_convert_tool_response_to_message_keeps_non_ascii_text_in_an_unwrapped_answer():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert "Hôtel Lutetia, 東京" in message.content
+    assert json.loads(message.content) == answer
+
+
+def test_convert_tool_response_to_message_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert json.loads(message.content.encode("utf-8")) == answer
 
 
 _TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
@@ -9522,7 +9611,9 @@ def test_map_openai_params_runs_tool_search_on_a_custom_named_deployment_whose_m
         AzureAnthropicConfig().map_openai_params(
             non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
         )
-    litellm.register_model({"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}})
+    litellm.register_model(
+        {"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}}
+    )
     mapped: Final = AzureAnthropicConfig().map_openai_params(
         non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
     )
@@ -9647,3 +9738,81 @@ def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> Non
     )
     provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_specific_fields
+
+
+def _two_function_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": f"tool_{i}", "description": f"Tool {i}", "parameters": {"type": "object"}},
+        }
+        for i in range(2)
+    ]
+
+
+@pytest.mark.parametrize(
+    "control, expected_control",
+    [
+        (None, {"type": "ephemeral"}),
+        ({"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"}),
+    ],
+)
+def test_transform_request_tool_config_point_marks_last_tool_and_drops_the_key(control, expected_control):
+    """LIT-9880: a tool_config injection point used to be spread into the Anthropic body, which
+    Anthropic rejected with 400 Extra inputs are not permitted."""
+    tools = _two_function_tools()
+    tools_before = copy.deepcopy(tools)
+    point = {"location": "tool_config", **({"control": control} if control is not None else {})}
+    litellm_params = {"metadata": {}, "model_info": {"id": "deployment-1"}}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [point]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][-1]["cache_control"] == expected_control
+    assert "cache_control" not in data["tools"][0]
+    assert tools == tools_before
+    assert litellm_params["metadata"]["litellm_gateway_injected_cache"] == "deployment-1"
+
+
+def test_transform_request_tool_config_point_keeps_the_clients_tool_marker():
+    tools = _two_function_tools()
+    tools[0]["cache_control"] = {"type": "ephemeral"}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][1]
+
+
+def test_transform_request_tool_config_point_skips_tool_search_tools():
+    tool_search_type = next(iter(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+    tools = [*_two_function_tools(), {"type": tool_search_type, "name": "tool_search"}]
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert data["tools"][1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][2]
+    assert "cache_control" not in data["tools"][0]
+
+
+def test_transform_request_tool_config_point_without_tools_drops_the_key():
+    litellm_params = {"metadata": {}}
+
+    data = _make_transform_request(
+        optional_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert "tools" not in data
+    assert litellm_params["metadata"] == {}

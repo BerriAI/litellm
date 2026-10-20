@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -75,6 +76,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.utils import ModelResponseListIterator
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
 
@@ -8479,9 +8482,11 @@ class _RecordingSuccessLogger(CustomLogger):
     def __init__(self):
         super().__init__()
         self.success_events = []
+        self.logged: Final = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+        self.logged.set()
 
 
 class TestStreamingClientDisconnectBilling:
@@ -8591,6 +8596,60 @@ class TestStreamingClientDisconnectBilling:
         partial_response: Final = recorder.success_events[0]["response_obj"]
         assert getattr(partial_response, "service_tier") == "priority"
         assert partial_response.usage.total_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_after_finish_chunk_bills_the_estimate_when_the_provider_sent_no_usage(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="no-usage-disconnect-call",
+            function_id="no-usage-disconnect-fn",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "no-usage-disconnect-call"}
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-no-usage", created=1741037890, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        first_chunk: Final = await stream_iter.__anext__()
+        finish_chunk: Final = await stream_iter.__anext__()
+        assert first_chunk.choices[0].finish_reason is None
+        assert finish_chunk.choices[0].finish_reason == "stop"
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj},
+            response,
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        usage: Final = recorder.success_events[0]["response_obj"].usage
+        assert (usage.prompt_tokens, usage.completion_tokens) == (
+            litellm.token_counter(model=model, messages=messages),
+            litellm.token_counter(model=model, text=text, count_response_tokens=True),
+        )
 
     @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
@@ -11637,3 +11696,98 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+class TestResponseCostFromLoggingObjForCacheHits:
+    BODY: Final = MappingProxyType(
+        {
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "cached answer"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1200, "output_tokens": 400},
+        }
+    )
+
+    @staticmethod
+    def _logging_obj():
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj: Final = Logging(
+            model="claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="cache-hit-header",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_a_v1_messages_cache_hit_costs_nothing_though_its_usage_prices_as_a_fresh_call(self):
+        fresh_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=self._logging_obj()
+        )
+        hit: Final = self._logging_obj()
+        hit.caching_details = {"cache_hit": True, "cache_duration_ms": 2.0}
+
+        hit_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=hit
+        )
+
+        assert fresh_cost is not None and fresh_cost > 0
+        assert hit_cost == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("hidden_params", "caching_details", "expected_header"),
+        (
+            (
+                {"cache_hit": True, "response_cost": 0.0},
+                CachingDetails(cache_hit=True, cache_duration_ms=2.0),
+                "0.0",
+            ),
+            ({"response_cost": 0.0}, None, None),
+        ),
+    )
+    async def test_only_a_cache_hit_sends_zero_cost_headers(
+        self,
+        hidden_params: dict[str, object],
+        caching_details: CachingDetails | None,
+        expected_header: str | None,
+    ):
+        response: Final = litellm.ModelResponse()
+        response._hidden_params = hidden_params
+        logging_obj: Final = self._logging_obj()
+        logging_obj.caching_details = caching_details
+
+        headers: Final = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
+            request=Request({"type": "http", "method": "POST", "headers": []}),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            logging_obj=logging_obj,
+            version=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        cost_headers: Final = (
+            "x-litellm-response-cost",
+            "x-litellm-response-cost-original",
+            "x-litellm-response-cost-input",
+            "x-litellm-response-cost-output",
+        )
+        assert {name: headers.get(name) for name in cost_headers} == dict.fromkeys(cost_headers, expected_header)
+
+    def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
+        logging_obj: Final = self._logging_obj()
+        logging_obj.model_call_details["response_cost"] = 0.0
+
+        cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=logging_obj
+        )
+
+        assert cost == ""

@@ -23,7 +23,7 @@ from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_t
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._experimental.mcp_server import mcp_server_manager
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
-from litellm.proxy.utils import _failure_fields_to_lift
+from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
@@ -1855,7 +1855,22 @@ async def test_non_stream_auto_execute_failing_every_retry_bills_each_paid_first
     failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
     billed_usage: Final = failure_row_fields["combined_usage_object"]
     assert isinstance(billed_usage, Usage)
-    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == billed_tokens
+    estimated_failure_usage: Final = (
+        _estimate_dispatched_failure_usage(
+            model="gpt-5.6",
+            request_input=logging_obj.model_call_details.get("messages"),
+            system_input=None,
+        )
+        if not retried_first_rounds
+        else None
+    )
+    expected_prompt_tokens: Final = billed_tokens[0] + (
+        estimated_failure_usage.prompt_tokens if estimated_failure_usage is not None else 0
+    )
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (
+        expected_prompt_tokens,
+        billed_tokens[1],
+    )
     assert failure_row_fields["response_cost"] == pytest.approx(
         _round_cost(_ROUND_ONE_BODY) + sum(_round_cost(body) for body in retried_first_rounds)
     )
