@@ -6,7 +6,7 @@ CountTokens answers 400 for it. The proxy then has to count through bedrock-mant
 Anthropic count_tokens, and the answer must sit within a few percent of what `/v1/messages`
 bills as `usage.input_tokens`. The local tokenizer fallback undercounts these models by
 about 40%, so this is the line that proves the real count is served. Both calls go through
-the real Anthropic SDK, the client customers count with
+the real Anthropic SDK, as a customer would use them.
 """
 
 from __future__ import annotations
