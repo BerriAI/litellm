@@ -88,7 +88,7 @@ export default function PageVisibilitySettings({
             {Object.entries(pagesByGroup).map(([groupName, pages]) => (
               <fieldset key={groupName} className="space-y-2">
                 <legend className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  {groupName}
+                  {term(groupName)}
                 </legend>
                 <div className="ml-4 space-y-2">
                   {pages.map((page) => {

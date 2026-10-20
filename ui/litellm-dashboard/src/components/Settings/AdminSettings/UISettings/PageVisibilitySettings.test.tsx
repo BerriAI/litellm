@@ -2,14 +2,22 @@ import { describe, it, expect, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders, screen } from "@/../tests/test-utils";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 
 import PageVisibilitySettings from "./PageVisibilitySettings";
+
+const uiConfig = vi.hoisted(() => ({ data: undefined as { use_si_terminology?: boolean } | undefined }));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => ({ data: uiConfig.data }),
+}));
 
 vi.mock("@/components/page_utils", () => ({
   getAvailablePages: () => [
     { page: "usage", label: "Usage", description: "View usage stats", group: "Analytics" },
     { page: "models", label: "Models", description: "Manage models", group: "Analytics" },
     { page: "keys", label: "API Keys", description: "Manage API keys", group: "Access" },
+    { page: "agents", label: "Agents", description: "Create and manage AI agents", group: "AI GATEWAY" },
   ],
 }));
 
@@ -73,6 +81,21 @@ describe("PageVisibilitySettings", () => {
         Reflect.deleteProperty(Object, "groupBy");
       }
     }
+  });
+
+  it("should show group names in SI terminology when the proxy enables it", async () => {
+    uiConfig.data = { use_si_terminology: true };
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TerminologyProvider>
+        <PageVisibilitySettings enabledPagesInternalUsers={null} isUpdating={false} onUpdate={vi.fn()} />
+      </TerminologyProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
+
+    expect(screen.getByRole("group", { name: "SI GATEWAY" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "AI GATEWAY" })).not.toBeInTheDocument();
   });
 
   it("should display the property description when provided", () => {

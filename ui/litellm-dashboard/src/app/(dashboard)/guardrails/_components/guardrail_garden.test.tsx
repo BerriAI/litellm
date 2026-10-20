@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import GuardrailGarden from "./guardrail_garden";
 import { ALL_CARDS } from "./guardrail_garden_data";
+
+const uiConfig = vi.hoisted(() => ({ data: undefined as { use_si_terminology?: boolean } | undefined }));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => ({ data: uiConfig.data }),
+}));
 
 vi.mock("./guardrail_garden_detail", () => ({
   __esModule: true,
@@ -112,6 +119,22 @@ describe("GuardrailGarden", () => {
     if (otherPartner) {
       expect(screen.queryByText(otherPartner.name)).not.toBeInTheDocument();
     }
+  });
+
+  it("should match the SI wording a card shows when SI terminology is on", async () => {
+    uiConfig.data = { use_si_terminology: true };
+    const card = ALL_CARDS.find((c) => c.description.startsWith("AI security platform protecting"));
+    expect(card).toBeDefined();
+    const user = userEvent.setup();
+    render(
+      <TerminologyProvider>
+        <GuardrailGarden accessToken="test-token" onGuardrailCreated={vi.fn()} />
+      </TerminologyProvider>,
+    );
+
+    await user.type(screen.getByPlaceholderText("Search guardrails"), "SI security platform protecting");
+
+    expect(screen.getByText(card!.name)).toBeInTheDocument();
   });
 
   it("should show an empty result set for a query that matches nothing", async () => {

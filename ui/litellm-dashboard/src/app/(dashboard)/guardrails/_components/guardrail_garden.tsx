@@ -24,7 +24,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
     const q = searchQuery.toLowerCase();
     return (
       card.name.toLowerCase().includes(q) ||
-      card.description.toLowerCase().includes(q) ||
+      term(card.description).toLowerCase().includes(q) ||
       card.tags.some((t) => t.toLowerCase().includes(q))
     );
   });
