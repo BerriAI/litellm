@@ -179,10 +179,16 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
     return tuple(entry.cache_key for entry in reversed(positions) if entry.position > oldest_probed_position)
 
 
+def _carrier_cache_control(carrier: Mapping[str, JsonValue]) -> JsonValue | None:
+    function: Final = carrier.get("function")
+    nested: Final = function.get("cache_control") if isinstance(function, dict) else None
+    return carrier.get("cache_control", nested)
+
+
 def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
     if not isinstance(carrier, Mapping):
         return None
-    cache_control: Final = carrier.get("cache_control")
+    cache_control: Final = _carrier_cache_control(carrier)
     if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
         return None
     return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS

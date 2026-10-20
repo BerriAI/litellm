@@ -65,6 +65,11 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
     return {**tool, "cache_control": cache_control} if cache_control else tool
 
 
+def _function_marked_tool(cache_control: dict[str, str]) -> ChatCompletionToolParam:
+    tool: Final = _tool(None)
+    return {**tool, "function": {**tool["function"], "cache_control": cache_control}}
+
+
 @pytest.mark.parametrize(
     ("messages", "tools", "expected_ttl"),
     [
@@ -107,6 +112,12 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
             [_tool({"type": "ephemeral", "ttl": "1h"})],
             PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
             id="1h-on-tools-only",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral"}),
+            [_function_marked_tool({"type": "ephemeral", "ttl": "1h"})],
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="1h-nested-under-function",
         ),
         pytest.param(
             _system_block_messages({"type": "ephemeral"}),
