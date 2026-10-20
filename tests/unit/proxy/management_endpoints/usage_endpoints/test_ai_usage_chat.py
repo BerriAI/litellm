@@ -1390,7 +1390,10 @@ class TestUsageAiChatTeamModelRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("key_metadata", [{}, {"tags": "prod"}, {"tags": {"env": "prod"}}])
-    async def test_key_and_team_tags_pick_the_tagged_deployment(self, key_metadata: dict[str, object]):
+    @pytest.mark.parametrize("tag_routing_prefix", ["", "route:"])
+    async def test_key_and_team_tags_pick_the_tagged_deployment(
+        self, key_metadata: dict[str, object], tag_routing_prefix: str
+    ):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
@@ -1411,6 +1414,7 @@ class TestUsageAiChatTeamModelRouting:
                 for tag in ("team-tag", "default")
             ],
             enable_tag_filtering=True,
+            tag_routing_prefix=tag_routing_prefix,
         )
 
         with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
@@ -1511,7 +1515,11 @@ class TestUsageAiChatTeamModelRouting:
         router.acompletion.assert_not_called()
 
     @staticmethod
-    async def _endpoint_body(user_api_key_dict: "UserAPIKeyAuth") -> bytes:
+    async def _endpoint_body(
+        user_api_key_dict: "UserAPIKeyAuth",
+        model: str = "prod-alias",
+        extra_deployments: tuple[dict[str, object], ...] = (),
+    ) -> bytes:
         from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
             ChatMessage,
             UsageAIChatRequest,
@@ -1528,8 +1536,10 @@ class TestUsageAiChatTeamModelRouting:
                         "api_key": "sk-dummy",
                         "mock_response": "from the aliased deployment",
                     },
-                }
-            ]
+                },
+                *extra_deployments,
+            ],
+            num_retries=0,
         )
         with (
             patch(  # test-quality-ok: Ask AI reads the proxy_server.llm_router module global; no injection seam
@@ -1543,7 +1553,7 @@ class TestUsageAiChatTeamModelRouting:
             ),
         ):
             response: Final = await usage_ai_chat(
-                data=UsageAIChatRequest(messages=[ChatMessage(role="user", content="hi")], model="prod-alias"),
+                data=UsageAIChatRequest(messages=[ChatMessage(role="user", content="hi")], model=model),
                 request=MagicMock(),
                 user_api_key_dict=user_api_key_dict,
             )
@@ -1589,6 +1599,32 @@ class TestUsageAiChatTeamModelRouting:
         )
         with patch.dict(litellm.model_alias_map, {"prod-alias": "other-model"}):
             body: Final = await self._endpoint_body(key_limited_to_its_alias_target)
+
+        assert b'"content": "from the aliased deployment"' in body
+        assert b'"type": "error"' not in body
+
+    @pytest.mark.asyncio
+    async def test_key_router_settings_fallbacks_rescue_a_failing_model(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        key_with_fallbacks: Final = UserAPIKeyAuth(
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+            router_settings={"fallbacks": [{"broken-model": ["prod-model"]}]},
+        )
+        failing_deployment: Final = {
+            "model_name": "broken-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-dummy",
+                "mock_response": "litellm.InternalServerError",
+            },
+        }
+
+        body: Final = await self._endpoint_body(
+            key_with_fallbacks, model="broken-model", extra_deployments=(failing_deployment,)
+        )
 
         assert b'"content": "from the aliased deployment"' in body
         assert b'"type": "error"' not in body

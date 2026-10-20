@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, cast, overload
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -21,6 +21,7 @@ from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.router_weights import RouterWeights, validate_router_weights
 from litellm.types.utils import ChatCompletionMessageToolCall
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
@@ -530,7 +531,37 @@ def _caller_identity_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[st
 def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object]:
     caller_tags: Final = _caller_routing_tags(user_api_key_dict)
     return MappingProxyType(
-        {**_caller_identity_metadata(user_api_key_dict), **({"tags": list(caller_tags)} if caller_tags else {})}
+        {
+            **_caller_identity_metadata(user_api_key_dict),
+            **({"tags": list(caller_tags), "inherited_tags": list(caller_tags)} if caller_tags else {}),
+        }
+    )
+
+
+def _router_weights(router_settings: Mapping[str, object]) -> RouterWeights | None:
+    try:
+        return validate_router_weights(router_settings.get("weights"))
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
+        return None
+
+
+def _per_request_router_kwargs(router_settings: Mapping[str, object] | None) -> Mapping[str, object]:
+    from litellm.proxy.route_llm_request import (
+        _PER_REQUEST_ROUTER_SETTINGS,  # pyright: ignore[reportPrivateUsage]  # the key and team settings /chat/completions forwards per request
+    )
+
+    if router_settings is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            **{
+                key: router_settings[key]
+                for key in _PER_REQUEST_ROUTER_SETTINGS
+                if router_settings.get(key) is not None
+            },
+            "_router_weights": _router_weights(router_settings),
+        }
     )
 
 
@@ -585,6 +616,7 @@ async def _acompletion(
     tools: list[_ToolDef] | None = None,  # mutable-ok: forwarded verbatim to acompletion
     stream: bool = False,
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
+    router_settings: Mapping[str, object] | None = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.proxy_server import llm_router
     from litellm.router_utils.common_utils import get_request_team_id, is_proxy_admin_request
@@ -607,6 +639,7 @@ async def _acompletion(
         else None
     )
     if llm_router is not None and route is not None:
+        router_kwargs: Final = _per_request_router_kwargs(router_settings)
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
                 model=model,
@@ -618,16 +651,19 @@ async def _acompletion(
                 allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
                 metadata=dict(caller_metadata),
                 specific_deployment=route == "deployment",
+                **router_kwargs,
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
             model=model,
             messages=completion_messages,
             tools=tools,
+            stream=False,
             temperature=USAGE_AI_TEMPERATURE,
             drop_params=True,
             allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
             metadata=dict(caller_metadata),
             specific_deployment=route == "deployment",
+            **router_kwargs,
         )
     return await litellm.acompletion(
         model=model,
@@ -799,6 +835,7 @@ async def _stream_final_response(
     model: str,
     chat_messages: list[Mapping[str, object]],
     user_api_key_dict: "UserAPIKeyAuth | None",
+    router_settings: Mapping[str, object] | None,
 ) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
@@ -808,6 +845,7 @@ async def _stream_final_response(
         messages=chat_messages,
         stream=True,
         user_api_key_dict=user_api_key_dict,
+        router_settings=router_settings,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -821,6 +859,7 @@ async def stream_usage_ai_chat(
     user_id: str | None = None,
     is_admin: bool = False,
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
+    router_settings: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model: Final = _resolve_model(model)
@@ -838,6 +877,7 @@ async def stream_usage_ai_chat(
             messages=chat_messages,
             tools=tools,
             user_api_key_dict=user_api_key_dict,
+            router_settings=router_settings,
         )
         choice: Final = response.choices[0]
 
@@ -851,7 +891,7 @@ async def stream_usage_ai_chat(
         for tc in choice.message.tool_calls:
             async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages, user_api_key_dict):
+        async for event in _stream_final_response(resolved_model, chat_messages, user_api_key_dict, router_settings):
             yield event
         yield _sse({"type": "done"})
 
