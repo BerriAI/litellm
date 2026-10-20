@@ -156,6 +156,50 @@ def check_responses(base: str, asynchronous: bool = False) -> None:
     assert json.loads(body) == {"model": "gpt-6", "input": "ping", "tools": tools}
 
 
+def check_messages_tools(base: str) -> None:
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up the forecast for a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        }
+    ]
+    content: Final = [{"type": "tool_use", "id": "toolu-http-check", "name": "lookup", "input": {"city": "Paris"}}]
+    enqueue(
+        {
+            "id": "msg-tools-http-check",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": content,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 3, "output_tokens": 2},
+        }
+    )
+
+    async def send() -> object:
+        create: Final = cast(  # cast-ok: SDK facade exposes untyped kwargs
+            Callable[..., Awaitable[object]], litellm.anthropic.messages.acreate
+        )
+        return await create(
+            model="anthropic/claude-sonnet-5-5",
+            messages=MESSAGES,
+            tools=tools,
+            max_tokens=16,
+            api_key="test-key",
+            api_base=base,
+        )
+
+    response: Final = JSON_OBJECT.validate_python(asyncio.run(send()))
+    assert response["content"] == content, response
+    path, headers, body = REQUESTS.get(timeout=10)
+    assert path == "/v1/messages"
+    assert headers["x-api-key"] == "test-key"
+    sent: Final = JSON_OBJECT.validate_json(body)
+    assert (sent["model"], sent["messages"], sent["tools"]) == ("claude-sonnet-5-5", MESSAGES, tools), sent
+
+
 @skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 cache hits import proxy-only fastapi")
 def check_cache_hit(base: str) -> None:
     from litellm.caching.caching import Cache
@@ -394,6 +438,7 @@ def main() -> None:
                 partial(check_tools, asynchronous=True),
                 check_responses,
                 partial(check_responses, asynchronous=True),
+                check_messages_tools,
                 check_cache_hit,
                 check_messages_stream_and_callback,
             ):
