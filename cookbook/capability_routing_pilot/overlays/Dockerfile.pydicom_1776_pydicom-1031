@@ -1,0 +1,2 @@
+FROM routing_poc/orig.pydicom_1776_pydicom-1031:latest
+RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir "pytest==7.4.4" && /opt/miniconda3/envs/testbed/bin/pip check || true

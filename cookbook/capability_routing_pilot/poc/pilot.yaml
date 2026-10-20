@@ -1,0 +1,11 @@
+agent:
+  step_limit: 50
+  cost_limit: 1.0
+  wall_time_limit_seconds: 540
+environment:
+  run_args: ["--rm", "--label", "routing_poc=1"]
+model:
+  model_class: poc.guarded_model.GuardedLitellmModel
+  run_budget_usd: 1.0
+  max_output_tokens: 8192
+  input_token_safety_factor: 1.25

@@ -1,0 +1,9 @@
+swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1031:latest sha256:dd35fa4aecc830e588ae5966b3f3cfe91b3b34a6057c483847f82a44e4e77ac5
+swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1165:latest sha256:e4134171da28404a3d71ef75f1866b776def32c31b986aab528c6f5716b27423
+swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1395:latest sha256:2eb9ad59249fc77761ffab8158f8fe2b1f44111f4972f804ca09991e49ae1197
+swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1614:latest sha256:7206ea531b6c8b02f7a8e1760d732e4651f95307781f12f55e4b88e982610159
+swebench/sweb.eval.x86_64.sqlfluff_1776_sqlfluff-884:latest sha256:ca28dab1d331c1c7e4908784576a7e1f3b11387dbaa4a8db466ce42a0eda6bec
+# overlays (local, built from upstream): pvlib-1395,pvlib-1165 +numpy==1.26.4; pydicom-1031 +pytest==7.4.4; originals tagged routing_poc/orig.*
+routing_poc/orig.pydicom_1776_pydicom-1031:latest sha256:0b962e881760f4b8bf3cdbfc695624c90906198ccf1e2410cd639f6adc6e340b
+routing_poc/orig.pvlib_1776_pvlib-python-1165:latest sha256:71e033964894077384c0c27a04ae0271e28eaad35602aa7570d40c683f1967d1
+routing_poc/orig.pvlib_1776_pvlib-python-1395:latest sha256:c7b51f4978926d54a788c54ac4d96e6c4c4e2cd2ee62736b30e91c9fd0891f10

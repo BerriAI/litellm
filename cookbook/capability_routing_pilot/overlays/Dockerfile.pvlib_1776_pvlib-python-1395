@@ -1,0 +1,2 @@
+FROM routing_poc/orig.pvlib_1776_pvlib-python-1395:latest
+RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir "numpy==1.26.4" && /opt/miniconda3/envs/testbed/bin/pip check || true

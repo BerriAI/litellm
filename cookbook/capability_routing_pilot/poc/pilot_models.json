@@ -1,0 +1,14 @@
+{
+  "source": "gateway.litellm-sandbox.ai /v1/model/info, fetched 2026-10-20",
+  "reference": "opus-5",
+  "solvers": {
+    "haiku-4.5": {"gateway_model": "anthropic/claude-haiku-4-5-20251001", "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+      "input": 1e-06, "output": 5e-06, "cache_read": 1e-07, "cache_write": 1.25e-06},
+    "sonnet-5": {"gateway_model": "anthropic/claude-sonnet-5", "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+      "input": 2e-06, "output": 1e-05, "cache_read": 2e-07, "cache_write": 2.5e-06},
+    "opus-5": {"gateway_model": "anthropic/claude-opus-5", "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+      "input": 5e-06, "output": 2.5e-05, "cache_read": 5e-07, "cache_write": 6.25e-06}
+  },
+  "labeler": {"gateway_model": "openai/gpt-5.4-mini-2026-03-17", "input": 7.5e-07, "output": 4.5e-06},
+  "classifier": {"gateway_model": "typesafe/jev-latest", "reported_version": "jev-1.13.0", "input": 4.2e-08, "output": 0.0}
+}
