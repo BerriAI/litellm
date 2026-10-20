@@ -14,7 +14,9 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
+    GEMINI_MAX_INTEGER_ENUM_VALUES,
     VertexAITokenCounter,
+    _fix_enum_types,
     build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
@@ -1502,7 +1504,7 @@ def test_fix_enum_types():
     }
 
     # Apply the transformation
-    _fix_enum_types(input_schema)
+    _fix_enum_types(input_schema, send_integer_enums=True)
 
     # Verify the transformation
     assert input_schema == expected_output
@@ -1553,12 +1555,41 @@ def test_build_vertex_schema_sends_integer_enum_as_format_enum():
         "required": ["level"],
     }
 
-    result = _build_vertex_schema(parameters)
+    result = _build_vertex_schema(parameters, send_integer_enums=True)
 
     assert result["properties"]["level"]["format"] == "enum"
     assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
     assert result["properties"]["level"]["type"].lower() == "integer"
     assert "enum" not in result["properties"]["flag"]
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_level"),
+    [
+        (
+            [1, 2, 5],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True, "format": "enum"}]},
+        ),
+        (
+            [1, 2, 5, None],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True, "format": "enum"}]},
+        ),
+        ([1, 2, 5], False, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        ([1, "a"], True, {"anyOf": [{"type": "integer", "nullable": True}]}),
+    ],
+    ids=["sent", "null-in-enum", "not-sent", "mixed-values"],
+)
+def test_build_vertex_schema_keeps_integer_enum_on_nullable_type_list(
+    enum_values: list[object], send_integer_enums: bool, expected_level: JsonValue
+) -> None:
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"level": {"type": ["integer", "null"], "enum": enum_values}}},
+        send_integer_enums=send_integer_enums,
+    )
+
+    assert schema["properties"]["level"] == expected_level
 
 
 def test_map_function_keeps_integer_enum_when_tools_are_reused():
@@ -1580,13 +1611,42 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
     config = VertexGeminiConfig()
 
     sent = [
-        config._map_function(tools, {})[0]["function_declarations"][0]["parameters"]["properties"]["level"]
+        config._map_function(tools, {}, send_integer_enums=True)[0]["function_declarations"][0]["parameters"][
+            "properties"
+        ]["level"]
         for _ in range(2)
     ]
 
     assert sent[0]["enum"] == ["1", "2", "5"]
     assert sent[1]["enum"] == ["1", "2", "5"]
     assert sent[1]["format"] == "enum"
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_enum"),
+    [
+        ([1, 2, 5], False, None),
+        (["-3", "007", 4], True, ["-3", "7", "4"]),
+        ([1, 2**63], True, None),
+        ([-(2**63), 2**63 - 1], True, [str(-(2**63)), str(2**63 - 1)]),
+        (["1", "--2"], True, None),
+        (["1", "\u00b2"], True, None),
+        ([True, 1], True, None),
+        ([1.5, 2], True, None),
+        ([], True, None),
+        (list(range(GEMINI_MAX_INTEGER_ENUM_VALUES)), True, [str(n) for n in range(GEMINI_MAX_INTEGER_ENUM_VALUES)]),
+        (list(range(GEMINI_MAX_INTEGER_ENUM_VALUES + 1)), True, None),
+    ],
+)
+def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
+    enum_values: list[object], send_integer_enums: bool, expected_enum: list[str] | None
+) -> None:
+    schema: Final = {"type": "integer", "enum": enum_values}
+
+    _fix_enum_types(schema, send_integer_enums=send_integer_enums)
+
+    assert schema.get("enum") == expected_enum
+    assert ("format" in schema) == (expected_enum is not None)
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (

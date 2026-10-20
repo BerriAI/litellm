@@ -666,14 +666,37 @@ def _fix_enum_empty_strings(schema, depth=0):
         _fix_enum_empty_strings(items, depth=depth + 1)
 
 
-def _fix_enum_types(schema, depth=0):
+GEMINI_MAX_INTEGER_ENUM_VALUES: Final = 1000
+_INT64_MIN: Final = -(2**63)
+_INT64_MAX: Final = 2**63 - 1
+
+
+def _gemini_integer_enum_value(value: object) -> str | None:
+    match value:
+        case bool():
+            return None
+        case int() if _INT64_MIN <= value <= _INT64_MAX:
+            return str(value)
+        case str() if re.fullmatch(r"-?[0-9]+", value) and _INT64_MIN <= int(value) <= _INT64_MAX:
+            return str(int(value))
+        case _:
+            return None
+
+
+def _gemini_integer_enum(values: Sequence[object]) -> tuple[str, ...] | None:
+    if not values or len(values) > GEMINI_MAX_INTEGER_ENUM_VALUES:
+        return None
+    converted: Final = tuple(text for value in values if (text := _gemini_integer_enum_value(value)) is not None)
+    return converted if len(converted) == len(values) else None
+
+
+def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
     """Make `enum` fields acceptable to Gemini / Vertex.
 
-    Gemini / Vertex APIs only accept string enum values. An integer enum is sent
-    the way Gemini documents it: type INTEGER, `format: "enum"` and the values as
-    strings; the model still returns an integer. An integer enum already in that
-    form, as a Gemini-native schema sends it, is kept. On
-    any other non-string typed property (or when `anyOf` types do not include a
+    Gemini / Vertex APIs only accept string enum values. With `send_integer_enums`,
+    an integer enum of int64 values is sent the way Gemini documents it: type INTEGER,
+    `format: "enum"` and the values as strings; the model still returns an integer.
+    On any other non-string typed property (or when `anyOf` types do not include a
     string type), the enum is removed to avoid provider validation errors.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
@@ -699,17 +722,15 @@ def _fix_enum_types(schema, depth=0):
                             break
 
         if not keep_enum:
-            enum_values: Final = cast(Sequence[object], schema["enum"])  # cast-ok: the schema is an untyped JSON dict
             is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
-            # integer strings too: a schema already in Gemini's form holds its values as strings
-            is_integer_enum: Final = is_integer_type and all(
-                (isinstance(value, int) and not isinstance(value, bool))
-                or (isinstance(value, str) and value.lstrip("-").isdigit())
-                for value in enum_values
+            integer_enum: Final = (
+                _gemini_integer_enum(cast(Sequence[object], schema["enum"]))  # cast-ok: an untyped JSON list
+                if send_integer_enums and is_integer_type
+                else None
             )
-            if is_integer_enum:
+            if integer_enum is not None:
                 schema["format"] = "enum"  # rebind-ok: this function edits the schema in place by design
-                schema["enum"] = [str(value) for value in enum_values]  # rebind-ok: same in-place edit
+                schema["enum"] = list(integer_enum)  # rebind-ok: same in-place edit
             else:
                 schema.pop("enum", None)
 
@@ -717,20 +738,20 @@ def _fix_enum_types(schema, depth=0):
     properties: Final = schema.get("properties", None)
     if properties is not None:
         for _, value in properties.items():
-            _fix_enum_types(value, depth=depth + 1)
+            _fix_enum_types(value, depth=depth + 1, send_integer_enums=send_integer_enums)
 
     items: Final = schema.get("items", None)
     if items is not None:
-        _fix_enum_types(items, depth=depth + 1)
+        _fix_enum_types(items, depth=depth + 1, send_integer_enums=send_integer_enums)
 
     anyof = schema.get("anyOf", None)
     if anyof is not None and isinstance(anyof, list):
         for item in anyof:
             if isinstance(item, dict):
-                _fix_enum_types(item, depth=depth + 1)
+                _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
-def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+def build_vertex_schema(parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -740,6 +761,7 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         parameters: dict - the json schema to build from
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
+        send_integer_enums: bool - whether to send integer enums in Gemini's `format: "enum"` form instead of removing them
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -765,7 +787,7 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     _fix_enum_empty_strings(parameters)
 
     # Remove enums for non-string typed fields (Gemini requires enum only on strings)
-    _fix_enum_types(parameters)
+    _fix_enum_types(parameters, send_integer_enums=send_integer_enums)
 
     # Handle empty items objects
     process_items(parameters)
@@ -1083,6 +1105,17 @@ def _convert_schema_types(schema, depth=0):
                         if field in schema:
                             item_schema[field] = deepcopy(schema[field])
                     any_of.append(item_schema)
+                elif t == "integer" and "enum" in schema and isinstance(schema["enum"], list):
+                    any_of.append(
+                        {
+                            "type": t,
+                            "enum": [
+                                value
+                                for value in cast(list[object], schema["enum"])  # cast-ok: an untyped JSON list
+                                if value is not None
+                            ],
+                        }
+                    )
                 else:
                     # For primitive types, only include the type
                     any_of.append({"type": t})

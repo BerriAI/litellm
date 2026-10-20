@@ -239,3 +239,22 @@ async def test_generate_content_stream_parses_function_call(
         },
     )
     assert _JSON_OBJECT.validate_json(route.calls.last.request.content)["tools"] == tools
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-flash-latest", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-1.5-pro", {"type": "integer"}),
+    ],
+)
+def test_normalize_response_schema_sends_integer_enums_to_gemini_3(
+    model: str, expected_level: dict[str, object]
+) -> None:
+    config_dict: Final = {
+        "responseSchema": {"type": "object", "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}}}
+    }
+
+    GoogleGenAIConfig._normalize_response_schema(config_dict, model)
+
+    assert config_dict["responseSchema"]["properties"]["level"] == expected_level

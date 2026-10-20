@@ -16,7 +16,7 @@ from litellm.llms.vertex_ai.common_utils import (
     build_vertex_schema,
     supports_response_json_schema,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig, VertexLLM
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -328,7 +328,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             if json_schema_key is not None:
                 generate_content_config_dict.pop(json_schema_key)
             generate_content_config_dict[schema_key] = build_vertex_schema(
-                parameters=deepcopy(value), add_property_ordering=True
+                parameters=deepcopy(value),
+                add_property_ordering=True,
+                send_integer_enums=VertexGeminiConfig.is_gemini_3_or_newer(model),
             )
 
     def transform_generate_content_request(

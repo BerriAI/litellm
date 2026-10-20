@@ -2120,7 +2120,16 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     ]
 
 
-def test_gemini_tool_mapping_leaves_caller_tools_intact_for_fallbacks() -> None:
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-3.8-flash", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-2.5-flash", {"type": "integer"}),
+    ],
+)
+def test_gemini_tool_mapping_sends_integer_enums_to_gemini_3_and_keeps_caller_tools(
+    model: str, expected_level: dict[str, object]
+) -> None:
     tools: Final = [
         {
             "type": "function",
@@ -2141,14 +2150,43 @@ def test_gemini_tool_mapping_leaves_caller_tools_intact_for_fallbacks() -> None:
     request_params: Final = VertexGeminiConfig().map_openai_params(
         non_default_params={"tools": tools},
         optional_params={},
-        model="gemini-2.5-flash",
+        model=model,
         drop_params=False,
     )
 
     sent_level: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"]
-    assert sent_level["format"] == "enum"
-    assert sent_level["enum"] == ["1", "2", "5"]
+    assert sent_level == expected_level
     assert tools == caller_tools
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-flash-latest", {"type": "integer", "format": "enum", "enum": ["1", "2", "5"]}),
+        ("gemini-1.5-pro", {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_sends_integer_enums_to_gemini_3(model: str, expected_level: dict[str, object]) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
 
 
 def test_vertex_ai_transform_parts():
