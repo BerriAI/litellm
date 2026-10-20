@@ -2160,6 +2160,35 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
 
 
+@pytest.mark.parametrize(("prompt_tokens", "expected_rate"), [(1_000, 1e-7), (250_000, 5e-7)])
+def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monkeypatch, prompt_tokens, expected_rate):
+    """A deployment that declares ``input_cost_per_token_above_200k_tokens`` next to its standard rate
+    bills a 250k-token prompt at the tier on the success path; the failure row must not flatten it to
+    the standard rate."""
+    from litellm.proxy.utils import _estimated_input_cost
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit-f9-tiered",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-7,
+            "input_cost_per_token_above_200k_tokens": 5e-7,
+            "output_cost_per_token": 4e-7,
+        },
+    )
+
+    response_cost = _estimated_input_cost(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        prompt_tokens=prompt_tokens,
+        deployment_id="dep-lit-f9-tiered",
+        base_model=None,
+    )
+
+    assert response_cost == pytest.approx(prompt_tokens * expected_rate)
+
+
 def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
     """The router leaves one RetryAttemptRecord per failed attempt in metadata.previous_models, the
     final attempt included; the earlier Timeout ones are billed (each at the deployment that served
