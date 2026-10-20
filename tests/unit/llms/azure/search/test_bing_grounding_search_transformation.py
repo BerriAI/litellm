@@ -134,8 +134,8 @@ def test_default_entra_minter_reuses_provider(monkeypatch: pytest.MonkeyPatch) -
 
 def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib
+    import itertools
     import threading
-    import time
     from concurrent.futures import ThreadPoolExecutor
 
     from azure.core.credentials import AccessToken
@@ -143,24 +143,23 @@ def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pyte
 
     from litellm.llms.azure import common_utils
 
+    far_future_expiry: Final = 4_102_444_800
     second_fetch_started: Final = threading.Event()
-    fetches: Final[list[tuple[str, ...]]] = []
+    fetch_numbers: Final = itertools.count()
 
     class SlowCredential:
         def get_token(self, *scopes: str, **_: object) -> AccessToken:
-            fetches.append(scopes)
-            if len(fetches) == 1:
+            if next(fetch_numbers) == 0:
                 second_fetch_started.wait(timeout=0.5)
             else:
                 second_fetch_started.set()
-            return AccessToken("entra-token", int(time.time()) + 3600)
+            return AccessToken(f"entra-token-for-{' '.join(scopes)}", far_future_expiry)
 
     second_build_started: Final = threading.Event()
-    builds: Final[list[str]] = []
+    build_numbers: Final = itertools.count()
 
     def provider_factory(azure_scope: str) -> object:
-        builds.append(azure_scope)
-        if len(builds) == 1:
+        if next(build_numbers) == 0:
             second_build_started.wait(timeout=0.5)
         else:
             second_build_started.set()
@@ -177,8 +176,8 @@ def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pyte
     finally:
         common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
 
-    assert [h["Authorization"] for h in headers] == ["Bearer entra-token"] * 4
-    assert fetches == [("https://ai.azure.com/.default",)]
+    assert [h["Authorization"] for h in headers] == ["Bearer entra-token-for-https://ai.azure.com/.default"] * 4
+    assert next(fetch_numbers) == 1
 
 
 def test_validate_environment_does_not_mutate_and_is_idempotent():

@@ -5,10 +5,11 @@ import os
 import re
 import threading
 from collections.abc import Awaitable, Callable, Hashable, Mapping
+from concurrent.futures import Future
 from contextlib import closing
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, TypeVar, cast
+from typing import Final, Generic, Literal, NamedTuple, TypeVar, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -175,24 +176,60 @@ def _shared_async_azure_ad_token_provider(
     return _single_flight_async_azure_ad_token_provider(provider)
 
 
+class _SingleFlight(Generic[_Token]):
+    def __init__(self, provider: Callable[[], _Token]) -> None:
+        self._provider: Final = provider
+        self._lock: Final = threading.Lock()
+        self._attempt: Future[_Token] | None = None
+
+    def __call__(self) -> _Token:
+        return self.fetch()[0]
+
+    def fetch(self) -> tuple[_Token, bool]:
+        attempt, leads = self._join_or_start()
+        if not leads:
+            return attempt.result(), False
+        return self._settle(attempt), True
+
+    def _join_or_start(self) -> tuple[Future[_Token], bool]:
+        with self._lock:
+            if self._attempt is not None:
+                return self._attempt, False
+            self._attempt = Future()
+            return self._attempt, True
+
+    def _settle(self, attempt: Future[_Token]) -> _Token:
+        try:
+            token: Final = self._provider()
+        except BaseException as error:
+            self._end()
+            attempt.set_exception(error)
+            raise
+        self._end()
+        attempt.set_result(token)
+        return token
+
+    def _end(self) -> None:
+        with self._lock:
+            self._attempt = None
+
+
 def _single_flight_azure_ad_token_provider(provider: Callable[[], _Token]) -> Callable[[], _Token]:
-    single_flight: Final = threading.Lock()
-
-    def fetch_one_at_a_time() -> _Token:
-        with single_flight:
-            return provider()
-
-    return fetch_one_at_a_time
+    return _SingleFlight(provider)
 
 
 def _single_flight_async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
-    fetch_one_at_a_time: Final = _single_flight_azure_ad_token_provider(provider)
+    single_flight: Final = _SingleFlight(provider)
 
     async def async_provider() -> str:
-        token: Final = await asyncio.to_thread(fetch_one_at_a_time)
-        return token if isinstance(token, str) else await token
+        token, led = await asyncio.to_thread(single_flight.fetch)
+        if isinstance(token, str):
+            return token
+        # A coroutine can be awaited only once, so callers that joined another caller's attempt start their own
+        own: Final = token if led else provider()
+        return own if isinstance(own, str) else await own
 
     return async_provider
 
