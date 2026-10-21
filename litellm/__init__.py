@@ -547,7 +547,13 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.get_model_cost_map import (
+    areload_model_cost_map as areload_model_cost_map,
+    get_model_cost_map,
+    mark_litellm_import_complete,
+    reload_model_cost_map as reload_model_cost_map,
+)
+from litellm.litellm_core_utils.model_cost_store import set_model_cost_overrides as set_model_cost_overrides
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -2319,6 +2325,7 @@ if TYPE_CHECKING:
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
     register_model: Callable[..., None]
+    invalidate_model_cost_caches: Callable[[], None]
     encode: Callable[..., list]
     decode: Callable[..., str]
     calculate_retry_after: Callable[..., float]

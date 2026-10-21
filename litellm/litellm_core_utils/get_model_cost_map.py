@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from itertools import chain
@@ -225,6 +226,7 @@ RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 _litellm_import_complete = threading.Event()
+MODEL_COST_WRITE_LOCK: Final = threading.Lock()
 
 
 def mark_litellm_import_complete() -> None:
@@ -666,13 +668,56 @@ def adopt_model_cost_map(
 ) -> int:
     import litellm
     from litellm import utils
+    from litellm.litellm_core_utils.model_cost_store import replay_model_cost_overrides
 
-    litellm.model_cost = new_model_cost_map
-    utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
-    litellm.add_known_models(model_cost_map=new_model_cost_map)
-    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
-    utils.reapply_runtime_model_cost_registrations()
+    with MODEL_COST_WRITE_LOCK:
+        litellm.model_cost = new_model_cost_map
+        utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+        litellm.add_known_models(model_cost_map=new_model_cost_map)
+        fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
+        utils.reapply_runtime_model_cost_registrations()
+        replay_model_cost_overrides()
     return fetched_model_count
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCostMapAdopted:
+    models_count: int
+
+
+async def _reload_model_cost_map(
+    url: str | None, client: "_AsyncGetClient | None"
+) -> ModelCostMapAdopted | ModelCostMapReloadUnavailable:
+    import litellm
+
+    result: Final = await refetch_model_cost_map(
+        url=url if url is not None else litellm.model_cost_map_url, client=client
+    )
+    match result:
+        case ModelCostMapReloadUnavailable():
+            return result
+        case ModelCostMapReloaded(model_cost_map=fetched):
+            return ModelCostMapAdopted(models_count=adopt_model_cost_map(fetched))
+
+
+async def areload_model_cost_map(url: str | None = None) -> ModelCostMapAdopted | ModelCostMapReloadUnavailable:
+    """Refetch the cost map (``url`` defaults to ``litellm.model_cost_map_url``), then adopt it and replay
+    ``register_model`` recordings, live router deployments and ``set_model_cost_overrides`` owners on top.
+    On ``ModelCostMapReloadUnavailable`` the current map is kept."""
+    return await _reload_model_cost_map(url, client=None)
+
+
+async def _reload_model_cost_map_with_own_client(
+    url: str | None,
+) -> ModelCostMapAdopted | ModelCostMapReloadUnavailable:
+    async with httpx.AsyncClient() as client:
+        return await _reload_model_cost_map(url, client=client)
+
+
+def reload_model_cost_map(url: str | None = None) -> ModelCostMapAdopted | ModelCostMapReloadUnavailable:
+    """Blocking ``areload_model_cost_map``, safe to call whether or not an event loop is running."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(_reload_model_cost_map_with_own_client(url))).result()
 
 
 def _retry_remote_fetch_in_background(
