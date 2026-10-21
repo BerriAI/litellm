@@ -5754,6 +5754,23 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    if team_object is not None and not team_object.models and team_object.access_group_ids:
+        return can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(
+                await _models_granted_by_groups_only(
+                    model=model,
+                    access_group_ids=team_object.access_group_ids,
+                    prisma_client=prisma_client,
+                    object_type="team",
+                )
+            ),
+            team_model_aliases=team_model_aliases,
+            team_id=team_object.team_id,
+            key_model_aliases=key_model_aliases,
+            object_type="team",
+        )
     try:
         return can_object_call_model(
             model=model,
