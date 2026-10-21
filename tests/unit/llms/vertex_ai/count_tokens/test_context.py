@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import time
 import uuid
 from collections.abc import Generator
@@ -18,10 +19,13 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     truncate_tool_name,
 )
 from litellm.llms.vertex_ai.count_tokens.context import (
+    CountContextEdits,
+    InferenceRequestView,
     VertexGeminiCountContext,
     VertexGeminiCountContextError,
     gemini_count_contents,
     inference_request_view,
+    unconvertible_messages_error,
     vertex_gemini_count_context,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -31,6 +35,7 @@ _SCHEMA: Final[JsonValue] = {
     "properties": {},
     "additionalProperties": False,
 }
+_NO_EDITS: Final = CountContextEdits(spec=None, model="gemini/gemini-2.5-flash", tools=None)
 _FUNCTION_DECLARATION: Final = {
     "functionDeclarations": [
         {
@@ -383,8 +388,8 @@ async def test_image_that_cannot_be_fetched_returns_an_error_value(
 @pytest.mark.parametrize(
     "system", ("Be brief.", [{"type": "text", "text": "Be brief."}]), ids=("string-system", "text-block-system")
 )
-def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block(system: JsonValue) -> None:
-    view: Final = inference_request_view(
+async def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block(system: JsonValue) -> None:
+    view: Final = await inference_request_view(
         (
             {"role": "user", "content": "first question " * 50},
             {"role": "assistant", "content": [{"type": "compaction", "content": "Summary of the earlier turns."}]},
@@ -392,16 +397,18 @@ def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block(sys
         ),
         system,
         "anthropic",
+        _NO_EDITS,
     )
 
+    assert isinstance(view, InferenceRequestView)
     assert view.messages == [{"role": "user", "content": "latest question"}]
     assert "Summary of the earlier turns." in str(view.system)
     assert "Be brief." in str(view.system)
 
 
-def test_anthropic_view_flattens_a_replayed_web_search_result_into_text() -> None:
+async def test_anthropic_view_flattens_a_replayed_web_search_result_into_text() -> None:
     snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
-    view: Final = inference_request_view(
+    view: Final = await inference_request_view(
         (
             {"role": "user", "content": "What is new?"},
             {
@@ -426,18 +433,21 @@ def test_anthropic_view_flattens_a_replayed_web_search_result_into_text() -> Non
         ),
         None,
         "anthropic",
+        _NO_EDITS,
     )
 
+    assert isinstance(view, InferenceRequestView)
     assistant_blocks: Final = TypeAdapter(list[dict[str, str]]).validate_python(view.messages[1]["content"])
     assert [block["type"] for block in assistant_blocks] == ["text"]
     assert snippet in assistant_blocks[0]["text"]
 
 
-def test_openai_view_is_the_request_unchanged() -> None:
+async def test_openai_view_is_the_request_unchanged() -> None:
     messages: Final = ({"role": "user", "content": [{"type": "compaction", "content": "kept"}]},)
 
-    view: Final = inference_request_view(messages, "Be brief.", "openai")
+    view: Final = await inference_request_view(messages, "Be brief.", "openai", _NO_EDITS)
 
+    assert isinstance(view, InferenceRequestView)
     assert view.messages == messages
     assert view.system == "Be brief."
 
@@ -470,7 +480,7 @@ async def test_gcs_media_type_lookup_uses_the_deployment_vertex_project() -> Non
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
-def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
+async def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
     custom_llm_provider: Literal["vertex_ai", "gemini"],
 ) -> None:
     snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
@@ -498,9 +508,163 @@ def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
         {"role": "user", "content": "Thanks."},
     )
 
-    view: Final = inference_request_view(messages, None, "anthropic")
-    contents: Final = asyncio.run(
-        gemini_count_contents(view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {})
+    view: Final = await inference_request_view(messages, None, "anthropic", _NO_EDITS)
+    assert isinstance(view, InferenceRequestView)
+    contents: Final = await gemini_count_contents(
+        view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {}
     )
 
     assert snippet in str(contents)
+
+
+_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
+_READ_FILE_TOOL: Final[dict[str, object]] = {
+    "name": "read_file",
+    "description": "Read a file",
+    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+}
+_CLEAR_EDIT: Final[JsonValue] = {
+    "type": "clear_tool_uses_20250919",
+    "trigger": {"type": "input_tokens", "value": 500},
+    "keep": {"type": "tool_uses", "value": 1},
+}
+_CLEAR_OLD_TOOL_RESULTS: Final[JsonValue] = {"edits": [_CLEAR_EDIT]}
+
+
+def _agent_turns(rounds: int, first_round: int = 0) -> tuple[dict[str, JsonValue], ...]:
+    return (
+        *(
+            turn
+            for index in range(first_round, first_round + rounds)
+            for turn in (
+                {"role": "user", "content": f"Read file {index}."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": _TOOL_OUTPUT}],
+                },
+            )
+        ),  # comprehension-ok: flattens each round into its three turns
+        {"role": "user", "content": "Summarize what you read."},
+    )
+
+
+def _tool_outputs_kept(view: InferenceRequestView) -> tuple[bool, ...]:
+    return tuple(
+        _TOOL_OUTPUT in str(message["content"]) for message in view.messages if "tool_result" in str(message["content"])
+    )
+
+
+def _edits(spec: JsonValue) -> CountContextEdits:
+    return CountContextEdits(spec=spec, model="gemini/gemini-2.5-flash", tools=(_READ_FILE_TOOL,))
+
+
+async def test_anthropic_view_clears_the_tool_results_inference_clears() -> None:
+    view: Final = await inference_request_view(_agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
+
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (False, False, True)
+
+
+async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction_summary_model() -> None:
+    spec: Final[JsonValue] = {
+        "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50000}}, _CLEAR_EDIT]
+    }
+    turns: Final = (
+        {"role": "user", "content": "first question " * 30000},
+        {"role": "assistant", "content": "first answer"},
+        *_agent_turns(3),
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="gemini/gemini-2.5-flash",
+        ),
+        patch.object(litellm, "acompletion", side_effect=AssertionError("count_tokens must not summarize")) as summary,
+    ):
+        view: Final = await inference_request_view(turns, None, "anthropic", _edits(spec))
+
+    assert summary.call_count == 0
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (False, False, True)
+
+
+async def test_anthropic_view_counts_the_unedited_body_without_an_error_log_when_an_edit_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")),
+        caplog.at_level(logging.DEBUG, logger="LiteLLM"),
+    ):
+        view: Final = await inference_request_view(_agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
+
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (True, True, True)
+    assert any("skipping edits" in record.getMessage() for record in caplog.records)
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
+async def test_anthropic_view_counts_the_turns_after_a_compaction_block_when_an_edit_before_compact_fails() -> None:
+    clear_before_compact: Final[JsonValue] = {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "tool_uses", "value": 3},
+                "keep": {"type": "tool_uses", "value": 1},
+            },
+            {"type": "compact_20260112"},
+        ]
+    }
+    turns: Final = (
+        *_agent_turns(3)[:-1],
+        {"role": "assistant", "content": [{"type": "compaction", "content": "Read files 0 to 2."}]},
+        *_agent_turns(2, first_round=3),
+    )
+
+    view: Final = await inference_request_view(turns, None, "anthropic", _edits(clear_before_compact))
+
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (True, True)
+    assert "Read files 0 to 2." in str(view.system)
+
+
+async def test_anthropic_view_rejects_a_compact_trigger_inference_rejects() -> None:
+    low_trigger: Final[JsonValue] = {
+        "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]
+    }
+
+    view: Final = await inference_request_view(_agent_turns(1), None, "anthropic", _edits(low_trigger))
+
+    assert isinstance(view, VertexGeminiCountContextError)
+    assert view.status_code == 400
+
+
+async def test_anthropic_view_names_the_block_gemini_cannot_count_when_an_edit_trigger_cannot_tokenize_it() -> None:
+    turns: Final = (
+        *_agent_turns(1)[:-1],
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "search_result",
+                    "source": "https://docs.litellm.ai",
+                    "title": "Docs",
+                    "content": [{"type": "text", "text": "LiteLLM docs"}],
+                }
+            ],
+        },
+    )
+
+    view: Final = await inference_request_view(turns, None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
+
+    assert isinstance(view, InferenceRequestView)
+    blocks_error: Final = unconvertible_messages_error(view.messages, "anthropic")
+    assert blocks_error is not None
+    assert blocks_error.status_code == 400
+    assert "search_result" in blocks_error.error_message

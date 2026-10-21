@@ -33,6 +33,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
+from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -369,6 +370,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -468,6 +470,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -563,6 +566,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -2137,6 +2141,47 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
+
+    @pytest.mark.asyncio
+    async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = BedrockError(
+            status_code=400,
+            message="requestMetadata can contain a maximum of 16 items",
+            headers={"x-amzn-errortype": "ValidationException"},
+        )
+
+        with pytest.raises(AwsErrorTypeProxyException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.aws_error_type == "ValidationException"
+        assert "requestMetadata can contain a maximum of 16 items" in exc_info.value.error.message
+        assert exc_info.value.error.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_without_an_aws_error_type_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(BedrockError(status_code=400, message="bad request"))
+
+        assert exc_info.value.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_error_with_a_non_ascii_header_value_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = HTTPException(status_code=403, detail="model not allowed", headers={"x-model-group": "modèle"})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),

@@ -151,6 +151,8 @@ class LoggingSurface(Protocol):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
+        *,
+        for_async_request: bool = False,
         **kwargs: object,
     ) -> None: ...
 

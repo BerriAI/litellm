@@ -275,6 +275,7 @@ async def new_tag(
     """
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
         litellm_proxy_admin_name,
         llm_router,
         prisma_client,
@@ -316,6 +317,7 @@ async def new_tag(
         )
 
         await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+        await invalidate_spend_counter(counter_key=f"spend:tag:{tag.name}")
 
         # Update models with new tag
         if tag.models:

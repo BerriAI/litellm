@@ -231,9 +231,6 @@
     "max-lines": {
       "count": 1
     },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
     "react/no-unescaped-entities": {
       "count": 2
     }
@@ -1127,9 +1124,6 @@
   "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
     "react-hooks/purity": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
@@ -1775,11 +1769,6 @@
       "count": 1
     }
   },
-  "src/components/molecules/cost_optimization_feedback_banner.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/navbar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2090,9 +2079,24 @@
       "count": 1
     }
   },
+  "src/components/ui/attachment.tsx": {
+    "local/no-ad-hoc-z-index": {
+      "count": 2
+    }
+  },
+  "src/components/ui/message-scroller.tsx": {
+    "local/no-noop-hover-variant": {
+      "count": 1
+    }
+  },
   "src/components/ui/slider.tsx": {
     "no-nested-ternary": {
       "count": 1
+    }
+  },
+  "src/components/ui/toggle-group.tsx": {
+    "local/no-ad-hoc-z-index": {
+      "count": 2
     }
   },
   "src/components/update_model_credentials_modal.tsx": {

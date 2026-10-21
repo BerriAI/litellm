@@ -586,6 +586,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,
@@ -3058,7 +3061,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             #########################################################################
             if raw_sse:
                 for sse_chunk in (
-                    anthropic_sse_chunks_from_response(assembled_model_response)
+                    anthropic_sse_chunks_from_response(assembled_model_response, all_chunks)
                     if model_response_text(assembled_model_response) != pre_guardrail_text
                     else all_chunks
                 ):

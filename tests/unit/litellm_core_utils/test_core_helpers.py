@@ -1,10 +1,14 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import json
 import logging
+import threading
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
@@ -13,19 +17,21 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
+    preserve_upstream_non_openai_attributes,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ImageResponse, TranscriptionResponse
+from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -52,6 +58,46 @@ def test_native_request_id_survives_stream_header_processing(header: str) -> Non
 
     assert processed["request-id"] == "req_native"
     assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
+
+
+def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_values() -> None:
+    original_chunk: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))],
+        scalar_attribute="scalar",
+        structured_attribute={"items": ["value"]},
+    )
+    model_response: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))]
+    )
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    assert model_response.scalar_attribute == "scalar"
+    assert model_response.structured_attribute == {"items": ["value"]}
+
+
+@pytest.mark.parametrize("last_extra_value", [9, {"nested": 9}], ids=["all_scalar", "one_structured"])
+def test_preserve_upstream_non_openai_attributes_keeps_upstream_key_order(last_extra_value: object) -> None:
+    extra_names: Final = ("zeta", "alpha", "mid", "beta", "omega", "delta", "kappa", "gamma", "theta", "iota")
+    extras: Final = {
+        **{f"extra_{name}": index for index, name in enumerate(extra_names[:-1])},
+        f"extra_{extra_names[-1]}": last_extra_value,
+    }
+    original_chunk: Final = ChatCompletionChunk(
+        id="chatcmpl-1",
+        created=0,
+        model="gpt-x",
+        object="chat.completion.chunk",
+        choices=[],
+        service_tier="default",
+        **extras,
+    )
+    model_response: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hello"))])
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    serialized_keys: Final = tuple(json.loads(model_response.model_dump_json(exclude_none=True, exclude_unset=True)))
+    assert serialized_keys[-len(extras) - 1 :] == ("service_tier", *extras)
 
 
 class TestBudgetReservationBinding:
@@ -587,3 +633,55 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:
+    metadata: Final[dict[str, object]] = {}
+
+    def logging_thread_records_hidden_params() -> None:
+        metadata["hidden_params"] = {"response_cost": 0.1}
+
+    class KeyCheckedWhileTheLoggingThreadRuns(str):
+        def __contains__(self, key: str) -> bool:
+            writer: Final = threading.Thread(target=logging_thread_records_hidden_params)
+            writer.start()
+            writer.join()
+            return super().__contains__(key)
+
+    metadata[KeyCheckedWhileTheLoggingThreadRuns("user_api_key_alias")] = "alias"
+    metadata["user_api_key_hash"] = "hash"
+    metadata["requester_ip_address"] = "10.0.0.1"
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key_alias": "stale", "model_group": "claude"}
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {"litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata}}
+    )
+
+    assert "hidden_params" in metadata
+    assert merged == {"user_api_key_alias": "alias", "user_api_key_hash": "hash", "model_group": "claude"}
+
+
+def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping() -> None:
+    class ReadOnlyMetadata(Mapping[str, object]):
+        def __init__(self, values: dict[str, object]) -> None:
+            self._values: Final = values
+
+        def __getitem__(self, key: str) -> object:
+            return self._values[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {
+            "litellm_params": {
+                "metadata": ReadOnlyMetadata({"user_api_key_hash": "hash", "requester_ip_address": "10.0.0.1"}),
+                "litellm_metadata": {"model_group": "claude"},
+            }
+        }
+    )
+
+    assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}

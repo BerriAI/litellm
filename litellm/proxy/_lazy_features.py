@@ -156,17 +156,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/v1/mcp/",),
     ),
     LazyFeature(
-        # Also serves /.well-known/oauth-* (OAuth metadata discovery).
-        # No /mcp/oauth prefix here: the mounted /mcp sub-app would
-        # shadow it, and there are no actual routes there anyway.
-        name="mcp_byok_oauth",
-        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
-        path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
-    ),
-    LazyFeature(
         # Serves OAuth dance endpoints (/authorize, /token, /callback,
         # /register) plus several /.well-known/ discovery URLs at the proxy
         # root — needed for MCP-over-OAuth flows even before /mcp is hit.
+        # Registered before mcp_byok_oauth, which also claims the root
+        # /.well-known/oauth-authorization-server: the root document is the
+        # gateway's own authorization server metadata (token endpoint /token).
         name="mcp_discoverable",
         module_path="litellm.proxy._experimental.mcp_server.discoverable_endpoints",
         path_prefixes=(
@@ -184,6 +179,14 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
+    ),
+    LazyFeature(
+        # Also serves /.well-known/oauth-* (OAuth metadata discovery).
+        # No /mcp/oauth prefix here: the mounted /mcp sub-app would
+        # shadow it, and there are no actual routes there anyway.
+        name="mcp_byok_oauth",
+        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
+        path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
     ),
     LazyFeature(
         name="mcp_rest",

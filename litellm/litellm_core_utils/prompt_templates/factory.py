@@ -9,10 +9,11 @@ import xml.etree.ElementTree as ET
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict, cast, overload
+from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
 import litellm.types
@@ -1668,7 +1669,7 @@ def _replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Patte
     return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
 
 
-def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
     return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
@@ -1814,7 +1815,7 @@ def convert_to_anthropic_tool_result(
         tool_message: Final[ChatCompletionToolMessage] = message
         tool_call_id: str = tool_message["tool_call_id"]
         # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = sanitize_anthropic_tool_use_id(tool_call_id)
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
@@ -1828,7 +1829,7 @@ def convert_to_anthropic_tool_result(
         function_message: Final[ChatCompletionFunctionMessage] = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
         # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = sanitize_anthropic_tool_use_id(tool_call_id)
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result",
             tool_use_id=sanitized_tool_use_id,
@@ -2036,7 +2037,7 @@ def convert_to_anthropic_tool_invoke(
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
         else:
-            sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
+            sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
                 id=sanitized_tool_id,
@@ -2582,6 +2583,48 @@ def _with_native_redacted_data(
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
+def _client_tool_result(message: AllMessageValues, replaced_server_tool_answers: frozenset[str]) -> bool:
+    return (
+        message_field(message, "role") in ("tool", "function")
+        and message_field(message, "tool_call_id") not in replaced_server_tool_answers
+    )
+
+
+def _tool_result_later_in_turn(
+    messages: Sequence[AllMessageValues], replaced_server_tool_answers: frozenset[str]
+) -> tuple[bool, ...]:
+    from_the_end: Final = itertools.accumulate(
+        reversed(messages),
+        lambda later, message: (
+            message_field(message, "role") in ("user", "tool", "function")
+            and (later or _client_tool_result(message, replaced_server_tool_answers))
+        ),
+        initial=False,
+    )
+    return tuple(from_the_end)[::-1][1:]
+
+
+def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
+    return placeholder
+
+
+def _cache_breakpoint_placeholder(
+    message: AllMessageValues, tool_result_follows: bool
+) -> tuple[AnthropicMessagesTextParam, ...]:
+    if tool_result_follows or not message_field(message, "cache_control"):
+        return ()
+    return (_empty_text_placeholder(message),)
+
+
+def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicMessagesTextParam | None:
+    empty_user_message: Final = next(
+        (message for message in reversed(span) if message["role"] == "user" and not message.get("content")), None
+    )
+    return None if empty_user_message is None else _empty_text_placeholder(empty_user_message)
+
+
 def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
@@ -2636,6 +2679,7 @@ def anthropic_messages_pt(
     is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
     force_base64 = is_bedrock_invoke or is_vertex_ai
 
+    tool_result_later_in_turn: Final = _tool_result_later_in_turn(messages, replaced_server_tool_answers)
     msg_i = 0
     while msg_i < len(messages):
         user_content: list[AnthropicMessagesUserMessageValues] = []
@@ -2648,8 +2692,12 @@ def anthropic_messages_pt(
                 ChatCompletionToolMessage | ChatCompletionUserMessage | ChatCompletionFunctionMessage
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
-                if isinstance(user_message_types_block["content"], list):
-                    for m in user_message_types_block["content"]:
+                if not (user_block_content := user_message_types_block.get("content")):
+                    user_content.extend(
+                        _cache_breakpoint_placeholder(user_message_types_block, tool_result_later_in_turn[msg_i])
+                    )
+                elif isinstance(user_block_content, list):
+                    for m in user_block_content:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
                             format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
@@ -2720,10 +2768,10 @@ def anthropic_messages_pt(
                                     _file_content_element,
                                 )
                             )
-                elif isinstance(user_message_types_block["content"], str):
+                elif isinstance(user_block_content, str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
-                        "text": user_message_types_block["content"],
+                        "text": user_block_content,
                     }
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_content_text_element,
@@ -2747,6 +2795,8 @@ def anthropic_messages_pt(
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
+        elif (placeholder := _empty_user_turn_placeholder(messages[init_msg_i:msg_i])) is not None:
+            new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
         unique_tool_ids: set[str] = set()
@@ -4253,6 +4303,24 @@ def _with_text_when_document_only(message: BedrockMessageBlock) -> BedrockMessag
     return BedrockMessageBlock(role="user", content=[*blocks[:cut], placeholder, *blocks[cut:]])
 
 
+def _rstrip_text_block(block: BedrockContentBlock) -> BedrockContentBlock:
+    return BedrockContentBlock(text=block["text"].rstrip()) if "text" in block else block
+
+
+def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    """Claude on Converse rejects a final assistant turn that ends in whitespace, as the Anthropic path strips it."""
+    if message["role"] != "assistant":
+        return message
+    blocks: Final = message["content"]
+    last_text_index: Final = max((index for index, block in enumerate(blocks) if "text" in block), default=None)
+    return BedrockMessageBlock(
+        role="assistant",
+        content=[
+            _rstrip_text_block(block) if index == last_text_index else block for index, block in enumerate(blocks)
+        ],
+    )
+
+
 def _ensure_document_messages_have_text(
     contents: list[BedrockMessageBlock],
 ) -> list[BedrockMessageBlock]:
@@ -4844,7 +4912,12 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+        converse_messages: Final = _ensure_document_messages_have_text(
+            _rename_duplicate_bedrock_document_names(contents)
+        )
+        if not (to_claude and converse_messages):
+            return converse_messages
+        return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5253,7 +5326,10 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    if not (to_claude and converse_messages):
+        return converse_messages
+    return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
@@ -5428,14 +5504,14 @@ def _bedrock_tools_pt(
             description = name
 
         defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs)
+        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
         # Expand $ref references in parameters using the definitions
         # Note: We don't pre-flatten defs as that causes exponential memory growth
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         normalize_json_schema_custom_types_to_object(parameters)
-        if parameters.get("type") not in _valid_json_schema_root_types:
+        if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"
         tool_block = cast(
             BedrockToolBlock,
@@ -5455,6 +5531,11 @@ def _bedrock_tools_pt(
             tool_block_list.append(cache_point_tool_block)
 
     return tool_block_list
+
+
+def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
+    """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
 
 
 def _is_system_message(message: Mapping[str, object]) -> bool:
@@ -5516,7 +5597,7 @@ def function_call_prompt(
     ]
 
 
-def response_schema_prompt(model: str, response_schema: dict) -> str:
+def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
     """
     Decides if a user-defined custom prompt or default needs to be used
 
@@ -5532,11 +5613,8 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
 
     if custom_prompt_details is not None:
-        return custom_prompt(
-            role_dict=custom_prompt_details["roles"],
-            initial_prompt_value=custom_prompt_details["initial_prompt_value"],
-            final_prompt_value=custom_prompt_details["final_prompt_value"],
-            messages=response_schema_as_message,
+        return render_custom_prompt_template(
+            template=custom_prompt_details, messages=response_schema_as_message, model=model, llm_provider=llm_provider
         )
     else:
         return default_response_schema_prompt(response_schema=response_schema)
@@ -5556,8 +5634,95 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 
 # Custom prompt template
+def _mapping_or_none(value: object) -> object:
+    if value is None or issubclass(type(value), Mapping):
+        return value
+    verbose_logger.warning(
+        "Ignoring a custom prompt template roles value of type %s because it is not a mapping, "
+        "so those messages render without role markers",
+        type(value).__name__,
+    )
+    return None
+
+
+class CustomPromptRole(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    pre_message: str | None = None
+    post_message: str | None = None
+
+
+class CustomPromptRoles(BaseModel):
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
+
+    roles: Mapping[str, Annotated[CustomPromptRole | None, BeforeValidator(_mapping_or_none)]]
+
+
+class CustomPromptTemplate(BaseModel):
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
+
+    roles: Annotated[Mapping[object, object] | None, BeforeValidator(_mapping_or_none)] = None
+    initial_prompt_value: str | None = None
+    final_prompt_value: str | None = None
+
+    @model_validator(mode="after")
+    def _sets_a_rendered_field(self) -> "CustomPromptTemplate":
+        if self.roles is None and self.initial_prompt_value is None and self.final_prompt_value is None:
+            raise PydanticCustomError(
+                "empty_custom_prompt_template",
+                "it sets none of roles, initial_prompt_value, or final_prompt_value",
+            )
+        return self
+
+
+def render_custom_prompt_template(
+    template: Mapping[str, object],
+    messages: Sequence[Mapping[str, object]],
+    model: str,
+    llm_provider: str,
+) -> str:
+    try:
+        return _render_custom_prompt_template(template=template, messages=messages)
+    except ValidationError as error:
+        raise litellm.APIConnectionError(
+            message=f"The custom prompt template for {model} is invalid: {_describe_template_errors(error)}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
+
+
+def _describe_template_errors(error: ValidationError) -> str:
+    return "; ".join(
+        _describe_template_error(detail) for detail in error.errors(include_url=False, include_input=False)
+    )
+
+
+def _describe_template_error(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
+    validated: Final = CustomPromptTemplate.model_validate(template)
+    message_roles: Final = frozenset(message.get("role") for message in messages)
+    template_roles: Final = validated.roles or {}
+    used_roles: Final = CustomPromptRoles.model_validate(
+        {"roles": {role: entry for role, entry in template_roles.items() if role in message_roles}}
+    )
+    return custom_prompt(
+        role_dict={
+            role: {"pre_message": entry.pre_message or "", "post_message": entry.post_message or ""}
+            for role, entry in used_roles.roles.items()
+            if entry is not None
+        },
+        initial_prompt_value=validated.initial_prompt_value or "",
+        final_prompt_value=validated.final_prompt_value or "",
+        messages=list(messages),
+    )
+
+
 def custom_prompt(
-    role_dict: dict,
+    role_dict: Mapping[str, Mapping[str, str]],
     messages: list,
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
@@ -5735,21 +5900,21 @@ def _optional_tool_name(value: object) -> str | None:
 
 
 def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
-    taken: Final = frozenset(_sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
+    taken: Final = frozenset(sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
 
     def fresh(call_id: str) -> Iterator[str]:
         return filter(
-            lambda candidate: _sanitize_anthropic_tool_use_id(candidate) not in taken,
+            lambda candidate: sanitize_anthropic_tool_use_id(candidate) not in taken,
             (f"{call_id}__concat_{n}" for n in itertools.count(1)),
         )
 
     suffixes: Final = MappingProxyType(
-        {_sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
+        {sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
     )
     return tuple(
         (
             call_id,
-            *(next(suffixes[_sanitize_anthropic_tool_use_id(call_id)]) for _ in range(count - 1)),
+            *(next(suffixes[sanitize_anthropic_tool_use_id(call_id)]) for _ in range(count - 1)),
         )
         if call_id
         else (None,) * count
@@ -6006,3 +6171,25 @@ def resolve_structured_messages(
         if structured:
             return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
     return None
+
+
+def is_flat_responses_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return tool_type in ("function", "custom") and tool_type not in tool and "input_schema" not in tool
+
+
+def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    if is_flat_responses_tool(tool):
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in a flat Responses tool shape
+        )
+        return tuple(chat_tools)
+    anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(
+        [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in an Anthropic or chat tool shape
+    )
+    return tuple(anthropic_tools)

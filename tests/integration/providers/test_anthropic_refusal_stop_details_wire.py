@@ -61,6 +61,7 @@ from pydantic import BaseModel, JsonValue
 pytestmark: Final = [
     pytest.mark.timeout(2 * graceful_stop_seconds() + 120),
     pytest.mark.xdist_group("anthropic_refusal_stop_details_wire"),
+    pytest.mark.shares_worker_state,
 ]
 
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"

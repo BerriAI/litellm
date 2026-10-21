@@ -27,6 +27,8 @@ from pydantic import BaseModel, JsonValue
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ADD: Final = {"a": 4, "b": 5}
 
 

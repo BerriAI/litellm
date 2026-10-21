@@ -476,6 +476,42 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     assert client.post.call_args.kwargs["json"]["stream"] is True
 
 
+@pytest.mark.asyncio
+async def test_async_response_api_handler_validates_environment_off_the_event_loop() -> None:
+    def validate_environment(**_kwargs: object) -> dict[str, str]:
+        return {"validated-on-thread": str(threading.get_ident()), "x-override": "provider"}
+
+    config: Final = Mock()
+    config.validate_environment.side_effect = validate_environment
+    config.get_complete_url.return_value = "https://responses.example.com/v1/responses"
+    config.async_transform_responses_api_request = AsyncMock(return_value={"model": "model", "input": "hi"})
+    config.sign_request.return_value = ({}, None)
+    client: Final = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://responses.example.com/v1/responses"),
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = None
+
+    await BaseLLMHTTPHandler().async_response_api_handler(
+        model="model",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="test",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+        extra_headers={"x-override": "caller"},
+    )
+
+    validated_headers: Final = config.async_transform_responses_api_request.await_args.kwargs["headers"]
+    assert validated_headers["validated-on-thread"] != str(threading.get_ident())
+    assert validated_headers["x-override"] == "caller"
+    client.post.assert_awaited_once()
+
+
 _CHATGPT_SSE_BODY = (
     "event: response.output_item.done\n"
     'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", '
@@ -3388,7 +3424,7 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
 
     from litellm.litellm_core_utils.litellm_logging import (
         Logging,
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
     monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
@@ -3437,7 +3473,7 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
     global_deployment = await logging_obj_after_handler(GenericLiteLLMParams(vertex_location="global"))
     assert global_deployment.litellm_params["vertex_location"] == "global"
     assert (
-        _resolve_vertex_location_for_cost(
+        resolve_vertex_location_for_cost(
             custom_llm_provider="vertex_ai",
             litellm_params=global_deployment.litellm_params,
             optional_params=global_deployment.optional_params,
@@ -5313,3 +5349,45 @@ async def test_retrieve_file_rejects_unverified_bedrock_range_error(
                 )
         finally:
             sync_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_its_beta() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_dropped_safeguards",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-sonnet-4-6",
+            api_key="sk-ant-test",
+            safeguards=({"type": "dangerous_tool_use"},),
+            additional_drop_params=["safeguards"],
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    sent: Final = received[0]
+    assert "safeguards" not in json.loads(sent.content)
+    assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)

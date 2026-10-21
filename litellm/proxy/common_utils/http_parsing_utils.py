@@ -372,6 +372,16 @@ def safe_set_request_parsed_body(
 _safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
+def detach_request_parsed_body(
+    request: Request, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the client's body copy, which the base tag merges write into
+    client_body: Final = dict(request_data)
+    cached: Final[object] = request.scope.get("parsed_body")
+    if isinstance(cached, tuple) and cached[1] is request_data:
+        request.scope["parsed_body"] = (cached[0], client_body)  # rebind-ok: cache holds the client copy
+    return client_body
+
+
 def rewrite_request_model(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     request: Request | None,

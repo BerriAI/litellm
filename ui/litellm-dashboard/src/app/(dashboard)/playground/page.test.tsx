@@ -22,8 +22,8 @@ vi.mock("@/utils/proxyUtils", () => ({
   fetchProxySettings: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock("@/app/(dashboard)/playground/components/chat_ui/ChatUI", () => ({
-  default: () => <div data-testid="chat-ui" />,
+vi.mock("@/app/(dashboard)/playground/components/chat/PlaygroundChat", () => ({
+  PlaygroundChat: () => <div data-testid="chat-ui" />,
 }));
 
 vi.mock("@/app/(dashboard)/playground/components/compareUI/CompareUI", () => ({

@@ -99,7 +99,8 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._litellm_logging_obj = litellm_logging_obj
         self._spend = _SpendCollection(provider_config, litellm_logging_obj)
         self._flush_scheduled = False
-        self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
+        self._background_tasks: set[asyncio.Task[bool]] = set()  # mutable-ok: instance set for background task tracking
+        self._flush: asyncio.Task[bool] | None = None
         self._hidden_params: dict[str, object] = {}  # mutable-ok: router attaches response headers here in place
 
     @property
@@ -157,6 +158,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             )
 
             self._background_tasks.add(task)
+            self._flush = task
 
             task.add_done_callback(self._background_tasks.discard)
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
@@ -165,6 +167,16 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self._spend.chunk_count,
                 e,
             )
+
+    async def wait_for_spend_flush(self) -> bool:
+        """Wait until the spend-tracking flush scheduled when the stream ended or was closed has finished, and say
+        whether it logged the stream, which it does not when the stream returned nothing it could read. Cancelling the
+        wait leaves the flush running."""
+        flush: Final = self._flush
+        if flush is None:
+            return False
+        outcome: Final = await asyncio.shield(asyncio.gather(flush, return_exceptions=True))
+        return outcome[0] is True
 
     def __aiter__(self) -> AsyncPassthroughStreamingResponse:
         return self

@@ -29,11 +29,8 @@ def _texts(message: dict) -> list[str]:
     return [block["text"] for block in message["content"]]
 
 
-SENDS_NOTHING = pytest.mark.parametrize(
-    "empty_content",
-    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
-    ids=["empty-list", "none", "unsupported-part-only"],
-)
+EMPTY_USER_CONTENT: Final = pytest.mark.parametrize("empty_content", [[], None], ids=["empty-list", "none"])
+UNSUPPORTED_PART_ONLY: Final = ({"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},)
 
 
 def test_split_leading_system_run_keeps_later_system_messages_in_the_conversation():
@@ -213,11 +210,42 @@ def test_flagged_placement_of_an_earlier_run_does_not_move_when_later_turns_are_
     assert _roles(placed_n_plus_one) == ["user", "assistant", "user", "assistant", "user"]
 
 
-@SENDS_NOTHING
-def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothing(empty_content):
-    placed = place_mid_conversation_system(
+@EMPTY_USER_CONTENT
+def test_flagged_placement_anchors_a_run_on_a_preceding_empty_user_turn(empty_content: list[object] | None) -> None:
+    placed: Final = place_mid_conversation_system(
         [
             {"role": "user", "content": empty_content},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant", "user"]
+    assert _texts(placed[1]) == ["reminder"]
+
+
+@EMPTY_USER_CONTENT
+def test_flagged_placement_anchors_a_run_on_a_following_empty_user_turn(empty_content: list[object] | None) -> None:
+    placed: Final = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "system", "content": "reminder"},
+            {"role": "user", "content": empty_content},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "assistant", "user", "system"]
+    assert _texts(placed[3]) == ["reminder"]
+
+
+def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothing() -> None:
+    placed: Final = place_mid_conversation_system(
+        [
+            {"role": "user", "content": list(UNSUPPORTED_PART_ONLY)},
             {"role": "system", "content": "reminder"},
             {"role": "assistant", "content": "a1"},
             {"role": "user", "content": "q2"},
@@ -229,14 +257,13 @@ def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothin
     assert _texts(placed[1]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
 
 
-@SENDS_NOTHING
-def test_flagged_placement_converts_a_run_whose_following_user_turn_sends_nothing(empty_content):
-    placed = place_mid_conversation_system(
+def test_flagged_placement_converts_a_run_whose_following_user_turn_sends_nothing() -> None:
+    placed: Final = place_mid_conversation_system(
         [
             {"role": "user", "content": "q1"},
             {"role": "assistant", "content": "a1"},
             {"role": "system", "content": "reminder"},
-            {"role": "user", "content": empty_content},
+            {"role": "user", "content": list(UNSUPPORTED_PART_ONLY)},
         ],
         supports_mid_conversation_system=True,
     )

@@ -1760,6 +1760,23 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "metadata" not in model_input
         assert "requestMetadata" not in model_input
 
+    def test_nova_record_request_metadata_stays_out_of_the_bedrock_body(self):
+        model_input = self._transform(
+            {
+                "custom_id": "4d",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": self.NOVA_MODEL,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "requestMetadata": {"ticket": "b\u00a0c"},
+                },
+            }
+        )
+
+        assert "requestMetadata" not in model_input
+        assert model_input["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+
     @pytest.mark.parametrize(
         "body",
         [
@@ -2029,6 +2046,31 @@ class TestBedrockBatchAnthropicRowParams:
         assert "json_mode" not in model_input
         assert "response_format" not in model_input
         assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
+
+    @pytest.mark.parametrize(
+        ("model", "native_output"),
+        [("bedrock/us.anthropic.claude-opus-4-8", False), (MODEL, True)],
+        ids=["opt_in_native_output_model", "native_output_model"],
+    )
+    def test_thinking_json_schema_rows_use_native_output_only_on_models_that_always_take_it(
+        self, local_model_cost_map, model, native_output
+    ):
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "thinking": {"type": "adaptive"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(

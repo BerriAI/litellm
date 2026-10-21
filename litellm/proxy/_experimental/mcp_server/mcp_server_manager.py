@@ -104,6 +104,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
     raise_classified_list_failure,
+    retry_upstream_rate_limit,
     upstream_auth_challenge,
     upstream_insufficient_scope,
 )
@@ -455,6 +456,7 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_subject_source: ReadOnly[str]
     id_jag_resource_client_id: ReadOnly[str]
     id_jag_resource_client_secret: ReadOnly[str]
     client_private_key: str
@@ -1969,6 +1971,7 @@ class MCPServerManager:
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
@@ -1978,6 +1981,7 @@ class MCPServerManager:
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
         )
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
         self._prompt_discovery_cache = _DiscoveryCache[ListPromptsResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListPromptsResult)
@@ -2789,6 +2793,7 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_subject_source=server_config.get("id_jag_subject_source", None),
                 id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
                 id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
                 client_private_key=server_config.get("client_private_key", None),
@@ -3380,6 +3385,7 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_subject_source=(credentials_dict.get("id_jag_subject_source") if credentials_dict else None),
             id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
             id_jag_resource_client_secret=self._decrypt_credential_field(
                 credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
@@ -3574,7 +3580,7 @@ class MCPServerManager:
         *,
         allow_all_server_ids: list[str] | None = None,
         submitted_server_ids: list[str] | None = None,
-    ) -> set:
+    ) -> frozenset[str]:
         """Servers reachable through OPEN channels rather than a grant: operator-opened
         ``allow_all_keys`` servers, plus the caller's own active BYOM submissions when the caller
         carries no explicit ``mcp_servers`` scope.
@@ -3595,10 +3601,10 @@ class MCPServerManager:
         if user_api_key_auth is not None and (
             user_api_key_auth.mcp_toolset_id is not None or user_api_key_auth.mcp_explicit_grants_only
         ):
-            return set()
-        if allow_all_server_ids is None:
-            allow_all_server_ids = self.get_allow_all_keys_server_ids()
-        open_ids: Final = set(allow_all_server_ids)
+            return frozenset()
+        open_ids: Final = frozenset(
+            allow_all_server_ids if allow_all_server_ids is not None else self.get_allow_all_keys_server_ids()
+        )
         key_object_permission: Final = user_api_key_auth.object_permission if user_api_key_auth else None
         # "Explicitly scoped, so do not widen with BYOM" is a rule about a CREDENTIAL that carries
         # its own mcp_servers list. It does not describe a keyless admitted subject: its
@@ -3610,11 +3616,14 @@ class MCPServerManager:
             and key_object_permission is not None
             and (key_object_permission.mcp_servers is not None)
         )
-        if not has_explicit_object_permission:
-            if submitted_server_ids is None:
-                submitted_server_ids = await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
-            open_ids.update(submitted_server_ids)
-        return open_ids
+        if has_explicit_object_permission:
+            return open_ids
+        submitted_ids: Final = (
+            submitted_server_ids
+            if submitted_server_ids is not None
+            else await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+        )
+        return open_ids | frozenset(submitted_ids)
 
     @staticmethod
     def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> frozenset[str] | None:
@@ -4345,6 +4354,7 @@ class MCPServerManager:
                 if resolved_server.allow_elicitation
                 else None
             ),
+            upstream_transport=self._upstream_transport,
         )
 
     _create_mcp_client = create_mcp_client
@@ -4525,7 +4535,11 @@ class MCPServerManager:
                 )
             else:
                 page: Final = (
-                    await client.list_tools_page(params)
+                    await retry_upstream_rate_limit(
+                        lambda: self._fetch_tools_page_with_timeout(client, server, params),
+                        server.name,
+                        deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                    )
                     if params is not None
                     else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
                 )
@@ -5594,7 +5608,11 @@ class MCPServerManager:
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools: Final = await client.list_tools(raise_on_error=True)
+                tools: Final = await retry_upstream_rate_limit(
+                    lambda: client.list_tools(raise_on_error=True),
+                    server_name,
+                    deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                )
                 verbose_logger.debug("Tools from %s: %s", server_name, tools)
                 return tools
         except TimeoutError as e:
@@ -5614,6 +5632,19 @@ class MCPServerManager:
                 "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server_name)
+
+    async def _fetch_tools_page_with_timeout(
+        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams
+    ) -> ListToolsResult:
+        deadline: Final = (
+            MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
+        )
+        try:
+            with anyio.fail_after(deadline):
+                return await client.list_tools_page(params)
+        except TimeoutError as e:
+            verbose_logger.warning("Timeout while listing tools from %s", server.name)
+            raise MCPServerListError(ServerListFault(tag="timeout"), server.name) from e
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
@@ -6023,6 +6054,7 @@ class MCPServerManager:
         guardrail_context: Mapping[str, object] | None = None,
         tool: MCPTool | None = None,
         incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+        guardrail_auth: UserAPIKeyAuth | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -6079,6 +6111,27 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
+        base_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+            guardrail_auth=guardrail_auth,
+            user_api_key_auth=user_api_key_auth,
+            server=server,
+            tool_name=name,
+        )
+        checked_auth: Final = (
+            base_guardrail_auth.model_copy(
+                update={
+                    "mcp_source_team_rpm_limits": await MCPRequestHandler.personal_key_team_rpm_limits(
+                        user_api_key_auth, server, name
+                    )
+                }
+            )
+            if base_guardrail_auth is not None
+            and user_api_key_auth is not None
+            and MCPRequestHandler.is_personal_key_inheriting_team_grants(user_api_key_auth)
+            and base_guardrail_auth.mcp_source_team_rpm_limits is None
+            else base_guardrail_auth
+        )
+
         caller_bearer: Final = (
             MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
             if incoming_bearer_token is ...
@@ -6091,13 +6144,11 @@ class MCPServerManager:
             "arguments": arguments,
             "server_name": server_name,
             "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
-            "user_api_key_auth": user_api_key_auth,
-            "user_api_key_user_id": (getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None),
-            "user_api_key_team_id": (getattr(user_api_key_auth, "team_id", None) if user_api_key_auth else None),
-            "user_api_key_end_user_id": (
-                getattr(user_api_key_auth, "end_user_id", None) if user_api_key_auth else None
-            ),
-            "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
+            "user_api_key_auth": checked_auth,
+            "user_api_key_user_id": (getattr(checked_auth, "user_id", None) if checked_auth else None),
+            "user_api_key_team_id": (getattr(checked_auth, "team_id", None) if checked_auth else None),
+            "user_api_key_end_user_id": (getattr(checked_auth, "end_user_id", None) if checked_auth else None),
+            "user_api_key_hash": (getattr(checked_auth, "api_key_hash", None) if checked_auth else None),
             "incoming_bearer_token": caller_bearer.get_secret_value() if caller_bearer is not None else None,
             "headers": logging_safe_mcp_headers(raw_headers),
             "tool_description": tool.description if tool is not None else None,
@@ -6118,11 +6169,11 @@ class MCPServerManager:
         try:
             # Use standard pre_call_hook
             modified_data: Final = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_auth,
+                user_api_key_dict=checked_auth,
                 data=synthetic_llm_data,
                 call_type=CallTypes.call_mcp_tool.value,
             )
-            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(checked_auth, server)
             if modified_data:
                 # Convert response back to MCP format and apply modifications
                 modified_kwargs: Final = proxy_logging_obj.convert_mcp_hook_response_to_kwargs(
@@ -6883,6 +6934,7 @@ class MCPServerManager:
         input_responses: InputResponses | None = None,
         request_state: str | None = None,
         *,
+        guardrail_auth: UserAPIKeyAuth | None = None,
         catalog_auth_header: str | None | EllipsisType = ...,
         listed_tool: MCPTool | None | EllipsisType = ...,
         incoming_bearer_token: SecretStr | None | EllipsisType = ...,
@@ -6910,6 +6962,12 @@ class MCPServerManager:
         """
         start_time: Final = datetime.datetime.now()
         mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+            guardrail_auth=guardrail_auth,
+            user_api_key_auth=user_api_key_auth,
+            server=mcp_server,
+            tool_name=name,
+        )
         client_auth_header: Final = _catalog_auth_header(mcp_auth_header, catalog_auth_header)
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
@@ -6941,6 +6999,7 @@ class MCPServerManager:
             guardrail_context=guardrail_context,
             tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
             incoming_bearer_token=incoming_bearer_token,
+            guardrail_auth=effective_guardrail_auth,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6952,7 +7011,7 @@ class MCPServerManager:
                 name=name,
                 arguments=arguments,
                 server_name_from_prefix=server_name,
-                user_api_key_auth=user_api_key_auth,
+                user_api_key_auth=effective_guardrail_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
@@ -7463,7 +7522,10 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop, quiet_on_error=True),
+                    timeout=MCP_HEALTH_CHECK_TIMEOUT,
+                )
                 self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
@@ -7475,6 +7537,12 @@ class MCPServerManager:
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
+                verbose_logger.warning(
+                    "MCP health check failed for %s: %s%s",
+                    server.name,
+                    type(e).__name__,
+                    _upstream_failure_suffix(e),
+                )
 
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,

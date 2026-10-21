@@ -2,10 +2,7 @@ from dataclasses import replace
 from typing import Final
 
 from integration._support.client import list_value, object_value
-from integration.translation.case import (
-    SSEFrame,
-    StreamingTranslationTestCase,
-)
+from integration.translation.case import SSEFrame, StreamingTranslationTestCase
 from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.anthropic import (
     CLAUDE_FABLE_5_1_TEST_CASE,
@@ -20,10 +17,7 @@ from integration.translation.chat_completions.templates import (
     coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
 )
-from integration.translation.templates.anthropic import (
-    ANTHROPIC_AGENT_REQUEST,
-    ANTHROPIC_AGENT_RESPONSE,
-)
+from integration.translation.templates.anthropic import ANTHROPIC_AGENT_REQUEST, ANTHROPIC_AGENT_RESPONSE
 
 CLAUDE_FABLE_5_1_AGENT_TEST_CASE: Final = replace(
     CLAUDE_FABLE_5_1_TEST_CASE,
@@ -350,7 +344,7 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_01324ezmdSmGSpmxGX55GvYF", "toolu_01MxHYehH7UYVY2A8WkRJZPu"),
+        ("toolu_01324ezmdSmGSpmxGX55GvYF", "toolu_01MxHYehH7UYVY2A8WkRJZPu")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,
@@ -596,7 +590,7 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_01UXBJZGdCaY4vxon1j4uapy", "toolu_0124RYbAPnwVoGtdzfPCNPc6"),
+        ("toolu_01UXBJZGdCaY4vxon1j4uapy", "toolu_0124RYbAPnwVoGtdzfPCNPc6")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,
@@ -1494,7 +1488,7 @@ CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_0177HUb25ArysRAu8eF3u4DJ", "toolu_011gegGWvYoxPwxWY7LSK4Uk"),
+        ("toolu_0177HUb25ArysRAu8eF3u4DJ", "toolu_011gegGWvYoxPwxWY7LSK4Uk")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,
@@ -1837,7 +1831,7 @@ CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_013mPRCxrKKH6KzYGHKPukwv", "toolu_01FkXiaw4cTiXua3PoMd4wCu"),
+        ("toolu_013mPRCxrKKH6KzYGHKPukwv", "toolu_01FkXiaw4cTiXua3PoMd4wCu")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,
@@ -2088,7 +2082,7 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_017r3PoQsgodP2mgcgDnDLxU", "toolu_01T8ECEb4XwFyozSnCKUiuB2"),
+        ("toolu_017r3PoQsgodP2mgcgDnDLxU", "toolu_01T8ECEb4XwFyozSnCKUiuB2")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1180,

@@ -1,9 +1,12 @@
+import json
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     ir_to_systemone_request,
     ir_to_systemone_response,
@@ -15,10 +18,13 @@ from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
     DecisionsIRRequest,
+    DecisionsIRScoreAnswer,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 _SYSTEMONE_BODY: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_BODY: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
@@ -264,3 +270,66 @@ def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
     response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == payload
+
+
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+@pytest.mark.parametrize("legend", (["low", "high"], {"0": "low", "1": "high"}))
+def test_score_legends_preserve_labels_probabilities_and_metadata(provider: str, legend: object) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": {"text": "The order arrived damaged"},
+                "questions": {"severity": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "drex-v2.0",
+        "answers": {
+            "severity": {
+                "type": "score",
+                "score": 0.75,
+                "confidence": 0.8,
+                "legend": legend,
+                "probabilities": {"0": 0.25, "1": 0.75},
+            }
+        },
+        "usage": {"input_tokens": 20, "output_tokens": 30},
+        "request_id": "test-request",
+        "evaluation_time_ms": 8.5,
+    }
+    original: Final = json.dumps(payload)
+    response: Final = config.parse_response(payload, request)
+    answer: Final = response.answers[0]
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert (answer.score, answer.confidence) == (0.75, 0.8)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == (
+        (0, "low", 0.25),
+        (1, "high", 0.75),
+    )
+    assert response.model == payload["model"]
+    assert (response.usage.input_tokens, response.usage.output_tokens) == (20, 30)
+    assert response.extra == {"request_id": "test-request", "evaluation_time_ms": 8.5}
+    assert json.dumps(payload) == original
+
+
+@pytest.mark.parametrize(
+    "payload", ([], {"answers": []}, {"answers": {"a": None}}, {"answers": {"a": {"type": "score", "legend": [1]}}})
+)
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+def test_invalid_provider_response_is_an_api_error(payload: object, provider: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": "text",
+                "questions": {"a": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    with pytest.raises(BaseLLMException, match="unexpected response") as error:
+        config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
+    assert error.value.status_code == 500
