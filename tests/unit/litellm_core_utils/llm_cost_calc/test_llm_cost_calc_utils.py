@@ -971,7 +971,8 @@ def _register_off_peak_reasoning_model(
                 **reasoning_entry,
                 **service_tier_rates,
             }
-        }
+        },
+        persist_across_reloads=False,
     )
 
 
@@ -1401,7 +1402,8 @@ def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
                     },
                 ],
             }
-        }
+        },
+        persist_across_reloads=False,
     )
 
     try:
@@ -1566,7 +1568,8 @@ def test_generic_cost_per_token_tier_1hr_cache_rate_preserves_zero_and_fallback(
                     }
                 ],
             }
-        }
+        },
+        persist_across_reloads=False,
     )
 
     try:
@@ -1612,7 +1615,8 @@ def test_generic_cost_per_token_tier_without_an_input_rate_is_not_a_priced_tier(
                 "output_cost_per_token": 2e-06,
                 "tiered_pricing": [{"range": [0, 128000], "output_cost_per_token": 3.5e-06}],
             }
-        }
+        },
+        persist_across_reloads=False,
     )
 
     try:

@@ -11283,7 +11283,7 @@ class Router:
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
         model_info: Final = dict(
-            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(mode="json", exclude_none=True))
         )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)

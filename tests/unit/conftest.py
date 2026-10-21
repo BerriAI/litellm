@@ -44,6 +44,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils import model_cost_store  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
@@ -275,8 +276,7 @@ def isolate_litellm_globals() -> Iterator[None]:
         if client is not original_clients.get(name):
             _close_handler_if_needed(client)
     litellm.__dict__.update(original_clients)
-    for name, value in (original_callbacks | original_reset | original_restored).items():
-        setattr(litellm, name, value)
+    litellm.__dict__.update(original_callbacks | original_reset | original_restored)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled
@@ -289,20 +289,19 @@ def isolate_litellm_globals() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
     original_live_routers: Final = frozenset(litellm_router_module._live_routers)
-    original_runtime_registered_model_cost: Final = {
-        model_key: dict(model_value)
-        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
-    }
+    store: Final = model_cost_store._OverrideStore
+    original_store: Final = (store.owners, store.registrations, store.registered, store.rebound_base)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm_router_module._live_routers.clear()
-    litellm_utils_module._runtime_registered_model_cost.clear()
+    store.owners = MappingProxyType({})
+    store.registrations = MappingProxyType({})
+    store.registered = MappingProxyType({})
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)
     for router in original_live_routers:
         litellm_router_module._live_routers.add(router)
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    store.owners, store.registrations, store.registered, store.rebound_base = original_store
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 
@@ -320,8 +319,8 @@ def isolate_model_catalog() -> Iterator[None]:
     models_by_provider_entries: Final = dict(models_by_provider)
     provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
     yield
-    model_cost.clear()
-    model_cost.update(model_cost_entries)
+    dict.clear(model_cost)
+    dict.update(model_cost, model_cost_entries)
     models_by_provider.clear()
     models_by_provider.update(models_by_provider_entries)
     for models, entries in provider_model_sets:

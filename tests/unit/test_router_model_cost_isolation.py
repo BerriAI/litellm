@@ -18,6 +18,7 @@ import queue
 import re
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -2172,13 +2173,6 @@ def test_price_data_reload_preserves_router_registered_model_info(monkeypatch):
     max_input_tokens / max_output_tokens from every custom model group and
     /model_group/info starts reporting nulls.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2220,13 +2214,6 @@ def test_price_data_reload_preserves_custom_override_of_a_catalog_model(monkeypa
     the same bug: the reload does not blank the metadata, it reverts the
     operator's model_info override to the upstream catalog values.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2272,13 +2259,6 @@ def test_deleted_deployments_are_not_replayed_onto_later_reloads(monkeypatch):
     key that another live deployment still points at must survive the same
     deletion.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2326,13 +2306,6 @@ def test_deleting_a_deployment_leaves_catalog_pricing_for_its_backend_model(monk
     A backend key is shared with the fetched catalog, so withdrawing the entries
     a deleted deployment owns must not take real upstream pricing down with it.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     backend_model = "gemini/gemini-2.5-pro"
     catalog_entry = litellm.get_model_info(model=backend_model)
@@ -2371,13 +2344,6 @@ def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
     old backend key behind, and a replayed registry would re-assert it onto every
     later catalog for the life of the process.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -3130,13 +3096,6 @@ def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
     strip must also survive a price-data reload, which rebuilds entries by
     walking the live routers.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -4415,3 +4374,20 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+def test_a_deployments_cost_map_row_stays_json_serializable_with_datetime_audit_fields():
+    created_at: Final = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    Router(
+        model_list=[
+            {
+                "model_name": "audited-deployment",
+                "litellm_params": {"model": "openai/gpt-4o", "input_cost_per_token": 1e-06},
+                "model_info": {"id": "audited-deployment-id", "created_at": created_at},
+            }
+        ]
+    )
+
+    row: Final = json.loads(json.dumps(litellm.model_cost["audited-deployment-id"]))
+    assert row["created_at"] == created_at.isoformat().replace("+00:00", "Z")
+    assert row["input_cost_per_token"] == 1e-06

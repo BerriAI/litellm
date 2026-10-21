@@ -5209,7 +5209,6 @@ class TestPriceDataReloadIntegration:
         The swap happens early in the handler, so a failure in the bookkeeping
         after it is swallowed by the surrounding except and would otherwise
         leave the metadata correct while the path is quietly broken"""
-        from litellm import utils as litellm_utils
         from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
         from litellm.proxy.proxy_server import ProxyConfig
 
@@ -5223,7 +5222,6 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
@@ -5249,8 +5247,6 @@ class TestPriceDataReloadIntegration:
             assert proxy_config.model_cost_map_applied_revision == 7
         finally:
             litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
             _invalidate_model_cost_lowercase_map()
 
     def test_manual_reload_preserves_interval_hours(self, monkeypatch):

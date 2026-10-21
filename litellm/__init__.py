@@ -5,7 +5,9 @@ from litellm._process_defaults import apply_process_defaults as _apply_process_d
 _apply_process_defaults()
 
 ### INIT VARIABLES #########################
+import sys as _sys
 import threading
+from types import ModuleType as _ModuleType
 import os
 import datetime
 
@@ -553,9 +555,25 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     mark_litellm_import_complete,
     reload_model_cost_map as reload_model_cost_map,
 )
-from litellm.litellm_core_utils.model_cost_store import set_model_cost_overrides as set_model_cost_overrides
+from litellm.litellm_core_utils.model_cost_store import (
+    install_model_cost as _install_model_cost,
+    rebind_model_cost as _rebind_model_cost,
+    set_model_cost_overrides as set_model_cost_overrides,
+)
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
+_install_model_cost(model_cost)
+
+
+class _LitellmModule(_ModuleType):
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "model_cost":
+            _rebind_model_cost(value)
+            return
+        super().__setattr__(name, value)
+
+
+_sys.modules[__name__].__class__ = _LitellmModule
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 apply_search_free_tier: bool = False
 cost_margin_config: Dict[

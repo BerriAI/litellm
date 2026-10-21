@@ -19,7 +19,13 @@ import pytest
 
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapAdopted,
+    _expand_model_aliases,
+    adopt_model_cost_map,
+)
+from litellm.litellm_core_utils.model_cost_store import ModelCostRegistrationError
 from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -230,7 +236,8 @@ def test_register_model_strips_none_litellm_provider():
                     "input_cost_per_token": 0.001,
                     "output_cost_per_token": 0.002,
                 }
-            }
+            },
+            persist_across_reloads=False,
         )
 
         registered = litellm.model_cost.get(model_key)
@@ -289,7 +296,8 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
                     "input_cost_per_token": 0.001,
                     "output_cost_per_token": 0.002,
                 }
-            }
+            },
+            persist_across_reloads=False,
         )
 
         registered = litellm.model_cost.get(model_key)
@@ -1095,7 +1103,7 @@ def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
     )
 
     try:
-        assert litellm.model_cost is reloaded_cost_map
+        assert litellm.model_cost[catalog_key]["input_cost_per_token"] == reloaded_input_cost
         assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
         assert litellm.get_model_info(deployment_key)["output_cost_per_token"] == registered_output_cost
     finally:
@@ -1664,6 +1672,7 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
                 }
             },
             custom_llm_provider="openai",
+            persist_across_reloads=False,
         )
 
         entry: Final = litellm.model_cost[colliding_id]
@@ -1704,3 +1713,46 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)
+
+
+PRICED_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-06}
+
+
+def _loaded_chat_key_with_input_price() -> str:
+    return next(
+        key
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if "/" not in key and row.get("mode") == "chat" and "input_cost_per_token" in row
+    )
+
+
+def test_register_model_rejects_the_whole_call_naming_the_model_and_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError) as rejected:
+        litellm.register_model(
+            {"accepted-model": PRICED_ROW, "rejected-model": {**PRICED_ROW, "output_cost_per_token": -1.0}}
+        )
+
+    assert isinstance(rejected.value, ModelCostRegistrationError)
+    assert [problem.split(":")[0] for problem in rejected.value.problems] == ["rejected-model.output_cost_per_token"]
+    assert "rejected-model.output_cost_per_token" in str(rejected.value)
+    assert "accepted-model" not in litellm.model_cost
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    assert isinstance(litellm.reload_model_cost_map(), ModelCostMapAdopted)
+    assert "accepted-model" not in litellm.model_cost, "a rejected call must not be recorded for replay"
+
+
+def test_register_model_rejects_a_new_model_whose_row_names_no_provider() -> None:
+    with pytest.raises(ModelCostRegistrationError) as rejected:
+        litellm.register_model({"provider-less-model": {"input_cost_per_token": 1e-06}})
+
+    assert [problem.split(" ")[0] for problem in rejected.value.problems] == ["provider-less-model.litellm_provider"]
+    assert "provider-less-model" not in litellm.model_cost
+
+
+def test_register_model_serves_the_loaded_row_with_only_the_registered_fields_on_top() -> None:
+    key: Final = _loaded_chat_key_with_input_price()
+
+    litellm.register_model({key: {"input_cost_per_token": 5e-06}})
+
+    assert litellm.model_cost[key] == {**GetModelCostMap.loaded_model_cost_map()[key], "input_cost_per_token": 5e-06}

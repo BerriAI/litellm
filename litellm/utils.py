@@ -30,7 +30,7 @@ import time
 import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import lru_cache, reduce, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -90,7 +90,21 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import (
+    MODEL_COST_WRITE_LOCK,
+    RESERVED_TOP_LEVEL_KEYS,
+    AliasedCostEntry,
+)
+from litellm.litellm_core_utils.model_cost_store import (
+    ModelCostRegistrationError,
+    RegisteredRow,
+    commit_model_cost_registrations,
+    model_cost_base,
+    model_cost_registrations,
+    registered_model_cost_rows,
+    replay_model_cost_overrides,
+    write_model_cost_rows,
+)
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -3458,7 +3472,9 @@ def _replace_cost_map_entry(
         name for name, value in registration.items() if value is not None
     )
     sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
+    write_model_cost_rows(
+        cost_map, dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields))
+    )
 
 
 def _without_synthesized_costs(
@@ -3485,6 +3501,7 @@ _DIRECTION_RATE_FIELDS: Final = MappingProxyType(
     }
 )
 _RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
+_REGISTRATIONS: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
 _RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
@@ -3746,20 +3763,24 @@ def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
     base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
-    # ``get_model_info`` returns ``litellm_provider: None`` when the
-    # provider is unknown (e.g. custom deployments registered via
-    # ``Router.add_deployment``). Persisting that None into
-    # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
-    # custom pricing on subsequent cost lookups.
-    existing_model: Final = {
-        name: field_value
-        for name, field_value in base.entry.items()
-        if name != "litellm_provider" or field_value is not None
-    }
     return _RegistrationWrite(
         key=base.key,
-        entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
+        entry={
+            **update_dictionary(dict(_row_with_known_provider(base)), value),
+            **dict.fromkeys(_base_fields_replaced_by(value)),
+        },
     )
+
+
+def _row_with_known_provider(base: _RegistrationWrite) -> Mapping[str, object]:
+    """The served row a registration lands on, else the row it is seeded with. ``get_model_info`` reports
+    ``litellm_provider: None`` for an unknown provider, and persisting that None makes ``_check_provider_match`` drop
+    the row's custom pricing."""
+    current: Final = _builtin_cost_map().get(base.key)
+    row: Final = current if current is not None else base.entry
+    return {
+        name: field_value for name, field_value in row.items() if name != "litellm_provider" or field_value is not None
+    }
 
 
 def _registration_attempt(
@@ -3791,7 +3812,102 @@ def _register_on_current_map(
     return next(write for write in attempts if write is not None)
 
 
-_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+@dataclass(frozen=True, slots=True)
+class ModelCostRegistrationRows:
+    registered: Mapping[str, RegisteredRow]
+    keys: frozenset[str]
+    touched: frozenset[str]
+
+
+def _alias_names_sharing(key: str) -> tuple[str, ...]:
+    served: Final = _builtin_cost_map()
+    current: Final = served.get(key)
+    if not isinstance(current, AliasedCostEntry):
+        return (key,)
+    return (key, *(name for name in current.names if name != key and served.get(name) is current))
+
+
+def _nested_tables(row: Mapping[str, object] | None, value: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: table for name, table in (row or {}).items() if name in value and isinstance(table, dict)}
+
+
+def _registration_seed(
+    base: _RegistrationWrite, value: Mapping[str, object], prior: RegisteredRow | None
+) -> Mapping[str, object]:
+    """What a registration merges onto as its own contribution: its previous one, nothing for a row the base map
+    has (bar the nested tables it merges into), else the whole row it lands on or is seeded with."""
+    nested: Final = _nested_tables(_builtin_cost_map().get(base.key), value)
+    if prior is not None:
+        return {**nested, **prior.entry}
+    if base.key in model_cost_base():
+        return nested
+    return _row_with_known_provider(base)
+
+
+def _registered_row(
+    key: str,
+    value: Mapping[str, object],
+    registered: Mapping[str, RegisteredRow],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+) -> RegisteredRow:
+    base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
+    prior: Final = registered.get(base.key)
+    seed: Final = _registration_seed(base, value, prior)
+    return RegisteredRow(
+        names=prior.names if prior is not None else _alias_names_sharing(base.key),
+        entry=MappingProxyType(
+            {**update_dictionary(dict(seed), value), **dict.fromkeys(_base_fields_replaced_by(value))}
+        ),
+        fields=(prior.fields if prior is not None else frozenset[str]())
+        | frozenset(name for name, field_value in value.items() if field_value is not None),
+    )
+
+
+def model_cost_registration_rows(
+    registrations: Mapping[str, Mapping[str, object]],
+    registered: Mapping[str, RegisteredRow],
+    custom_llm_provider: str | None = None,
+    warning_display_name: str | None = None,
+) -> ModelCostRegistrationRows:
+    """``registered`` with each registration resolved against the served map and merged over its previous row"""
+
+    def register(
+        rows: ModelCostRegistrationRows, registration: tuple[str, Mapping[str, object]]
+    ) -> ModelCostRegistrationRows:
+        row: Final = _registered_row(
+            registration[0], registration[1], rows.registered, custom_llm_provider, warning_display_name
+        )
+        return ModelCostRegistrationRows(
+            registered=MappingProxyType({**rows.registered, **dict.fromkeys(row.names, row)}),
+            keys=rows.keys | {row.names[0]},
+            touched=rows.touched | frozenset(row.names),
+        )
+
+    return reduce(
+        register,
+        registrations.items(),
+        ModelCostRegistrationRows(registered=registered, keys=frozenset(), touched=frozenset()),
+    )
+
+
+def _register_persistently(
+    registrations: Mapping[str, Mapping[str, object]],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+) -> None:
+    with MODEL_COST_WRITE_LOCK:
+        recorded: Final = model_cost_registrations()
+        rows: Final = model_cost_registration_rows(
+            registrations, registered_model_cost_rows(), custom_llm_provider, warning_display_name
+        )
+        recordings: Final = {
+            **recorded,
+            **{key: update_dictionary(dict(recorded.get(key, {})), value) for key, value in registrations.items()},
+        }
+        rejected: Final = commit_model_cost_registrations(recordings, rows.registered, rows.keys, rows.touched)
+    if rejected is not None:
+        raise ModelCostRegistrationError(rejected.problems)
 
 
 def runtime_model_cost_registrations(
@@ -3840,24 +3956,17 @@ def reapply_runtime_model_cost_registrations() -> None:
     """Re-apply runtime model metadata on top of a freshly adopted cost map.
 
     Adopting a new catalog replaces ``litellm.model_cost`` wholesale, which on
-    its own discards everything registered at runtime: the deployment
-    ``model_info`` the Router registers from ``model_list``, and pricing
-    overrides passed to ``register_model``. Both are re-applied here so a price
-    data reload only updates pricing rather than erasing operator-supplied model
-    metadata.
-
-    The two are restored differently, and the difference is what keeps this
-    bounded. Deployment metadata is re-derived from the routers that are alive
-    right now, so a deployment that has been deleted or repointed, and a router
-    that has been discarded, are simply not part of the rebuild; nothing has to
-    withdraw them and nothing accumulates. Only ``register_model`` calls that
-    have no such owner are recorded and replayed, and a registration describing
-    a single request opts out of even that.
+    its own discards everything registered at runtime: ``register_model``
+    recordings and ``set_model_cost_overrides`` owners, and the deployment
+    ``model_info`` the Router registers from ``model_list``. The owners are
+    composed over the new map first, then the deployments are re-derived from
+    the routers that are alive right now, so a deployment that has been deleted
+    or repointed, and a router that has been discarded, are simply not part of
+    the rebuild.
     """
+    replay_model_cost_overrides()
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
-    if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -3900,8 +4009,11 @@ def register_model(
 
     ``persist_across_reloads`` controls whether the registration is replayed
     when the cost map is refreshed. It defaults to True because a caller
-    registering a model is declaring durable intent. Pass False for a
-    registration that only describes one request, so it is dropped rather than
+    registering a model is declaring durable intent. Such a registration is
+    validated as the row it composes into, and when any row is invalid the
+    whole call raises ``ModelCostRegistrationError`` naming the model and field,
+    and nothing is registered. Pass False for a registration that only
+    describes one request, so it is written as given and dropped rather than
     re-asserted over every future catalog.
 
     ``warning_display_name`` names the model in the missing-cache-pricing
@@ -3924,23 +4036,21 @@ def register_model(
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
+    registrations: Final = _REGISTRATIONS.validate_python(loaded_model_cost)
     if persist_across_reloads:
-        _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
-        for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = update_dictionary(
-                dict(_runtime_registered_model_cost.get(_registered_key, {})),
-                _RATE_TABLE.validate_python(_registered_value),
-            )
+        _register_persistently(
+            {key: value for key, value in registrations.items() if key not in RESERVED_TOP_LEVEL_KEYS},
+            custom_llm_provider,
+            warning_display_name,
+        )
 
-    for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
-
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
-
-        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
+    for key, value in registrations.items():
+        if not persist_across_reloads:
+            write = _register_on_current_map(key, value, custom_llm_provider, warning_display_name)
+            _invalidate_model_cost_lowercase_map()
+            verbose_logger.debug("added/updated model=%s in litellm.model_cost", write.key)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
-            litellm.openrouter_models.add(str(key).split("/", 1)[-1])
+            litellm.openrouter_models.add(key.split("/", 1)[-1])
     if add_to_provider_model_sets:
         litellm.add_known_models(loaded_model_cost)
     return model_cost

@@ -3308,6 +3308,22 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     assert pc._add_deployment(db_models=[bad]) == 0
 
 
+def test_ProxyConfig__add_deployment_skips_one_bad_db_model_and_loads_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    without_model = SimpleNamespace(
+        model_id="db-without-model", model_name="broken", model_info={"id": "db-without-model"}, litellm_params={}
+    )
+
+    added = ProxyConfig()._add_deployment(db_models=[_db_model("db-first"), without_model, _db_model("db-last")])
+
+    assert added == 2
+    assert router.get_model_ids() == ["db-first", "db-last"]
+
+
 def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypatch):
     """Every ``os.environ/`` value on an admin-scoped DB row resolves at
     load time, regardless of the field name. Replaces the earlier

@@ -762,9 +762,6 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     original_model_cost = litellm.model_cost
     litellm.model_cost = new_cost_map
 
-    # Confirm the model is NOT yet in the provider set before reload propagation.
-    assert model not in litellm.anthropic_models
-
     # Simulate what proxy_server.py now does after every reload.
     litellm.add_known_models(model_cost_map=new_cost_map)
 

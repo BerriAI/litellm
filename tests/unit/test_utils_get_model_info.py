@@ -51,6 +51,7 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     litellm.register_model(
         {
             "openai/command-r-plus": {
+                "litellm_provider": "openai",
                 "input_cost_per_token": 0.0,
                 "output_cost_per_token": 0.0,
             },
@@ -512,7 +513,7 @@ def test_get_model_info_custom_provider():
     assert resp.choices[0].message.content == "Hi!"
 
     # Register model info
-    model_info = {"my-custom-llm/my-fake-model": {"max_tokens": 2048}}
+    model_info = {"my-custom-llm/my-fake-model": {"litellm_provider": "my-custom-llm", "max_tokens": 2048}}
     litellm.register_model(model_info)
 
     # Get registered model info

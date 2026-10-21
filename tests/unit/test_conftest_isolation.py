@@ -10,8 +10,8 @@ import pytest
 import litellm
 from litellm import Router
 from litellm import router as litellm_router_module
-from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils import model_cost_store
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests.unit import conftest as unit_harness
@@ -81,11 +81,11 @@ class _CanaryRouterHolder:
 
 def test_register_model_ledger_entry_is_scoped_to_this_test():
     litellm.register_model({CANARY_MODEL: {"litellm_provider": "openai", "input_cost_per_token": 0.001}})
-    assert CANARY_MODEL in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL in model_cost_store.model_cost_registrations()
 
 
 def test_register_model_ledger_entry_was_rolled_back():
-    assert CANARY_MODEL not in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL not in model_cost_store.model_cost_registrations()
 
 
 def test_register_model_catalog_writes_are_scoped_to_this_test():
@@ -159,7 +159,8 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture(scope="module", autouse=True)
 def registered_collection_models() -> Iterator[None]:
-    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    store: Final = model_cost_store._OverrideStore
+    original_store: Final = (store.owners, store.registrations, store.registered, store.rebound_base)
     original_routers: Final = frozenset(litellm_router_module._live_routers)
     litellm.register_model(
         {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
@@ -173,8 +174,7 @@ def registered_collection_models() -> Iterator[None]:
         ]
     )
     yield
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    store.owners, store.registrations, store.registered, store.rebound_base = original_store
     litellm_router_module._live_routers.discard(collection_router)
     litellm_router_module._live_routers.update(original_routers)
 

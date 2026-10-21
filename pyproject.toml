@@ -402,6 +402,8 @@ filterwarnings = [
     "ignore::UserWarning:pydantic.main",
     # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
     "ignore::DeprecationWarning:pytest_asyncio.plugin",
+    # TODO: drop once our tests write litellm.model_cost through the public API instead of directly
+    "ignore::litellm.litellm_core_utils.model_cost_store.ModelCostDirectWriteWarning",
 ]
 
 [tool.mutmut]
