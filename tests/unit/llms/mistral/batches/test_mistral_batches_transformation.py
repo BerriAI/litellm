@@ -334,6 +334,14 @@ def test_list_response_exactly_filled_last_page_has_no_more(config):
     assert page.next_page_token is None
 
 
+def test_list_response_zero_page_size_has_no_more(config):
+    page = config.transform_list_batches_response(
+        model=None, raw_response=_list_response([], total=5, page=0, page_size=0), logging_obj=None, litellm_params={}
+    )
+    assert page.has_more is False
+    assert page.next_page_token is None
+
+
 def test_list_response_empty_page(config):
     page = config.transform_list_batches_response(
         model=None, raw_response=_list_response([], total=0, page=0, page_size=20), logging_obj=None, litellm_params={}

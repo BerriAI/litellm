@@ -270,7 +270,7 @@ class MistralBatchesConfig(BaseBatchesListConfig, BaseBatchesCancelConfig):
         page_number: Final = int(sent_query["page"])
         page_size: Final = int(sent_query["page_size"])
         data: Final = tuple(_to_litellm_batch(job) for job in page.data)
-        has_more: Final = (page_number + 1) * page_size < page.total
+        has_more: Final = bool(data) and (page_number + 1) * page_size < page.total
         return OpenAIBatchListResponse(
             data=data,
             first_id=data[0].id if data else None,

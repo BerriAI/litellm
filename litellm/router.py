@@ -415,6 +415,7 @@ from litellm.types.router import (
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    LIST_BATCHES_SUPPORTED_PROVIDERS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -7588,14 +7589,12 @@ class Router:
             raise Exception("Router not yet initialized.")
 
         async def try_retrieve_batch(model: DeploymentTypedDict):
+            provider: Final = deployment_provider(model)
+            listing_provider: Final = (
+                {"custom_llm_provider": provider} if provider in LIST_BATCHES_SUPPORTED_PROVIDERS else {}
+            )
             try:
-                return await litellm.alist_batches(
-                    **{
-                        **model["litellm_params"],
-                        "custom_llm_provider": deployment_provider(model) or "openai",
-                        **kwargs,
-                    }
-                )
+                return await litellm.alist_batches(**{**model["litellm_params"], **listing_provider, **kwargs})
             except Exception:
                 return None
 
@@ -7608,7 +7607,6 @@ class Router:
             "first_id": None,
             "last_id": None,
             "has_more": False,
-            "next_page_token": None,
         }
 
         for result in results:
