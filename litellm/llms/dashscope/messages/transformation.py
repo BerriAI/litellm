@@ -39,7 +39,7 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def get_api_base(api_base: str | None = None) -> str:
         return resolve_dashscope_anthropic_api_base(api_base)
 
-    def validate_anthropic_messages_environment(  # pyright: ignore[reportUnknownParameterType]  # return type mirrors the base signature
+    def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the legacy base override signature
         model: str,
@@ -48,7 +48,7 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the base signature  # pyright: ignore[reportMissingTypeArgument]  # mirrors the base signature
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: mirrors the base signature
         resolved_api_key: Final = self.get_api_key(api_key=api_key)
         if resolved_api_key is None:
             present_headers: Final = {name.lower() for name in headers}
@@ -61,7 +61,7 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
                     llm_provider="dashscope",
                     model=model,
                 )
-        return super().validate_anthropic_messages_environment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # base signature uses an unparameterized dict
+        return super().validate_anthropic_messages_environment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportReturnType]  # base signature uses an unparameterized dict
             headers=headers,
             model=model,
             messages=messages,
