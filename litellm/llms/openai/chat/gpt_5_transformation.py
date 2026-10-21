@@ -5,6 +5,7 @@ from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.utils import (
     declared_value_factory,
     is_explicitly_disabled_factory,
@@ -14,6 +15,12 @@ from litellm.utils import (
 from .gpt_transformation import OpenAIGPTConfig
 
 _GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
+
+DROP_REFUSED_REASONING_EFFORT_WARNING: Final = (
+    "Dropping reasoning_effort=%r for model=%r (drop_params=True) because the model map does not mark that level "
+    "supported for %r. If the deployment supports it, set model_info.base_model to its underlying model or add "
+    "the level to model_info.reasoning_effort_levels."
+)
 
 
 def _catalogue_declares_default_effort() -> bool:
@@ -342,6 +349,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             and self.refuses_reasoning_effort_level(model, requested_effort)
         ):
             if litellm.drop_params or drop_params:
+                verbose_logger.warning(
+                    DROP_REFUSED_REASONING_EFFORT_WARNING,
+                    requested_effort,
+                    model,
+                    self._model_map_lookup_name(model),
+                )
                 non_default_params.pop("reasoning_effort", None)
                 optional_params.pop("reasoning_effort", None)
             else:
