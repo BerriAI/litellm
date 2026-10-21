@@ -6,6 +6,7 @@ import {
   dailyActivityExportCall,
   dailyActivityKeySearchCall,
   dailyActivityModelTopKeysCall,
+  dailyActivityTagPageCall,
 } from "./networking";
 import type { DailyActivityEntity, DailyActivityRequest } from "./UsagePage/dailyActivityApi";
 
@@ -62,6 +63,7 @@ describe("dailyActivityAggregatedCall", () => {
     expect(url.searchParams.has("timezone")).toBe(true);
     expect(url.searchParams.has("page")).toBe(false);
     expect(url.searchParams.has("page_size")).toBe(false);
+    expect(url.searchParams.has("group_by")).toBe(false);
   });
 
   it("omits the entity filter when no ids are given", async () => {
@@ -123,16 +125,27 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch).searchParams.get("include_current_utc_day")).toBe("true");
   });
 
-  it("sends group_by on team reports only, and only when set", async () => {
+  it("GETs the team tags page with team, offset, and limit", async () => {
     const mockFetch = captureFetch();
 
-    await dailyActivityAggregatedCall("team", req({ entityIds: ["team-a"], groupBy: "tag" }));
-    await dailyActivityAggregatedCall("team", req({ entityIds: ["team-a"] }));
-    await dailyActivityAggregatedCall("tag", req({ entityIds: ["tag-a"], groupBy: "tag" }));
+    const request = {
+      accessToken: "sk-key",
+      startTime: start,
+      endTime: end,
+      teamId: "team-a",
+      offset: 50,
+      limit: 50,
+    };
+    await dailyActivityTagPageCall(request);
 
-    expect(requestedUrl(mockFetch, 0).searchParams.get("group_by")).toBe("tag");
-    expect(requestedUrl(mockFetch, 1).searchParams.has("group_by")).toBe(false);
-    expect(requestedUrl(mockFetch, 2).searchParams.has("group_by")).toBe(false);
+    const url = requestedUrl(mockFetch);
+    expect(url.pathname).toBe("/team/daily/activity/aggregated/tags");
+    expect(url.searchParams.get("team_ids")).toBe("team-a");
+    expect(url.searchParams.get("start_date")).toBe("2025-01-05");
+    expect(url.searchParams.get("end_date")).toBe("2025-01-31");
+    expect(url.searchParams.get("offset")).toBe("50");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.has("group_by")).toBe(false);
   });
 
   it("sends api_key_limit only when provided", async () => {

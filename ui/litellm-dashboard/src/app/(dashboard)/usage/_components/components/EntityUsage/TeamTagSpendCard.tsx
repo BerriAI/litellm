@@ -1,16 +1,17 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { Tags } from "lucide-react";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, DataTablePagination } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
-import { toDailyData, type DailyActivityRequest } from "@/components/UsagePage/dailyActivityApi";
+import type {
+  DailyActivityTagPageResponse,
+  DailyActivityTagSpendRow,
+} from "@/components/UsagePage/dailyActivityApi";
 
-import { useAggregatedDailyActivity } from "../../hooks/useAggregatedDailyActivity";
 import { Panel } from "../overview/Primitives";
 
 import { ENTITY_API } from "./entityFetchFns";
-import { teamTagSpendRows, type TeamTagSpendRow } from "./teamTagSpend";
 
 interface TeamTagSpendCardProps {
   accessToken: string | null;
@@ -19,9 +20,26 @@ interface TeamTagSpendCardProps {
   teamId: string;
 }
 
-const QUIET_HEADER = { headerClassName: "font-normal" };
+interface TagPageState {
+  scope: object;
+  page: number;
+  response: DailyActivityTagPageResponse | null;
+  failed: boolean;
+}
 
-const columns: ColumnDef<TeamTagSpendRow>[] = [
+interface TeamTagSpendPage {
+  page: number;
+  loading: boolean;
+  failed: boolean;
+  rows: DailyActivityTagSpendRow[];
+  totalTags: number;
+  onPageChange: (nextPage: number) => void;
+}
+
+const QUIET_HEADER = { headerClassName: "font-normal" };
+const PAGE_SIZE = 50;
+
+const columns: ColumnDef<DailyActivityTagSpendRow>[] = [
   {
     header: "Tag",
     accessorKey: "tag",
@@ -60,21 +78,68 @@ const columns: ColumnDef<TeamTagSpendRow>[] = [
   },
 ];
 
-const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = ({ accessToken, startTime, endTime, teamId }) => {
-  const tagSpendRequest: DailyActivityRequest = {
-    accessToken: accessToken as string,
-    startTime: startTime as Date,
-    endTime: endTime as Date,
-    entityIds: [teamId],
-    groupBy: "tag",
-  };
-  const { data, loading, failed } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API.team.aggregated(tagSpendRequest),
-    enabled: Boolean(accessToken && startTime && endTime),
-    deps: [accessToken, startTime, endTime, teamId],
-  });
-  const rows = useMemo(() => teamTagSpendRows(toDailyData(data)), [data]);
+const useTeamTagSpendPage = ({
+  accessToken,
+  startTime,
+  endTime,
+  teamId,
+}: TeamTagSpendCardProps): TeamTagSpendPage => {
+  const startTimestamp = startTime?.getTime();
+  const endTimestamp = endTime?.getTime();
+  const requestScope = useMemo(
+    () => ({ hasAccessToken: accessToken !== null, endTimestamp, startTimestamp, teamId }),
+    [accessToken, endTimestamp, startTimestamp, teamId],
+  );
+  const [pageState, setPageState] = useState<{ scope: object; page: number }>({ scope: {}, page: 0 });
+  const [tagPageState, setTagPageState] = useState<TagPageState | null>(null);
+  const page = pageState.scope === requestScope ? pageState.page : 0;
+  const currentScopeState = tagPageState?.scope === requestScope ? tagPageState : null;
+  const currentPageState = currentScopeState?.page === page ? currentScopeState : null;
+  const enabled = Boolean(accessToken && startTimestamp !== undefined && endTimestamp !== undefined);
 
+  useEffect(() => {
+    if (!accessToken || startTimestamp === undefined || endTimestamp === undefined) return;
+
+    const controller = new AbortController();
+    const tagPageRequest = {
+      accessToken,
+      startTime: new Date(startTimestamp),
+      endTime: new Date(endTimestamp),
+      teamId,
+      offset: page * PAGE_SIZE,
+      limit: PAGE_SIZE,
+      signal: controller.signal,
+    };
+    void ENTITY_API.team.tagPage(tagPageRequest)
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        const nextPageState: TagPageState = { scope: requestScope, page, response, failed: false };
+        setTagPageState(nextPageState);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        console.error("Team tag spend page request failed:", error);
+        setTagPageState((current) => ({
+          scope: requestScope,
+          page,
+          response: current?.scope === requestScope ? current.response : null,
+          failed: true,
+        }));
+      });
+    return () => controller.abort();
+  }, [accessToken, endTimestamp, page, requestScope, startTimestamp, teamId]);
+
+  const loading = enabled && currentPageState === null;
+  const failed = currentPageState?.failed ?? false;
+  const rows = failed ? [] : (currentPageState?.response?.tags ?? []);
+  const totalTags = currentScopeState?.response?.total_tags ?? 0;
+  const onPageChange = (nextPage: number) => setPageState({ scope: requestScope, page: nextPage });
+
+  return { page, loading, failed, rows, totalTags, onPageChange };
+};
+
+const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = (props) => {
+  const { page, loading, failed, rows, totalTags, onPageChange } = useTeamTagSpendPage(props);
   return (
     <Panel icon={Tags} title="Spend Per Tag" testId="team-tag-spend-card">
       <p className="mb-3 text-xs text-muted-foreground">
@@ -91,6 +156,17 @@ const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = ({ accessToken, startT
         }
         size="compact"
       />
+      {totalTags > 0 && (
+        <DataTablePagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          rowCount={totalTags}
+          onPageChange={onPageChange}
+          onPageSizeChange={() => undefined}
+          pageSizeOptions={[PAGE_SIZE]}
+          isLoading={loading}
+        />
+      )}
     </Panel>
   );
 };
