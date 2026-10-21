@@ -976,6 +976,7 @@ from litellm.secret_managers.main import (
 )
 from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -10383,6 +10384,7 @@ async def async_data_generator(
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
+    dispatched_call_type: str | None = None,
 ):
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
@@ -10598,6 +10600,7 @@ async def async_data_generator(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
+            dispatched_call_type=dispatched_call_type,
         )
         client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
@@ -18219,6 +18222,7 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        data.pop(STREAM_USAGE_INJECTED_FIELD, None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
