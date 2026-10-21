@@ -1845,7 +1845,7 @@ def completion_cost(
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = (
-                        len(prompt.strip())
+                        len(prompt)
                         if custom_llm_provider == LlmProviders.ELEVENLABS.value
                         else litellm.utils.count_characters(text=prompt)
                     )
