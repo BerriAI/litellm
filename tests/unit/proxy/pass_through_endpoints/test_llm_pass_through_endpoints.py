@@ -528,17 +528,12 @@ class TestVertexAIPassThroughHandler:
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-                new_callable=AsyncMock,
-            ) as mock_auth,
         ):
             # Mock credentials object with necessary attributes
             mock_credentials = Mock()
             mock_credentials.token = default_credentials
 
             mock_load_auth.return_value = (mock_credentials, default_project)
-            mock_auth.return_value = MagicMock()
 
             # Mock the vertex handler
             mock_handler = Mock()
@@ -556,6 +551,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 traceback.print_exc()
@@ -630,20 +626,16 @@ class TestVertexAIPassThroughHandler:
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-                new_callable=AsyncMock,
-            ) as mock_auth,
         ):
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
-            mock_auth.return_value = UserAPIKeyAuth(api_key="sk-test-creds")
 
             with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-creds"),
                 )
 
             assert exc_info.value.status_code == 401
@@ -655,8 +647,9 @@ class TestVertexAIPassThroughHandler:
         Critical
 
         This is how Vertex AI JS SDK will Auth to Litellm Proxy: the virtual key
-        arrives in x-litellm-api-key and must reach user_api_key_auth. With no Vertex
-        credential configured, that virtual key must not be forwarded to Google, so
+        arrives in x-litellm-api-key and authenticates the caller (covered through the
+        real auth dependency in TestVertexPassthroughAuthenticatesOncePerRequest). With no
+        Vertex credential configured, that virtual key must not be forwarded to Google, so
         the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
@@ -665,26 +658,21 @@ class TestVertexAIPassThroughHandler:
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
-            mock_auth.return_value = {"api_key": "test-key-123"}
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_pass_through:
+            mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
-            with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-            ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
+            with pytest.raises(HTTPException) as exc_info:
+                await vertex_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key-123"),
+                )
 
-                with pytest.raises(HTTPException) as exc_info:
-                    await vertex_proxy_route(
-                        endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
-                        request=mock_request,
-                        fastapi_response=mock_response,
-                    )
-
-                assert exc_info.value.status_code == 401
-                mock_pass_through.assert_not_called()
-                mock_auth.assert_called_once()
-                call_args = mock_auth.call_args[1]
-                assert call_args["api_key"] == "Bearer test-key-123"
+            assert exc_info.value.status_code == 401
+            mock_pass_through.assert_not_called()
 
     def test_vertex_passthrough_handler_multimodal_embedding_response(self):
         """

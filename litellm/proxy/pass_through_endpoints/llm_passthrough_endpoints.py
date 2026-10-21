@@ -2956,7 +2956,7 @@ async def _base_vertex_proxy_route(
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
-        user_api_key_dict: User API key authentication dict
+        user_api_key_dict: The caller the route already authenticated, or None to authenticate here
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
     from litellm.llms.vertex_ai.common_utils import (
@@ -2970,22 +2970,15 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: Mapping[str, str] = {}
-    api_key_to_use = get_litellm_virtual_key(request=request)
-    user_api_key_dict = await user_api_key_auth(
-        request=request,
-        api_key=api_key_to_use,
+    caller: Final = (
+        user_api_key_dict
+        if user_api_key_dict is not None
+        else await user_api_key_auth(request=request, api_key=get_litellm_virtual_key(request=request))
     )
-
-    if user_api_key_dict is None:
-        api_key_to_use = get_litellm_virtual_key(request=request)
-        user_api_key_dict = await user_api_key_auth(
-            request=request,
-            api_key=api_key_to_use,
-        )
     if router_credentials is not None:
         await assert_user_can_access_vector_store(
             vector_store=router_credentials,
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=caller,
         )
 
     vertex_project: str | None = get_vertex_project_id_from_url(endpoint)
@@ -3037,7 +3030,7 @@ async def _base_vertex_proxy_route(
         router_credentials=router_credentials,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=caller,
     )
 
     base_target_url: Final = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
@@ -3083,7 +3076,7 @@ async def _base_vertex_proxy_route(
         received_value: Final = await endpoint_func(
             request,
             fastapi_response,
-            user_api_key_dict,
+            caller,
         )
     except ProxyException as e:
         if headers_passed_through:
