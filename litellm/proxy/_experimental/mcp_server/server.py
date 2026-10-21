@@ -1760,10 +1760,10 @@ if MCP_AVAILABLE:
         row capping it.
 
         Raises HTTPException(403) unless the principal holds toolset_id through one
-        of its grant sources. Admins always pass.
+        of its grant sources. Admins pass unless the key is bound to a real team.
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import has_team_unbound_mcp_admin_view
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-        from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
         # A key scoped to no MCP servers opts out of every MCP path. Enforce it
         # here too, since toolset scoping replaces mcp_servers and would otherwise
@@ -1777,7 +1777,7 @@ if MCP_AVAILABLE:
             )
 
         acting: Final = await acting_user(user_api_key_auth)
-        is_admin: Final = user_api_key_has_admin_view(acting)
+        is_admin: Final = has_team_unbound_mcp_admin_view(acting)
         if not is_admin and toolset_id not in await granted(acting):
             raise HTTPException(
                 status_code=403,

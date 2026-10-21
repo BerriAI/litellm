@@ -282,14 +282,16 @@ class LiteLLM_Proxy_MCP_Handler:
                         toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
                         if toolset is not None:
                             if user_api_key_auth is not None:
+                                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                                    has_team_unbound_mcp_admin_view,
+                                )
                                 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
                                     granted_toolset_ids,
                                 )
-                                from litellm.proxy.management_endpoints.common_utils import (
-                                    user_api_key_has_admin_view,
-                                )
 
-                                if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
+                                if not has_team_unbound_mcp_admin_view(
+                                    user_api_key_auth
+                                ) and toolset.toolset_id not in (
                                     await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
                                 ):
                                     verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
