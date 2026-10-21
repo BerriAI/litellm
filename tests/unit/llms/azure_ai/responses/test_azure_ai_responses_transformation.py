@@ -7,7 +7,10 @@ import respx
 
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
+from litellm.llms.azure_ai.responses.transformation import (
+    AzureAIAgentResponsesAPIConfig,
+    AzureAIResponsesAPIConfig,
+)
 from litellm.responses.main import _will_bridge_to_chat_completions
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -103,12 +106,20 @@ def test_other_hosts_keep_chat_bridge(model, api_base):
     assert config is None
 
 
-@pytest.mark.parametrize("model", ["claude-3-5-sonnet", "model_router/gpt-5", "agents/my-agent"])
+@pytest.mark.parametrize("model", ["claude-3-5-sonnet", "model_router/gpt-5", "agents/asst_abc123"])
 def test_non_openai_surfaces_keep_chat_bridge(model):
     config = ProviderConfigManager.get_provider_responses_api_config(
         provider="azure_ai", model=model, api_base=FOUNDRY_PROJECT_BASE
     )
     assert config is None
+
+
+@pytest.mark.parametrize("model", ["agents/support-agent", "agents/support-agent:3"])
+def test_foundry_project_agents_resolve_agent_config(model):
+    config = ProviderConfigManager.get_provider_responses_api_config(
+        provider="azure_ai", model=model, api_base=FOUNDRY_PROJECT_BASE
+    )
+    assert isinstance(config, AzureAIAgentResponsesAPIConfig)
 
 
 @pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
@@ -383,3 +394,112 @@ def test_foundry_responses_none_unlocks_temperature_off_the_azure_ai_row(
 
     assert params["temperature"] == 0.2
     assert params["reasoning"] == {"effort": "none"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "model,expected_reference",
+    [
+        ("azure_ai/agents/support-agent", {"type": "agent_reference", "name": "support-agent"}),
+        ("azure_ai/agents/support-agent:3", {"type": "agent_reference", "name": "support-agent", "version": "3"}),
+    ],
+)
+async def test_aresponses_sends_agent_reference_instead_of_model(model, expected_reference):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model=model, input="What is 2+2?", max_output_tokens=50, api_base=FOUNDRY_PROJECT_BASE, api_key="fake-key"
+    )
+
+    request = route.calls.last.request
+    body = json.loads(request.content)
+    assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == FOUNDRY_RESPONSES_URL
+    assert body["agent_reference"] == expected_reference
+    assert "model" not in body
+    assert body["input"] == "What is 2+2?"
+    assert body["max_output_tokens"] == 50
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_router_aresponses_keeps_the_deployment_agent_over_extra_body():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "support-agent",
+                "litellm_params": {
+                    "model": "azure_ai/agents/support-agent",
+                    "api_base": FOUNDRY_PROJECT_BASE,
+                    "api_key": "fake-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.aresponses(
+        model="support-agent",
+        input="What is 2+2?",
+        extra_body={"agent_reference": {"type": "agent_reference", "name": "billing-agent"}, "store": False},
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
+    assert body["store"] is False
+    assert "model" not in body
+
+
+AGENT_OWNED_PARAMS = {
+    "instructions": "Answer in French",
+    "temperature": 0.2,
+    "top_p": 0.5,
+    "tools": [WEATHER_TOOL],
+    "text": {"format": {"type": "text"}},
+    "reasoning": {"effort": "high"},
+}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_drops_agent_owned_params_under_drop_params():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/agents/support-agent",
+        input="What is 2+2?",
+        tool_choice="auto",
+        drop_params=True,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        **AGENT_OWNED_PARAMS,
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert body.keys().isdisjoint(AGENT_OWNED_PARAMS)
+    assert body["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("param", sorted(AGENT_OWNED_PARAMS))
+async def test_aresponses_rejects_agent_owned_params_without_drop_params(param):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=param):
+        await litellm.aresponses(
+            model="azure_ai/agents/support-agent",
+            input="What is 2+2?",
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+            **{param: AGENT_OWNED_PARAMS[param]},
+        )
+
+    assert not route.called

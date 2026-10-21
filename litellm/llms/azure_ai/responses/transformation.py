@@ -1,3 +1,5 @@
+from collections.abc import Collection, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -9,11 +11,14 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.types.llms.azure_ai import FoundryAgentReference
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 _PROJECT_PATH_PREFIX: Final = ("api", "projects")
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
+_AGENT_OWNED_PARAMS: Final = frozenset({"instructions", "temperature", "top_p", "tools", "text", "reasoning"})
 
 
 def _responses_url(api_base: str) -> str:
@@ -64,3 +69,58 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
                 "Set the api_base parameter or the AZURE_AI_API_BASE environment variable."
             )
         return _responses_url(resolved_base)
+
+
+def _agent_reference(model: str) -> FoundryAgentReference:
+    name, _, version = model.split("agents/", 1)[1].partition(":")
+    if version:
+        return FoundryAgentReference(type="agent_reference", name=name, version=version)
+    return FoundryAgentReference(type="agent_reference", name=name)
+
+
+class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: override contract
+        inherited: Final[list[str]] = super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare list  # mutable-ok: same
+        return [param for param in inherited if param not in _AGENT_OWNED_PARAMS]
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
+        mapped: Final = super().map_openai_params_for_deployment(
+            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+        return MappingProxyType({key: value for key, value in mapped.items() if key not in _AGENT_OWNED_PARAMS})
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: same
+    ) -> dict[str, object]:  # mutable-ok: same
+        request: Final[dict[str, object]] = super().transform_responses_api_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare dict  # mutable-ok: same
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        return {
+            **{key: value for key, value in request.items() if key != "model"},
+            "agent_reference": _agent_reference(model),
+        }
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return {**extra_body, "agent_reference": _agent_reference(model)}
