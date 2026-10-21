@@ -573,10 +573,13 @@ def _tag_image(source: str, target: str) -> None:
     subprocess.run(["docker", "tag", source, target], check=True, capture_output=True, text=True)
 
 
-def _build_image(root_dir: Path, tag: str, dockerfile: str) -> None:
-    subprocess.run(
-        ["docker", "build", "--tag", tag, "--file", "-", "."],
-        cwd=root_dir,
+def _build_image(
+    tag: str,
+    dockerfile: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    runner(
+        ["docker", "build", "--tag", tag, "-"],
         input=dockerfile,
         check=True,
         capture_output=True,
@@ -819,7 +822,7 @@ def _pull_batch(
     task: Final = batch.tasks[0]
     remaining: Final = ProfileBatch(batch.index, batch.tasks[1:])
     if preflight_rows.get(task.task_id, {}).get("record_type") == "preflight_failed":
-        return _pull_batch(config, remaining, ops, preflight_rows)
+        return _pull_batch(config, remaining, ops, preflight_rows, prepared, owned)
     if task.image_ref is None:
         if task.task_id not in preflight_rows:
             _append_preflight(config, task, "preflight_failed", "env", None, None, 0.0)
@@ -984,7 +987,7 @@ def _default_ops(
         inspect_image=_inspect_image,
         pull_image=_pull_image,
         tag_image=_tag_image,
-        build_image=lambda tag, dockerfile: _build_image(config.root_dir, tag, dockerfile),
+        build_image=lambda tag, dockerfile: _build_image(tag, dockerfile),
         evaluate=lambda task_id, patch, label, paths: _evaluate(task_id, patch, label, paths, env),
         remove_image=_remove_image,
         image_exists=lambda reference: _inspect_image(reference) is not None,

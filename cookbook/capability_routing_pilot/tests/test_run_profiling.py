@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,6 +15,7 @@ from poc.run_profiling import (
     ProfileTask,
     RuntimeOps,
     TransientInfraError,
+    _build_image,
     _cleanup_plan,
     _pull_batch,
     _guard_sha256,
@@ -383,6 +385,55 @@ def test_transient_pull_leaves_rows_absent_and_retry_prepares_task(tmp_path: Pat
     failed = False
     plan = _pull_batch(config, ProfileBatch(1, (task,)), operations, {})
     assert plan.prepared[0].final_image_id == "upstream-id"
+
+
+def test_preflight_failed_task_preserves_later_pull_plan_and_cleanup(tmp_path: Path) -> None:
+    first = ProfileTask(0, "task-0", "repository_debugging", model_order_for_task(0), "repo/first@sha256:a", "sha256:a")
+    later = ProfileTask(1, "task-1", "repository_debugging", model_order_for_task(1), "repo/later@sha256:b", "sha256:b")
+    batch = ProfileBatch(1, (first, later))
+    config = ProfileConfig(tmp_path, tmp_path / "manifest.json", "manifest-sha")
+    images: dict[str, str] = {}
+
+    def tag(source: str, target: str) -> None:
+        images[target] = images[source]
+
+    operations = RuntimeOps(
+        disk_stats=lambda: {"free_bytes": 100 * 1024**3},
+        inspect_image=lambda reference: images.get(reference),
+        pull_image=lambda reference: images.__setitem__(reference, reference),
+        tag_image=tag,
+        build_image=lambda _tag, _dockerfile: None,
+        evaluate=lambda *_args: ("unresolved", 0.1),
+        remove_image=lambda reference: not images.pop(reference, None),
+        image_exists=lambda reference: reference in images,
+        attempt=lambda *_args: {},
+    )
+    plan = _pull_batch(
+        config,
+        batch,
+        operations,
+        {"task-0": {"record_type": "preflight_failed"}},
+    )
+
+    assert tuple(task_image.task_id for task_image in plan.prepared) == ("task-1",)
+    assert plan.owned_refs == ("repo/later@sha256:b", "repo/later:latest")
+    _cleanup_plan(config, batch, plan, operations)
+    assert not images
+
+
+def test_overlay_build_uses_empty_docker_context() -> None:
+    runner = Mock()
+    dockerfile = "FROM repo/image@sha256:digest\nRUN true\n"
+
+    _build_image("routing_poc/profiling-overlay:task-0", dockerfile, runner)
+
+    runner.assert_called_once_with(
+        ["docker", "build", "--tag", "routing_poc/profiling-overlay:task-0", "-"],
+        input=dockerfile,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_profile_guard_enforces_phase_cap_and_pre_pull_disk_reserve(tmp_path: Path) -> None:
