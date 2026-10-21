@@ -271,6 +271,7 @@ def _append_attempt_link(
                 "run_id": run_id,
                 "timestamp": run_pilot._utc_now(),
                 **dict(metadata),
+                "cost_usd": 0.0,
             },
         )
 

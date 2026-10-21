@@ -377,3 +377,36 @@ def test_repair_dry_run_does_not_write_artifacts(tmp_path: Path, monkeypatch: py
     }
     assert after == before
     assert json.loads(capsys.readouterr().out)["plan"][0]["eligible"] is True
+
+
+def test_repair_rows_are_counted_by_committed_spend_and_dispatch_guard(tmp_path: Path) -> None:
+    scenario: Final = _scenario(tmp_path)
+    config: Final = scenario[0]
+    aux_path: Final = tmp_path / "profiling" / "aux_costs.jsonl"
+
+    assert _repair(scenario) is True
+
+    rows: Final = run_pilot.read_jsonl_locked(config.runs_path)
+    correction_rows: Final = tuple(row for row in rows if row.get("record_type") == "env_correction")
+    preflight_rows: Final = tuple(
+        row for row in rows if row.get("record_type") == "preflight_passed"
+    )
+    link_rows: Final = tuple(
+        row for row in rows if row.get("record_type") == "env_correction_attempt_link"
+    )
+    attempt_rows: Final = tuple(row for row in rows if row.get("record_type") == "attempt")
+    assert len(correction_rows) == 1
+    assert len(preflight_rows) == 1
+    assert len(link_rows) == len(attempt_rows) == 3
+    assert all(row["cost_usd"] == 0.0 for row in correction_rows + preflight_rows + link_rows)
+    assert all(row["cost_usd"] == 0.1 for row in attempt_rows)
+    assert run_pilot.committed_spend_usd(config.runs_path, aux_path) == pytest.approx(0.3)
+
+    guard: Final = run_pilot.DispatchGuard(
+        config.profile_dir / "spend_guard_stops.jsonl",
+        budget=180.0,
+        free_bytes=lambda: 100 * 1024**3,
+        committed_spend=lambda: run_pilot.committed_spend_usd(config.runs_path, aux_path),
+    )
+    assert guard.acquire(TASK_ID) is True
+    guard.release()
