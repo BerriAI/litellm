@@ -43,8 +43,22 @@ class _Sink:
         self.transactions = (*self.transactions, transaction)
 
 
-def _database_windows(table: _Table | None, sink: _Sink) -> DatabaseSharedWindows:
-    prisma: Final = None if table is None else SimpleNamespace(db=_Database(table))
+class _LaggingReplica:
+    def __init__(self, writer: _Database) -> None:
+        self.litellm_budgetwindowspend = _Table()
+        self._writer = writer
+
+    async def execute_raw(self, query: str, *params: object) -> int:
+        return await self._writer.execute_raw(query, *params)
+
+
+def _database_windows(table: _Table | None, sink: _Sink, lagging_replica: bool = False) -> DatabaseSharedWindows:
+    writer: Final = None if table is None else _Database(table)
+    prisma: Final = (
+        None
+        if writer is None
+        else SimpleNamespace(db=_LaggingReplica(writer) if lagging_replica else writer, writer_db=writer)
+    )
     return DatabaseSharedWindows(
         prisma_client_source=lambda: prisma,  # pyright: ignore[reportArgumentType]  # duck-typed prisma double
         sink=sink,
@@ -115,6 +129,18 @@ async def test_open_joins_the_window_another_replica_already_started():
 
     assert started_at == WINDOW_START.timestamp()
     assert table.row.spend == 2.5
+
+
+@pytest.mark.asyncio
+async def test_open_reads_the_window_from_the_writer_while_the_read_replica_lags():
+    table: Final = _Table(row=SimpleNamespace(window_start=WINDOW_START.replace(tzinfo=None), spend=2.5))
+    windows: Final = _database_windows(table, _Sink(), lagging_replica=True)
+
+    started_at: Final = await windows.open(
+        spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp() + 3600
+    )
+
+    assert started_at == WINDOW_START.timestamp()
 
 
 @pytest.mark.asyncio

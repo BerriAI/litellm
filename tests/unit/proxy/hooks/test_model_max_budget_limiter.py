@@ -3,6 +3,7 @@ import functools
 import re
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -325,7 +326,11 @@ OPUS_GROUP_MEMBERS: Final = MappingProxyType(
     {"claude-opus-4-8": frozenset({OPUS_GROUP}), "claude-opus-5-5": frozenset({OPUS_GROUP})}
 )
 FAMILY_CAP: Final = {"budget_limit": CHAT_COST, "time_period": "1d"}  # mutable-ok: BudgetConfig validates dicts only
-ROOMY_CAP: Final = {"budget_limit": CHAT_COST * 100, "time_period": "1d"}  # mutable-ok: BudgetConfig validates dicts only
+ROOMY_CAP: Final = {
+    "budget_limit": CHAT_COST * 100,
+    "time_period": "1d",
+}  # mutable-ok: BudgetConfig validates dicts only
+WINDOW_EPOCH: Final = datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc).timestamp()
 
 
 def _model_access_groups(groups_by_model: Mapping[str, frozenset[str]]) -> Callable[[str], frozenset[str]]:
@@ -341,6 +346,7 @@ class _SharedWindowsDouble:
         return self.rows.get(spend_key)
 
     async def open(self, spend_key: str, budget_duration: str, now: float) -> float:
+        await asyncio.sleep(0)
         stored: Final = self.rows.get(spend_key)
         if stored is not None and stored.is_open(budget_duration=budget_duration, now=now):
             return stored.started_at
@@ -493,9 +499,7 @@ async def test_key_info_usage_reports_the_family_total():
         ("*", "claude-sonnet-5", True),
     ],
 )
-def test_glob_entries_match_the_whole_model_name_with_only_star_as_a_wildcard(
-    pattern: str, model: str, governs: bool
-):
+def test_glob_entries_match_the_whole_model_name_with_only_star_as_a_wildcard(pattern: str, model: str, governs: bool):
     resolved: Final = resolve_model_budget(
         model=model, model_max_budget={pattern: FAMILY_CAP}, model_access_groups=_model_access_groups({})
     )
@@ -545,7 +549,7 @@ async def test_a_replica_charges_the_open_shared_window_instead_of_restarting_it
     budget: Final = {"claude-opus*": {"budget_limit": CHAT_COST * 1.5, "time_period": "1d"}}
     table: Final = _SharedWindowsDouble()
     clock: Final = _Clock()
-    clock.advance(time.time())
+    clock.advance(WINDOW_EPOCH)
     replica_a: Final = _family_limiter(shared_windows=table, clock=clock.now)
     replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
 
@@ -588,7 +592,7 @@ async def test_replicas_starting_a_window_moments_apart_keep_each_others_spend(b
     budget: Final = {budget_model: ROOMY_CAP}
     table: Final = _SharedWindowsDouble()
     clock: Final = _Clock()
-    clock.advance(time.time())
+    clock.advance(WINDOW_EPOCH)
     replica_a: Final = _family_limiter(shared_windows=table, clock=clock.now)
     replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
 
@@ -602,6 +606,30 @@ async def test_replicas_starting_a_window_moments_apart_keep_each_others_spend(b
         entity_id=KEY_HASH,
         model_max_budget=budget,
         cache=DualCache(),
+        now=datetime.fromtimestamp(clock.now(), tz=timezone.utc),
         shared_windows=table,
     )
     assert usage[budget_model]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_charges_on_one_replica_both_count():
+    budget: Final = {"claude-opus*": ROOMY_CAP}
+    clock: Final = _Clock()
+    clock.advance(WINDOW_EPOCH)
+    limiter: Final = _family_limiter(shared_windows=_SharedWindowsDouble(), clock=clock.now)
+
+    await asyncio.gather(
+        _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget),
+        _spend_on(limiter, model="claude-opus-5-5", model_max_budget=budget),
+    )
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=limiter.dual_cache,
+        now=datetime.fromtimestamp(clock.now(), tz=timezone.utc),
+        shared_windows=_SharedWindowsDouble(),
+    )
+    assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)

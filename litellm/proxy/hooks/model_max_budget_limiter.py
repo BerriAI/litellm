@@ -942,11 +942,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             local=local, start_time_key=start_time_key, budget_duration=budget_duration, now=now
         ):
             return
+        started_at: Final = await self._shared_windows.open(
+            spend_key=spend_key, budget_duration=budget_duration, now=now
+        )
+        if _open_local_window_start(
+            local=local, start_time_key=start_time_key, budget_duration=budget_duration, now=now
+        ):
+            return
         _start_local_window(
             local=local,
             spend_key=spend_key,
             start_time_key=start_time_key,
-            started_at=await self._shared_windows.open(spend_key=spend_key, budget_duration=budget_duration, now=now),
+            started_at=started_at,
             budget_duration=budget_duration,
             now=now,
         )

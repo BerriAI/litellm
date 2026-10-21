@@ -96,7 +96,7 @@ class DatabaseSharedWindows:
             return now
         try:
             seen: Final = await _fetch_row(
-                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration
+                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration, use_writer=True
             )
             if seen is not None and seen.is_open(budget_duration=budget_duration, now=now):
                 return seen.started_at
@@ -111,7 +111,7 @@ class DatabaseSharedWindows:
                 else datetime.fromtimestamp(seen.started_at, tz=timezone.utc),
             )
             opened: Final = await _fetch_row(
-                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration
+                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration, use_writer=True
             )
         except Exception:  # noqa: BLE001  # an unreachable database leaves this replica on its own window
             verbose_proxy_logger.exception("Unable to open the shared model budget window")
@@ -141,14 +141,18 @@ class DatabaseSharedWindows:
         if prisma_client is None:
             return None
         try:
-            return await _fetch_row(prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration)
+            return await _fetch_row(
+                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration, use_writer=False
+            )
         except Exception:  # noqa: BLE001  # an unreadable row leaves enforcement on this replica's own counter
             verbose_proxy_logger.exception("Unable to read shared model budget spend")
             return None
 
 
-async def _fetch_row(prisma_client: "PrismaClient", spend_key: str, budget_duration: str) -> SharedWindow | None:
-    row: Final = await BudgetWindowSpendRepository(prisma_client).table.find_unique(
+async def _fetch_row(
+    prisma_client: "PrismaClient", spend_key: str, budget_duration: str, use_writer: bool
+) -> SharedWindow | None:
+    row: Final = await BudgetWindowSpendRepository(prisma_client, use_writer=use_writer).table.find_unique(
         where={
             "entity_type_entity_id_window_duration": {
                 "entity_type": MODEL_BUDGET_WINDOW_ENTITY_TYPE,
