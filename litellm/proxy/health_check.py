@@ -152,8 +152,9 @@ def _health_check_requires_audio_output(
     if provider not in _AUDIO_OUTPUT_PROBE_PROVIDERS:
         return False
     base_model: Final = model_info.get("base_model")
+    probes_own_model: Final = model_info.get("health_check_model") is None
     return litellm.supports_audio_output(
-        model=base_model if isinstance(base_model, str) else model, custom_llm_provider=provider
+        model=base_model if isinstance(base_model, str) and probes_own_model else model, custom_llm_provider=provider
     )
 
 
@@ -841,7 +842,8 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
-    - asks OpenAI and Azure chat models that support audio output (`model_info.base_model` first) for `modalities`
+    - asks OpenAI and Azure chat models that support audio output (`model_info.base_model` first, unless
+      `health_check_model` replaces the probed model) for `modalities`
       text + audio and a wav `audio` in the `health_check_voice` (default "alloy"), since those models reject
       text-only requests. Keys already set through `health_check_params` are kept as they are
     """
