@@ -1,0 +1,853 @@
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi import HTTPException
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+from litellm import Router
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    apply_team_provider_credentials,
+    apply_unified_file_ids,
+    get_credentials_for_model,
+    get_team_provider_credentials,
+    is_litellm_executed_batch,
+    map_raw_file_ids_to_unified,
+)
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
+from litellm.types.utils import LiteLLMBatch
+
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+
+def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
+    llm_router: Final = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = None
+
+    with pytest.raises(ProxyModelNotFoundError) as raised:
+        get_credentials_for_model(
+            llm_router=llm_router, model_id=_RAW_MODEL_WITH_PROMPT, operation_context="file upload"
+        )
+
+    assert (raised.value.status_code, handle_exception_on_proxy(raised.value).code) == (400, "400")
+    assert _RAW_MODEL_WITH_PROMPT in raised.value.detail["error"]
+    assert raised.value.retryable_with_model_read_through is False
+    assert raised.value.spend_log_error_message.startswith("file upload: ")
+    assert "medical records" not in raised.value.spend_log_error_message
+
+
+def _batch(input_file_id, output_file_id, error_file_id) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch-1",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id=input_file_id,
+        object="batch",
+        status="cancelled",
+        output_file_id=output_file_id,
+        error_file_id=error_file_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_map_raw_file_ids_to_unified_empty_ids_skips_db():
+    prisma_client = MagicMock()
+
+    assert await map_raw_file_ids_to_unified(frozenset(), prisma_client) == {}
+
+    prisma_client.db.litellm_managedfiletable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_map_raw_file_ids_to_unified_no_prisma_client_returns_empty():
+    assert await map_raw_file_ids_to_unified(frozenset({"file-raw-1"}), None) == {}
+
+
+@pytest.mark.asyncio
+async def test_map_raw_file_ids_to_unified_bulk_queries_and_filters_to_requested_ids():
+    row_a = MagicMock(
+        unified_file_id="unified-a",
+        flat_model_file_ids=["file-raw-a", "file-raw-other"],
+    )
+    row_b = MagicMock(unified_file_id="unified-b", flat_model_file_ids=["file-raw-b"])
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[row_a, row_b])
+
+    mapping = await map_raw_file_ids_to_unified(
+        frozenset({"file-raw-b", "file-raw-a", "file-raw-missing"}), prisma_client
+    )
+
+    prisma_client.db.litellm_managedfiletable.find_many.assert_awaited_once_with(
+        where={"flat_model_file_ids": {"hasSome": ["file-raw-a", "file-raw-b", "file-raw-missing"]}}
+    )
+    assert dict(mapping) == {"file-raw-a": "unified-a", "file-raw-b": "unified-b"}
+
+
+def test_apply_unified_file_ids_swaps_only_mapped_ids():
+    batch = _batch(input_file_id="file-raw-in", output_file_id="file-raw-out", error_file_id=None)
+
+    apply_unified_file_ids(batch, MappingProxyType({"file-raw-out": "unified-out"}))
+
+    assert batch.input_file_id == "file-raw-in"
+    assert batch.output_file_id == "unified-out"
+    assert batch.error_file_id is None
+
+
+def test_apply_unified_file_ids_swaps_all_three_ids():
+    batch = _batch(
+        input_file_id="file-raw-in",
+        output_file_id="file-raw-out",
+        error_file_id="file-raw-err",
+    )
+
+    apply_unified_file_ids(
+        batch,
+        MappingProxyType(
+            {
+                "file-raw-in": "unified-in",
+                "file-raw-out": "unified-out",
+                "file-raw-err": "unified-err",
+            }
+        ),
+    )
+
+    assert (batch.input_file_id, batch.output_file_id, batch.error_file_id) == (
+        "unified-in",
+        "unified-out",
+        "unified-err",
+    )
+
+
+class _FakeScheduler:
+    def __init__(self, job):
+        self._job = job
+
+    def get_job(self, job_id):
+        assert job_id == "check_batch_cost_job"
+        return self._job
+
+
+class _FakePoller:
+    def __init__(self, confirmed):
+        self.batch_processed_support_confirmed = confirmed
+
+    def check_batch_cost(self):
+        return None
+
+
+def _job_for(poller):
+    if poller is None:
+        return None
+    job = MagicMock()
+    job.func = poller.check_batch_cost
+    return job
+
+
+@pytest.mark.parametrize(
+    "polling_enabled, job, expected",
+    [
+        (True, _job_for(_FakePoller(confirmed=True)), True),
+        (True, _job_for(_FakePoller(confirmed=False)), False),
+        (True, None, False),
+        (False, _job_for(_FakePoller(confirmed=True)), False),
+    ],
+    ids=[
+        "poller-running-and-column-confirmed",
+        "poller-running-but-column-unconfirmed",
+        "job-absent-enterprise-import-failed",
+        "polling-disabled-by-config",
+    ],
+)
+def test_batch_cost_poller_is_active(monkeypatch, polling_enabled, job, expected):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", polling_enabled, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is expected
+
+
+def test_batch_cost_poller_is_active_is_false_when_no_scheduler_exists(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", None, raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch-done",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id="file-out",
+    )
+
+
+async def _run_update(monkeypatch, poller_active: bool) -> dict:
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: poller_active)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    assert update_mock.await_count == 1
+    return update_mock.await_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_leaves_batch_processed_to_the_cost_poller(monkeypatch):
+    data = await _run_update(monkeypatch, poller_active=True)
+
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost_poller(monkeypatch):
+    data = await _run_update(monkeypatch, poller_active=False)
+
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
+
+
+def test_batch_cost_poller_is_active_is_false_when_the_job_has_no_bound_poller(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    def unbound_check_batch_cost():
+        return None
+
+    job = MagicMock()
+    job.func = unbound_check_batch_cost
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def test_batch_cost_poller_is_active_is_false_when_get_job_raises(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    class _ExplodingScheduler:
+        def get_job(self, job_id):
+            raise RuntimeError("scheduler not started")
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _ExplodingScheduler(), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_batch_whose_status_is_unchanged_writes_nothing(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "completed"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    await cu.update_batch_in_database(
+        batch_id="batch-raw-xyz",
+        unified_batch_id=False,
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_caller_s_accounting_decision_wins_over_a_later_poller_transition(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: True)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=False,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=True,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"
+
+
+# =========================================================================== #
+# add_internal_model_credentials - the snapshot that lets a completed
+# batch's output file be read, and therefore its cost be recorded
+# =========================================================================== #
+
+
+def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
+    """Cost accounting for a completed batch reads its output file, and Bedrock resolves
+    that bucket only from this snapshot. It must be immutable so nothing downstream can
+    redirect the bucket that managed file ids are validated against."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(
+        return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
+    )
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-1")
+
+    snapshot = data["_litellm_internal_model_credentials"]
+    assert snapshot["s3_bucket_name"] == "configured-bucket"
+    assert isinstance(snapshot, MappingProxyType)
+    with pytest.raises(TypeError):
+        snapshot["s3_bucket_name"] = "attacker-bucket"
+    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
+
+
+@pytest.mark.parametrize(
+    "model_id, credentials",
+    [(None, {"s3_bucket_name": "b"}), ("deployment-1", None)],
+    ids=["no-model-id", "deployment-has-no-credentials"],
+)
+def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deployment(model_id, credentials):
+    """An unroutable batch must be left alone rather than given an empty snapshot, which
+    would look like a configured bucket of nothing."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials(data=data, llm_router=router, model_id=model_id)
+
+    assert "_litellm_internal_model_credentials" not in data
+
+
+def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
+    """The snapshot only enables cost accounting, so a batch whose deployment no longer
+    resolves, which happens when a model group is removed while batches are in flight,
+    must still be retrievable rather than failing the request on the lookup."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-gone")
+
+    assert data == {"batch_id": "unified-batch-id"}
+
+
+from openai.types.batch import BatchRequestCounts
+
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _completed_batch_safe_to_retire,
+)
+
+
+def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
+    kwargs = dict(
+        id="batch-1",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id=output_file_id,
+        error_file_id=None,
+    )
+    if counts is not None:
+        kwargs["request_counts"] = counts
+    return LiteLLMBatch(**kwargs)
+
+
+class TestCompletedBatchSafeToRetire:
+    """A completed batch is only safe to retire from cost recovery once its output
+    file has arrived or the provider proves it enumerated a positive total of
+    request lines and none succeeded (#37713, LIT-6360)."""
+
+    def test_output_file_present_is_safe(self):
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire("file-out")) is True
+
+    def test_no_output_and_synthesized_zero_counts_is_not_safe(self):
+        counts = BatchRequestCounts(total=0, completed=0, failed=0)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is False
+
+    def test_no_output_but_successful_lines_is_not_safe(self):
+        counts = BatchRequestCounts(total=100, completed=100, failed=0)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is False
+
+    def test_no_output_and_all_lines_failed_is_safe(self):
+        counts = BatchRequestCounts(total=100, completed=0, failed=100)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is True
+
+    def test_no_output_and_unknown_counts_is_not_safe(self):
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
+
+
+@pytest.mark.parametrize(
+    "decoded_unified_batch_id, executed",
+    [
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:litellm_batch_0123abcd", True),
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:batch_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;generic_response_id:resp_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;llm_output_file_id:file-0123abcd", False),
+        ("batch_0123abcd", False),
+    ],
+)
+def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
+    assert is_litellm_executed_batch(decoded_unified_batch_id) is executed
+
+
+def _managed_files_hook(prisma_client: MagicMock) -> _PROXY_LiteLLMManagedFiles:
+    return _PROXY_LiteLLMManagedFiles(internal_usage_cache=InternalUsageCache(DualCache()), prisma_client=prisma_client)
+
+
+def _managed_object_prisma(db_batch_object: MagicMock | None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=db_batch_object)
+    prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_batch_status_sync_from_provider_to_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+        update_batch_in_database,
+    )
+
+    batch_id: Final = "batch_test123"
+    unified_batch_id: Final = "litellm_proxy:test_unified_batch"
+    stored_row: Final = MagicMock(
+        unified_object_id=batch_id,
+        status="validating",
+        file_object=json.dumps(
+            {
+                "id": batch_id,
+                "object": "batch",
+                "status": "validating",
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-test123",
+                "completion_window": "24h",
+                "created_at": 1234567890,
+            }
+        ),
+    )
+    prisma_client: Final = _managed_object_prisma(stored_row)
+    managed_files: Final = _managed_files_hook(prisma_client)
+    logger: Final = logging.getLogger("test_batch_status_sync")
+
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=managed_files,
+        prisma_client=prisma_client,
+        verbose_proxy_logger=logger,
+    )
+
+    prisma_client.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
+        where={"unified_object_id": batch_id}
+    )
+    assert db_batch_object is stored_row
+    assert isinstance(response_batch, LiteLLMBatch)
+    assert response_batch.id == batch_id
+    assert response_batch.status == "validating"
+    assert response_batch.input_file_id == "file-test123"
+
+    completed: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="completed",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        output_file_id="file-output123",
+    )
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=completed,
+            managed_files_obj=managed_files,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            db_batch_object=db_batch_object,
+            operation="retrieve",
+            poller_owns_accounting=False,
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "complete"
+    assert written["batch_processed"] is True
+    assert written["updated_at"] is not None
+    assert json.loads(written["file_object"])["status"] == "completed"
+    assert json.loads(written["file_object"])["output_file_id"] == "file-output123"
+    assert f"Updating batch {batch_id} status from validating to completed" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import update_batch_in_database
+
+    batch_id: Final = "batch_cancel_test"
+    cancelled: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="cancelled",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        cancelled_at=1234567999,
+    )
+    prisma_client: Final = _managed_object_prisma(None)
+    logger: Final = logging.getLogger("test_batch_cancel_updates_database")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id="litellm_proxy:cancel_test",
+            response=cancelled,
+            managed_files_obj=_managed_files_hook(prisma_client),
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            operation="cancel",
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "cancelled"
+    assert "batch_processed" not in written
+    assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
+    assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+def _team_openai_router(team_public_model_name: str, deployment_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": team_public_model_name,
+                "litellm_params": {"model": deployment_model, "api_key": "team-openai-key"},
+                "model_info": {
+                    "id": "team-a-openai",
+                    "team_id": "team-a",
+                    "team_public_model_name": team_public_model_name,
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "anthropic-key"},
+            },
+        ]
+    )
+
+
+def _team_only_openai_credentials(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+) -> dict | None:
+    return get_team_provider_credentials(
+        llm_router=_team_openai_router(team_public_model_name, deployment_model),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-a",
+            team_models=[team_public_model_name, "claude-opus-4-6"],
+            models=key_models,
+        ),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "team_public_model_name, deployment_model, key_models",
+    [
+        ("openai/*", "openai/*", ["gpt-4o"]),
+        ("openai/*", "openai/*", ["openai/gpt-4o"]),
+        ("gpt-4o", "openai/gpt-4o", ["openai/*"]),
+    ],
+)
+def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_covers(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+):
+    credentials = _team_only_openai_credentials(team_public_model_name, deployment_model, key_models)
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-openai-key"
+
+
+@pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
+def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
+    assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+@pytest.mark.parametrize(
+    "request_credentials, sent_api_key, sent_api_base",
+    [
+        ({}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "   "}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "\n"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
+        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": "https://caller.example/v1"},
+            "sk-forwarded",
+            "https://caller.example/v1",
+        ),
+        ({"api_key": 123}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": ["https://caller.example/v1"]},
+            "sk-forwarded",
+            "https://team.example/v1",
+        ),
+        ({"api_key": "sk-forwarded", "api_base": "  "}, "sk-forwarded", "https://team.example/v1"),
+        ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded\n", "drop_params": True}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-for warded"}, "sk-for warded", "https://team.example/v1"),
+    ],
+)
+def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
+    request_credentials: dict[str, object], sent_api_key: str, sent_api_base: str
+):
+    data: Final[dict[str, object]] = dict(request_credentials)
+
+    _apply_team_a_openai_credentials(data)
+
+    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
+
+
+@pytest.mark.parametrize("api_key", ["sk-forwarded\n", " sk-forwarded", "\u200b", "sk-forwarded\u00a0"])
+def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
+    data: Final[dict[str, object]] = {"api_key": api_key}
+
+    with pytest.raises(HTTPException) as refused:
+        _apply_team_a_openai_credentials(data)
+
+    assert refused.value.status_code == 400
+    assert api_key not in str(refused.value.detail)
+
+
+def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
+    apply_team_provider_credentials(
+        data=data,
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "team-openai-key",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                }
+            ]
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+        ),
+        custom_llm_provider="openai",
+    )
+
+
+def _team_openai_deployment(
+    deployment_id: str, api_key: str, created_at: datetime | None = None, db_model: bool = True
+) -> dict[str, object]:
+    return {
+        "model_name": f"team-gpt-{deployment_id}",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
+        "model_info": {"id": deployment_id, "team_id": "team-a", "db_model": db_model}
+        | ({} if created_at is None else {"created_at": created_at}),
+    }
+
+
+@pytest.mark.parametrize("deployment_ids", [("deployment-a", "deployment-b"), ("deployment-b", "deployment-a")])
+def test_a_team_with_two_openai_deployments_resolves_the_same_one_in_any_router_order(
+    deployment_ids: tuple[str, str],
+):
+    router: Final = Router(
+        model_list=[_team_openai_deployment(deployment_id, f"{deployment_id}-key") for deployment_id in deployment_ids]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-a-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_id(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "older-key"
+
+
+def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
+    db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
+    config_deployments: Final = tuple(
+        _team_openai_deployment(deployment_id, f"{deployment_id}-key", db_model=False)
+        for deployment_id in ("deployment-z", "deployment-b")
+    )
+    router: Final = Router(model_list=[db_deployment, *config_deployments])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-z-key"

@@ -16,14 +16,11 @@ from typing_extensions import ReadOnly
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
-from litellm.types.llms.anthropic import (
-    AnthopicMessagesAssistantMessageParam,
-    AnthropicMessagesUserMessageParam,
-    AnthropicSystemMessageContent,
-)
+from litellm.types.llms.anthropic import AllAnthropicPassThroughMessageValues, AnthropicSystemMessageContent
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
     Choices,
@@ -93,18 +90,14 @@ def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse
     return response.json()
 
 
-def _is_claude_model(model: str) -> bool:
+def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
 
 
-def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
-    return (
-        {key: value for key, value in schema.items() if key != "$schema"}
-        if isinstance(schema, Mapping)
-        else schema  # mutable-ok: JSON schema copy
-    )  # mutable-ok: JSON schema copy
+def _clean_input_schema(schema: object) -> object:
+    return {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
 
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
@@ -134,7 +127,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             params.append("thinking")
         return params
 
@@ -148,7 +141,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return f"{api_base}/cortex/v1/messages"
         return f"{api_base}/cortex/v1/chat/completions"
 
@@ -171,7 +164,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
@@ -201,7 +194,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(anthropic_tool)
             else:
                 anthropic_tools.append(
-                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}  # mutable-ok: JSON wire tool
+                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}
                     if "input_schema" in tool
                     else tool
                 )
@@ -209,10 +202,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def _extract_system_and_messages(
         self, model: str, messages: list[AllMessageValues]
-    ) -> tuple[
-        list[AnthropicSystemMessageContent] | None,
-        list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
-    ]:
+    ) -> tuple[list[AnthropicSystemMessageContent] | None, list[AllAnthropicPassThroughMessageValues]]:
         """Cortex's /messages endpoint speaks Anthropic's dialect, so the shared translators own the shape."""
         conversation_messages: Final = list(messages)
         system: Final = AnthropicConfig().translate_system_message(messages=conversation_messages)
@@ -235,9 +225,26 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        inlined_messages: Final = (
+            await async_inline_remote_media(messages) if is_snowflake_claude_model(model) else messages
+        )
+        return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
         self,
@@ -265,7 +272,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: object) -> Mapping[str, object]:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 
@@ -313,18 +320,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_name: Final = model.removeprefix("snowflake/")
 
         body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire body
-            {  # mutable-ok: JSON wire body
+            {
                 "model": model_name,
                 "messages": conversation,
                 "stream": stream,
                 **optional_params,
-                **extra_body,  # mutable-ok: JSON wire body
+                **extra_body,
             }
         )
         if system is not None:
-            body["system"] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire payload
-                {"system": system}  # mutable-ok: JSON wire payload
-            )["system"]
+            body["system"] = normalize_cache_control_in_anthropic_payload({"system": system})["system"]
 
         if "max_tokens" not in body:
             body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
@@ -345,7 +350,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )
@@ -374,7 +379,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
-            returned_response._hidden_params["model"] = model
+            returned_response.hidden_params["model"] = model
 
         return returned_response
 
@@ -439,7 +444,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response.id = response_json.get("id", "")
 
         if model is not None:
-            model_response._hidden_params["model"] = model
+            model_response.hidden_params["model"] = model
 
         return model_response
 

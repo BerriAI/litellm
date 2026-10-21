@@ -1,0 +1,250 @@
+"""Discovery-time guard for an MCP server's tool catalog."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
+
+from mcp.types import Tool as MCPTool
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.proxy._experimental.mcp_server.utils import logging_safe_mcp_headers, strip_known_server_prefix
+from litellm.types.mcp import MCPPreCallRequestObject
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from litellm.types.utils import CallTypes
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+
+
+class _ServedCatalogEntry(TypedDict, total=False):
+    description: ReadOnly[str | None]
+    input_schema: ReadOnly[Mapping[str, object]]
+
+
+class _ScanRequest(TypedDict):
+    tool_name: ReadOnly[str]
+    arguments: ReadOnly[Mapping[str, object]]
+    server_name: ReadOnly[str]
+
+
+class _ScanKwargs(TypedDict):
+    name: ReadOnly[str]
+    arguments: ReadOnly[Mapping[str, object]]
+    server_name: ReadOnly[str]
+    mcp_rate_limit_server_name: ReadOnly[str]
+    user_api_key_auth: ReadOnly[UserAPIKeyAuth | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_end_user_id: ReadOnly[str | None]
+    user_api_key_hash: ReadOnly[str | None]
+    headers: ReadOnly[Mapping[str, str]]
+    mcp_tool_description: ReadOnly[str]
+    mcp_input_schema: ReadOnly[Mapping[str, object]]
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_OPTIONAL_GUARDED: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_ERROR_DETAIL: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_OPTIONAL_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_CATALOG_SCAN_BATCH_SIZE: Final = 8
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogAlert:
+    signature: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedTool:
+    name: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDescriptionScan:
+    served: tuple[MCPTool, ...]
+    blocked: tuple[BlockedTool, ...]
+
+    def alert(self, server: MCPServer) -> CatalogAlert | None:
+        if not self.blocked:
+            return None
+        lines: Final = "\n".join(f"- `{tool.name}`: {tool.reason}" for tool in self.blocked)
+        return CatalogAlert(
+            signature=",".join(sorted(tool.name for tool in self.blocked)),
+            message=(
+                f"MCP server `{server.name}`: {len(self.blocked)} tool description(s) blocked by a guardrail "
+                f"and hidden from tools/list\n{lines}"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedCatalogDrift:
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+    changed: tuple[str, ...]
+
+    def alert(self, server: MCPServer) -> CatalogAlert:
+        parts: Final = tuple(
+            f"{label}: {', '.join(f'`{name}`' for name in names)}"
+            for label, names in (("added", self.added), ("removed", self.removed), ("changed", self.changed))
+            if names
+        )
+        return CatalogAlert(
+            signature="|".join(parts),
+            message=(
+                f"MCP server `{server.name}`: upstream tool list drifted from the pinned catalog; "
+                f"serving the pinned tools and descriptions until an admin re-pins the server\n" + "\n".join(parts)
+            ),
+        )
+
+
+def apply_description_overrides(tools: Sequence[MCPTool], server: MCPServer) -> tuple[MCPTool, ...]:
+    overrides: Final = server.tool_name_to_description or {}
+    if not overrides:
+        return tuple(tools)
+    return tuple(_described_tool(tool, overrides.get(strip_known_server_prefix(tool.name, server))) for tool in tools)
+
+
+def _described_tool(tool: MCPTool, description: str | None) -> MCPTool:
+    if description is None or description == tool.description:
+        return tool
+    return tool.model_copy(update={"description": description})
+
+
+def pin_tool_catalog(
+    tools: Sequence[MCPTool], pinned_tools: Mapping[str, PinnedMCPTool]
+) -> tuple[tuple[MCPTool, ...], PinnedCatalogDrift | None]:
+    upstream: Final = MappingProxyType({tool.name: tool for tool in tools})
+    added: Final = tuple(sorted(name for name in upstream if name not in pinned_tools))
+    removed: Final = tuple(sorted(name for name in pinned_tools if name not in upstream))
+    changed: Final = tuple(
+        sorted(name for name, tool in upstream.items() if name in pinned_tools and _drifted(tool, pinned_tools[name]))
+    )
+    served: Final = tuple(
+        _pinned_tool(tool, pinned_tools[tool.name]) if tool.name in changed else tool
+        for tool in tools
+        if tool.name in pinned_tools
+    )
+    drift: Final = PinnedCatalogDrift(added, removed, changed) if added or removed or changed else None
+    return served, drift
+
+
+def _drifted(tool: MCPTool, pinned: PinnedMCPTool) -> bool:
+    return (tool.description or "") != pinned.description or tool.input_schema != pinned.input_schema
+
+
+def _pinned_tool(tool: MCPTool, pinned: PinnedMCPTool) -> MCPTool:
+    entry: Final[_ServedCatalogEntry] = {
+        "description": pinned.description or None,
+        "input_schema": pinned.input_schema,
+    }
+    return _with_served_entry(tool, entry)
+
+
+async def scan_tool_descriptions(
+    tools: Sequence[MCPTool],
+    server: MCPServer,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    raw_headers: Mapping[str, str] | None,
+) -> ToolDescriptionScan:
+    batches: Final = tuple(
+        [
+            await asyncio.gather(
+                *(
+                    _scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+                    for tool in tools[offset : offset + _CATALOG_SCAN_BATCH_SIZE]
+                )
+            )
+            for offset in range(0, len(tools), _CATALOG_SCAN_BATCH_SIZE)
+        ]
+    )
+    return ToolDescriptionScan(
+        served=tuple(outcome for batch in batches for outcome in batch if isinstance(outcome, MCPTool)),
+        blocked=tuple(outcome for batch in batches for outcome in batch if isinstance(outcome, BlockedTool)),
+    )
+
+
+def _has_scannable_text(tool: MCPTool) -> bool:
+    return bool(tool.description) or bool(tool.input_schema)
+
+
+async def _scan_tool(
+    tool: MCPTool,
+    server: MCPServer,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    raw_headers: Mapping[str, str] | None,
+) -> MCPTool | BlockedTool:
+    if not _has_scannable_text(tool):
+        return tool
+    try:
+        guarded: Final = await _guarded_catalog_entry(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+    except Exception as e:  # noqa: BLE001  # any guardrail failure hides the tool: fail closed
+        return BlockedTool(name=tool.name, reason=_block_reason(e))
+    return tool if guarded is None else _masked_tool(tool, guarded)
+
+
+async def _guarded_catalog_entry(
+    tool: MCPTool,
+    server: MCPServer,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    raw_headers: Mapping[str, str] | None,
+) -> Mapping[str, object] | None:
+    request: Final[_ScanRequest] = {"tool_name": tool.name, "arguments": {}, "server_name": server.name}
+    request_obj: Final = MCPPreCallRequestObject.model_validate(request)
+    kwargs: Final[_ScanKwargs] = {
+        "name": tool.name,
+        "arguments": {},
+        "server_name": server.name,
+        "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
+        "user_api_key_auth": user_api_key_auth,
+        "user_api_key_user_id": user_api_key_auth.user_id if user_api_key_auth else None,
+        "user_api_key_team_id": user_api_key_auth.team_id if user_api_key_auth else None,
+        "user_api_key_end_user_id": user_api_key_auth.end_user_id if user_api_key_auth else None,
+        "user_api_key_hash": user_api_key_auth.api_key if user_api_key_auth else None,
+        "headers": logging_safe_mcp_headers(raw_headers),
+        "mcp_tool_description": tool.description or "",
+        "mcp_input_schema": tool.input_schema,
+    }
+    data: Final = _JSON_OBJECT.validate_python(
+        proxy_logging_obj._convert_mcp_to_llm_format(request_obj, kwargs)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the tool-call path builds its guardrail payload through this same untyped helper
+    )
+    return _OPTIONAL_GUARDED.validate_python(
+        await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownArgumentType]  # untyped hook; its overloads want an auth the MCP call types tolerate missing
+            user_api_key_dict=user_api_key_auth,  # pyright: ignore[reportArgumentType]  # the tool-call path passes the same optional auth
+            data=data,
+            call_type=CallTypes.list_mcp_tools.value,
+            guardrails_only=True,
+        )
+    )
+
+
+def _block_reason(exc: Exception) -> str:
+    detail: Final[object] = getattr(exc, "detail", None)
+    error: Final = _ERROR_DETAIL.validate_python(detail).get("error") if isinstance(detail, Mapping) else None
+    if error:
+        return str(error)
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+
+
+def _masked_tool(tool: MCPTool, guarded: Mapping[str, object]) -> MCPTool:
+    entry: Final[_ServedCatalogEntry] = {
+        "description": _OPTIONAL_TEXT.validate_python(guarded.get("mcp_tool_description", tool.description)),
+        "input_schema": _JSON_OBJECT.validate_python(guarded.get("mcp_input_schema", tool.input_schema)),
+    }
+    unchanged: Final = entry["description"] == tool.description and entry["input_schema"] == tool.input_schema
+    return tool if unchanged else _with_served_entry(tool, entry)
+
+
+def _with_served_entry(tool: MCPTool, update: _ServedCatalogEntry) -> MCPTool:
+    return tool.model_copy(deep=True, update=update)
