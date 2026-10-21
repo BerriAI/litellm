@@ -4,8 +4,10 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
-from collections.abc import Callable
-from typing import Final, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final, TypedDict, cast
+
+from typing_extensions import ReadOnly
 
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
@@ -16,11 +18,21 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.token_counter import offload_token_count
-from litellm.types.llms.openai import AllMessageValues
+from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import CallTypes, StandardLoggingPayload
-from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
+from litellm.utils import (
+    get_base_model_from_metadata,
+    get_prompt_cache_min_tokens,
+    is_prompt_caching_valid_prompt,
+)
 
 from ..prompt_caching_cache import PromptCachingCache
+
+
+class _PromptCachingSuccessEventKwargs(TypedDict, total=False):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+    litellm_params: ReadOnly[Mapping[str, object] | None]
 
 
 def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
@@ -48,6 +60,19 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
     )
 
 
+def _honors_one_hour_cache_ttl(
+    standard_logging_object: StandardLoggingPayload, litellm_params: Mapping[str, object]
+) -> bool:
+    if standard_logging_object["custom_llm_provider"] == "bedrock":
+        deployment_model: Final = standard_logging_object["model"]
+        capability_model: Final = bedrock_capability_model(
+            deployment_model, get_base_model_from_metadata({"litellm_params": litellm_params})
+        )
+        return bedrock_cache_point_ttl_supported(capability_model, deployment_model)
+    model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
+    return model_map_value is not None and (model_map_value.get("cache_creation_input_token_cost_above_1hr") or 0) > 0
+
+
 class PromptCachingDeploymentCheck(CustomLogger):
     def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
         super().__init__()
@@ -66,11 +91,38 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return healthy_deployments
         if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
             return healthy_deployments
+        if not healthy_deployments[1:]:
+            return healthy_deployments
 
-        if messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
-            messages=messages,
+        request_data: Final = (
+            cast(  # cast-ok: request_kwargs is a bare dict; this only reads its keys
+                Mapping[str, object], request_kwargs
+            )
+            if request_kwargs is not None
+            else None
+        )
+        request_tools: Final = (
+            cast(  # cast-ok: request_kwargs is untyped; the stand-down scan duck-types every tool it reads
+                list[AllToolParamValues] | None, request_data.get("tools")
+            )
+            if request_data is not None
+            else None
+        )
+        prompt_messages: Final = (
+            PromptCachingCache.prepend_system_prompt(
+                messages, request_data.get("system") if request_data is not None else None
+            )
+            if messages is not None
+            else None
+        )
+        if prompt_messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
+            messages=prompt_messages,
             model=model,
             min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
+            tools=cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes the counter duck-types
+                list[ChatCompletionToolParam] | None,
+                request_tools,
+            ),
         ):
             prompt_cache: Final = PromptCachingCache(
                 cache=self.cache,
@@ -80,19 +132,13 @@ class PromptCachingDeploymentCheck(CustomLogger):
             ## `litellm.acompletion`, after a deployment has been picked, so the affinity key has to
             ## be derived from the messages as they will be sent, not as they arrive here.
             affinity_messages: Final = AnthropicCacheControlHook.messages_with_default_injections(
-                messages=cast(list[AllMessageValues], messages),
+                messages=prompt_messages,
                 models=(
                     deployment["litellm_params"]["model"]
                     for deployment in healthy_deployments
                     if isinstance(deployment.get("litellm_params"), dict) and deployment["litellm_params"].get("model")
                 ),
-                tools=(
-                    cast(  # cast-ok: request_kwargs is untyped; the stand-down scan duck-types every tool it reads
-                        list[AllToolParamValues] | None, request_kwargs.get("tools")
-                    )
-                    if request_kwargs is not None
-                    else None
-                ),
+                tools=request_tools,
                 enable_prompt_caching=(
                     request_kwargs.get("enable_prompt_caching") is True if request_kwargs is not None else None
                 ),
@@ -101,7 +147,10 @@ class PromptCachingDeploymentCheck(CustomLogger):
 
             model_id_dict: Final = await prompt_cache.async_get_model_id(
                 messages=affinity_messages,
-                tools=None,
+                tools=cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes
+                    Sequence[ChatCompletionToolParam] | None,
+                    request_tools,
+                ),
             )
             if model_id_dict is not None:
                 model_id: Final = model_id_dict["model_id"]
@@ -111,7 +160,13 @@ class PromptCachingDeploymentCheck(CustomLogger):
 
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: _PromptCachingSuccessEventKwargs,
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
         standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:
@@ -144,18 +199,39 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        event_data: Final = cast(  # cast-ok: success-event kwargs are an untyped dict
+            Mapping[str, object], kwargs
+        )
+        tools: Final = cast(list[AllToolParamValues] | None, event_data.get("tools"))
+        prompt_messages: Final = PromptCachingCache.prepend_system_prompt(
+            cast(list[AllMessageValues], messages),  # cast-ok: isinstance(list) checked above
+            event_data.get("system"),
+        )
+
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=prompt_messages,
+            tools=cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes the counter duck-types
+                list[ChatCompletionToolParam] | None,
+                tools,
+            ),
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
+            raw_litellm_params: Final = kwargs.get("litellm_params")
+            litellm_params: Final[Mapping[str, object]] = (
+                raw_litellm_params if isinstance(raw_litellm_params, Mapping) else {}
+            )
             await cache.async_add_model_id(
                 model_id=model_id,
-                messages=messages,
-                tools=None,  # [TODO]: add tools once standard_logging_object supports it
+                messages=prompt_messages,
+                tools=cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes
+                    Sequence[ChatCompletionToolParam] | None,
+                    tools,
+                ),
+                honors_one_hour_ttl=_honors_one_hour_cache_ttl(standard_logging_object, litellm_params),
             )
 
         return

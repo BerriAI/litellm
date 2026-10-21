@@ -31,7 +31,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
     pub async fn connect(
         account_url: &str,
         container: &str,
-        http: reqwest::Client,
+        http: litellm_http::Client,
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {

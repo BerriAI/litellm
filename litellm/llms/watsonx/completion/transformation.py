@@ -1,10 +1,11 @@
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
@@ -15,9 +16,9 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import (
     IBMWatsonXMixin,
     WatsonXAIError,
-    _get_api_params,
     aconvert_watsonx_messages_to_prompt,
     convert_watsonx_messages_to_prompt,
+    get_api_params,
 )
 
 if TYPE_CHECKING:
@@ -102,7 +103,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         stream: bool | None = None,
         **kwargs,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -226,7 +227,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         """Shared logic to build request payload"""
         extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(model=model, api_params=watsonx_api_params)
 
         return {
@@ -342,7 +343,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             endpoint = WatsonXAIEndpoint.TEXT_GENERATION_STREAM if stream else WatsonXAIEndpoint.TEXT_GENERATION
-        url = url.rstrip("/") + endpoint
+        url = join_api_base(url, endpoint)
 
         ## add api version
         url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))

@@ -2,10 +2,12 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -46,7 +48,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -89,12 +91,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         base_url = base_url.removesuffix("/beta")
 
         if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
-            base_url = f"{base_url}/anthropic"
+            base_url = join_api_base(base_url, "anthropic")
 
-        return f"{base_url}/v1/messages"
+        return join_api_base(base_url, "v1/messages")
 
     @staticmethod
-    def _sanitize_tools_for_deepseek(tools: Any) -> Any:
+    def _sanitize_tools_for_deepseek(tools: Any) -> object:
         if not isinstance(tools, list):
             return tools
 

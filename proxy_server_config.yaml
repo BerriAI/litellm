@@ -31,7 +31,7 @@ model_list:
   - model_name: sagemaker-completion-model
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-      input_cost_per_second: 0.000420  
+      cost_per_second: 0.000420
   - model_name: text-embedding-ada-002
     litellm_params:
       model: openai/text-embedding-3-small
@@ -141,6 +141,11 @@ model_list:
   - model_name: mistral-embed
     litellm_params:
       model: mistral/mistral-embed
+  - model_name: gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      reasoning_effort: none
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
     litellm_params:
       model: text-completion-openai/gpt-3.5-turbo-instruct

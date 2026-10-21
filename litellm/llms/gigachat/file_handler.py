@@ -13,9 +13,10 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.utils import LlmProviders
@@ -60,7 +61,7 @@ def _content_type_or_default(headers: Mapping[str, str]) -> str:
 
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client: Final = _get_httpx_client(params={"ssl_verify": False})
+    client: Final = get_httpx_client(params={"ssl_verify": False})
     response: Final = client.get(url)
     response.raise_for_status()
 
@@ -125,10 +126,9 @@ def upload_file_sync(
         access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
-        client: Final = _get_httpx_client(params={"ssl_verify": False})
+        client: Final = get_httpx_client(params={"ssl_verify": False})
         response: Final = client.post(
             upload_url,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -191,8 +191,7 @@ async def upload_file_async(
         access_token: Final = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
