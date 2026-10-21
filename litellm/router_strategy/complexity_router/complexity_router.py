@@ -67,6 +67,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.router_utils.common_utils import deployment_supports_image_input, get_request_team_id
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -130,6 +131,9 @@ from .jev_classifier import (
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
+
+_ROUTING_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -3665,22 +3669,7 @@ class ComplexityRouter(CustomLogger):
         )
 
     def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
-        """Declared vision support per deployment serving the name: True, False, or None when
-        nothing declares either way.
-
-        Resolved through the deployments that would actually serve the name; a name with no
-        deployment on the router is served by the SDK directly and is checked against the model
-        cost map itself. A deployment-level model_info override wins over the map.
-
-        One verdict set, two readings, because the two callers fail in opposite directions.
-        Routing a user's image asks whether anything RULES IT OUT, so an undeclared model stays
-        eligible and unmapped custom names keep routing. Handing an image to the classifier asks
-        whether something RULES IT IN: an undeclared model that turns out to be text-only rejects
-        every image request, and that rejection is swallowed by the classifier's own fallback, so
-        the router quietly serves all image traffic from the fallback tier and pays for the failed
-        call each time. An undeclared model instead keeps today's text-only payload, which is a
-        visible no-op the operator fixes by declaring supports_vision on the deployment.
-        """
+        """Vision declarations used to decide whether the classifier receives image content."""
         from litellm.utils import is_vision_explicitly_disabled, supports_vision
 
         def model_verdict(model: str) -> bool | None:
@@ -3699,25 +3688,27 @@ class ComplexityRouter(CustomLogger):
             return (model_verdict(model_name),)
         return tuple(deployment_verdict(deployment) for deployment in deployments)
 
-    def _model_accepts_image_input(self, model_name: str) -> bool:
-        """Whether a routed model or pool entry can serve an image request.
-
-        A multi-deployment group must accept on EVERY deployment: the router picks a deployment
-        inside the group after this gate runs, so a mixed group marked eligible could still hand
-        the image to its text-only member and fail with the exact 400 the gate exists to prevent.
-        """
-        return all(verdict is not False for verdict in self._vision_verdicts(model_name))
+    def _model_accepts_image_input(self, model_name: str, request_kwargs: Mapping[str, object]) -> bool:
+        team_id: Final = get_request_team_id(request_kwargs)
+        deployments: Final = (
+            self.litellm_router_instance.get_model_list(model_name=model_name, team_id=team_id)
+            if team_id is not None
+            else self.litellm_router_instance.get_model_list(model_name=model_name)
+        )
+        if not deployments:
+            return deployment_supports_image_input({"litellm_params": {"model": model_name}})
+        return any(deployment_supports_image_input(deployment) for deployment in deployments)
 
     def _model_declares_vision_support(self, model_name: str) -> bool:
         """Whether every deployment serving the name is declared vision-capable."""
         return all(verdict is True for verdict in self._vision_verdicts(model_name))
 
-    def _modality_eligible_models(self) -> frozenset[str]:
+    def _modality_eligible_models(self, request_kwargs: Mapping[str, object]) -> frozenset[str]:
         """Every configured pool entry, plus default_model, that can serve an image request."""
         names: Final = frozenset(entry for pool in self._tier_pools().values() for entry in pool) | frozenset(
             name for name in (self.config.default_model,) if name
         )
-        return frozenset(name for name in names if self._model_accepts_image_input(name))
+        return frozenset(name for name in names if self._model_accepts_image_input(name, request_kwargs))
 
     async def _gate_response_modality(
         self,
@@ -3745,8 +3736,7 @@ class ComplexityRouter(CustomLogger):
         """
         decision: Final = response.routing_decision
         if (
-            not self.config.modality_routing
-            or not resolved_messages
+            not resolved_messages
             or response.model is None
             or (
                 decision is not None
@@ -3754,11 +3744,15 @@ class ComplexityRouter(CustomLogger):
                 and not self.config.modality_pin_override
             )
             or not request_contains_image_content(resolved_messages)
-            or self._model_accepts_image_input(response.model)
+            or self._model_accepts_image_input(response.model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         ):
             return response
         fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
-        eligible: Final = frozenset(name for name in self._modality_eligible_models() if fit.accepts(name))
+        eligible: Final = frozenset(
+            name
+            for name in self._modality_eligible_models(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
+            if fit.accepts(name)
+        )
         names: Final = self.config.tier_names()
         pools: Final = self._tier_pools()
         decided: Final = decision.get("tier") if decision is not None else None
@@ -3786,9 +3780,9 @@ class ComplexityRouter(CustomLogger):
             raise litellm.BadRequestError(
                 message=(
                     f"Auto-router {self.model_name} received a request with image input, but no model "
-                    f"at or above the decided tier accepts images and modality_routing is enabled. "
+                    f"at or above the decided tier has confirmed image support. "
                     f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
-                    f"or set a vision-capable default_model, or remove the image content."
+                    f"or set model_info.supports_vision: true for a custom vision deployment, or remove the image content."
                 ),
                 model=self.model_name,
                 llm_provider="",
@@ -3933,8 +3927,8 @@ class ComplexityRouter(CustomLogger):
         ):
             return response
         eligible: Final = (
-            self._modality_eligible_models()
-            if self.config.modality_routing and resolved_messages and request_contains_image_content(resolved_messages)
+            self._modality_eligible_models(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
+            if resolved_messages and request_contains_image_content(resolved_messages)
             else None
         )
         pools: Final = self._tier_pools()

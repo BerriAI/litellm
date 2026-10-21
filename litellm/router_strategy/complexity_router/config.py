@@ -1532,16 +1532,12 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         ),
     )
     modality_routing: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Route image-bearing requests only to models that can accept image input. The "
-            "classifier reads text alone, so an image request whose text classifies cheap "
-            "otherwise lands on a text-only model and fails with a provider 400. When enabled, "
-            "a routed model explicitly declared supports_vision false (deployment model_info "
-            "or the model cost map; unmapped names stay routable) is replaced by the nearest "
-            "HIGHER tier holding a capable model, then default_model, else a clear 400. A kept "
-            "session-affinity pin still wins even when an image arrives, unless "
-            "modality_pin_override is also enabled."
+            "Deprecated compatibility setting. Image-capability routing is always enforced, including when false. "
+            "Image requests require a deployment with confirmed supports_vision. Mixed groups remain eligible "
+            "when a compatible deployment is available. Kept session pins are not relocated unless "
+            "modality_pin_override is enabled; incompatible pinned requests fail before provider dispatch."
         ),
     )
     modality_pin_override: bool = Field(
@@ -1549,11 +1545,10 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         description=(
             "Let modality_routing replace a kept session-affinity pin on the turns that carry an "
             "image. Without this, a session pinned to a text-only model fails every image turn with "
-            "a provider 400, since the pin is exempt from the modality gate. When enabled, such a "
+            "a routing error before provider dispatch. When enabled, such a "
             "turn routes to a capable model for that request only and the stored pin is left "
             "untouched, so the next text turn replays the session's own model; the override is "
-            "reported as cause modality_pin_override and is never itself pinned. Inert unless "
-            "modality_routing is also enabled."
+            "reported as cause modality_pin_override and is never itself pinned."
         ),
     )
 

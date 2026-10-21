@@ -29306,7 +29306,7 @@ async def test_async_get_healthy_deployments_keeps_region_check_when_token_count
         {
             "model_name": "fake-openai-endpoint",
             "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "region_name": region},
-            "model_info": {"id": f"{region}-deployment", "max_input_tokens": 100},
+            "model_info": {"id": f"{region}-deployment", "max_input_tokens": 100, "supports_vision": True},
         }
         for region in ("eu", "us")
     ]
@@ -29338,7 +29338,7 @@ def test_completion_answers_400_when_no_deployment_supports_the_requested_param(
             {
                 "model_name": "no-json-mode",
                 "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
-                "model_info": {"max_input_tokens": 100},
+                "model_info": {"max_input_tokens": 100, "supports_vision": True},
             }
         ],
         enable_pre_call_checks=True,
@@ -29733,3 +29733,263 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+@pytest.mark.parametrize("async_selection", (False, True))
+@pytest.mark.parametrize("declared", (False, None))
+async def test_image_candidates_exclude_incompatible_lower_order(async_selection: bool, declared: bool | None) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image-pool",
+                "litellm_params": {"model": "openai/unknown-text", "api_key": "test", "order": 1},
+                "model_info": {"id": "text", **({"supports_vision": declared} if declared is not None else {})},
+            },
+            {
+                "model_name": "image-pool",
+                "litellm_params": {"model": "openai/unknown-vision", "api_key": "test", "order": 2},
+                "model_info": {"id": "vision", "supports_vision": True},
+            },
+        ]
+    )
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}}]}
+    ]
+    selected: Final = (
+        await router.async_get_available_deployment(model="image-pool", messages=messages, request_kwargs={})
+        if async_selection
+        else router.get_available_deployment(model="image-pool", messages=messages, request_kwargs={})
+    )
+    assert selected["model_info"]["id"] == "vision"
+
+
+@pytest.mark.parametrize("async_selection", (False, True))
+async def test_image_request_rejects_unknown_direct_deployment(async_selection: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "unknown-image-pool",
+                "litellm_params": {"model": "openai/unknown-image-backend", "api_key": "test"},
+                "model_info": {"id": "unknown-image-deployment"},
+            }
+        ]
+    )
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}}]}
+    ]
+    if async_selection:
+        with pytest.raises(litellm.BadRequestError, match="supports_vision"):
+            await router.async_get_available_deployment(
+                model="unknown-image-deployment", messages=messages, request_kwargs={}
+            )
+    else:
+        with pytest.raises(litellm.BadRequestError, match="supports_vision"):
+            router.get_available_deployment(model="unknown-image-deployment", messages=messages, request_kwargs={})
+
+
+@pytest.mark.parametrize("legacy_flag", (None, False, True))
+@pytest.mark.parametrize("mixed", (False, True))
+async def test_auto_router_selects_only_confirmed_image_deployments(legacy_flag: bool | None, mixed: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "automatic",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "cheap", "MEDIUM": "vision", "COMPLEX": "vision"},
+                        **({"modality_routing": legacy_flag} if legacy_flag is not None else {}),
+                    },
+                },
+            },
+            {
+                "model_name": "cheap",
+                "litellm_params": {"model": "openai/custom-text", "api_key": "test", "order": 1},
+                "model_info": {"id": "text"},
+            },
+            {
+                "model_name": "cheap" if mixed else "vision",
+                "litellm_params": {"model": "openai/custom-vision", "api_key": "test", "order": 2},
+                "model_info": {"id": "image", "supports_vision": True},
+            },
+        ]
+    )
+    image: Final = await router.async_get_available_deployment(
+        model="automatic",
+        request_kwargs={},
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is this?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+                ],
+            }
+        ],
+    )
+    text: Final = await router.async_get_available_deployment(
+        model="automatic",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "Hi"}],
+    )
+    assert image["model_info"]["id"] == "image"
+    assert text["model_info"]["id"] == "text"
+
+
+@pytest.mark.parametrize("specific", (False, True))
+@pytest.mark.parametrize("async_selection", (False, True))
+async def test_responses_images_cannot_select_text_only_deployment(specific: bool, async_selection: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "text-pool",
+                "litellm_params": {"model": "openai/custom-text", "api_key": "test"},
+                "model_info": {"supports_vision": False},
+            }
+        ]
+    )
+    request: Final = {"input": [{"role": "user", "content": [{"type": "input_image", "file_id": "file-image"}]}]}
+    model: Final = "openai/custom-text" if specific else "text-pool"
+    if async_selection:
+        with pytest.raises(litellm.BadRequestError, match="confirmed image support"):
+            await router.async_get_available_deployment(
+                model=model, request_kwargs=request, specific_deployment=specific
+            )
+    else:
+        with pytest.raises(litellm.BadRequestError, match="confirmed image support"):
+            router.get_available_deployment(model=model, request_kwargs=request, specific_deployment=specific)
+
+
+@pytest.mark.parametrize("team_id", ("image-team", "other-team"))
+async def test_auto_router_image_eligibility_respects_team_public_model_name(team_id: str) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "automatic",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "team-images"}},
+                },
+            },
+            {
+                "model_name": "private-image-deployment",
+                "litellm_params": {"model": "openai/custom-vision", "api_key": "test"},
+                "model_info": {
+                    "id": "vision",
+                    "supports_vision": True,
+                    "team_id": "image-team",
+                    "team_public_model_name": "team-images",
+                },
+            },
+        ]
+    )
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hi"},
+                {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+            ],
+        }
+    ]
+    kwargs: Final = {"metadata": {"user_api_key_team_id": team_id}}
+    if team_id == "image-team":
+        selected: Final = await router.async_get_available_deployment(
+            model="automatic", messages=messages, request_kwargs=kwargs
+        )
+        assert selected["model_info"]["id"] == "vision"
+    else:
+        with pytest.raises(litellm.BadRequestError, match="confirmed image support"):
+            await router.async_get_available_deployment(model="automatic", messages=messages, request_kwargs=kwargs)
+
+
+@pytest.mark.parametrize("async_selection", (False, True))
+async def test_confirmed_image_deployment_can_be_selected_directly(async_selection: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image-pool",
+                "litellm_params": {"model": "openai/custom-vision", "api_key": "test"},
+                "model_info": {"id": "vision", "supports_vision": True},
+            }
+        ]
+    )
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}]}
+    ]
+    selected: Final = (
+        await router.async_get_available_deployment(model="vision", messages=messages, request_kwargs={})
+        if async_selection
+        else router.get_available_deployment(model="vision", messages=messages, request_kwargs={})
+    )
+    assert selected["model_info"]["id"] == "vision"
+
+
+@pytest.mark.parametrize("primary_fails", (False, True))
+async def test_image_dispatch_and_fallback_never_call_text_deployment(
+    primary_fails: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/text",
+                    "api_base": "https://text.test/v1",
+                    "api_key": "test",
+                    "order": 1,
+                },
+                "model_info": {"supports_vision": False},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/vision",
+                    "api_base": "https://vision.test/v1",
+                    "api_key": "test",
+                    "order": 2,
+                },
+                "model_info": {"supports_vision": True},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/backup", "api_base": "https://backup.test/v1", "api_key": "test"},
+                "model_info": {"supports_vision": True},
+            },
+        ],
+        fallbacks=[{"mixed": ["backup"]}],
+        num_retries=0,
+    )
+    success: Final = {
+        "id": "chatcmpl-image",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "vision",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "blue"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+        text_route: Final = upstream.post("https://text.test/v1/chat/completions").respond(400)
+        vision_route: Final = upstream.post("https://vision.test/v1/chat/completions").mock(
+            return_value=httpx.Response(503, json={"error": {"message": "temporarily unavailable"}})
+            if primary_fails
+            else httpx.Response(200, json=success)
+        )
+        backup_route: Final = upstream.post("https://backup.test/v1/chat/completions").respond(200, json=success)
+        response: Final = await router.acompletion(
+            model="mixed",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What color is this?"},
+                        {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+                    ],
+                }
+            ],
+        )
+        assert response.choices[0].message.content == "blue"
+        assert vision_route.called
+        assert backup_route.called is primary_fails
+        assert not text_route.called

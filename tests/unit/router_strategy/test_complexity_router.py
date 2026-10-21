@@ -1418,8 +1418,7 @@ class TestAsyncPreRoutingHookEdgeCases:
         assert result.model == "gpt-4o-mini"  # "Hello, how are you?" is SIMPLE
 
     @pytest.mark.asyncio
-    async def test_pre_routing_hook_list_content_complex(self, complexity_router):
-        """Test pre-routing hook classifies list-format content by complexity."""
+    async def test_pre_routing_hook_rejects_image_when_reasoning_tier_lacks_vision(self, complexity_router):
         messages = [
             {
                 "role": "user",
@@ -1435,13 +1434,10 @@ class TestAsyncPreRoutingHookEdgeCases:
                 ],
             }
         ]
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=messages,
-        )
-        assert result is not None
-        assert result.model == "o1-preview"  # REASONING tier
+        with pytest.raises(litellm.BadRequestError, match="confirmed image support"):
+            await complexity_router.async_pre_routing_hook(
+                model="test-model", request_kwargs={}, messages=messages,
+            )
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_preserves_messages(self, complexity_router):
@@ -14812,11 +14808,9 @@ class TestModalityRouting:
     @pytest.mark.parametrize(
         "config_extra, vision, send_image, expected_model, expect_marker",
         [
-            ({}, {"text-cheap": False}, True, "text-cheap", False),
             ({"modality_routing": True}, {"text-cheap": False}, False, "text-cheap", False),
-            ({"modality_routing": True}, {"text-cheap": None}, True, "text-cheap", False),
         ],
-        ids=["flag_off", "no_image", "undeclared_model_stays_routable"],
+        ids=["no_image"],
     )
     async def test_gate_leaves_ungated_requests_untouched(
         self, mock_router_instance, config_extra, vision, send_image, expected_model, expect_marker
@@ -14863,7 +14857,7 @@ class TestModalityRouting:
             ("pin_replacement_gated", "vision-big", "modality_escalation"),
             ("pin_override_escalates", "vision-mid", "modality_pin_override"),
             ("pin_override_same_tier", "vision-cheap", "modality_pin_override"),
-            ("pin_override_inert_without_modality_routing", "text-cheap", "session_affinity_pin"),
+            ("pin_override_with_legacy_flag_off", "vision-mid", "modality_pin_override"),
             ("adaptive_pick_rewritten", "vision-mid", "modality_escalation"),
         ],
     )
@@ -14930,7 +14924,7 @@ class TestModalityRouting:
                 config["modality_pin_override"] = True
                 config["tiers"]["SIMPLE"] = ["text-cheap", "vision-cheap"]
                 vision["vision-cheap"] = True
-            elif path == "pin_override_inert_without_modality_routing":
+            elif path == "pin_override_with_legacy_flag_off":
                 config["modality_routing"] = False
             config["modality_pin_override"] = path.startswith("pin_override")
         elif path == "adaptive_pick_rewritten":
@@ -15006,7 +15000,7 @@ class TestModalityRouting:
         assert "modality_escalated_from:SIMPLE" in result.routing_decision["signals"]
 
     @pytest.mark.asyncio
-    async def test_mixed_deployment_group_is_treated_text_only(self, mock_router_instance):
+    async def test_mixed_deployment_group_retains_vision_candidates(self, mock_router_instance):
         def get_model_list(model_name=None):
             declared = {"mixed-group": [True, False], "vision-big": [True]}.get(model_name)
             if declared is None:
@@ -15030,8 +15024,8 @@ class TestModalityRouting:
             },
         )
         result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
-        assert result.model == "vision-big"
-        assert result.routing_decision["cause"] == "modality_escalation"
+        assert result.model == "mixed-group"
+        assert result.routing_decision["cause"] == "heuristic_scorer"
 
     @pytest.mark.asyncio
     async def test_continuation_turn_screenshot_escalates_past_the_held_model(self, mock_router_instance):
@@ -15862,7 +15856,7 @@ class TestHealthFallbackDispatch:
                 result: Final = await router.acompletion(model="health-router", messages=messages)
                 assert result.choices[0].message.content == "fallback"
             else:
-                with pytest.raises(litellm.BadRequestError, match="modality_routing is enabled"):
+                with pytest.raises(litellm.BadRequestError, match="confirmed image support"):
                     await router.acompletion(model="health-router", messages=messages)
                 assert not upstream.calls
 

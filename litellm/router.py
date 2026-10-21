@@ -217,7 +217,9 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     is_proxy_admin_request,
     provider_for_generic_call,
+    request_requires_vision,
     request_user_api_key_auth,
+    require_image_compatible_deployments,
     resolve_model_group_alias,
     team_may_use_deployment,
     truncate_fallback_error_detail,
@@ -14369,11 +14371,37 @@ class Router:
     def _common_checks_available_deployment(
         self,
         model: str,
-        messages: list[dict[str, str]] | None = None,
+        messages: Sequence[Mapping[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str, list | dict]:
+        resolved_model, deployments = self._resolve_available_deployment_candidates(
+            model=model,
+            specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
+        )
+        request_input: Final = cast(object, input)  # cast-ok: erase legacy untyped token lists before shape inspection
+        if not request_requires_vision(messages, request_input, request_kwargs):
+            return resolved_model, (
+                cast(  # cast-ok: TypedDict is a plain dict in the legacy selection contract
+                    dict[str, object], deployments
+                )
+                if isinstance(deployments, dict)
+                else deployments
+            )
+        compatible: Final = require_image_compatible_deployments(
+            resolved_model,
+            (deployments,) if isinstance(deployments, dict) else deployments,
+        )
+        return resolved_model, dict(compatible[0]) if isinstance(deployments, dict) else list(compatible)
+
+    def _resolve_available_deployment_candidates(
+        self,
+        model: str,
+        specific_deployment: bool | None = False,
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> tuple[str, list[DeploymentTypedDict] | DeploymentTypedDict]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 
@@ -14400,18 +14428,15 @@ class Router:
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model: Final = deployment.litellm_params.model
-                return deployment_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
-                    dict,
-                    self._filter_reserved_deployments(
-                        model=deployment_model,
-                        healthy_deployments=(
-                            cast(  # cast-ok: model_dump of a router deployment
-                                DeploymentTypedDict, deployment.model_dump(exclude_none=True)
-                            ),
+                return deployment_model, self._filter_reserved_deployments(
+                    model=deployment_model,
+                    healthy_deployments=(
+                        cast(  # cast-ok: model_dump of a router deployment
+                            DeploymentTypedDict, deployment.model_dump(exclude_none=True)
                         ),
-                        request_team_id=request_team_id,
-                    )[0],
-                )
+                    ),
+                    request_team_id=request_team_id,
+                )[0]
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in Model ID map"
             )
@@ -14429,18 +14454,15 @@ class Router:
             )
             if early is not None:
                 if not isinstance(early[1], list):
-                    return early[0], cast(  # cast-ok: contract requires a plain dict for a single deployment
-                        dict,
-                        self._filter_reserved_deployments(
-                            model=early[0],
-                            healthy_deployments=(
-                                cast(  # cast-ok: early resolve returns a router deployment
-                                    DeploymentTypedDict, early[1]
-                                ),
+                    return early[0], self._filter_reserved_deployments(
+                        model=early[0],
+                        healthy_deployments=(
+                            cast(  # cast-ok: early resolve returns a router deployment
+                                DeploymentTypedDict, early[1]
                             ),
-                            request_team_id=request_team_id,
-                        )[0],
-                    )
+                        ),
+                        request_team_id=request_team_id,
+                    )[0]
                 return early[0], self._drop_strategy_markers(
                     early[0],
                     self._filter_reserved_deployments(
