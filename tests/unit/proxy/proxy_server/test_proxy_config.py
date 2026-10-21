@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import turn_on_json
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -2116,6 +2118,42 @@ async def test_ProxyConfig_lists_search_tools_once_at_startup_not_on_every_repar
     out: Final = capfd.readouterr().out
     assert out.count("Proxy initialized with Search Tools:") == 1, out
     assert out.count("web-search (tavily)") == 1, out
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_lists_each_search_tool_as_its_own_json_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+):
+    """With json_logs on, the startup listing is a header record and one record per tool, so a pipeline that
+    reads one tool per record keeps working."""
+    config_file: Final = tmp_path / "search.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+        "  - search_tool_name: news-search\n"
+        "    litellm_params:\n"
+        "      search_provider: exa_ai\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(litellm, "suppress_startup_output", False)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    turn_on_json()
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    messages: Final = [json.loads(raw)["message"] for raw in capfd.readouterr().out.splitlines() if raw.strip()]
+    listing: Final = [message for message in messages if "Search Tools" in message or "-search (" in message]
+    assert listing == [
+        "LiteLLM: Proxy initialized with Search Tools:",
+        "    web-search (tavily)",
+        "    news-search (exa_ai)",
+    ], messages
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

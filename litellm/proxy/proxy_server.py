@@ -7237,18 +7237,12 @@ class ProxyConfig:
         ## SEARCH TOOLS SETTINGS
         search_tools: Final[list[SearchToolTypedDict] | None] = self.parse_search_tools(config)
         if search_tools:
-            print_startup_message(
-                "\n".join(
-                    (
-                        "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m",
-                        *(
-                            f"\033[32m    {tool.get('search_tool_name', '')} "
-                            f"({tool.get('litellm_params', {}).get('search_provider', '')})\033[0m"
-                            for tool in search_tools
-                        ),
-                    )
+            print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
+            for tool in search_tools:
+                print_startup_message(
+                    f"\033[32m    {tool.get('search_tool_name', '')} "
+                    f"({tool.get('litellm_params', {}).get('search_provider', '')})\033[0m"
                 )
-            )
 
         ## SANDBOX TOOLS SETTINGS
         from litellm.sandbox.sandbox_tools import register_sandbox_tools
