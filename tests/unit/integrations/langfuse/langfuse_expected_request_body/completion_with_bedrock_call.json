@@ -14,6 +14,7 @@
             ]
         },
         "langfuse.observation.level": "DEFAULT",
+        "langfuse.observation.metadata.is_silent_experiment": false,
         "langfuse.observation.model.name": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "langfuse.observation.model.parameters": {
             "aws_region": "us-east-1"
