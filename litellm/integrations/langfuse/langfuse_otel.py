@@ -11,12 +11,18 @@ from opentelemetry import trace
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
     serialize_langfuse_datetime,
 )
-from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.opentelemetry import (
+    HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    OpenTelemetry,
+    OpenTelemetryConfig,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.secret_managers.main import str_to_bool
@@ -37,6 +43,17 @@ LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
+# The attributes ``OpenTelemetry._record_exception_on_span`` adds to a failed call's span after these.
+_ERROR_ATTRIBUTES: Final = frozenset(
+    {
+        ErrorAttributes.ERROR_CODE,
+        HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+        ErrorAttributes.ERROR_TYPE,
+        ErrorAttributes.ERROR_MESSAGE,
+        ErrorAttributes.ERROR_LLM_PROVIDER,
+        ErrorAttributes.ERROR_STACK_TRACE,
+    }
+)
 
 
 @runtime_checkable
@@ -283,27 +300,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         joins_existing_trace: Final = metadata.get("existing_trace_id") is not None or not _starts_its_own_trace(
             span, kwargs
         )
-        if metadata.get("trace_name") is None and not joins_existing_trace:
-            safe_set_attribute(
-                span,
-                LangfuseSpanAttributes.TRACE_NAME.value,
-                f"litellm-{kwargs.get('call_type') or 'completion'}",
-            )
-
-        if not joins_existing_trace:
-            tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata)
-            if tags:
-                safe_set_attribute(span, LangfuseSpanAttributes.TAGS.value, json.dumps(list(tags)))
-
         input_json: Final = safe_dumps(kwargs.get("messages")) if kwargs.get("messages") else None
         if input_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, input_json)
-            if not joins_existing_trace:
-                safe_set_attribute(
-                    span,
-                    LangfuseSpanAttributes.TRACE_INPUT.value,
-                    REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_input")) else input_json,
-                )
 
         completion_start_time: Final = kwargs.get("completion_start_time")
         if isinstance(completion_start_time, datetime):
@@ -316,12 +315,63 @@ class LangfuseOtelLogger(OpenTelemetry):
         output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
         if output_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, output_json)
-            if not joins_existing_trace:
-                safe_set_attribute(
-                    span,
-                    LangfuseSpanAttributes.TRACE_OUTPUT.value,
-                    REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_output")) else output_json,
+
+        if not joins_existing_trace:
+            LangfuseOtelLogger._set_trace_fields(
+                span=span, kwargs=kwargs, metadata=metadata, input_json=input_json, output_json=output_json
+            )
+
+    @staticmethod
+    def _set_trace_fields(
+        span: Span,
+        kwargs: Mapping[str, Any],
+        metadata: Mapping[str, object],
+        input_json: str | None,
+        output_json: str | None,
+    ) -> None:
+        """Set the derived trace name, tags, input and output into the room ``span``'s attribute limit leaves next
+        to the error attributes a failed call adds after them, so they never evict or drop another attribute."""
+        from litellm.integrations.otel.emitter import carried_keys, span_attribute_limit
+
+        tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata)
+        fields: Final = (
+            *(
+                ((LangfuseSpanAttributes.TRACE_NAME.value, f"litellm-{kwargs.get('call_type') or 'completion'}"),)
+                if metadata.get("trace_name") is None
+                else ()
+            ),
+            *(((LangfuseSpanAttributes.TAGS.value, json.dumps(list(tags))),) if tags else ()),
+            *(
+                (
+                    (
+                        LangfuseSpanAttributes.TRACE_INPUT.value,
+                        REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_input")) else input_json,
+                    ),
                 )
+                if input_json is not None
+                else ()
+            ),
+            *(
+                (
+                    (
+                        LangfuseSpanAttributes.TRACE_OUTPUT.value,
+                        REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_output")) else output_json,
+                    ),
+                )
+                if output_json is not None
+                else ()
+            ),
+        )
+        limit: Final = span_attribute_limit(span)
+        carried: Final = carried_keys(span)
+        new_keys: Final = tuple(key for key, _value in fields if key not in carried)
+        room: Final = (
+            len(new_keys) if limit is None else max(limit - len(carried) - len(_ERROR_ATTRIBUTES - carried), 0)
+        )
+        written: Final = carried | frozenset(new_keys[:room])
+        for key, value in fields:
+            if key in written:
+                _utils.safe_set_attribute(span, key, value)
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:

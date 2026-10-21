@@ -38,6 +38,7 @@ class SpanRecord:
     trace_id: str
     parent_span_id: str
     attributes: Mapping[str, object]
+    dropped_attributes: int = 0
 
     def tags(self) -> tuple[object, ...]:
         """The trace tags Langfuse ingestion reads from the raw attribute."""
@@ -71,6 +72,7 @@ def _span_records(body: bytes) -> tuple[SpanRecord, ...]:
             trace_id=span.trace_id.hex(),
             parent_span_id=span.parent_span_id.hex(),
             attributes={pair.key: _attribute_value(pair.value) for pair in span.attributes},
+            dropped_attributes=span.dropped_attributes_count,
         )
         for span in _exported_spans(body)
     )
@@ -613,3 +615,44 @@ def test_destination_outage_mid_burst_lands_every_span_once_with_derived_fields(
     assert {identity: len(records) for identity, records in spans.items()} == dict.fromkeys(expected, 1)
     for identity, records in spans.items():
         _assert_derived(records[0], SURFACE_CALL_TYPES[expected[identity]])
+
+
+def _tool(index: int) -> Mapping[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": f"lookup_{index}",
+            "description": f"Looks up record {index}",
+            "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+        },
+    }
+
+
+def _chat_with_tools(rig: Rig, content: str, tools: int, headers: Mapping[str, str] | None = None) -> SpanRecord:
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": rig.openai_model,
+            "messages": [{"role": "user", "content": content}],
+            "tools": [_tool(index) for index in range(tools)],
+        },
+        key=rig.key,
+        headers=headers,
+    )
+    assert response.status_code == (500 if content.startswith("fail-") else 200), response.text
+    return rig.sink.one(content)
+
+
+@pytest.mark.parametrize(("tools", "prefix"), product((30, 33, 34, 35, 36, 40), ("", "fail-")))
+def test_trace_fields_never_evict_or_drop_another_attribute_of_a_full_span(v1: Rig, tools: int, prefix: str) -> None:
+    run: Final = uuid.uuid4().hex
+    derived: Final = _chat_with_tools(v1, f"{prefix}lit8281-full-{tools}-{run}", tools)
+    joined: Final = _chat_with_tools(
+        v1,
+        f"{prefix}lit8281-full-joined-{tools}-{run}",
+        tools,
+        headers={"traceparent": f"00-{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-01"},
+    )
+    assert set(joined.attributes) <= set(derived.attributes), set(joined.attributes) - set(derived.attributes)
+    assert derived.dropped_attributes == joined.dropped_attributes, (derived.dropped_attributes, joined.attributes)
