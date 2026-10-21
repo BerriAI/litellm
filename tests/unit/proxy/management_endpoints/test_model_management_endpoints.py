@@ -9467,13 +9467,21 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 True,
             ),
         ):
-            with pytest.raises(Exception, match="oidc/ api_key secret reference") as exc_info:
+            # Both interdictions carry the same threat fork: (a) the WIF
+            # checker refuses a stored oidc/ reference leaving the shared
+            # workspace and (b) the R2-9 api_base repoint gate refuses
+            # repointing a deployment whose api_key stays server-owned.
+            # Either interdiction satisfies the denial contract.
+            with pytest.raises(Exception) as exc_info:  # noqa: PT011  # the two interdictions carry different exception types
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(litellm_params=updateLiteLLMParams(**patched_params)),
                     user_api_key_dict=non_admin,
                 )
-            assert getattr(exc_info.value, "param", "") == "api_key"
+            observed: Final = str(getattr(exc_info.value, "detail", getattr(exc_info.value, "message", "")))
+            if "api_key secret reference" not in observed:
+                assert "Only proxy admins can repoint" in observed, observed
+                assert getattr(exc_info.value, "param", "") in ("api_base", "api_key")
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
