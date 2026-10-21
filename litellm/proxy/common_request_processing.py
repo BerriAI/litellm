@@ -687,7 +687,7 @@ def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
     return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
 
 
-def _counted_drop_policies(
+def counted_drop_policies(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> tuple[DropPolicy, ...]:
     requested: Final = {**_router_defaults(llm_router), **data}
@@ -703,7 +703,7 @@ def _counted_drop_policies(
 def resolve_counted_tool_fields(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> Mapping[str, object] | ProxyException:
-    resolved: Final = resolve_tool_fields(data, lambda: _counted_drop_policies(data, llm_router, team_id))
+    resolved: Final = resolve_tool_fields(data, lambda: counted_drop_policies(data, llm_router, team_id))
     if isinstance(resolved, MalformedField):
         return ProxyException(
             message=resolved.message,

@@ -1812,11 +1812,21 @@ def _allowlist(object_permission_id: str, vector_stores: list[str] | None) -> Li
             ["vs_allowed"],
             {
                 **_file_search_tool_request("vs_other_team"),
-                "drop_params": True,
                 "tools": [{"type": "file_search", "vector_store_ids": ["vs_other_team", 1]}],
             },
             ProxyErrorTypes.team_vector_store_access_denied,
-            id="team-drop-params-tool-with-an-int-other-store",
+            id="team-file-search-tool-with-an-int-other-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {
+                **_vector_store_ids_request("vs_other_team"),
+                "additional_drop_params": ["vector_store_ids"],
+                "vector_store_ids": {"vs_other_team": True},
+            },
+            None,
+            id="team-additional-drop-params-object-names-no-store",
         ),
         pytest.param(
             None,
@@ -1879,6 +1889,26 @@ async def test_litellm_settings_drop_params_skips_a_malformed_vector_store_ids(
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_params",
+    [{"drop_params": True}, {"additional_drop_params": ["vector_store_ids"]}],
+    ids=["drop-params", "additional-drop-params"],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_a_deployment_that_drops_vector_store_ids_skips_a_malformed_one(
+    deployment_params: Mapping[str, object], vector_store_registry: VectorStoreRegistry | None
+) -> None:
+    assert await _common_checks_for_rag_query(
+        {},
+        _virtual_key(object_permission_id="key-permission"),
+        SimpleNamespace(vector_stores=["KBSTOREA"]),
+        request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", "vector_store_ids": ["KBSTOREA", 1]},
+        vector_store_registry=vector_store_registry,
+        llm_router=_gpt_4o_mini_router(deployment_params),
+    )
+
+
 _KEY_DENIED: Final = ProxyErrorTypes.key_vector_store_access_denied
 _TEAM_DENIED: Final = ProxyErrorTypes.team_vector_store_access_denied
 _USER_DENIED: Final = ProxyErrorTypes.user_vector_store_access_denied
@@ -1922,6 +1952,7 @@ async def _common_checks_for_rag_query(
     request_body: Mapping[str, object] | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     vector_store_registry: VectorStoreRegistry | None = None,
+    llm_router: "Router | None" = None,
 ) -> bool:
     permissions: Final = {
         "key-permission": _permission_row("key-permission", key_permission),
@@ -1962,11 +1993,22 @@ async def _common_checks_for_rag_query(
             global_proxy_spend=None,
             general_settings=dict(general_settings),
             route="/v1/rag/query",
-            llm_router=None,
+            llm_router=llm_router,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
             request=MagicMock(spec=Request),
         )
+
+
+def _gpt_4o_mini_router(litellm_params: Mapping[str, object]) -> "Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", **litellm_params},
+            }
+        ]
+    )
 
 
 async def _assert_rag_query_outcome(request: Awaitable[bool], denied_by: ProxyErrorTypes | None) -> None:
@@ -2406,10 +2448,8 @@ async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request
         {"vector_store_ids": "KBSTOREA"},
         {"vector_store_ids": {"KBSTOREB": True}},
         {"vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]},
-        {"tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]}]},
-        {"tools": [{"type": "file_search", "vector_store_ids": {"KBSTOREB": True}}]},
     ],
-    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id", "object-tool-id", "object-tool-ids"],
+    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
 )
 @pytest.mark.parametrize(
     "general_settings", [{"vector_store_deny_by_default": True}, {}], ids=["deny-by-default", "legacy"]
@@ -2427,6 +2467,7 @@ async def test_malformed_vector_store_ids_are_rejected_as_bad_request(
             SimpleNamespace(vector_stores=["KBSTOREA"]),
             request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
             vector_store_registry=vector_store_registry,
+            llm_router=_gpt_4o_mini_router({}),
         )
     assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
         "invalid_request_error",
