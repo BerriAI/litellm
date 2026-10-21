@@ -620,6 +620,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 4.5e-06,
     },
+    "azure_ai/grok-4.6": {
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+    },
     "azure_ai/claude-haiku-4-5": {
         "litellm_provider": "azure_ai",
         "mode": "chat",

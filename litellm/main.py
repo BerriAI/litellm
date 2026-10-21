@@ -1212,13 +1212,18 @@ def _register_custom_pricing_for_request(
         litellm.register_model({shared_key: entry}, persist_across_reloads=False)
         return
     litellm.register_model(
-        {
-            deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
-        },
+        {deployment_id: entry},
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
+    )
+    litellm.register_model(
+        {shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)},
+        persist_across_reloads=False,
+        warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
     )
 
 
@@ -5785,6 +5790,7 @@ def completion(
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
+                    "responses_api_version",
                 )
                 if key in kwargs
             },
