@@ -37,6 +37,7 @@ from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADAT
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -79,7 +80,8 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
+from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
@@ -94,7 +96,6 @@ from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, TokenCountResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
@@ -532,6 +533,14 @@ async def cursor_model_list(
     return await model_list(user_api_key_dict=user_api_key_dict)
 
 
+def _dispatched_prompt_token_counter(logging_obj: LiteLLMLoggingObj) -> Callable[[], int]:
+    return lambda: count_request_input_tokens(
+        model=str(logging_obj.model_call_details.get("model") or ""),
+        request_input=messages_since_newest_compaction(logging_obj.model_call_details.get("messages")),
+        system_input=None,
+    )
+
+
 @router.post(
     "/cursor/chat/completions",
     dependencies=[
@@ -656,6 +665,11 @@ async def cursor_chat_completions(
                 model=request_data.get("model", ""),
                 custom_llm_provider=None,
                 logging_obj=logging_obj,
+                count_prompt_tokens=(
+                    _dispatched_prompt_token_counter(logging_obj)
+                    if isinstance(logging_obj, LiteLLMLoggingObj)
+                    else None
+                ),
             )
             # Use async_data_generator to format as SSE
             return async_data_generator(
@@ -663,6 +677,7 @@ async def cursor_chat_completions(
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 request=request,
+                dispatched_call_type=processor.route_type,
             )
         # Otherwise, use the default generator
         return async_data_generator(
@@ -670,6 +685,7 @@ async def cursor_chat_completions(
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             request=request,
+            dispatched_call_type=processor.route_type,
         )
 
     try:
@@ -1585,6 +1601,7 @@ def _responses_input_as_token_count_messages(
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
         responses_api_request=request_params,
+        only_since_compaction=True,
     )
     return tuple(
         message if isinstance(message, dict) else message.model_dump(exclude_none=True) for message in transformed

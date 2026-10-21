@@ -1,5 +1,7 @@
 """Tests for the shared guardrail content extraction helpers."""
 
+import json
+
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -165,6 +167,21 @@ def test_iter_message_text_inspects_reasoning_content_and_summary():
         ]
     }
     assert list(iter_message_text(data)) == ["content secret", "summary secret"]
+
+
+
+def test_iter_message_text_inspects_compaction_summary():
+    data = {
+        "input": [
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps({"type": "compaction", "content": "banned word"}),
+            },
+            {"role": "user", "content": "next turn"},
+        ]
+    }
+    assert list(iter_message_text(data)) == ["banned word", "next turn"]
 
 
 # ── walk_user_text ────────────────────────────────────────────────────────────
@@ -345,6 +362,30 @@ def test_walk_user_text_redacts_reasoning_content_and_summary():
     assert item["content"][0]["text"] == "[REDACTED] content"
     assert item["summary"][0]["text"] == "[REDACTED] summary"
     assert item["id"] == "rs_1"
+
+
+
+def test_walk_user_text_redacts_compaction_summary_and_keeps_the_block():
+    data = {
+        "input": [
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps(
+                    {"type": "compaction", "content": "AKIAEXAMPLE summary", "signature": "sig"}
+                ),
+            }
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    item = data["input"][0]
+    assert visited == 1
+    assert (item["type"], item["id"]) == ("compaction", "cmp_1")
+    assert json.loads(item["encrypted_content"]) == {
+        "type": "compaction",
+        "content": "[REDACTED] summary",
+        "signature": "sig",
+    }
 
 
 # ── build_inspection_messages ─────────────────────────────────────────────────

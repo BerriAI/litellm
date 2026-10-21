@@ -19,6 +19,10 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    billable_input_since_newest_compaction,
+    holds_compaction_summary,
+)
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -54,10 +58,11 @@ async def count_input_tokens(
         (model, rust_tokenizer(model)) for model in models
     )
     groups: Final[tuple[RustTokenizer | None, ...]] = tuple(dict.fromkeys(tokenizer for _, tokenizer in tokenizers))
+    counted_raw_body: Final = None if holds_compaction_summary(request_body.get("input")) else raw_body
     group_counts: Final = [
         await _count_group(
             request_body=request_body,
-            raw_body=raw_body,
+            raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
         )
@@ -140,7 +145,9 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("input"))
+            return _count_text_tokens(
+                model=model, text=billable_input_since_newest_compaction(request_body.get("input"))
+            )
         if "query" in request_body or "documents" in request_body:
             query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
             document_tokens: Final = _count_text_tokens(

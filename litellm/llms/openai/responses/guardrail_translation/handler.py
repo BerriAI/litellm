@@ -65,6 +65,11 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    decode_compaction_item,
+    with_compaction_summary,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
 from litellm.responses.litellm_completion_transformation.tool_search import is_server_tool_search_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -108,6 +113,16 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ResponseInputParam
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+_COMPACTION_SUMMARY_POSITION: Final = -1
+
+
+def _output_compaction_summary(item: object) -> str | None:
+    if stream_item_field(item, "type") != "compaction":
+        return None
+    block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
+    return None if block is None else block.summary
 
 
 class _ToolCallShape(NamedTuple):
@@ -266,7 +281,17 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     return _PATCHABLE_ITEM_FIELDS.get(item_type)
 
 
+def _rewritten_compaction_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    encrypted_content: Final = item.get("encrypted_content")
+    summary: Final = rewritten.get("content") if isinstance(rewritten, Mapping) else None
+    if not isinstance(encrypted_content, str) or not isinstance(summary, str) or not summary:
+        return None
+    return {**item, "encrypted_content": with_compaction_summary(encrypted_content, summary)}
+
+
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    if compaction_summary(item) is not None:
+        return _rewritten_compaction_item(item, rewritten)
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None
@@ -804,6 +829,11 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image extraction logic.
         """
+        summary: Final = compaction_summary(message)
+        if summary is not None:
+            texts_to_check.append(summary)
+            task_mappings.append((msg_idx, None))
+            return
         content: Final = message.get("content", None)
         if content is None:
             return
@@ -848,6 +878,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
+
+            if compaction_summary(messages[msg_idx]) is not None:
+                messages[msg_idx]["encrypted_content"] = with_compaction_summary(  # rebind-ok: in-place input rewrite
+                    messages[msg_idx]["encrypted_content"], guardrail_response
+                )
+                continue
 
             content = messages[msg_idx].get("content", None)
             if content is None:
@@ -1116,13 +1152,17 @@ class OpenAIResponsesHandler(BaseTranslation):
         # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
+            finished_summary: Final = _output_compaction_summary(stream_item_field(final_chunk, "item"))
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
             tool_calls: Final = model_response_stream.choices[0].delta.tool_calls
-            if tool_calls:
+            if tool_calls or finished_summary is not None:
                 inputs = GenericGuardrailAPIInputs()
-                inputs["tool_calls"] = cast(list[ChatCompletionToolCallChunk], tool_calls)
+                if finished_summary is not None:
+                    inputs["texts"] = [finished_summary]
+                if tool_calls:
+                    inputs["tool_calls"] = cast(list[ChatCompletionToolCallChunk], tool_calls)
                 if hasattr(model_response_stream, "model") and model_response_stream.model:
                     inputs["model"] = model_response_stream.model
                 await guardrail_to_apply.apply_guardrail(
@@ -1214,6 +1254,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         else:
             setattr(event, field, value)
 
+    @staticmethod
+    def _write_compaction_summary(item: object, summary: str) -> None:
+        encrypted_content: Final = stream_item_field(item, "encrypted_content")
+        if isinstance(encrypted_content, str):
+            OpenAIResponsesHandler._write_event_field(
+                item, "encrypted_content", with_compaction_summary(encrypted_content, summary)
+            )
+
     def _sync_stream_events_with_rewrites(
         self,
         stream_events: Sequence[Any],
@@ -1256,11 +1304,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         output_index: int,
         rewrites_by_position: Mapping[tuple[int, int], str],
     ) -> None:
-        content: Final = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
-        if not isinstance(content, list):
+        summary_rewrite: Final = rewrites_by_position.get((output_index, _COMPACTION_SUMMARY_POSITION))
+        if summary_rewrite is not None:
+            OpenAIResponsesHandler._write_compaction_summary(item, summary_rewrite)
             return
+        content: Final = stream_item_items(item, "content")
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
-            if item_idx != output_index or content_idx >= len(content):
+            if item_idx != output_index or not 0 <= content_idx < len(content):
                 continue
             OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
 
@@ -1481,13 +1531,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         message_items: Final = tuple(
             item for item in output_items if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES
         )
+        message_parts: Final = chain.from_iterable(stream_item_items(item, "content") for item in message_items)
+        part_texts: Final = tuple(
+            text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
+        )
+        summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
         return StreamingScanKey(
-            texts=tuple(
-                text
-                for item in message_items
-                for part in stream_item_items(item, "content")
-                if isinstance(text := stream_item_field(part, "text"), str) and text
-            ),
+            texts=(*part_texts, *summaries),
             tool_calls=tuple(
                 stream_item_fingerprint(item)
                 for item in output_items
@@ -1610,6 +1660,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
             return
 
+        summary: Final = _output_compaction_summary(output_item)
+        if summary is not None:
+            texts_to_check.append(summary)
+            task_mappings.append((output_idx, _COMPACTION_SUMMARY_POSITION))
+            return
+
         # Handle both GenericResponseOutputItem and dict
         content: list[OutputText] | list[dict] | None = None
         if isinstance(output_item, BaseModel):
@@ -1676,6 +1732,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 continue
 
             output_item = response_output[output_idx]
+
+            if content_idx == _COMPACTION_SUMMARY_POSITION:
+                self._write_compaction_summary(output_item, guardrail_response)
+                continue
 
             # Handle both GenericResponseOutputItem, BaseModel, and dict
             if isinstance(output_item, GenericResponseOutputItem):
