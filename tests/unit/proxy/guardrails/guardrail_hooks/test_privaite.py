@@ -1424,3 +1424,37 @@ async def test_engine_for_a_privaite_without_pii_engine_recommends_the_install(m
 
     with pytest.raises(RuntimeError, match=r"pip install 'privaite>=0\.7\.2'"):
         await _make_guardrail()._engine_for(["en"])
+
+
+@pytest.mark.asyncio
+async def test_post_call_restores_a_copy_and_leaves_the_response_litellm_caches_and_logs():
+    gr = _make_guardrail()
+    message = types.SimpleNamespace(content="Sending to <PERSON_1>", tool_calls=None, function_call=None)
+    response = types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    out = await gr.async_post_call_success_hook({"metadata": {"privaite_map": _FAKES}}, None, response)
+
+    assert out.choices[0].message.content == "Sending to Marie Dupont"
+    assert message.content == "Sending to <PERSON_1>", "the object LiteLLM caches and logs must keep the placeholder"
+
+
+@pytest.mark.asyncio
+async def test_streaming_restores_copies_and_leaves_the_chunks_litellm_reassembles():
+    gr = _make_guardrail()
+    source = [
+        _choice_chunk(_bare_delta(content="Hi <PERS")),
+        _choice_chunk(_bare_delta(content="ON_1>"), finish="stop"),
+    ]
+
+    async def _source():
+        for chunk in source:
+            yield chunk
+
+    chunks = await _collect(
+        gr.async_post_call_streaming_iterator_hook(None, _source(), {"metadata": {"privaite_map": _FAKES}})
+    )
+
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == "Hi Marie Dupont"
+    assert [chunk.choices[0].delta.content for chunk in source] == ["Hi <PERS", "ON_1>"], (
+        "the chunks LiteLLM keeps to rebuild the logged and cached response must keep the placeholder"
+    )

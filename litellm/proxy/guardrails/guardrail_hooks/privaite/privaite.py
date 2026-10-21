@@ -21,6 +21,7 @@ without it. See https://github.com/crp4222/PrivAiTe.
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -228,6 +229,13 @@ class PrivaiteGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
     ) -> object:
+        """Restores the original values in a copy of the response.
+
+        LiteLLM keeps the object it hands this hook for its response cache and its
+        success logs, and a cache write may serialize it after this hook ran. Restoring it
+        in place would put this caller's values in the cache under a key built from the
+        anonymized request, where another caller's identical-looking request hits them.
+        """
         if not self.deanonymize:
             return response
         pairs: Final = _pop_restore_map(data)
@@ -235,12 +243,13 @@ class PrivaiteGuardrail(CustomGuardrail):
             return response
         mapping: Final = restore_mapping(pairs)
         engine: Final = await self._engine_for(self._languages())
-        for choice in read_list(response, "choices"):
+        restored: Final = copy.deepcopy(response)
+        for choice in read_list(restored, "choices"):
             message = read_field(choice, "message")
             if message is not None:
                 await restore_message(message, engine, mapping)
-        await restore_responses_output(response, engine, mapping)
-        return response
+        await restore_responses_output(restored, engine, mapping)
+        return restored
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -248,6 +257,12 @@ class PrivaiteGuardrail(CustomGuardrail):
         response: AsyncIterable[ModelResponseStream],
         request_data: JsonObject,
     ) -> AsyncGenerator[ModelResponseStream, None]:
+        """Restores the original values in copies of the chunks.
+
+        The stream wrapper keeps every chunk it yields and rebuilds the whole response from
+        them for the cache and the success logs once the stream ends, so the chunks
+        themselves keep their placeholders, as in the non-streaming hook.
+        """
         pairs: Final = _pop_restore_map(request_data)
         if not self.deanonymize or not pairs:
             async for chunk in response:
@@ -260,8 +275,9 @@ class PrivaiteGuardrail(CustomGuardrail):
             restore_buffer_factory(),
         )
         async for chunk in response:
-            restorer.restore_chunk(chunk)
-            yield chunk
+            restored = copy.deepcopy(chunk)
+            restorer.restore_chunk(restored)
+            yield restored
         for drained in restorer.drain():
             yield drained
 
