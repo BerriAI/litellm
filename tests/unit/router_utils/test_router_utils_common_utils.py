@@ -171,19 +171,59 @@ class TestFilterTeamBasedModels:
         # others should be included since they don't have proper team_id setup
         assert len(result) >= 1  # At least deployment-1 should be included
 
-    def test_filter_team_based_models_dict_input(self):
-        """Test with Dict input instead of List[Dict]"""
-        # Note: Based on the function signature, it accepts Union[List[Dict], Dict]
-        # But the implementation seems to expect List[Dict] for the filtering logic
-        # This test documents the current behavior
-        deployments_dict = {"key1": "value1", "key2": "value2"}
+    @pytest.mark.parametrize(
+        "deployment, request_kwargs, allowed",
+        (
+            pytest.param(
+                {"model_info": {"id": "dep-a", "team_id": "team-a"}},
+                {"metadata": {"user_api_key_team_id": "team-b"}},
+                False,
+                id="other-team",
+            ),
+            pytest.param(
+                {"model_info": {"id": "dep-a", "team_id": "team-a"}},
+                {"metadata": {"user_api_key_team_id": "team-a"}},
+                True,
+                id="owning-team",
+            ),
+            pytest.param(
+                {"model_info": {"id": "dep-a", "team_id": "team-a"}},
+                {},
+                False,
+                id="no-team",
+            ),
+            pytest.param(
+                {"model_info": {"id": "dep-a", "team_id": "team-a"}},
+                {"metadata": {"user_api_key_auth": UserAPIKeyAuth(user_role="proxy_admin")}},
+                True,
+                id="proxy-admin",
+            ),
+            pytest.param(
+                {"model_info": {"id": "dep-a"}},
+                {"metadata": {"user_api_key_team_id": "team-b"}},
+                True,
+                id="unowned-deployment",
+            ),
+        ),
+    )
+    def test_filter_team_based_models_dict_input(
+        self, deployment: dict[str, object], request_kwargs: dict[str, object], allowed: bool
+    ) -> None:
+        if not allowed:
+            with pytest.raises(
+                litellm.BadRequestError,
+                match=r"You passed in model=dep-a\. There are no healthy deployments",
+            ):
+                filter_team_based_models(deployment, request_kwargs)
+            return
 
-        request_kwargs = {"metadata": {"user_api_key_team_id": "team-a"}}
+        assert filter_team_based_models(deployment, request_kwargs) is deployment
 
-        # This should not crash, though the filtering logic won't apply to Dict input
-        result = filter_team_based_models(deployments_dict, request_kwargs)
-        # The function will likely return the dict unchanged or handle it differently
-        assert result is not None
+    def test_filter_team_based_models_dict_input_uses_litellm_metadata(self) -> None:
+        deployment: Final = {"model_info": {"id": "dep-a", "team_id": "team-a"}}
+        request_kwargs: Final = {"litellm_metadata": {"user_api_key_team_id": "team-a"}}
+
+        assert filter_team_based_models(deployment, request_kwargs) is deployment
 
     def test_filter_team_based_models_empty_deployments(self):
         """Test with empty deployments list"""

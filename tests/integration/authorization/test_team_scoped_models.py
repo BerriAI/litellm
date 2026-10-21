@@ -131,6 +131,27 @@ def test_a_team_model_is_listed_and_served_only_for_keys_of_its_team(gateway: Ga
         assert _calls_to(observed, provider_model) == 1, observed
 
 
+def test_a_team_model_id_is_not_served_to_another_teams_wildcard_key(gateway: Gateway, upstream: httpx.Client) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(models=[])
+        other: Final = scenario.team(models=["*"])
+        provider_model: Final = f"team-id-scoped-{uuid.uuid4().hex}"
+        deployment_id: Final = f"team-deployment-{uuid.uuid4().hex}"
+        model: Final = scenario.model(
+            model=f"openai/{provider_model}",
+            model_info={"id": deployment_id, "team_id": team},
+        )
+        team_key: Final = scenario.key(team_id=team)
+        other_key: Final = scenario.key(team_id=other, models=["*"])
+
+        served: Final = _chat(gateway, model, team_key)
+        assert served.status_code == 200, served.text
+        refused: Final = _chat(gateway, deployment_id, other_key)
+        assert refused.status_code == 400, refused.text
+        observed: Final = _observed_requests(upstream)
+        assert _calls_to(observed, provider_model) == 1, observed
+
+
 def _v2_team_public_names(gateway: Gateway, key: str, model: str) -> list[JsonValue]:
     response: Final = gateway.request("GET", "/v2/model/info", key=key, params={"model": model})
     assert response.status_code == 200, response.text

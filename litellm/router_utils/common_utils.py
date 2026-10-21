@@ -21,6 +21,7 @@ from litellm.types.router import (
     Deployment,
     FallbackSkipReason,
     LiteLLM_Params,
+    RouterErrors,
     SkippedFallbackTarget,
 )
 from litellm.types.utils import (
@@ -35,6 +36,7 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_REQUEST_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -314,7 +316,21 @@ def filter_team_based_models(
 
     ids_to_remove: Final = set()
     if isinstance(healthy_deployments, dict):
-        return healthy_deployments
+        deployment_mapping: Final = _OBJECT_MAPPING_ADAPTER.validate_python(healthy_deployments)
+        model_info: Final = _OBJECT_MAPPING_ADAPTER.validate_python(deployment_mapping.get("model_info") or {})
+        owner: Final = model_info.get("team_id")
+        if team_may_use_deployment(owner, request_team_id) or (
+            request_team_id is None and is_proxy_admin_request(_REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs))
+        ):
+            return healthy_deployments
+        deployment_id_value: Final = model_info.get("id")
+        deployment_id: Final[str | None] = deployment_id_value if isinstance(deployment_id_value, str) else None
+        raise BadRequestError(
+            message=f"You passed in model={deployment_id}. {RouterErrors.no_healthy_deployments.value}",
+            model=deployment_id,
+            llm_provider="",
+        )
+
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")
