@@ -46,7 +46,7 @@ jobs:
             exit 0
           fi
           today="$(date +'%Y-%m-%d')"
-          branch="litellm_price_map_auto_update_$today"
+          branch="litellm_price_map_auto_update_${today}_${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
