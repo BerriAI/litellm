@@ -10842,16 +10842,22 @@ async def test_acompletion_keeps_provider_error_when_tenacity_is_missing(
     assert route.call_count == 1
 
 
-async def _until(condition: Callable[[], bool]) -> None:
-    while not condition():
-        await asyncio.sleep(0.01)
+class _WatchedReservation(dict[str, object]):
+    def __init__(self) -> None:
+        super().__init__(reserved_cost=0.5, entries=[], finalized=False, callback_bound=False)
+        self.handed_back: Final = asyncio.Event()
+
+    def __setitem__(self, key: str, value: object) -> None:
+        super().__setitem__(key, value)
+        if key == "callback_bound" and value is False:
+            self.handed_back.set()
 
 
 @pytest.mark.asyncio
 async def test_acompletion_hands_the_budget_reservation_back_while_it_waits_to_retry(
     retry_upstream: respx.MockRouter,
 ) -> None:
-    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    reservation: Final = _WatchedReservation()
     route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(429, {"retry-after": "30"}))
     call: Final = asyncio.create_task(
         _completion_with_retries_kwargs(
@@ -10859,8 +10865,7 @@ async def test_acompletion_hands_the_budget_reservation_back_while_it_waits_to_r
         )
     )
 
-    await asyncio.wait_for(_until(lambda: route.call_count == 1), 10)
-    await asyncio.wait_for(_until(lambda: reservation["callback_bound"] is False), 5)
+    await reservation.handed_back.wait()
     call.cancel()
     with pytest.raises(asyncio.CancelledError):
         await call
