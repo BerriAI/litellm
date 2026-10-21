@@ -95,6 +95,7 @@ from pydantic import AnyUrl, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
+    MCP_MAX_SSE_EVENT_SIZE_BYTES,
     MCP_NPM_CACHE_DIR,
     MCP_TOOL_LISTING_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
@@ -292,6 +293,7 @@ class _MCPResponseStream(httpx2.AsyncByteStream):
 class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
     cleanup_errors: tuple[Exception, ...] = ()
+    post_failure: asyncio.Future[Exception] | None = None
 
     def _record_cleanup_error(self, error: Exception) -> None:
         if self.cleanup_scope is not None and self.cleanup_scope.shield:
@@ -319,7 +321,12 @@ class _MCPHTTPClient(httpx2.AsyncClient):
             response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
             if request.method == "POST" and response.is_error and response.status_code != 404:
                 await response.aclose()
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx2.HTTPStatusError as error:
+                    if self.post_failure is not None and not self.post_failure.done():
+                        self.post_failure.set_result(error)
+                    raise
             if stream:
                 response.stream = _MCPResponseStream(
                     cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
@@ -498,6 +505,7 @@ class MCPClient:
         elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
@@ -524,6 +532,7 @@ class MCPClient:
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._session_callbacks_override: _SessionCallbackMap | None = None
         # handle the basic auth value if provided
         if auth_value:
@@ -610,7 +619,11 @@ class MCPClient:
             return stdio_client(server_params), None
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
-            httpx_client_factory = self._create_httpx_client_factory()
+            httpx_client_factory = (
+                self._create_httpx_client_factory()
+                if self._upstream_transport is None
+                else self._create_httpx_client_factory(transport=self._upstream_transport)
+            )
             return (
                 sse_client(
                     url=self.server_url,
@@ -622,7 +635,11 @@ class MCPClient:
             )
         # HTTP transport (default)
         headers = self._get_auth_headers()
-        httpx_client_factory = self._create_httpx_client_factory()
+        httpx_client_factory = (
+            self._create_httpx_client_factory()
+            if self._upstream_transport is None
+            else self._create_httpx_client_factory(transport=self._upstream_transport)
+        )
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
@@ -631,6 +648,7 @@ class MCPClient:
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
             http_client=http_client,
+            max_sse_event_size=MCP_MAX_SSE_EVENT_SIZE_BYTES,
         )
         return transport_ctx, http_client
 
@@ -747,6 +765,8 @@ class MCPClient:
                     read_stream: Final = transport[0]
                     write_stream: Final = transport[1]
                     stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+                    if isinstance(http_client, _MCPHTTPClient):
+                        http_client.post_failure = stream_error  # rebind-ok: operation-scoped stream error
                     _notify_stream_error(on_stream_error, stream_error)
 
                     session_kwargs: Final = (
@@ -813,6 +833,7 @@ class MCPClient:
                 if isinstance(http_client, _MCPHTTPClient):
                     http_client.cleanup_errors = ()
                     http_client.cleanup_scope = None
+                    http_client.post_failure = None  # rebind-ok: clear operation-scoped stream error
         await anyio.lowlevel.checkpoint_if_cancelled()
         if cleanup_scope.cancel_called:
             raise (

@@ -20,10 +20,12 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     CONNECT_FLOW_COOKIE_PREFIX,
     GATEWAY_AUTH_CODE_PREFIX,
     GATEWAY_AUTH_CODE_TTL_SECONDS,
+    JWT_BEARER_GRANT_TYPE,
     MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
     MAX_CLIENT_ID_LENGTH,
     SUBJECT_TOKEN_TYPES,
     TOKEN_EXCHANGE_GRANT_TYPE,
+    AssertionIdentity,
     ConsentTeam,
     MintedProxyCredential,
     SubjectIdentity,
@@ -44,6 +46,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     open_gateway_dcr_client,
     register_aggregate_client,
     revoke_refresh_token,
+    supported_grant_types,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionBearerAdmitted,
@@ -1771,10 +1774,12 @@ CONSENT_TEAMS = (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam
 class _Minter:
     def __init__(self, result=None):
         self.calls = []
+        self.allowed_routes = []
         self.result = result
 
-    async def __call__(self, user_id, team_id):
+    async def __call__(self, user_id, team_id, allowed_routes=None):
         self.calls.append((user_id, team_id))
+        self.allowed_routes.append(allowed_routes)
         if self.result is not None:
             return self.result
         return MintedProxyCredential(key=f"sk-cli-{user_id}", expires_in=3600, user_id=user_id, team_id=team_id)
@@ -3296,3 +3301,201 @@ async def test_gateway_scope_still_narrows_when_the_resource_does_not_resolve() 
     _, cookies = _flow_cookie_from(response)
     sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
     assert sealed_flow["resource_server_id"] == "alpha-id"
+
+
+ID_JAG = "eyJhbGciOiJSUzI1NiIsInR5cCI6Im9hdXRoLWlkLWphZytqd3QifQ.eyJzdWIiOiJ1MSJ9.idp-signature"
+REQUESTING_APP = "0oa-requesting-app"
+ASSERTED = AssertionIdentity(
+    user_id="u1",
+    team_id="team-b",
+    replay_key="mcp_gateway_dcr:id_jag:jti-1",
+    replay_ttl_seconds=300,
+    scope="litellm:mcp",
+    allowed_routes=("mcp_inference_routes",),
+)
+
+
+class _Redeemer:
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result
+
+    async def __call__(self, assertion, client_id, client_secret, request):
+        self.calls.append((assertion, client_id, client_secret, request.url.path))
+        return self.result if self.result is not None else ASSERTED
+
+
+async def _redeem_assertion_native(minter, redeemer, cache=None, client_id=REQUESTING_APP, **overrides):
+    arguments = {
+        "grant_type": JWT_BEARER_GRANT_TYPE,
+        "assertion": ID_JAG,
+        "client_secret": "app-secret",
+        "redeem_assertion": redeemer,
+    }
+    return await _redeem_native(None, client_id, minter, cache=cache, **{**arguments, **overrides})
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_mints_the_proxy_credential_for_the_asserted_user_once_per_assertion():
+    """RFC 7523: an allowlisted requesting app redeems the ID-JAG its identity provider minted for
+    the same credential the consent flow mints, attributed to the user the assertion names and
+    the team asked for, with the assertion's scope stated and no refresh token (RFC 7521 section
+    4.1, the app renews with a fresh assertion). The assertion's jti is single-use: presenting it again is a replay and mints
+    nothing, while a fresh assertion for the same user is served."""
+    minter, redeemer, cache = _Minter(), _Redeemer(), DualCache()
+    response = await _redeem_assertion_native(minter, redeemer, cache=cache)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = json.loads(response.body)
+    assert redeemer.calls == [(ID_JAG, REQUESTING_APP, "app-secret", "/token")]
+    assert minter.calls == [("u1", "team-b")]
+    assert body["access_token"] == "sk-cli-u1"
+    assert body["token_type"] == "Bearer"
+    assert body["scope"] == "litellm:mcp"
+    assert "issued_token_type" not in body
+    assert (body["user_id"], body["team_id"]) == ("u1", "team-b")
+    assert "refresh_token" not in body
+    replayed = await _redeem_assertion_native(minter, redeemer, cache=cache)
+    assert replayed.status_code == 400
+    assert json.loads(replayed.body)["error"] == "invalid_grant"
+    assert minter.calls == [("u1", "team-b")]
+    fresh = _Redeemer(ASSERTED.model_copy(update={"replay_key": "mcp_gateway_dcr:id_jag:jti-2", "scope": None}))
+    again = await _redeem_assertion_native(minter, fresh, cache=cache)
+    assert again.status_code == 200
+    assert "scope" not in json.loads(again.body)
+    assert minter.calls == [("u1", "team-b"), ("u1", "team-b")]
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_claims_the_jti_before_it_mints():
+    """A mint the gateway could not complete still consumed the assertion: the client gets the
+    503 and comes back with a fresh assertion, never with the same one."""
+    minter, cache = _Minter(result="unavailable"), DualCache()
+    first = await _redeem_assertion_native(minter, _Redeemer(), cache=cache)
+    assert first.status_code == 503
+    retried = await _redeem_assertion_native(_Minter(), _Redeemer(), cache=cache)
+    assert retried.status_code == 400
+    assert json.loads(retried.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.parametrize(
+    "error, status",
+    [
+        ("invalid_client", 401),
+        ("invalid_grant", 400),
+        ("invalid_request", 400),
+        ("invalid_target", 400),
+        ("unsupported_grant_type", 400),
+        ("temporarily_unavailable", 503),
+    ],
+)
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_refusals_keep_their_oauth_error_and_status(error, status):
+    minter, cache = _Minter(), DualCache()
+    refusal = SubjectTokenRefusal(error=error, description="why")
+    response = await _redeem_assertion_native(minter, _Redeemer(refusal), cache=cache)
+    assert response.status_code == status
+    assert json.loads(response.body) == {"error": error, "error_description": "why"}
+    assert minter.calls == []
+    served = await _redeem_assertion_native(minter, _Redeemer(), cache=cache)
+    assert served.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_requires_an_assertion_and_the_proxy_api_target():
+    minter, redeemer = _Minter(), _Redeemer()
+    missing = await _redeem_assertion_native(minter, redeemer, assertion=None)
+    assert missing.status_code == 400
+    assert json.loads(missing.body)["error"] == "invalid_request"
+    foreign = await _redeem_assertion_native(minter, redeemer, resource="https://elsewhere.example/api")
+    assert foreign.status_code == 400
+    assert json.loads(foreign.body)["error"] == "invalid_target"
+    assert redeemer.calls == []
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_is_refused_where_no_redeemer_is_wired():
+    minter = _Minter()
+    response = await _redeem_native(
+        None, REQUESTING_APP, minter, grant_type=JWT_BEARER_GRANT_TYPE, assertion=ID_JAG, client_secret=None
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "unsupported_grant_type"
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_grant_type_names_the_jwt_bearer_grant_among_the_served_ones():
+    response = await _redeem_native(None, REQUESTING_APP, _Minter(), grant_type="urn:example:nope")
+    assert response.status_code == 400
+    assert JWT_BEARER_GRANT_TYPE in json.loads(response.body)["error_description"]
+
+
+@pytest.mark.parametrize(
+    "token_exchange, jwt_bearer, expected",
+    [
+        (False, False, ("authorization_code", "refresh_token")),
+        (True, False, ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE)),
+        (False, True, ("authorization_code", "refresh_token", JWT_BEARER_GRANT_TYPE)),
+        (True, True, ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE, JWT_BEARER_GRANT_TYPE)),
+    ],
+)
+def test_the_jwt_bearer_grant_is_advertised_exactly_when_it_is_served(token_exchange, jwt_bearer, expected):
+    assert supported_grant_types(token_exchange, jwt_bearer) == expected
+    contract = native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), token_exchange, jwt_bearer)
+    assert contract["grant_types_supported"] == expected
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_narrows_the_credential_to_the_routes_the_scope_bought():
+    """The route groups the assertion's scope resolved to reach the minter, so the credential is
+    enforced on every proxy route the way a virtual key's allowed_routes is, and the response states
+    exactly the scope that was enforced. No scope on the assertion mints the full credential."""
+    minter = _Minter()
+    both = ASSERTED.model_copy(
+        update={"scope": "litellm:mcp litellm:llm", "allowed_routes": ("mcp_inference_routes", "openai_routes")}
+    )
+    scoped = await _redeem_assertion_native(minter, _Redeemer(both), cache=DualCache())
+    assert scoped.status_code == 200
+    assert json.loads(scoped.body)["scope"] == "litellm:mcp litellm:llm"
+    full = await _redeem_assertion_native(
+        minter, _Redeemer(ASSERTED.model_copy(update={"scope": None, "allowed_routes": None})), cache=DualCache()
+    )
+    assert full.status_code == 200
+    assert "scope" not in json.loads(full.body)
+    assert minter.allowed_routes == [("mcp_inference_routes", "openai_routes"), None]
+
+
+@pytest.mark.asyncio
+async def test_jwt_bearer_grant_accepts_the_mcp_resource_indicator_as_its_target():
+    """RFC 8707 clients send the ID-JAG's audience as ``resource``, and that audience may be the MCP
+    resource ``{base}/mcp``, so it is a valid target next to the proxy origin. Anything else stays
+    ``invalid_target``."""
+    minter = _Minter()
+    served = await _redeem_assertion_native(
+        minter, _Redeemer(), cache=DualCache(), resource=PROXY_API_RESOURCE.rstrip("/") + "/mcp"
+    )
+    assert served.status_code == 200
+    foreign = await _redeem_assertion_native(
+        minter, _Redeemer(), cache=DualCache(), resource=PROXY_API_RESOURCE.rstrip("/") + "/other/mcp"
+    )
+    assert json.loads(foreign.body)["error"] == "invalid_target"
+    assert minter.calls == [("u1", "team-b")]
+
+
+@pytest.mark.parametrize("jwt_bearer_available", [True, False])
+def test_aggregate_metadata_advertises_basic_client_auth_only_with_the_grant_that_reads_it(jwt_bearer_available):
+    """Only the jwt-bearer redemption reads an HTTP Basic client secret, the other grants take
+    ``client_secret`` from the form, so ``client_secret_basic`` is advertised only when that grant
+    is on. A client following the document otherwise sends Basic alone and authenticates with no
+    secret."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_aggregate_authorization_server_response,
+    )
+
+    document = _build_aggregate_authorization_server_response(_request(), True, jwt_bearer_available)
+    methods = document["token_endpoint_auth_methods_supported"]
+    assert isinstance(methods, list)
+    assert ("client_secret_basic" in methods) is jwt_bearer_available
+    assert "none" in methods and "client_secret_post" in methods

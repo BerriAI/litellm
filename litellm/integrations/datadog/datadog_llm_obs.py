@@ -12,7 +12,7 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -54,6 +54,7 @@ from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -93,8 +94,12 @@ _ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "ro
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
 
 
-def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
-    metadata: Final = standard_logging_payload.get("metadata")
+def _logging_metadata_of(standard_logging_payload: StandardLoggingPayload) -> StandardLoggingMetadata | None:
+    return standard_logging_payload.get("metadata")
+
+
+def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, object]:
+    metadata: Final = _logging_metadata_of(standard_logging_payload)
     return metadata or _EMPTY_MAPPING
 
 
@@ -1057,14 +1062,23 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         # Get budget information from metadata
         metadata: Final = _metadata_of(standard_logging_payload)
+        logging_metadata: Final = _logging_metadata_of(standard_logging_payload)
 
         # API key max budget
-        user_api_key_max_budget: Final = metadata.get("user_api_key_max_budget")
+        user_api_key_max_budget: Final = (
+            logging_metadata["user_api_key_max_budget"]
+            if logging_metadata and "user_api_key_max_budget" in logging_metadata
+            else None
+        )
         if user_api_key_max_budget is not None:
             spend_metrics["user_api_key_max_budget"] = float(user_api_key_max_budget)
 
         # API key spend
-        user_api_key_spend: Final = metadata.get("user_api_key_spend")
+        user_api_key_spend: Final = (
+            logging_metadata["user_api_key_spend"]
+            if logging_metadata and "user_api_key_spend" in logging_metadata
+            else None
+        )
         if user_api_key_spend is not None:
             try:
                 spend_metrics["user_api_key_spend"] = float(user_api_key_spend)

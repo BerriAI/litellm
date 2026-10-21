@@ -10,6 +10,7 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -50,6 +51,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         litellm_completion_request: dict[str, object],
         instructions: str | None = None,
         request_kwargs: Mapping[str, object] | None = None,
+        previous_response_client_ids: tuple[str, ...] = (),
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -137,7 +139,7 @@ class _AnthropicMessage(BaseModel, frozen=True):
 
 class _AnthropicRequest(BaseModel, frozen=True):
     messages: tuple[_AnthropicMessage, ...]
-    system: tuple[_AnthropicBlock, ...]
+    system: tuple[_AnthropicBlock, ...] = ()
 
 
 class _RecordingAnthropicMessages:
@@ -306,6 +308,25 @@ async def test_previous_response_id_without_instructions_carries_the_latest_ones
         ("user", [("text", "What about Osaka?")]),
     ]
     assert [block.text for block in anthropic.request.system] == [expected_system]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_does_not_replay_redacted_instructions() -> None:
+    anthropic: Final = _RecordingAnthropicMessages()
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        _FakePrismaClient([_FIRST_TURN, _second_turn(REDACTED_BY_LITELLM)]),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-second-turn",
+            input="What about Osaka?",
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert anthropic.request is not None
+    assert anthropic.request.system == ()
 
 
 _SEARCH_CALL: Final = {

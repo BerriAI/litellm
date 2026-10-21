@@ -41,7 +41,7 @@ class _ErrorResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as client:
-        client.get("/__observations").raise_for_status()
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -166,6 +166,7 @@ def test_team_model_alias_routes_a_team_key_to_its_target(
         assert string_value(response.json()["model"]) == alias
         observed: Final = _observed_requests(upstream)
         assert _calls_to(observed, provider_model) == 1, observed
+        upstream.delete("/__observations").raise_for_status()
         unaliased: Final = _chat(gateway, f"alias-{uuid.uuid4().hex}", key)
         assert unaliased.status_code == 403, unaliased.text
         assert unaliased.json()["error"]["type"] == "key_model_access_denied"
@@ -189,6 +190,7 @@ def test_team_model_add_and_delete_change_what_a_warmed_team_key_can_call(
         _model_denied(initially_denied)
         observed_before_add: Final = _observed_provider_models(upstream)
         assert observed_before_add == (provider_one,), repr(observed_before_add)
+        upstream.delete("/__observations").raise_for_status()
 
         added: Final = gateway.request("POST", "/team/model/add", {"team_id": team, "models": [model_two, model_three]})
         assert added.status_code == 200, added.text
