@@ -24,7 +24,7 @@ _USAGE: Final[dict[str, JsonValue]] = {"usage": {"inputTokens": 11, "outputToken
 
 
 def _frame(event_type: str, payload: Mapping[str, JsonValue]) -> bytes:
-    return _aws_event_frame(event_type, payload, "sc", "u")
+    return _aws_event_frame(event_type, payload, "sc")
 
 
 _NORMAL: Final = b"".join(
@@ -74,6 +74,7 @@ def _consume_sync_stream(wire: Wire) -> _Consumed:
     )
 
 
+@pytest.mark.covers("other.provider_wire.k01_sync_stream_with_a_validation_exception_frame_first_raises_a_400")
 def test_k01_sync_stream_with_a_validation_exception_frame_first_raises_a_400() -> None:
     with wire_server(_peer(_VALIDATION_FRAME)) as wire:
         with pytest.raises(BadRequestError, match=re.escape(_REJECTION)) as raised:
@@ -82,6 +83,7 @@ def test_k01_sync_stream_with_a_validation_exception_frame_first_raises_a_400() 
         assert len(wire.drain()) == 1
 
 
+@pytest.mark.covers("other.provider_wire.k02_sync_stream_whose_only_frame_has_an_unknown_event_type_raises_a_502_naming_it")
 def test_k02_sync_stream_whose_only_frame_has_an_unknown_event_type_raises_a_502_naming_it() -> None:
     with wire_server(_peer(_UNKNOWN_FRAME)) as wire:
         with pytest.raises(MidStreamFallbackError, match=re.escape(_UNKNOWN_TYPE)) as raised:
@@ -92,6 +94,7 @@ def test_k02_sync_stream_whose_only_frame_has_an_unknown_event_type_raises_a_502
         assert len(wire.drain()) == 1
 
 
+@pytest.mark.covers("other.provider_wire.k03_sync_stream_with_normal_frames_delivers_the_text_and_a_stop")
 def test_k03_sync_stream_with_normal_frames_delivers_the_text_and_a_stop() -> None:
     with wire_server(_peer(_NORMAL)) as wire:
         consumed: Final = _consume_sync_stream(wire)
@@ -100,6 +103,7 @@ def test_k03_sync_stream_with_normal_frames_delivers_the_text_and_a_stop() -> No
         assert len(wire.drain()) == 1
 
 
+@pytest.mark.covers("other.provider_wire.k04_sync_stream_open_400_carries_the_bedrock_body_as_text")
 def test_k04_sync_stream_open_400_carries_the_bedrock_body_as_text() -> None:
     body: Final = '{"message":"The request is invalid."}'
 

@@ -49,6 +49,7 @@ def s3_peer(request: Request) -> Reply:
     return Reply(body=b"")
 
 
+@pytest.mark.covers("other.provider_wire.completions_and_responses_batch_records_upload_as_anthropic_user_messages")
 @pytest.mark.covers(
     "other.provider_wire.bedrock.batch_file_completions_and_responses_records_reach_s3_as_user_messages"
 )
@@ -87,6 +88,7 @@ _SCHEMA: Final = {
 }
 
 
+@pytest.mark.covers("other.provider_wire.json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output")
 @pytest.mark.parametrize(
     "backend", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-4-8"], ids=["haiku_5_5", "opus_4_8"]
 )

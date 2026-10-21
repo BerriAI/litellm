@@ -109,6 +109,7 @@ def _sent_native(wire: Wire, route: str, call: Callable[[list[dict[str, str]]], 
     return _native(_JSON.validate_json(request.body), route == "invoke")
 
 
+@pytest.mark.covers("other.provider_wire.a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out")
 @pytest.mark.parametrize("route", ["converse", "invoke"])
 @pytest.mark.usefixtures("opus_4_8_opted_in_for_the_process")
 def test_a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out(route: str) -> None:

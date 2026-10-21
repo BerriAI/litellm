@@ -1028,6 +1028,7 @@ def _anthropic_client(gateway: Gateway) -> anthropic.Anthropic:
     )
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_content_is_the_schema_object")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -1072,6 +1073,7 @@ def test_vertex_chat_json_schema_content_is_the_schema_object(gateway: Gateway, 
         assert "output_config" not in sent.body and "output_format" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_through_the_openai_sdk_unwraps_the_envelope")
 def test_vertex_chat_through_the_openai_sdk_unwraps_the_envelope(gateway: Gateway) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1086,6 +1088,7 @@ def test_vertex_chat_through_the_openai_sdk_unwraps_the_envelope(gateway: Gatewa
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_through_the_async_openai_sdk_unwraps_the_envelope")
 def test_vertex_chat_through_the_async_openai_sdk_unwraps_the_envelope(gateway: Gateway) -> None:
     marker, marker_hex = _marker("wrapped")
 
@@ -1110,6 +1113,7 @@ def test_vertex_chat_through_the_async_openai_sdk_unwraps_the_envelope(gateway: 
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_responses_json_schema_output_text_is_the_schema_object")
 def test_vertex_responses_json_schema_output_text_is_the_schema_object(gateway: Gateway) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1120,6 +1124,7 @@ def test_vertex_responses_json_schema_output_text_is_the_schema_object(gateway: 
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_stream_json_schema_content_is_the_schema_object")
 @pytest.mark.parametrize("shape", _STREAM_SHAPES)
 def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Gateway, shape: str) -> None:
     marker, marker_hex = _marker(shape)
@@ -1137,6 +1142,7 @@ def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Ga
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_stream_label_before_a_declared_key_keeps_streaming")
 def test_vertex_chat_stream_label_before_a_declared_key_keeps_streaming(gateway: Gateway) -> None:
     marker, marker_hex = _marker("label_then_declared")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1148,6 +1154,7 @@ def test_vertex_chat_stream_label_before_a_declared_key_keeps_streaming(gateway:
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_stream_held_answer_without_an_envelope_is_sent_as_the_model_wrote_it")
 @pytest.mark.parametrize("shape", _AS_WRITTEN_SHAPES)
 def test_vertex_chat_stream_held_answer_without_an_envelope_is_sent_as_the_model_wrote_it(
     gateway: Gateway, shape: str
@@ -1160,6 +1167,7 @@ def test_vertex_chat_stream_held_answer_without_an_envelope_is_sent_as_the_model
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_without_required_keys_unwraps_only_the_tool_named_envelope")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize("schema", [_OPTIONAL_SCHEMA, {"type": "object"}], ids=["no_required", "no_properties"])
 @pytest.mark.parametrize(
@@ -1185,6 +1193,7 @@ def test_vertex_chat_json_schema_without_required_keys_unwraps_only_the_tool_nam
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_whole")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 def test_vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_whole(
     gateway: Gateway, stream: bool
@@ -1206,6 +1215,7 @@ def test_vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_that_allows_undeclared_keys_keeps_an_undeclared_wrapper_whole")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize(
     ("schema", "wrapper_unwrapped"),
@@ -1241,6 +1251,7 @@ def test_vertex_chat_json_schema_that_allows_undeclared_keys_keeps_an_undeclared
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_responses_stream_json_schema_output_text_is_the_schema_object")
 def test_vertex_responses_stream_json_schema_output_text_is_the_schema_object(gateway: Gateway) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1251,6 +1262,7 @@ def test_vertex_responses_stream_json_schema_output_text_is_the_schema_object(ga
         assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_unwraps_a_tool_named_envelope_only_around_one_object")
 @pytest.mark.parametrize("shape", ["other_tool", "named_input", "named_two_objects", "named_string", "named_partial"])
 def test_vertex_chat_json_schema_unwraps_a_tool_named_envelope_only_around_one_object(
     gateway: Gateway, shape: str
@@ -1263,6 +1275,7 @@ def test_vertex_chat_json_schema_unwraps_a_tool_named_envelope_only_around_one_o
         _one_delivery(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_with_a_name_property_unwraps_only_the_tool_named_wrapper")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize("shape", ["name_property", "name_value_plain"])
 def test_vertex_chat_json_schema_with_a_name_property_unwraps_only_the_tool_named_wrapper(
@@ -1284,6 +1297,7 @@ def test_vertex_chat_json_schema_with_a_name_property_unwraps_only_the_tool_name
         assert _json_tool_schema(sent)["properties"] == _NAME_SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_validation_runs_on_the_unwrapped_object")
 @pytest.mark.parametrize("shape", ["wrapped", "inner_incomplete"])
 def test_vertex_chat_json_schema_validation_runs_on_the_unwrapped_object(gateway: Gateway, shape: str) -> None:
     marker, marker_hex = _marker(shape)
@@ -1301,6 +1315,7 @@ def test_vertex_chat_json_schema_validation_runs_on_the_unwrapped_object(gateway
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_next_to_a_user_tool_unwraps_the_envelope_and_keeps_the_tool_call")
 def test_vertex_chat_json_schema_next_to_a_user_tool_unwraps_the_envelope_and_keeps_the_tool_call(
     gateway: Gateway,
 ) -> None:
@@ -1323,6 +1338,7 @@ def test_vertex_chat_json_schema_next_to_a_user_tool_unwraps_the_envelope_and_ke
         assert _tool_names(sent.body) == frozenset({_USER_TOOL, _JSON_TOOL}), sent.body
 
 
+@pytest.mark.covers("other.provider_wire.tool_path_family_unwraps_the_envelope")
 @pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
@@ -1334,6 +1350,7 @@ def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) ->
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.tool_path_family_stream_unwraps_the_envelope")
 @pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
@@ -1348,6 +1365,7 @@ def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: 
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_accepts_forced_tools")
 @pytest.mark.parametrize("accepts_forced_tools", [True, False], ids=["accepts_forced_tools", "rejects_forced_tools"])
 def test_vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_accepts_forced_tools(
     gateway: Gateway, accepts_forced_tools: bool
@@ -1366,6 +1384,7 @@ def test_vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_accept
         assert "output_config" not in sent.body and "output_format" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasoning_effort_like_plain_chat")
 def test_vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasoning_effort_like_plain_chat(
     gateway: Gateway,
 ) -> None:
@@ -1388,6 +1407,7 @@ def test_vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasonin
     assert _reasoning_fields(structured_sent) == _reasoning_fields(plain_sent), (structured_sent.body, plain_sent.body)
 
 
+@pytest.mark.covers("other.provider_wire.bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_rejects_forced_tools")
 def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_rejects_forced_tools(
     gateway: Gateway,
 ) -> None:
@@ -1403,6 +1423,7 @@ def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_
         assert "tool_choice" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_json_schema_native_folds_output_format_into_output_config")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 def test_vertex_chat_json_schema_native_folds_output_format_into_output_config(gateway: Gateway, stream: bool) -> None:
     marker, marker_hex = _marker("native")
@@ -1416,6 +1437,7 @@ def test_vertex_chat_json_schema_native_folds_output_format_into_output_config(g
         assert "tools" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_native_through_the_openai_sdk_folds_output_format")
 def test_vertex_chat_native_through_the_openai_sdk_folds_output_format(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1430,6 +1452,7 @@ def test_vertex_chat_native_through_the_openai_sdk_folds_output_format(gateway: 
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
 
 
+@pytest.mark.covers("other.provider_wire.vertex_responses_native_folds_output_format")
 def test_vertex_responses_native_folds_output_format(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1451,6 +1474,7 @@ def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, prov
             raise AssertionError(provider)
 
 
+@pytest.mark.covers("other.provider_wire.native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open")
 @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
 def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open(
     gateway: Gateway, provider: str
@@ -1467,6 +1491,7 @@ def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_ke
         assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
 
 
+@pytest.mark.covers("other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced")
 @pytest.mark.parametrize(
     ("provider", "backend", "extra"),
     [
@@ -1531,6 +1556,7 @@ def _json_tool_deployment(gateway: Gateway, scenario: Scenario, api_base: str, p
             raise AssertionError(provider)
 
 
+@pytest.mark.covers("other.provider_wire.json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call")
 @pytest.mark.parametrize("provider", ["vertex_ai", "bedrock_invoke"])
 def test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call(gateway: Gateway, provider: str) -> None:
     marker, marker_hex = _marker("plain")
@@ -1549,6 +1575,7 @@ def test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call(ga
         assert sent.body.get("tool_choice") != _FORCED_JSON_TOOL, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object")
 def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     schema: Final[dict[str, JsonValue]] = {
@@ -1589,6 +1616,7 @@ def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_obj
         assert "tools" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_folds_output_format_into_output_config")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 def test_vertex_messages_folds_output_format_into_output_config(gateway: Gateway, stream: bool) -> None:
     marker, marker_hex = _marker("native")
@@ -1608,6 +1636,7 @@ def test_vertex_messages_folds_output_format_into_output_config(gateway: Gateway
         assert sent.target.endswith(_VERTEX_STREAM_SUFFIX if stream else ":rawPredict"), sent.target
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_through_the_anthropic_sdk_folds_output_format")
 def test_vertex_messages_through_the_anthropic_sdk_folds_output_format(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1625,6 +1654,7 @@ def test_vertex_messages_through_the_anthropic_sdk_folds_output_format(gateway: 
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_through_the_async_anthropic_sdk_folds_output_format")
 def test_vertex_messages_through_the_async_anthropic_sdk_folds_output_format(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
 
@@ -1652,6 +1682,7 @@ def test_vertex_messages_through_the_async_anthropic_sdk_folds_output_format(gat
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_output_format_wins_over_the_callers_output_config_format")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize(
     ("callers_config", "expected_output_config"),
@@ -1679,6 +1710,7 @@ def test_vertex_messages_output_format_wins_over_the_callers_output_config_forma
         assert sent.body["output_config"] == expected_output_config, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_json_schema_that_allows_undeclared_keys_keeps_the_answer_whole")
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize(
     "schema",
@@ -1703,6 +1735,7 @@ def test_vertex_messages_json_schema_that_allows_undeclared_keys_keeps_the_answe
         assert _folded_format(_one_delivery(wire, marker_hex)) == output_format
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_replaces_a_non_dict_output_config_with_the_folded_format")
 def test_vertex_messages_replaces_a_non_dict_output_config_with_the_folded_format(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1717,6 +1750,7 @@ def test_vertex_messages_replaces_a_non_dict_output_config_with_the_folded_forma
         assert sent.body["output_config"] == {"format": _OUTPUT_FORMAT}, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_drops_effort_but_keeps_the_folded_format_on_haiku")
 def test_vertex_messages_drops_effort_but_keeps_the_folded_format_on_haiku(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1731,6 +1765,7 @@ def test_vertex_messages_drops_effort_but_keeps_the_folded_format_on_haiku(gatew
         assert sent.body["output_config"] == {"format": _OUTPUT_FORMAT}, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_forwards_an_explicit_output_config_format_unchanged")
 def test_vertex_messages_forwards_an_explicit_output_config_format_unchanged(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1743,6 +1778,7 @@ def test_vertex_messages_forwards_an_explicit_output_config_format_unchanged(gat
         assert sent.body["output_config"] == {"format": _OUTPUT_FORMAT}, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_output_format_beside_an_explicit_output_config")
 @pytest.mark.parametrize(
     ("extra", "expected_output_config"),
     [
@@ -1787,6 +1823,7 @@ def test_vertex_messages_output_format_beside_an_explicit_output_config(
             assert sent.body["output_config"] == expected_output_config, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.anthropic_messages_forwards_top_level_output_format_verbatim")
 def test_anthropic_messages_forwards_top_level_output_format_verbatim(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1804,6 +1841,7 @@ def test_anthropic_messages_forwards_top_level_output_format_verbatim(gateway: G
         assert "output_config" not in sent.body, sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_without_response_format_sends_no_tool_and_no_output_config")
 def test_vertex_chat_without_response_format_sends_no_tool_and_no_output_config(gateway: Gateway) -> None:
     marker, marker_hex = _marker("plain_text")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1817,6 +1855,7 @@ def test_vertex_chat_without_response_format_sends_no_tool_and_no_output_config(
         assert not {"tools", "output_config", "output_format"} & sent.body.keys(), sent.body
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_malformed_output_format_reaches_the_caller_as_the_peer_400")
 @pytest.mark.parametrize(
     "output_format",
     [5, [], {}, "x" * 5000],
@@ -1839,6 +1878,7 @@ def test_vertex_messages_malformed_output_format_reaches_the_caller_as_the_peer_
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
+@pytest.mark.covers("other.provider_wire.vertex_messages_duplicate_output_format_keys_fold_the_last_value")
 def test_vertex_messages_duplicate_output_format_keys_fold_the_last_value(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1856,6 +1896,7 @@ def test_vertex_messages_duplicate_output_format_keys_fold_the_last_value(gatewa
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_malformed_response_format_schema_keeps_the_tool_input")
 @pytest.mark.parametrize(
     "schema",
     [
@@ -1889,6 +1930,7 @@ def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serving")
 @pytest.mark.parametrize("status", [400, 403, 404])
 def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serving(
     gateway: Gateway, status: int
@@ -1909,6 +1951,7 @@ def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serv
             _one_delivery(wire, after_hex)
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_unauthenticated_request_never_reaches_the_peer")
 def test_vertex_chat_unauthenticated_request_never_reaches_the_peer(gateway: Gateway) -> None:
     marker, _ = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1920,6 +1963,7 @@ def test_vertex_chat_unauthenticated_request_never_reaches_the_peer(gateway: Gat
         assert wire.drain() == ()
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_repeated_requests_each_reach_the_peer_and_log_spend_once")
 def test_vertex_chat_repeated_requests_each_reach_the_peer_and_log_spend_once(gateway: Gateway) -> None:
     markers: Final = tuple(_marker("wrapped") for _ in range(2))
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1938,6 +1982,7 @@ def test_vertex_chat_repeated_requests_each_reach_the_peer_and_log_spend_once(ga
             assert _spend_rows(request_id)[0]["request_id"] == request_id
 
 
+@pytest.mark.covers("other.provider_wire.concurrent_burst_across_both_workers_unwraps_every_envelope")
 def test_concurrent_burst_across_both_workers_unwraps_every_envelope(gateway: Gateway) -> None:
     with ExitStack() as stack:
         wire: Final = stack.enter_context(wire_server(_peer))
@@ -1964,6 +2009,7 @@ def test_concurrent_burst_across_both_workers_unwraps_every_envelope(gateway: Ga
         _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex in markers))
 
 
+@pytest.mark.covers("other.provider_wire.upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped")
 def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway: Gateway) -> None:
     with ExitStack() as stack:
         clients: Final = _clients(stack, str(gateway.client.base_url), 8)
@@ -2002,6 +2048,7 @@ def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway
             unwrapped(revived, wave())
 
 
+@pytest.mark.covers("other.provider_wire.worker_sigkill_mid_burst_leaves_the_replacement_unwrapping_envelopes")
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 def test_worker_sigkill_mid_burst_leaves_the_replacement_unwrapping_envelopes(gateway: Gateway, tmp_path: Path) -> None:
     held: Final[SimpleQueue[str]] = SimpleQueue()
@@ -2048,6 +2095,7 @@ def test_worker_sigkill_mid_burst_leaves_the_replacement_unwrapping_envelopes(ga
         assert owned.process.poll() is None
 
 
+@pytest.mark.covers("other.provider_wire.vertex_chat_stream_never_closing_tool_input_stays_linear_and_keeps_health_responsive")
 @pytest.mark.parametrize(
     ("shape", "response_format"),
     [
@@ -2094,6 +2142,7 @@ def test_vertex_chat_stream_never_closing_tool_input_stays_linear_and_keeps_heal
         assert slowest <= _HEALTH_LATENCY_SECONDS, (shape, slowest, len(probes))
 
 
+@pytest.mark.covers("other.provider_wire.anthropic_pass_through_stream_relays_the_tool_stream_verbatim_and_logs_spend")
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 def test_anthropic_pass_through_stream_relays_the_tool_stream_verbatim_and_logs_spend(
     gateway: Gateway, tmp_path: Path
@@ -2121,6 +2170,7 @@ def test_anthropic_pass_through_stream_relays_the_tool_stream_verbatim_and_logs_
             assert row["model"] == _UNMAPPED_MODEL, row
 
 
+@pytest.mark.covers("other.provider_wire.bedrock_pass_through_invoke_stream_relays_the_event_stream_verbatim")
 def test_bedrock_pass_through_invoke_stream_relays_the_event_stream_verbatim(gateway: Gateway) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -2150,6 +2200,7 @@ def test_bedrock_pass_through_invoke_stream_relays_the_event_stream_verbatim(gat
         assert sent.target == f"/model/{_BEDROCK_INVOKE_MODEL}/invoke-with-response-stream", sent.target
 
 
+@pytest.mark.covers("other.provider_wire.pass_through_stream_relays_the_scripted_frames_verbatim")
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 @pytest.mark.parametrize("route", _PASS_THROUGH_ROUTES)
 def test_pass_through_stream_relays_the_scripted_frames_verbatim(

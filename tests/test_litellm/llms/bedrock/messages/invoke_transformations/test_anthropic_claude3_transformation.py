@@ -3681,6 +3681,9 @@ async def _send_bedrock_messages(
     messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Summarise the weather as JSON."},),
 ) -> tuple[ScriptedBedrockInvoke, Exception | None]:
     bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(bedrock))
     try:
         await litellm.anthropic_messages(
             model=f"bedrock/invoke/{model}",
@@ -3692,11 +3695,13 @@ async def _send_bedrock_messages(
             aws_access_key_id="test-access-key",
             aws_secret_access_key="test-secret-key",
             aws_region_name="us-east-1",
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+            client=handler,
             **({} if model_info is None else {"model_info": model_info}),
         )
     except Exception as error:
         return bedrock, error
+    finally:
+        await handler.client.aclose()
     return bedrock, None
 
 

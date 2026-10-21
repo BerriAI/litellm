@@ -125,6 +125,7 @@ def _assert_one_retry_without_native_output(wire: Wire, route: str) -> None:
     assert _JSON_TOOL in _tool_names(retried, invoke), retried
 
 
+@pytest.mark.covers("other.provider_wire.sync_call_retries_a_native_output_rejection_once_with_the_json_tool")
 @_ROUTES
 def test_sync_call_retries_a_native_output_rejection_once_with_the_json_tool(
     route: str, stream: bool, marker_hex: str
@@ -140,6 +141,7 @@ def test_sync_call_retries_a_native_output_rejection_once_with_the_json_tool(
         _assert_one_retry_without_native_output(wire, route)
 
 
+@pytest.mark.covers("other.provider_wire.async_call_retries_a_native_output_rejection_once_with_the_json_tool")
 @_ROUTES
 async def test_async_call_retries_a_native_output_rejection_once_with_the_json_tool(
     route: str, stream: bool, marker_hex: str
@@ -195,6 +197,7 @@ def _sent_bodies(
         return tuple(_JSON.validate_json(sent.body) for sent in wire.drain())
 
 
+@pytest.mark.covers("other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends")
 @_ROUTES
 @pytest.mark.parametrize(
     "request_params",
@@ -231,6 +234,7 @@ def test_the_retry_sends_what_a_deployment_without_native_output_sends(
     assert retried == opted_out
 
 
+@pytest.mark.covers("other.provider_wire.the_retry_keeps_the_callers_continuation_message")
 @_ROUTES
 def test_the_retry_keeps_the_callers_continuation_message(route: str, stream: bool, marker_hex: str) -> None:
     request_params: Final = {
@@ -297,6 +301,7 @@ async def _messages_bodies(
         return tuple(_JSON.validate_json(sent.body) for sent in wire.drain())
 
 
+@pytest.mark.covers("other.provider_wire.a_messages_retry_sends_what_a_deployment_without_native_output_sends")
 @pytest.mark.parametrize("route", ["converse", "invoke"])
 async def test_a_messages_retry_sends_what_a_deployment_without_native_output_sends(
     route: str, marker_hex: str
@@ -308,6 +313,7 @@ async def test_a_messages_retry_sends_what_a_deployment_without_native_output_se
     assert retried == opted_out
 
 
+@pytest.mark.covers("other.provider_wire.the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client")
 @_ROUTES
 def test_the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client(
     route: str, stream: bool, marker_hex: str

@@ -541,6 +541,7 @@ def _assert_native_without_tools(body: Mapping[str, JsonValue], invoke: bool, sc
     assert _JSON_TOOL not in _tools(body, invoke), body
 
 
+@pytest.mark.covers("other.provider_wire.thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning")
 @pytest.mark.parametrize(
     ("route", "stream"),
     [("converse", False), ("converse", True), ("invoke", False)],
@@ -567,6 +568,7 @@ def test_thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps
         assert _thinking_requested(body, invoke), body
 
 
+@pytest.mark.covers("other.provider_wire.responses_reasoning_effort_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning")
 def test_responses_reasoning_effort_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning(
     gateway: Gateway,
 ) -> None:
@@ -594,6 +596,7 @@ def test_responses_reasoning_effort_on_a_bedrock_native_model_gets_native_output
         assert _thinking_requested(body, False), body
 
 
+@pytest.mark.covers("other.provider_wire.messages_thinking_on_a_bedrock_converse_native_model_gets_native_output_and_keeps_reasoning")
 def test_messages_thinking_on_a_bedrock_converse_native_model_gets_native_output_and_keeps_reasoning(
     gateway: Gateway,
 ) -> None:
@@ -614,6 +617,7 @@ def test_messages_thinking_on_a_bedrock_converse_native_model_gets_native_output
         assert _thinking_requested(body, False), body
 
 
+@pytest.mark.covers("other.provider_wire.bedrock_native_model_without_thinking_keeps_the_forced_json_tool")
 @pytest.mark.parametrize("route", ["converse", "invoke"])
 def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gateway: Gateway, route: str) -> None:
     marker, marker_hex = _marker()
@@ -631,6 +635,7 @@ def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gatewa
         assert _tools(body, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], body
 
 
+@pytest.mark.covers("other.provider_wire.thinking_request_follows_the_bedrock_native_key_the_model_resolves_to")
 @pytest.mark.parametrize(
     ("backend", "model_info", "native"),
     [
@@ -691,6 +696,7 @@ def _sent_native_schema(gateway: Gateway, wire: Wire, entry: str, model: str) ->
     return native
 
 
+@pytest.mark.covers("other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it")
 @pytest.mark.parametrize(
     "entry", ["converse_chat", "converse_responses", "converse_messages", "invoke_chat", "invoke_messages"]
 )
@@ -705,6 +711,7 @@ def test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it(
         assert _sent_native_schema(gateway, wire, entry, opted_in) == _SCHEMA
 
 
+@pytest.mark.covers("other.provider_wire.fable_5_json_schema_takes_the_json_tool_instead_of_the_native_output_bedrock_rejects")
 def test_fable_5_json_schema_takes_the_json_tool_instead_of_the_native_output_bedrock_rejects(
     gateway: Gateway,
 ) -> None:
@@ -734,6 +741,7 @@ def _limits_answer(gateway: Gateway, entry: str, model: str, marker: str) -> Jso
             return _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", messages)))
 
 
+@pytest.mark.covers("other.provider_wire.native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed")
 @pytest.mark.parametrize("entry", ["converse_chat", "converse_output_config", "invoke_chat", "invoke_messages"])
 def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed(
     gateway: Gateway, entry: str
@@ -754,6 +762,7 @@ def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_obj
         assert _JSON_TOOL not in _tools(body, route == "invoke"), body
 
 
+@pytest.mark.covers("other.provider_wire.open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open")
 @pytest.mark.parametrize("route", ["converse", "invoke"])
 def test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open(
     gateway: Gateway, route: str
@@ -772,6 +781,7 @@ def test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_
         assert object_value(tool_schema["properties"])["counts"] == _OPEN_COUNTS, tool_schema
 
 
+@pytest.mark.covers("other.provider_wire.thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool")
 def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool(gateway: Gateway) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
@@ -797,6 +807,7 @@ def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_ca
         assert _thinking_requested(body, False), body
 
 
+@pytest.mark.covers("other.provider_wire.non_anthropic_native_model_gets_the_callers_schema_with_objects_closed")
 @pytest.mark.parametrize(
     ("schema", "expected"),
     [(_UNCLEANED_SCHEMA, _UNCLEANED_SCHEMA), (_NULLABLE_SCHEMA, _CLOSED_NULLABLE_SCHEMA)],
@@ -816,6 +827,7 @@ def test_non_anthropic_native_model_gets_the_callers_schema_with_objects_closed(
         assert _native_schema(body, False) == expected, body
 
 
+@pytest.mark.covers("other.provider_wire.messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_thinking")
 @pytest.mark.parametrize(
     ("schema", "native"),
     [
@@ -843,6 +855,7 @@ def test_messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_think
         assert all((name in prompt) is not native for name in object_value(schema["properties"])), body
 
 
+@pytest.mark.covers("other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error")
 @pytest.mark.parametrize(
     "schema",
     [
@@ -873,6 +886,7 @@ def test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
+@pytest.mark.covers("other.provider_wire.numeric_formats_and_wide_schemas_follow_the_bedrock_native_key")
 @pytest.mark.parametrize(
     ("route", "backend", "thinking", "schema", "native"),
     [
@@ -933,6 +947,7 @@ def _fallback_answer(gateway: Gateway, entry: str, model: str, marker: str) -> J
             return _opt_in_answer(gateway, entry, model, marker)
 
 
+@pytest.mark.covers("other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it")
 @pytest.mark.parametrize(
     ("entry", "rejection"),
     [
@@ -972,6 +987,7 @@ def test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it(
                 assert tools[_JSON_TOOL]["properties"] == _SCHEMA["properties"], retried
 
 
+@pytest.mark.covers("other.provider_wire.bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output")
 @pytest.mark.parametrize(
     ("backend", "rejection"),
     [(_OPUS_4_8, _MAX_TOKENS_400), (_SONNET, _FABLE_REJECTION)],
@@ -1002,6 +1018,7 @@ def _always_rejecting(message: str) -> Callable[[Request], Reply]:
     return reply
 
 
+@pytest.mark.covers("other.provider_wire.messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output")
 @pytest.mark.parametrize(
     ("backend", "rejection"),
     [(_OPUS_4_8, _MAX_TOKENS_400), (_SONNET, _FABLE_REJECTION)],
@@ -1023,6 +1040,7 @@ def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless
         _one_call(wire, marker_hex)
 
 
+@pytest.mark.covers("other.provider_wire.a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params")
 def test_a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params(gateway: Gateway) -> None:
     marker, marker_hex = _marker()
     with wire_server(_rejecting_native_output(_FABLE_REJECTION)) as wire, gateway.scenario() as scenario:
@@ -1068,6 +1086,7 @@ def _rejecting_native_output_and_foreign_signatures(signature_first: bool) -> Ca
     return reply
 
 
+@pytest.mark.covers("other.provider_wire.messages_retry_without_native_output_keeps_the_thinking_signature_fix")
 @pytest.mark.parametrize("signature_first", [False, True], ids=["rejection_first", "signature_first"])
 def test_messages_retry_without_native_output_keeps_the_thinking_signature_fix(
     gateway: Gateway, signature_first: bool
@@ -1105,6 +1124,7 @@ def test_messages_retry_without_native_output_keeps_the_thinking_signature_fix(
         assert all(name in json.dumps(sent[-1]["messages"]) for name in object_value(_SCHEMA["properties"])), sent[-1]
 
 
+@pytest.mark.covers("other.provider_wire.a_request_retried_without_native_output_lands_one_success_spend_row")
 @pytest.mark.parametrize("entry", ["converse_chat", "invoke_messages"])
 def test_a_request_retried_without_native_output_lands_one_success_spend_row(gateway: Gateway, entry: str) -> None:
     marker, marker_hex = _marker()
@@ -1142,6 +1162,7 @@ def _deserializing_like_bedrock(request: Request) -> Reply:
     return Reply(status=400, body=json.dumps({"Message": _BEDROCK_SCHEMA_OBJECT_400}).encode())
 
 
+@pytest.mark.covers("other.provider_wire.a_malformed_caller_output_config_on_an_opt_in_model_gets_bedrocks_own_400_after_one_call")
 def test_a_malformed_caller_output_config_on_an_opt_in_model_gets_bedrocks_own_400_after_one_call(
     gateway: Gateway,
 ) -> None:
@@ -1170,6 +1191,7 @@ _CALLER_OUTPUT_CONFIG: Final[dict[str, JsonValue]] = {
 }
 
 
+@pytest.mark.covers("other.provider_wire.a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model")
 @pytest.mark.parametrize("thinking", [None, _ADAPTIVE], ids=["no_thinking", "adaptive_thinking"])
 def test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model(
     gateway: Gateway, thinking: dict[str, JsonValue] | None

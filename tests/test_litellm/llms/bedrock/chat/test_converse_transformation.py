@@ -18,7 +18,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES,
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
@@ -29,6 +28,21 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock, RequestObject
+
+
+CAPITAL_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "capital",
+        "schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 
 def test_transform_usage():
@@ -7947,3 +7961,26 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+
+
+def _converse_request_for_json_schema(
+    model: str, stream: bool, thinking_params: Mapping[str, object] | None = None
+) -> tuple[Mapping[str, object], RequestObject]:
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream, **(thinking_params or {})},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    return optional_params, request
+

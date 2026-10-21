@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from collections.abc import AsyncIterator
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast

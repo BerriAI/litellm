@@ -1,3 +1,4 @@
+from functools import partial
 import asyncio
 import copy
 import json
