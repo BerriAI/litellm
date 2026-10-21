@@ -90,6 +90,17 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         },
         "additionalProperties": False,
     },
+    "search_free_requests": {
+        "type": "object",
+        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+        "required": ["count", "period", "shared_group"],
+        "additionalProperties": False,
+        "properties": {
+            "count": NONNEG_INTEGER,
+            "period": {"type": "string", "enum": ["day", "month"]},
+            "shared_group": {"type": "string", "pattern": r"\S"},
+        },
+    },
     "guardrail_cost_per_unit": {
         "type": "object",
         "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
