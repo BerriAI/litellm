@@ -1,0 +1,620 @@
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Final, Literal
+
+import httpx
+import pytest
+import yaml
+from mcp import ClientSession, MCPError
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, PaginatedRequestParams
+
+from integration._support.client import Gateway
+from integration._support.mcp import McpPeer, paginated_mcp_peer
+from integration._support.process import owned_proxy
+from litellm.experimental_mcp_client.client import MCPClient
+from litellm.types.mcp import MCPTransport
+
+
+@asynccontextmanager
+async def catalog_session(gateway):
+    async with httpx.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
+        async with streamable_http_client(
+            str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
+        ) as streams:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                yield session
+
+
+def config_file(directory: Path, upstream: str) -> Path:
+    config = directory / "proxy.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [],
+                "mcp_servers": {"pages": {"url": upstream, "transport": "http"}},
+                "general_settings": {"master_key": "sk-pagination-test", "store_model_in_db": False},
+            }
+        )
+    )
+    return config
+
+
+REMOVE_DATABASE = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH")
+
+
+def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path):
+    async def exercise(first_replica, second_replica):
+        for method, field in (
+            ("list_tools", "tools"),
+            ("list_prompts", "prompts"),
+            ("list_resources", "resources"),
+            ("list_resource_templates", "resource_templates"),
+        ):
+            async with catalog_session(first_replica) as first_session:
+                first = await getattr(first_session, method)()
+            assert first.next_cursor
+            async with catalog_session(second_replica) as second_session:
+                second = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                replay = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert getattr(second, field) == getattr(replay, field)
+                assert second.next_cursor
+                third = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=second.next_cursor))
+            names = [item.name for page in (first, second, third) for item in getattr(page, field)]
+            assert len(names) == len(set(names)) == 3
+            assert third.next_cursor is None
+        async with catalog_session(second_replica) as session:
+            called = await session.call_tool("pages-add2", {"a": 3, "b": 4})
+            assert not called.is_error
+            assert called.content[0].text == "7"
+
+    with paginated_mcp_peer() as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        options = dict(config=config, database_setup=(), remove_environment=REMOVE_DATABASE)
+        environment = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-pagination-test",
+        }
+        with (
+            owned_proxy(seed, tmp_path / "a", environment, **options) as a,
+            owned_proxy(seed, tmp_path / "b", environment, **options) as b,
+        ):
+            asyncio.run(exercise(a, b))
+
+
+@pytest.mark.parametrize("page_size", [1, 3])
+def test_no_salt_preserves_complete_lists_and_calls_but_rejects_continuations(tmp_path: Path, page_size: int):
+    async def exercise(gateway):
+        async with catalog_session(gateway) as session:
+            for method, field in (
+                ("list_tools", "tools"),
+                ("list_prompts", "prompts"),
+                ("list_resources", "resources"),
+                ("list_resource_templates", "resource_templates"),
+            ):
+                if page_size == 1:
+                    with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
+                        await getattr(session, method)()
+                else:
+                    result = await getattr(session, method)()
+                    assert len(getattr(result, field)) == 3
+                    assert result.next_cursor is None
+            called = await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name="pages-add2", arguments={"a": 3, "b": 4})),
+                CallToolResult,
+            )
+            assert not called.is_error
+            assert called.content[0].text == "7"
+            if page_size == 3:
+                bare = await session.send_request(
+                    CallToolRequest(params=CallToolRequestParams(name="add2", arguments={"a": 3, "b": 4})),
+                    CallToolResult,
+                )
+                assert not bare.is_error
+                assert bare.content[0].text == "7"
+
+    with paginated_mcp_peer(page_size=page_size) as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": ""}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+@pytest.mark.parametrize("grant", ["direct", "access_group"])
+def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, monkeypatch, grant: str):
+    import os
+    import subprocess
+    import sys
+
+    from integration._support.database import scratch_database
+    from integration._support.mcp import register_mcp
+
+    assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
+
+    async def exercise(a, b, peer, identity, owner, stranger, policy, spare):
+        owner_a = Gateway(a.client, owner, peer.url)
+        owner_b = Gateway(b.client, owner, peer.url)
+        stranger_b = Gateway(b.client, stranger, peer.url)
+        first_pages = {}
+        for method in ("list_tools", "list_prompts", "list_resources", "list_resource_templates"):
+            async with catalog_session(owner_a) as session:
+                first_pages[method] = await getattr(session, method)()
+                assert first_pages[method].next_cursor
+            async with catalog_session(owner_b) as session:
+                continued = await getattr(session, method)(
+                    params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
+                )
+                assert continued.next_cursor
+            async with catalog_session(stranger_b) as session:
+                peer.drain()
+                with pytest.raises(MCPError, match="fresh listing"):
+                    await getattr(session, method)(
+                        params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
+                    )
+                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+
+        a.post(
+            "/key/update",
+            {
+                "key": owner,
+                **(
+                    {"access_group_ids": [], "object_permission": {"mcp_servers": [spare]}}
+                    if grant == "access_group"
+                    else {"object_permission": {"mcp_servers": [spare]}}
+                ),
+            },
+        )
+        for method, first in first_pages.items():
+            async with catalog_session(owner_b) as session:
+                peer.drain()
+                with pytest.raises(MCPError, match="fresh listing"):
+                    await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+        a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": []}, **policy})
+        changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
+        assert changed.status_code == 202, changed.text
+        for method, first in first_pages.items():
+            async with catalog_session(owner_b) as session:
+                peer.drain()
+                with pytest.raises(MCPError, match="fresh listing"):
+                    await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                fresh = await getattr(session, method)()
+                assert fresh.next_cursor
+
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "prisma",
+                "db",
+                "push",
+                "--schema",
+                "litellm/proxy/schema.prisma",
+                "--skip-generate",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        with paginated_mcp_peer() as peer, paginated_mcp_peer() as spare_peer, httpx.Client() as client:
+            seed = Gateway(client, "sk-pagination-test", peer.url)
+            config = tmp_path / "database-proxy.yaml"
+            config.write_text(
+                yaml.safe_dump(
+                    {"model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True}}
+                )
+            )
+            environment = {
+                "DATABASE_URL": database_url,
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "shared-pagination-test",
+            }
+            options = dict(
+                config=config,
+                database_setup=(),
+                remove_environment=("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"),
+            )
+            with (
+                owned_proxy(seed, tmp_path / "a", environment, **options) as a,
+                owned_proxy(seed, tmp_path / "b", environment, **options) as b,
+                a.scenario() as scenario,
+            ):
+                identity = register_mcp(scenario, peer, "pages")
+                spare: Final = register_mcp(scenario, spare_peer, "spare")
+                group = a.request(
+                    "POST",
+                    "/v1/access_group",
+                    {
+                        "access_group_name": "pagination-grant",
+                        "access_mcp_server_ids": [identity],
+                    },
+                )
+                assert group.status_code == 201, group.text
+                policy = (
+                    {"access_group_ids": [group.json()["access_group_id"]]}
+                    if grant == "access_group"
+                    else {"object_permission": {"mcp_servers": [identity]}}
+                )
+                owner = scenario.key(**policy)
+                stranger = scenario.key(object_permission={"mcp_servers": [identity]})
+                assert owner != stranger
+                asyncio.run(exercise(a, b, peer, identity, owner, stranger, policy, spare))
+
+
+@pytest.mark.parametrize("changed", ["key", "snapshot"])
+def test_cursor_rejects_changed_replica_configuration_before_dispatch(tmp_path: Path, changed: str):
+    async def exercise(a, b, peer):
+        for method in ("list_tools", "list_prompts", "list_resources", "list_resource_templates"):
+            async with catalog_session(a) as session:
+                first = await getattr(session, method)()
+                assert first.next_cursor
+            async with catalog_session(b) as session:
+                peer.drain()
+                with pytest.raises(MCPError, match="fresh listing"):
+                    await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
+                fresh = await getattr(session, method)()
+                assert fresh.next_cursor
+
+    with paginated_mcp_peer() as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        second_config = tmp_path / "second-proxy.yaml"
+        second_values = yaml.safe_load(config.read_text())
+        if changed == "snapshot":
+            second_values["mcp_servers"]["pages"]["description"] = "changed registry definition"
+        second_config.write_text(yaml.safe_dump(second_values))
+        environment = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "original-key",
+        }
+        second_environment = {**environment, "LITELLM_SALT_KEY": "rotated-key" if changed == "key" else "original-key"}
+        options = dict(database_setup=(), remove_environment=REMOVE_DATABASE)
+        with (
+            owned_proxy(seed, tmp_path / "a", environment, config=config, **options) as a,
+            owned_proxy(seed, tmp_path / "b", second_environment, config=second_config, **options) as b,
+        ):
+            asyncio.run(exercise(a, b, peer))
+
+
+def test_pages_preserve_supported_protocol_versions(tmp_path: Path):
+    from mcp.types import ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, ListToolsRequest
+    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+    async def exercise(gateway):
+        for revision in HANDSHAKE_PROTOCOL_VERSIONS:
+            client = MCPClient(
+                server_url=str(gateway.client.base_url).rstrip("/") + "/mcp",
+                transport_type=MCPTransport.http,
+                protocol_version=revision,
+                extra_headers={"Authorization": "Bearer " + gateway.key},
+                timeout=15,
+            )
+            for request, field in (
+                (ListToolsRequest, "tools"),
+                (ListPromptsRequest, "prompts"),
+                (ListResourcesRequest, "resources"),
+                (ListResourceTemplatesRequest, "resource_templates"),
+            ):
+                first = await client.list_page(request())
+                assert first.next_cursor, revision
+                second = await client.list_page(request(params=PaginatedRequestParams(cursor=first.next_cursor)))
+                assert second.next_cursor, revision
+                third = await client.list_page(request(params=PaginatedRequestParams(cursor=second.next_cursor)))
+                assert third.next_cursor is None, revision
+                names = [item.name for page in (first, second, third) for item in getattr(page, field)]
+                assert len(names) == len(set(names)) == 3, revision
+
+    with paginated_mcp_peer() as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+def test_incomplete_discovery_never_establishes_a_bare_tool_route(tmp_path: Path):
+    from integration._support.mcp import tool_calls
+
+    async def exercise(gateway, peer):
+        async with catalog_session(gateway) as session:
+            first = await session.list_tools()
+            assert [tool.name for tool in first.tools] == ["pages-add0"]
+            assert first.next_cursor
+            with pytest.raises(MCPError, match="repeated"):
+                await session.list_tools(params=PaginatedRequestParams(cursor=first.next_cursor))
+            peer.drain()
+            result = await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name="add0", arguments={"a": 3, "b": 4})),
+                CallToolResult,
+            )
+            assert result.is_error
+            assert tool_calls(peer.drain()) == ()
+            prefixed = await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name="pages-add0", arguments={"a": 3, "b": 4})),
+                CallToolResult,
+            )
+            assert not prefixed.is_error
+            assert prefixed.content[0].text == "7"
+            assert len(tool_calls(peer.drain())) == 1
+
+    with paginated_mcp_peer(repeat_cursor=True) as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway, peer))
+
+
+def test_partial_catalog_keeps_sanitized_failure_metadata_on_following_pages(tmp_path: Path):
+    async def exercise(gateway):
+        for method, field in (
+            ("list_tools", "tools"),
+            ("list_prompts", "prompts"),
+            ("list_resources", "resources"),
+            ("list_resource_templates", "resource_templates"),
+        ):
+            async with catalog_session(gateway) as session:
+                first = await getattr(session, method)()
+                assert first.next_cursor
+                assert len(getattr(first, field)) == 1
+                fault = first.meta["litellm.ai/server_outcomes"]["broken"]
+                assert fault["status"] != "ok"
+                assert "tag" not in fault
+                assert "untrusted upstream message" not in first.model_dump_json()
+                second = await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert len(getattr(second, field)) == 1
+                assert second.meta["litellm.ai/server_outcomes"]["broken"] == fault
+
+    with paginated_mcp_peer() as healthy, paginated_mcp_peer(fail_listing=True) as broken, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", healthy.url)
+        config = config_file(tmp_path, healthy.url)
+        values = yaml.safe_load(config.read_text())
+        values["mcp_servers"]["broken"] = {"url": broken.url, "transport": "http"}
+        config.write_text(yaml.safe_dump(values))
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+def test_failed_upstream_continuation_requires_restart_for_every_catalog(tmp_path: Path):
+    async def exercise(gateway):
+        async with catalog_session(gateway) as session:
+            for method in ("list_tools", "list_prompts", "list_resources", "list_resource_templates"):
+                first = await getattr(session, method)()
+                assert first.next_cursor
+                with pytest.raises(MCPError, match="fresh listing") as caught:
+                    await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert "untrusted upstream message" not in str(caught.value)
+
+    with paginated_mcp_peer(fail_continuation=True) as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+@pytest.mark.parametrize("foreign", [{"foreign": {"status": "error", "message": "foreign outcome"}}, "malformed"])
+def test_optional_catalog_ignores_upstream_gateway_outcomes(tmp_path: Path, foreign):
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    async def exercise(gateway):
+        async with catalog_session(gateway) as session:
+            for method, field in (
+                ("list_prompts", "prompts"),
+                ("list_resources", "resources"),
+                ("list_resource_templates", "resource_templates"),
+            ):
+                first = await getattr(session, method)()
+                assert len(getattr(first, field)) == 1
+                assert first.next_cursor
+                second = await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert len(getattr(second, field)) == 1
+                assert "foreign" not in (second.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
+
+    with paginated_mcp_peer(metadata={SERVER_OUTCOMES_META_KEY: foreign}) as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+def test_complete_initial_page_keeps_bare_routes_with_a_cached_database_revision(tmp_path: Path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    from integration._support.database import read_rows, scratch_database, write_rows
+    from integration._support.mcp import register_mcp, tool_calls
+
+    assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
+
+    async def exercise(gateway, first, second):
+        async with catalog_session(gateway) as session:
+            listing = await session.list_tools()
+            assert len(listing.tools) == 3 and listing.next_cursor is None
+            first.drain()
+            second.drain()
+            called = await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name="add2", arguments={"a": 3, "b": 4})),
+                CallToolResult,
+            )
+            assert not called.is_error
+            assert called.content[0].text == "7"
+            assert tool_calls(first.drain()) == ()
+            assert len(tool_calls(second.drain())) == 1
+
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        subprocess.run(
+            [sys.executable, "-I", "-m", "prisma", "db", "push", "--schema",
+             "litellm/proxy/schema.prisma", "--skip-generate"],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            [sys.executable, "-I", "-m", "prisma", "db", "execute", "--schema",
+             "litellm/proxy/schema.prisma", "--file",
+             "litellm-proxy-extras/litellm_proxy_extras/migrations/20260923000000_add_mcp_catalog_revision_trigger/migration.sql"],
+            check=True, capture_output=True, text=True,
+        )
+        with paginated_mcp_peer(page_size=3) as first, paginated_mcp_peer(page_size=3) as second, httpx.Client() as client:
+            seed = Gateway(client, "sk-pagination-test", first.url)
+            config = tmp_path / "database-proxy.yaml"
+            config.write_text(yaml.safe_dump({
+                "model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True},
+            }))
+            environment = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-pagination-test"}
+            with owned_proxy(
+                seed, tmp_path / "proxy", environment, config=config, database_setup=(),
+                remove_environment=("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"),
+            ) as gateway, gateway.scenario() as scenario:
+                first_id = register_mcp(scenario, first, "first")
+                second_id = register_mcp(scenario, second, "second")
+                owner = scenario.key(object_permission={"mcp_servers": [second_id]})
+                warm = gateway.client.get("/mcp-rest/tools/list", headers={"Authorization": "Bearer " + gateway.key}, params={"server_id": first_id})
+                assert warm.status_code == 200, warm.text
+                # A no-op SQL writer bumps the trigger revision without changing either server.
+                write_rows('UPDATE "LiteLLM_MCPServerTable" SET "alias" = "alias" WHERE "server_id" = %s', (first_id,))
+                warm = gateway.client.get("/mcp-rest/tools/list", headers={"Authorization": "Bearer " + gateway.key}, params={"server_id": first_id})
+                assert warm.status_code == 200, warm.text
+                query = 'SELECT "reload_revision" FROM "LiteLLM_Config" WHERE "param_name" = %s'
+                revision = read_rows(query, ("mcp_catalog",))
+                assert revision and revision[0]["reload_revision"] > 0
+                asyncio.run(exercise(Gateway(gateway.client, owner, second.url), first, second))
+                assert read_rows(query, ("mcp_catalog",)) == revision
+
+
+@pytest.mark.parametrize("entry", ["mcp", "server_mcp"])
+def test_missing_user_keeps_explicit_key_and_team_grants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: Literal["mcp", "server_mcp"]
+):
+    import subprocess
+    import sys
+    import uuid
+
+    from integration._support.database import read_rows, scratch_database
+    from integration._support.mcp import McpCaller, register_mcp, tool_calls
+
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        subprocess.run(
+            [sys.executable, "-I", "-m", "prisma", "db", "push", "--schema",
+             "litellm/proxy/schema.prisma", "--skip-generate"],
+            check=True, capture_output=True, text=True,
+        )
+        with paginated_mcp_peer(page_size=3) as allowed, paginated_mcp_peer(page_size=3) as private, httpx.Client() as client:
+            seed = Gateway(client, "sk-pagination-test", allowed.url)
+            config = tmp_path / "database-proxy.yaml"
+            config.write_text(yaml.safe_dump({
+                "model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True},
+            }))
+            environment = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-pagination-test"}
+            options = dict(config=config, database_setup=(), remove_environment=("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"))
+            with (
+                owned_proxy(seed, tmp_path / "a", environment, **options) as a,
+                owned_proxy(seed, tmp_path / "b", environment, **options) as b,
+                a.scenario() as scenario,
+            ):
+                identity = register_mcp(scenario, allowed, "allowed")
+                register_mcp(scenario, private, "private")
+                team = scenario.team(object_permission={"mcp_servers": [identity]})
+                for policy in ({"object_permission": {"mcp_servers": [identity]}}, {"team_id": team}):
+                    user = "missing-" + uuid.uuid4().hex
+                    key = scenario.key(user_id=user, **policy)
+                    assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
+                    for replica in (a, b):
+                        caller = McpCaller(replica, key, entry, alias="allowed")
+                        allowed.drain()
+                        private.drain()
+                        listing = caller.list_tools()
+                        assert listing.ok, listing
+                        assert len(listing.tools) == 3, listing
+                        name = next(name for name in listing.tools if name.endswith("add2"))
+                        called = caller.call(name, {"a": 3, "b": 4})
+                        assert called.ok and called.text == "7", called
+                        assert len(tool_calls(allowed.drain())) == 1
+                        assert private.drain() == ()
+                        forbidden = caller.call("private-add2", {"a": 3, "b": 4})
+                        assert not forbidden.ok, forbidden
+                        assert tool_calls(allowed.drain()) == ()
+                        assert private.drain() == ()
+
+
+def test_aggregate_freshness_matches_real_upstream() -> None:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        ListToolsRequest,
+        ListToolsResult,
+    )
+    from litellm.proxy._experimental.mcp_server.catalog import combine_optional_catalog, list_tools_page
+
+    async def exercise(peer: McpPeer) -> None:
+        client: Final = MCPClient(server_url=peer.url, transport_type=MCPTransport.http, protocol_version="2026-07-28")
+        for request in (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest()):
+            page: Final = await client.list_page(request)
+            assert page.ttl_ms == 9000
+            result: Final = combine_optional_catalog(request, [page], None, None)
+            assert result.ttl_ms == 9000
+            assert result.cache_scope == "private"
+
+        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+            return await client.list_page(ListToolsRequest())
+
+        tools_result: Final = await list_tools_page(
+            cursor=None, caller_scope="caller", snapshot="snapshot", server_ids=("server",), fetch=fetch, now=100
+        )
+        assert 0 < tools_result.ttl_ms <= 9000
+        assert tools_result.cache_scope == "private"
+        assert len(tools_result.tools) == 3
+
+    with paginated_mcp_peer(page_size=3, ttl_ms=9000) as peer:
+        asyncio.run(exercise(peer))
+
+
+@pytest.mark.parametrize("ttl_ms", [0, 9000])
+def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms: int) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    async def exercise(peer: McpPeer) -> None:
+        server: Final = MCPServer(
+            server_id="pages", name="pages", url=peer.url, transport=MCPTransport.http, protocol_version="2026-07-28"
+        )
+        for manager in (MCPServerManager(), MCPServerManager()):
+            for user in (UserAPIKeyAuth(user_id="one"), UserAPIKeyAuth(user_id="two")):
+                for _ in range(2):
+                    result: Final = await manager.get_prompts_from_server(server, user)
+                    assert [prompt.name for prompt in result] == ["pages-prompt0", "pages-prompt1", "pages-prompt2"]
+
+    with paginated_mcp_peer(page_size=3, ttl_ms=ttl_ms) as peer:
+        asyncio.run(exercise(peer))
+        observed: Final = peer.drain()
+        listings: Final = [item for item in observed if item.get("body", {}).get("method") == "prompts/list"]
+        assert len(listings) == (8 if ttl_ms == 0 else 4)

@@ -176,6 +176,52 @@ def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
     assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
 
 
+TOKEN_COUNT_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "token_count_framing": 78,
+        "token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "us-east-1"},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"token_count_framing": 0},
+        {"token_count_framing": 78},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5"}},
+    ],
+)
+def test_generator_classifies_token_count_settings(setting: dict):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(TOKEN_COUNT_ENTRY)})))
+    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, **setting}})
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"token_count_framing": -1},
+        {"token_count_framing": "78"},
+        {"token_count_framing": 1.5},
+        {"token_count_model": {"model": ""}},
+        {"token_count_model": {"model": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": ""}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": 5}},
+        {"token_count_model": {"region": "us-east-1"}},
+        {"token_count_model": "us.anthropic.claude-opus-5-5"},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "zone": "us-east-1"}},
+    ],
+)
+def test_generated_token_count_schema_rejects_malformed_settings(setting: dict):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(TOKEN_COUNT_ENTRY)})))
+    assert not build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, **setting}})
+
+
 def find_duplicate_keys(path: Path) -> list[str]:
     duplicates: list[str] = []
 
@@ -230,6 +276,56 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+
+
+# Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
+AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_charge_the_global_web_search_price(prices: dict, region: str):
+    global_search_cost = prices["azure/gpt-6.1-sol"]["search_context_cost_per_query"]
+    assert global_search_cost
+    assert prices[f"azure/{region}/gpt-6.1-sol"].get("search_context_cost_per_query") == global_search_cost
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium(region: str):
+    premium = AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM[region]
+    usage = {"prompt_tokens": 300_000, "completion_tokens": 1_000, "cache_read_input_tokens": 100_000}
+
+    def total_cost(model: str) -> float:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider="azure",
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_input_tokens=usage["cache_read_input_tokens"],
+        )
+        return prompt_cost + completion_cost
+
+    global_cost = total_cost("azure/gpt-6.1-sol")
+    assert global_cost > 0
+    assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
+
+
+# https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026
+@pytest.mark.parametrize("model", ["gemini/deep-research-preview-04-2026", "gemini/deep-research-max-preview-04-2026"])
+def test_gemini_deep_research_previews_accept_the_documented_input_window(prices: dict, model: str):
+    assert prices[model]["max_input_tokens"] == 1_048_576
+    assert prices[model]["max_output_tokens"] == 65_536
+
+
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
+    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+)
+
+
+@pytest.mark.parametrize("model", sorted(VERTEX_GEMINI_FLASH_RETIREMENT_DATES))
+@pytest.mark.parametrize("prefix", ["", "vertex_ai/"])
+def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: dict, model: str, prefix: str):
+    assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
@@ -464,7 +560,7 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
-MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
     {
         "vertex_ai-ai21_models",

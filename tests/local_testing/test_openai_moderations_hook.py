@@ -13,7 +13,7 @@ load_dotenv()
 import pytest
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.openai_moderation import (
-    _ENTERPRISE_OpenAI_Moderation,
+    ENTERPRISE_OpenAI_Moderation,
 )
 from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
@@ -32,9 +32,9 @@ async def test_openai_moderation_error_raising(monkeypatch):
     from litellm.types.llms.openai import OpenAIModerationResponse
 
     litellm.openai_moderations_model_name = "omni-moderation-latest"
-    openai_mod = _ENTERPRISE_OpenAI_Moderation()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    openai_mod = ENTERPRISE_OpenAI_Moderation()
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 

@@ -57,7 +57,7 @@ async def route_a2a_agent_request(
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
-    if not is_admin:
+    if not is_admin or agent.identity_managed:
         is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,

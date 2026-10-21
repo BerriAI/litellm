@@ -63,4 +63,4 @@ tests/rust-python-harness/
 - `shared/` contains reusable parity, tracing, reporting primitives, and unit-runner machinery
 - Keep fixtures with their owning API and existing Python tests in their current locations
 - Each strategy folder carries an `AGENTS.md` one-liner stating what it should be doing
-- Run the harness's own checks with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/shared tests/rust-python-harness/cli tests/rust-python-harness/strategies/trace_parity tests/rust-python-harness/strategies/unit_tests_parity tests/rust-python-harness/strategies/unit_tests_rust tests/test_rust_python_harness.py -q`
+- Run the harness's own checks with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/shared tests/rust-python-harness/cli tests/rust-python-harness/strategies/trace_parity tests/rust-python-harness/strategies/unit_tests_parity tests/rust-python-harness/strategies/unit_tests_rust -q`

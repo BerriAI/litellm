@@ -1,5 +1,9 @@
 use std::convert::Infallible;
 
+use crate::{
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::messages::context::MessagesTransformContext,
+};
 use futures_util::StreamExt;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
@@ -10,22 +14,21 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_llms_types::formats::messages::{
+    MessagesRequest,
+    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+};
 use serde_json::{Map, Value};
 
 use crate::{
     Error,
-    anthropic::messages::streaming_iterator::{AnthropicMessagesStreamEvent, AnthropicStreamUsage},
     base_llm::{
-        anthropic_messages::{
-            streaming::{ByteStream, EventStream, StreamDecoder},
-            transformation::{
-                BaseAnthropicMessagesConfig, Headers, MessagesTransformContext,
-                ValidatedEnvironment,
-            },
-        },
         auth::AuthScheme,
         base_model_iterator::{StreamError, StreamTransformer, transform_stream},
+        messages::{
+            streaming::{ByteStream, EventStream, StreamDecoder},
+            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        },
     },
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
 };
@@ -85,7 +88,15 @@ fn invoke_url(
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
 }
 
-impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        reasoning_auto_summary: bool,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -106,9 +117,9 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        _request: AnthropicMessagesRequest,
+        _request: MessagesRequest,
         _context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Err(Error::Unsupported(
             "Bedrock invoke messages request shaping",
         ))
@@ -198,17 +209,17 @@ pub fn bedrock_anthropic_messages_event_stream(bytes: ByteStream) -> EventStream
 
 #[derive(Default)]
 pub struct MessageStopUsagePromoter {
-    pending_delta: Option<AnthropicMessagesStreamEvent>,
-    start_usage: Option<AnthropicStreamUsage>,
+    pending_delta: Option<MessagesStreamEvent>,
+    start_usage: Option<MessagesStreamUsage>,
 }
 
 fn promoted_usage(
-    delta: Option<AnthropicStreamUsage>,
-    stop: Option<&AnthropicStreamUsage>,
-    start: Option<&AnthropicStreamUsage>,
-) -> Option<AnthropicStreamUsage> {
+    delta: Option<MessagesStreamUsage>,
+    stop: Option<&MessagesStreamUsage>,
+    start: Option<&MessagesStreamUsage>,
+) -> Option<MessagesStreamUsage> {
     let delta = delta.unwrap_or_default();
-    let merged = AnthropicStreamUsage {
+    let merged = MessagesStreamUsage {
         input_tokens: stop
             .and_then(|stop| stop.input_tokens)
             .or(delta.input_tokens),
@@ -234,20 +245,20 @@ fn promoted_usage(
             }),
         ..delta
     };
-    (merged != AnthropicStreamUsage::default()).then_some(merged)
+    (merged != MessagesStreamUsage::default()).then_some(merged)
 }
 
 fn promoted(
-    event: AnthropicMessagesStreamEvent,
-    stop: Option<&AnthropicStreamUsage>,
-    start: Option<&AnthropicStreamUsage>,
-) -> AnthropicMessagesStreamEvent {
+    event: MessagesStreamEvent,
+    stop: Option<&MessagesStreamUsage>,
+    start: Option<&MessagesStreamUsage>,
+) -> MessagesStreamEvent {
     match event {
-        AnthropicMessagesStreamEvent::MessageDelta {
+        MessagesStreamEvent::MessageDelta {
             delta,
             usage,
             context_management,
-        } => AnthropicMessagesStreamEvent::MessageDelta {
+        } => MessagesStreamEvent::MessageDelta {
             delta,
             usage: promoted_usage(usage, stop, start),
             context_management,
@@ -257,37 +268,37 @@ fn promoted(
 }
 
 impl StreamTransformer for MessageStopUsagePromoter {
-    type Input = AnthropicMessagesStreamEvent;
-    type Output = AnthropicMessagesStreamEvent;
+    type Input = MessagesStreamEvent;
+    type Output = MessagesStreamEvent;
     type Error = Infallible;
 
     fn transform(
         &mut self,
-        input: AnthropicMessagesStreamEvent,
-    ) -> Result<Vec<AnthropicMessagesStreamEvent>, Infallible> {
+        input: MessagesStreamEvent,
+    ) -> Result<Vec<MessagesStreamEvent>, Infallible> {
         let pending = self.pending_delta.take();
         match input {
-            AnthropicMessagesStreamEvent::MessageDelta { .. } => {
+            MessagesStreamEvent::MessageDelta { .. } => {
                 self.pending_delta = Some(input);
                 Ok(pending.into_iter().collect())
             }
-            AnthropicMessagesStreamEvent::MessageStop { usage } => Ok(pending
+            MessagesStreamEvent::MessageStop { usage } => Ok(pending
                 .map(|delta| promoted(delta, usage.as_ref(), self.start_usage.as_ref()))
                 .into_iter()
-                .chain([AnthropicMessagesStreamEvent::MessageStop { usage }])
+                .chain([MessagesStreamEvent::MessageStop { usage }])
                 .collect()),
-            AnthropicMessagesStreamEvent::MessageStart { message } => {
+            MessagesStreamEvent::MessageStart { message } => {
                 self.start_usage = Some(message.usage.clone());
                 Ok(pending
                     .into_iter()
-                    .chain([AnthropicMessagesStreamEvent::MessageStart { message }])
+                    .chain([MessagesStreamEvent::MessageStart { message }])
                     .collect())
             }
             other => Ok(pending.into_iter().chain([other]).collect()),
         }
     }
 
-    fn finish(&mut self) -> Result<Vec<AnthropicMessagesStreamEvent>, Infallible> {
+    fn finish(&mut self) -> Result<Vec<MessagesStreamEvent>, Infallible> {
         Ok(self
             .pending_delta
             .take()
@@ -310,13 +321,13 @@ mod tests {
     use litellm_auth_aws::constants::DEFAULT_BEDROCK_REGION;
 
     use super::*;
-    use crate::base_llm::anthropic_messages::streaming::encode_anthropic_sse;
+    use crate::base_llm::messages::streaming::encode_anthropic_sse;
 
-    fn event(value: Value) -> AnthropicMessagesStreamEvent {
+    fn event(value: Value) -> MessagesStreamEvent {
         serde_json::from_value(value).unwrap()
     }
 
-    fn message_start(usage: Value) -> AnthropicMessagesStreamEvent {
+    fn message_start(usage: Value) -> MessagesStreamEvent {
         event(json!({
             "type": "message_start",
             "message": {
@@ -326,7 +337,7 @@ mod tests {
         }))
     }
 
-    fn message_delta(usage: Value) -> AnthropicMessagesStreamEvent {
+    fn message_delta(usage: Value) -> MessagesStreamEvent {
         event(json!({
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn"},
@@ -334,14 +345,14 @@ mod tests {
         }))
     }
 
-    fn message_stop(usage: Option<Value>) -> AnthropicMessagesStreamEvent {
+    fn message_stop(usage: Option<Value>) -> MessagesStreamEvent {
         match usage {
             Some(usage) => event(json!({"type": "message_stop", "usage": usage})),
             None => event(json!({"type": "message_stop"})),
         }
     }
 
-    fn promote(events: Vec<AnthropicMessagesStreamEvent>) -> Vec<AnthropicMessagesStreamEvent> {
+    fn promote(events: Vec<MessagesStreamEvent>) -> Vec<MessagesStreamEvent> {
         let mut promoter = MessageStopUsagePromoter::default();
         let mut output: Vec<_> = events
             .into_iter()

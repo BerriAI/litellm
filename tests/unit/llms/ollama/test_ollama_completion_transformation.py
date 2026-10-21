@@ -2,13 +2,14 @@ import base64
 import io
 import json
 import sys
-from litellm._uuid import uuid
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
@@ -115,6 +116,28 @@ class TestOllamaConfig:
             result.choices[0]["message"].tool_calls[0]["function"]["arguments"]
         ) == {"location": "San Francisco"}
         # No usage assertions here as we don't need to test them in every case
+
+    def test_transform_response_json_function_call_in_code_fence(self):
+        raw_response: Final = MagicMock()
+        raw_response.json.return_value = {
+            "response": '```json\n{"name": "read", "arguments": {"filePath": "calc.py"}}\n```'
+        }
+
+        result: Final = OllamaConfig().transform_response(
+            model="gemma4:31b",
+            raw_response=raw_response,
+            model_response=ModelResponse(choices=[{"message": Message(content="")}]),
+            logging_obj=MagicMock(),
+            request_data={"format": "json"},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=MagicMock(),
+        )
+
+        tool_call: Final = result.choices[0].message.tool_calls[0]
+        assert (result.choices[0].finish_reason, tool_call.function.name) == ("tool_calls", "read")
+        assert json.loads(tool_call.function.arguments) == {"filePath": "calc.py"}
 
     def test_transform_response_regular_json(self):
         # Initialize config
@@ -573,6 +596,28 @@ class TestOllamaConfig:
 
 
 class TestOllamaTextCompletionResponseIterator:
+    def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        ollama_chunks: Final = (
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "thinking": "Hm", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "Hel", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "lo", "done": False},
+        )
+
+        results: Final = tuple(iterator.chunk_parser(chunk) for chunk in ollama_chunks)
+
+        ids: Final = {result.id for result in results if isinstance(result, ModelResponseStream)}
+        assert len(results) == len(ollama_chunks) and len(ids) == 1, ids
+        assert next(iter(ids)).startswith("chatcmpl-")
+        other: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        other_result: Final = other.chunk_parser(ollama_chunks[2])
+        assert isinstance(other_result, ModelResponseStream) and other_result.id not in ids
+
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
         iterator = OllamaTextCompletionResponseIterator(
@@ -664,6 +709,72 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+    @pytest.mark.parametrize(
+        ("response_chunks", "expected_text", "expected_tool_name", "expected_finish_reason"),
+        [
+            (
+                ['{"name": "write_file", ', '"arguments": {"path": "hello.py"}}'],
+                "",
+                "write_file",
+                "tool_calls",
+            ),
+            (
+                ["```", "json", "\n", '{"name": "write_file", "arguments": {"path": "hello.py"}}', "\n```"],
+                "",
+                "write_file",
+                "tool_calls",
+            ),
+            (['{"answer": ', "42}"], '{"answer": 42}', None, "stop"),
+            (["{not json"], "{not json", None, "stop"),
+        ],
+    )
+    def test_chunk_parser_turns_streamed_json_function_call_into_tool_call(
+        self,
+        response_chunks: list[str],
+        expected_text: str,
+        expected_tool_name: str | None,
+        expected_finish_reason: str,
+    ):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        streamed: Final = [iterator.chunk_parser({"response": text, "done": False}) for text in response_chunks]
+        done: Final = iterator.chunk_parser({"response": "", "done": True, "prompt_eval_count": 3, "eval_count": 2})
+
+        assert [chunk.choices[0].delta.content for chunk in streamed] == [None] * len(response_chunks)
+        assert done["text"] == expected_text
+        assert done["finish_reason"] == expected_finish_reason
+        assert done["usage"]["total_tokens"] == 5
+        tool_use: Final = done.get("tool_use")
+        assert (tool_use["function"]["name"] if tool_use else None) == expected_tool_name
+        if tool_use:
+            assert json.loads(tool_use["function"]["arguments"]) == {"path": "hello.py"}
+
+    def test_chunk_parser_streams_text_that_only_later_contains_braces(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        first: Final = iterator.chunk_parser({"response": "Here is code: ", "done": False})
+        second: Final = iterator.chunk_parser({"response": '{"a": 1}', "done": False})
+        done: Final = iterator.chunk_parser({"response": "", "done": True})
+
+        assert (first.choices[0].delta.content, second.choices[0].delta.content) == ("Here is code: ", '{"a": 1}')
+        assert (done["text"], done["finish_reason"], done.get("tool_use")) == ("", "stop", None)
+
+    def test_chunk_parser_releases_held_code_fence_that_is_not_json(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        contents: Final = [
+            iterator.chunk_parser({"response": text, "done": False}).choices[0].delta.content
+            for text in ("```", "python\n", "print(1)")
+        ]
+
+        assert contents == [None, "```python\n", "print(1)"]
 
 
 async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):

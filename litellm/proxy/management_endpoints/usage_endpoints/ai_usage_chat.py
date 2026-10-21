@@ -6,20 +6,19 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import Final, Literal, NamedTuple, Protocol, cast, overload
 
+from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
-from litellm.types.llms.openai import AllMessageValues
+from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall
-
-if TYPE_CHECKING:
-    from litellm.router import Router
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -262,22 +261,34 @@ async def _query_activity(
 ) -> SpendAnalyticsPaginatedResponse:
     """Shared helper that calls the daily activity query layer."""
     from litellm.proxy.management_endpoints.common_daily_activity import (
+        daily_activity_repository,
+        daily_activity_scope,
         get_daily_activity,
         get_daily_activity_aggregated,
     )
     from litellm.proxy.proxy_server import prisma_client
 
     if use_aggregated:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        repository: Final = daily_activity_repository(prisma_client)
+        scope: Final = daily_activity_scope(
+            table_name,
+            entity_id_field,
+            entity_id,
+            None,
+            None,
+            start_date,
+            end_date,
+            None,
+            None,
+        )
         return await get_daily_activity_aggregated(
-            prisma_client=prisma_client,
-            table_name=table_name,
-            entity_id_field=entity_id_field,
-            entity_id=entity_id,
-            entity_metadata_field=None,
-            start_date=start_date,
-            end_date=end_date,
-            model=None,
-            api_key=None,
+            repository,
+            scope,
         )
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -446,20 +457,6 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-def _get_llm_router() -> "Router":
-    """Return the proxy's initialized router, raising if none is configured.
-
-    Calls must go through the router rather than litellm.acompletion directly:
-    the router is what resolves a model_list alias (what the model picker
-    offers) into a real provider call with its configured credentials.
-    """
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        raise ValueError("AI usage chat requires at least one model configured in the proxy's model_list.")
-    return llm_router
-
-
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Mapping[str, str],
@@ -552,13 +549,9 @@ async def _stream_final_response(model: str, chat_messages: list[Mapping[str, ob
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    router: Final = _get_llm_router()
-    response: Final = await router.acompletion(
+    response: Final = await litellm.acompletion(
         model=model,
-        # chat_messages mixes hand-built dicts and provider SDK model_dump() output,
-        # so it stays declared as the loose Mapping shape everywhere it's built and
-        # passed around; only this boundary needs the router's stricter message type.
-        messages=cast(list[AllMessageValues], chat_messages),
+        messages=chat_messages,
         stream=True,
         temperature=USAGE_AI_TEMPERATURE,
     )
@@ -585,10 +578,9 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        router: Final = _get_llm_router()
-        response: Final = await router.acompletion(
+        response: Final = await litellm.acompletion(
             model=resolved_model,
-            messages=cast(list[AllMessageValues], chat_messages),
+            messages=chat_messages,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
@@ -613,10 +605,6 @@ async def stream_usage_ai_chat(
         yield _sse(
             {
                 "type": "error",
-                # The router's own exceptions (unknown model_name, no healthy deployment,
-                # provider auth failure) are already safe, user-facing text — surfacing them
-                # is what lets an admin fix their model_list instead of guessing at a generic
-                # failure message.
-                "message": str(e) or "An internal error occurred. Please try again.",
+                "message": "An internal error occurred. Please try again.",
             }
         )

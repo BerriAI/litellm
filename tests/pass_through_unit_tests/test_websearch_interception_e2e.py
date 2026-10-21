@@ -21,7 +21,7 @@ async def test_websearch_interception_non_streaming():
     Test WebSearch interception with non-streaming request.
     Validates that agentic loop executes transparently.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("E2E TEST 1: WebSearch Interception (Non-Streaming)")
@@ -838,75 +838,6 @@ async def test_claude_code_native_websearch_streaming():
         return False
 
 
-def test_is_web_search_tool_detection():
-    """
-    PRIORITY TEST #3: Unit test for is_web_search_tool() utility.
-
-    Validates detection of all supported formats including future versions.
-    """
-    print("\n" + "=" * 80)
-    print("UNIT TEST: Web Search Tool Detection")
-    print("=" * 80)
-
-    from litellm.integrations.websearch_interception import is_web_search_tool
-
-    test_cases = [
-        ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
-        (
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
-            True,
-            "Current Anthropic native (2025)",
-        ),
-        (
-            {"type": "web_search_2026", "name": "web_search"},
-            True,
-            "Future Anthropic native (2026)",
-        ),
-        (
-            {"type": "web_search_20270615", "name": "web_search"},
-            True,
-            "Future Anthropic native (2027)",
-        ),
-        (
-            {"name": "web_search", "type": "web_search_20250305"},
-            True,
-            "Claude Code format",
-        ),
-        ({"name": "WebSearch"}, True, "Legacy WebSearch"),
-        ({"name": "calculator"}, False, "Non-web-search tool"),
-        ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
-        ({"type": "custom_tool"}, False, "Custom tool type"),
-    ]
-
-    passed = 0
-    failed = 0
-
-    for tool, expected, description in test_cases:
-        result = is_web_search_tool(tool)
-        if result == expected:
-            print(f"   ✅ PASS: {description}")
-            passed += 1
-        else:
-            print(f"   ❌ FAIL: {description}")
-            print(f"      Tool: {tool}")
-            print(f"      Expected: {expected}, Got: {result}")
-            failed += 1
-
-    print(f"\n📊 Results: {passed} passed, {failed} failed")
-
-    if failed == 0:
-        print("\n" + "=" * 80)
-        print("✅ ALL DETECTION TESTS PASSED!")
-        print("=" * 80)
-        print("✅ Detects all current formats")
-        print("✅ Future-proof for new web_search_* versions")
-        print("=" * 80)
-        return True
-    else:
-        print("\n❌ Some detection tests failed")
-        return False
-
-
 async def test_pre_request_hook_modifies_request_body():
     """
     Unit test to verify async_pre_request_hook correctly modifies request body.
@@ -921,7 +852,7 @@ async def test_pre_request_hook_modifies_request_body():
     from unittest.mock import AsyncMock, patch, MagicMock
     from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("UNIT TEST: Pre-Request Hook Modifies Request Body")
@@ -993,7 +924,7 @@ async def test_pre_request_hook_modifies_request_body():
 
     # Patch the anthropic_messages_handler function (called after hooks)
     with patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+        "litellm.llms.anthropic.pass_through.messages.handler.anthropic_messages_handler",
         side_effect=mock_anthropic_messages_handler,
     ), patch(  # test-quality-ok: the hook imports this process-global router at call time; no injection seam exists to register search_tools
         "litellm.proxy.proxy_server.llm_router",

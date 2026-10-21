@@ -12,7 +12,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
-    _redact_string,
+    redact_string,
     _secret_filter,
     redact_internal_details_from_client_message,
     verbose_logger,
@@ -21,7 +21,6 @@ from litellm._logging import (
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
-    redact_string,
     redact_structured_value,
 )
 
@@ -474,7 +473,7 @@ def test_vertex_error_message_no_credential_leak():
         "Ensure the JSON is valid (check for unescaped newlines in private_key). "
         "Parse error: JSONDecodeError"
     )
-    result = _redact_string(new_msg)
+    result = redact_string(new_msg)
     assert result == new_msg  # nothing to redact
 
 

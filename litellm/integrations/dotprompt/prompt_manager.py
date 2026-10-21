@@ -168,7 +168,7 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Split frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return PromptTemplate(
             content=template_content.strip(),
@@ -176,7 +176,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
+    def parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern: Final = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
@@ -196,6 +196,8 @@ class PromptManager:
             template_content = content
 
         return frontmatter, template_content
+
+    _parse_frontmatter = parse_frontmatter
 
     def render(
         self,
@@ -329,7 +331,7 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Parse frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return {"content": template_content.strip(), "metadata": frontmatter}
 

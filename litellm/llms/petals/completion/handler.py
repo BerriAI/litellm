@@ -10,7 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.utils import ModelResponse, Usage
 
@@ -66,7 +66,7 @@ def completion(
 
         ## COMPLETION CALL
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         response: Final = client.post(api_base, data=data)
 
         ## LOGGING

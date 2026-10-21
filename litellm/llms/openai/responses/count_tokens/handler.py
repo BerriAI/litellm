@@ -5,7 +5,8 @@ Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
 
@@ -26,13 +27,14 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        input: str | list[Any],
+        input: str | Sequence[object],
         api_key: str,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
-    ) -> dict[str, Any]:
+        text: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
 
@@ -52,6 +54,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 input=input,
                 tools=tools,
                 instructions=instructions,
+                text=text,
             )
 
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)

@@ -4,8 +4,8 @@
 Sibling of scripts/check_type_discipline.py, same output contract
 (``path:line: CODE message``) and same stdlib-only constraint, aimed at the test
 tree instead of the package. Each rule is a shape the testing-strategy audit
-measured and named; scripts/test_quality_gate.py caps the codebase total of each
-one against test-quality-budget.json so the counts can only ratchet down.
+measured and named; scripts/test_quality_gate.py fails any change that grows the
+codebase total of one past its merge-base count.
 
 Rules
 -----

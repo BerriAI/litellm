@@ -10,10 +10,11 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import (
@@ -42,10 +43,9 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         optional_params: dict,
     ):
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
+
         auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
         optional_params.pop("aws_bedrock_runtime_endpoint", None)
@@ -79,11 +79,9 @@ class SagemakerLLM(BaseAWSLLM):
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
         dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
@@ -253,7 +251,7 @@ class SagemakerLLM(BaseAWSLLM):
 
             ## LOGGING
             timeout = 300.0
-            sync_handler: Final = _get_httpx_client()
+            sync_handler: Final = get_httpx_client()
             ## LOGGING
             logging_obj.pre_call(
                 input=[],
@@ -317,7 +315,7 @@ class SagemakerLLM(BaseAWSLLM):
         client=None,
     ):
         if client is None:
-            client = _get_httpx_client()
+            client = get_httpx_client()
         sync_response: Final = client.post(
             api_base,
             headers=headers,

@@ -88,11 +88,11 @@ def add_provider_affinity_header(
 ) -> dict[str, object]:  # mutable-ok: downstream handlers add auth and signing headers
     header_name: Final = _get_provider_affinity_header_name(litellm_params)
     if header_name is None or any(key.lower() == header_name.lower() for key in headers):
-        return dict(headers)  # mutable-ok: downstream handlers add auth and signing headers
+        return dict(headers)
 
     session_id: Final = get_stable_session_id(litellm_params)
     if session_id is None:
-        return dict(headers)  # mutable-ok: downstream handlers add auth and signing headers
+        return dict(headers)
     if any(character in session_id for character in ("\r", "\n", "\0")):
         raise ValueError("session_id cannot contain HTTP header control characters")
-    return {**headers, header_name: session_id}  # mutable-ok: downstream handlers add auth and signing headers
+    return {**headers, header_name: session_id}

@@ -1,3 +1,4 @@
+import builtins
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
@@ -50,7 +51,7 @@ def build_web_search_call(
     query: Final = tool_input.get("query", "") if isinstance(tool_input, Mapping) else ""
     content: Final = result.get("content") if isinstance(result, Mapping) else None
     result_items: Final = content if isinstance(content, Sequence) and not isinstance(content, (str, bytes)) else ()
-    sources: Final = [  # mutable-ok: official SDK expects a source list
+    sources: Final = [
         ActionSearchSource(type="url", url=url)
         for item in result_items
         if isinstance(item, Mapping)
@@ -62,10 +63,10 @@ def build_web_search_call(
         id=f"ws_{tool_id}",
         type="web_search_call",
         status=status or ("failed" if failed else "completed"),
-        action={  # mutable-ok: official SDK expects an action mapping
+        action={
             "type": "search",
             "query": query if isinstance(query, str) else "",
-            "queries": [query] if isinstance(query, str) and query else [],  # mutable-ok: SDK list field
+            "queries": [query] if isinstance(query, str) and query else [],
             "sources": sources,
         },
     )
@@ -163,6 +164,14 @@ class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class DecodedResponseId(TypedDict, total=False):

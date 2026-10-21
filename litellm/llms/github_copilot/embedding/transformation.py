@@ -11,6 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_RESPONSE_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
@@ -154,7 +157,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # GitHub Copilot returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
+        response_json: Final = _RESPONSE_OBJECT.validate_python(raw_response.json())
 
         return convert_to_model_response_object(
             response_object=response_json,

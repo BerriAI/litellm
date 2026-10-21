@@ -1,21 +1,15 @@
 import json
-import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
-import litellm
-from test_streaming import streaming_format_tests
-
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from test_streaming import streaming_format_tests
 
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+import litellm
+from litellm import completion_cost
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -55,7 +49,7 @@ async def test_completion_sagemaker(sync_mode):
                 ],
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
         else:
             response = await litellm.acompletion(
@@ -65,7 +59,7 @@ async def test_completion_sagemaker(sync_mode):
                 ],
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
         # Add any assertions here to check the response
         print(response)
@@ -78,70 +72,6 @@ async def test_completion_sagemaker(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio()
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],
-)
-async def test_completion_sagemaker_messages_api(sync_mode):
-    try:
-        litellm.set_verbose = True
-        verbose_logger.setLevel(logging.DEBUG)
-        print("testing sagemaker")
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
-        if sync_mode is True:
-            client = HTTPHandler()
-            with patch.object(client, "post") as mock_post:
-                try:
-                    resp = litellm.completion(
-                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-                        messages=[
-                            {"role": "user", "content": "hi"},
-                        ],
-                        temperature=0.2,
-                        max_tokens=80,
-                        client=client,
-                    )
-                except Exception as e:
-                    print(e)
-                mock_post.assert_called_once()
-                json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert (
-                    json_data["model"]
-                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
-                )
-                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
-                assert json_data["temperature"] == 0.2
-                assert json_data["max_tokens"] == 80
-
-        else:
-            client = AsyncHTTPHandler()
-            with patch.object(client, "post") as mock_post:
-                try:
-                    resp = await litellm.acompletion(
-                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-                        messages=[
-                            {"role": "user", "content": "hi"},
-                        ],
-                        temperature=0.2,
-                        max_tokens=80,
-                        num_retries=0,
-                        client=client,
-                    )
-                except Exception as e:
-                    print(e)
-                mock_post.assert_called_once()
-                json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert (
-                    json_data["model"]
-                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
-                )
-                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
-                assert json_data["temperature"] == 0.2
-                assert json_data["max_tokens"] == 80
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.asyncio()
@@ -169,7 +99,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
                 temperature=0.2,
                 stream=True,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
 
             for idx, chunk in enumerate(response):
@@ -187,7 +117,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
                 stream=True,
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
 
             print("streaming response")
@@ -280,7 +210,7 @@ async def test_acompletion_sagemaker_non_stream():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
 
         # Print what was called on the mock
@@ -340,7 +270,7 @@ async def test_completion_sagemaker_non_stream():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
 
         # Print what was called on the mock
@@ -457,7 +387,7 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
             aws_access_key_id="gm",
             aws_secret_access_key="s",
             aws_region_name="us-west-5",

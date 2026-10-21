@@ -35,7 +35,7 @@ async def test_construct_request_headers_project_id_from_env(monkeypatch):
         mock_token = "mock-token"
 
         with patch(
-            "litellm.vertex_chat_completion._ensure_access_token_async"
+            "litellm.vertex_chat_completion.ensure_access_token_async"
         ) as mock_ensure_token:
             mock_ensure_token.return_value = (mock_auth_header, test_project_id)
 
@@ -53,7 +53,7 @@ async def test_construct_request_headers_project_id_from_env(monkeypatch):
                     "Content-Type": "application/json",
                 }
 
-                # Verify _ensure_access_token_async was called with correct project_id
+                # Verify ensure_access_token_async was called with correct project_id
                 mock_ensure_token.assert_called_once_with(
                     credentials="test-path.json",
                     project_id=test_project_id,

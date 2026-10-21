@@ -96,6 +96,15 @@ def test_openrouter_extra_body_transformation():
     ]
 
 
+def test_openrouter_supported_params_include_reasoning_for_unmapped_model():
+    supported_params = OpenrouterConfig().get_supported_openai_params(
+        "openrouter/unmapped-model"
+    )
+
+    assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
+
+
 def test_openrouter_cache_control_flag_removal():
     transformed_request = OpenrouterConfig().transform_request(
         model="openrouter/deepseek/deepseek-chat",
@@ -537,17 +546,15 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     assert supported_params.count("reasoning_effort") == 1
 
 
-def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
-    """
-    Models without reasoning support should not gain reasoning-specific params.
-    """
+def test_openrouter_non_reasoning_models_support_reasoning_params():
     config = OpenrouterConfig()
 
     supported_params = config.get_supported_openai_params(
         model="openrouter/anthropic/claude-3-5-haiku"
     )
 
-    assert "reasoning_effort" not in supported_params
+    assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
 
 
 def test_openrouter_reasoning_effort_max_maps_to_xhigh():

@@ -1,0 +1,21 @@
+services:
+  lens-worker:
+    image: ${LENS_WORKER_IMAGE:-${LITELLM_VERSION:+ghcr.io/berriai/litellm-lens-worker:v}${LITELLM_VERSION:-}}
+    environment:
+      LITELLM_URL: ${LITELLM_URL:?Set the URL reachable from this container}
+      LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:-}
+      LITELLM_LENS_SERVICE_TOKEN: ${LITELLM_LENS_SERVICE_TOKEN:?Set the same secret on LiteLLM and Lens}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:?Set the ClickHouse URL reachable from Lens}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-litellm}
+      AGENT_TRACING_RETENTION_DAYS: ${AGENT_TRACING_RETENTION_DAYS:-14}
+    ports:
+      - "127.0.0.1:${LENS_PORT:-4318}:4318"
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 64
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${LENS_WORKER_TMP_SIZE:-1g}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

@@ -53,6 +53,6 @@ def isolated_callback_registries() -> Generator[None]:
     with ExitStack() as stack:
         for attribute in CALLBACK_ATTRIBUTES:
             stack.enter_context(_isolated_list(litellm, attribute))
-        stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))  # pyright: ignore[reportPrivateUsage]  # no public callback-cache accessor
+        stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))
         stack.enter_context(rebound(utils, "callback_list", []))
         yield

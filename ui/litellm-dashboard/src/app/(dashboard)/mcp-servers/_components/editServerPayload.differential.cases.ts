@@ -14,6 +14,7 @@ const SERVER: MCPServer = {
   updated_at: "2024-01-01T00:00:00Z",
   updated_by: "user-1",
   mcp_access_groups: [],
+  rpm: undefined,
 };
 
 export const baseUi: EditServerUiState = {
@@ -45,6 +46,7 @@ const ROOT = {
   url: "https://example.com/mcp",
   auth_type: "none",
   max_concurrent_requests: undefined,
+  rpm: undefined,
   mcp_access_groups: [],
   extra_headers: [],
   static_headers: [],

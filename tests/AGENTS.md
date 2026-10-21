@@ -1,7 +1,8 @@
 # Tests
 
 Nothing on the other side of the call: `tests/unit`. A proxy we start with an upstream we script:
-`tests/integration`. Someone else's service with real credentials: `tests/e2e`. Two fit, split it
+`tests/integration`. Someone else's service with real credentials: `tests/e2e`. Tests of that harness
+itself, no proxy at all: `tests/e2e_harness`. Two fit, split it
 
 ## What good looks like
 

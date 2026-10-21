@@ -105,7 +105,7 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
-vi.mock("@/app/(dashboard)/api-keys/ApiKeysDashboard", () => ({ default: stub("api-keys-dashboard") }));
+vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({ default: stub("home-page") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
@@ -119,7 +119,7 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 }));
 vi.mock("@/components/pass_through_settings", () => ({ default: stub("pass-through-settings") }));
 vi.mock("@/components/budgets/budget_panel", () => ({ default: stub("budget-panel") }));
-vi.mock("@/components/view_logs", () => ({ default: stub("spend-logs") }));
+vi.mock("@/components/logs", () => ({ default: stub("spend-logs") }));
 vi.mock("@/components/model_hub_table", () => ({ default: stub("model-hub-table") }));
 vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
@@ -271,7 +271,7 @@ describe("CreateKeyPage auth behavior", () => {
 
     // And the default page content appears (ApiKeysDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("home-page")).toBeInTheDocument();
     });
   });
 

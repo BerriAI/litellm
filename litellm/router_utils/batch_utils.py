@@ -150,7 +150,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         return file_content
 
 
-def _get_router_metadata_variable_name(function_name: str | None) -> str:
+def get_router_metadata_variable_name(function_name: str | None) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
@@ -171,6 +171,9 @@ def _get_router_metadata_variable_name(function_name: str | None) -> str:
         return "litellm_metadata"
     else:
         return "metadata"
+
+
+_get_router_metadata_variable_name = get_router_metadata_variable_name
 
 
 BATCH_RETRIEVE_CALL_TYPES: Final = frozenset(

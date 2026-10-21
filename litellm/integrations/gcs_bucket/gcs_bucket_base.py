@@ -53,13 +53,13 @@ class GCSBucketBase(CustomBatchLogger):
         if vertex_instance is None:
             vertex_instance = vertex_chat_completion
 
-        _auth_header, vertex_project = await vertex_instance._ensure_access_token_async(
+        _auth_header, vertex_project = await vertex_instance.ensure_access_token_async(
             credentials=service_account_json,
             project_id=None,
             custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_instance._get_token_and_url(
+        auth_header, _ = vertex_instance.get_token_and_url(
             model="gcs-bucket",
             auth_header=_auth_header,
             vertex_credentials=service_account_json,
@@ -89,13 +89,13 @@ class GCSBucketBase(CustomBatchLogger):
         # from Secret Manager.
         project_id: Final = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
 
-        _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
+        _auth_header, vertex_project = vertex_chat_completion.ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=project_id,
             custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_chat_completion._get_token_and_url(
+        auth_header, _ = vertex_chat_completion.get_token_and_url(
             model="gcs-bucket",
             auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
@@ -192,7 +192,7 @@ class GCSBucketBase(CustomBatchLogger):
         _in_memory_key: Final = self._get_in_memory_key_for_vertex_instance(credentials)
         if _in_memory_key not in self.vertex_instances:
             vertex_instance: Final = VertexBase()
-            await vertex_instance._ensure_access_token_async(
+            await vertex_instance.ensure_access_token_async(
                 credentials=credentials,
                 project_id=None,
                 custom_llm_provider="vertex_ai",

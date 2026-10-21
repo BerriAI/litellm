@@ -69,7 +69,7 @@ class PatternMatchRouter:
             llm_deployment: str or List[str]
         """
         # Convert the pattern to a regex
-        regex: Final = self._pattern_to_regex(pattern)
+        regex: Final = self.pattern_to_regex(pattern)
         if regex in self.patterns:
             self.patterns[regex].append(llm_deployment)
             return
@@ -86,7 +86,7 @@ class PatternMatchRouter:
             if (remaining := [d for d in deployments if (d.get("model_info") or {}).get("id") != model_id])
         }
 
-    def _pattern_to_regex(self, pattern: str) -> str:
+    def pattern_to_regex(self, pattern: str) -> str:
         """
         Convert a wildcard pattern to a regex pattern
 
@@ -109,6 +109,8 @@ class PatternMatchRouter:
         # regex = re.escape(regex).replace(r"\.\*", ".*")
         # return f"^{regex}$"
         return re.escape(pattern).replace(r"\*", "(.*)")
+
+    _pattern_to_regex = pattern_to_regex
 
     def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: list[dict]) -> list[dict]:
         new_deployments: Final = []
@@ -141,7 +143,7 @@ class PatternMatchRouter:
                 return None
 
             regex_filtered_model_names: Final = (
-                tuple(self._pattern_to_regex(m) for m in filtered_model_names)
+                tuple(self.pattern_to_regex(m) for m in filtered_model_names)
                 if filtered_model_names is not None
                 else ()
             )

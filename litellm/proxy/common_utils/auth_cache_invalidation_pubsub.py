@@ -4,12 +4,16 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.config_sync_pubsub import (
-    _ConfigSyncPubSub,
-    _pubsub_capable_client,
+from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
+    ConfigSyncPubSub,
+    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     coordination_redis_cache,
+    pubsub_capable_client,
 )
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
     from litellm.caching.in_memory_cache import InMemoryCache
@@ -73,13 +77,7 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
 
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
-                cache_key,
-            )
-            return
+        client: Final = pubsub_capable_client(redis_cache)
         async with _in_flight_publishes:
             await client.publish(auth_cache_invalidation_channel(redis_cache), message)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
@@ -129,6 +127,7 @@ async def publish_auth_cache_invalidation(
     await asyncio.sleep(0)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
@@ -184,13 +183,7 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
-                        "cross-worker eviction falls back to the local cache TTL"
-                    )
-                    return
+                client = pubsub_capable_client(self._redis_cache)
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
@@ -209,13 +202,14 @@ class AuthCacheInvalidationSubscriber:
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
             self._apply_message(message)
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
         parsed: Final = _message_from_data(data)
@@ -230,7 +224,7 @@ class AuthCacheInvalidationSubscriber:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
         try:
             await pubsub.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection

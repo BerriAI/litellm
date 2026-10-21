@@ -6,7 +6,7 @@ from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.decisions.transformation import ir_to_systemone_response, systemone_request_to_ir
 from litellm.llms.openai.decisions.transformation import (
-    OPENAI_DECISIONS_ENDPOINT,
+    OpenAIDecisionsConfig,
     ir_to_openai_request,
     ir_to_openai_response,
     openai_request_to_ir,
@@ -101,7 +101,7 @@ def test_an_openai_request_reaches_openai_unchanged() -> None:
 def test_an_openai_response_reaches_the_caller_unchanged() -> None:
     ir: Final = _openai_ir(_OPENAI_REQUEST)
 
-    parsed: Final = OPENAI_DECISIONS_ENDPOINT.parse_response(_OPENAI_RESPONSE, ir)
+    parsed: Final = OpenAIDecisionsConfig().parse_response(_OPENAI_RESPONSE, ir)
 
     assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
 
@@ -110,7 +110,7 @@ def test_answers_openai_did_not_return_are_refusals() -> None:
     ir: Final = _openai_ir(_OPENAI_REQUEST)
     payload: Final = {**_OPENAI_RESPONSE, "answers": [_PREDICATE_ANSWER]}
 
-    response: Final = ir_to_openai_response(OPENAI_DECISIONS_ENDPOINT.parse_response(payload, ir), ir, "requested")
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
 
     assert [answer.type for answer in response.answers] == ["predicate", "refusal", "refusal", "refusal"]
     assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
@@ -181,6 +181,32 @@ def test_systemone_questions_without_instructions_become_valid_openai_questions(
     assert all(question.instructions for question in _OPENAI_BODY.validate_python(body).questions)
 
 
+def test_systemone_images_reach_openai_as_input_images_ahead_of_the_state() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": {"ticket": 1234},
+            "questions": {"damaged": {"type": "noul", "instructions": "Is the item damaged?"}},
+            "images": ["data:image/png;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        }
+    )
+
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    {"type": "input_image", "image_url": "data:image/webp;base64,BB=="},
+                    {"type": "input_text", "text": '{"ticket": 1234}'},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"}],
+    }
+
+
 @pytest.mark.parametrize(
     "question",
     ({"type": "choice", "criteria": {"refund": None}}, {"type": "score", "criteria": ["minor"]}),
@@ -230,7 +256,7 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
         ],
     }
 
-    response: Final = ir_to_systemone_response(OPENAI_DECISIONS_ENDPOINT.parse_response(payload, ir), ir)
+    response: Final = ir_to_systemone_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == {
         "model": "gpt-6-luna",

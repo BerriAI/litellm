@@ -526,7 +526,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
     ) -> RealtimeResponseTypedDict:
         payload: Final = message.decode("utf-8") if isinstance(message, bytes) else message
         result: Final[RealtimeResponseTypedDict] = {
-            "response": list(self._backend_events(payload)),  # mutable-ok: RealtimeResponseTypedDict.response is a list
+            "response": list(self._backend_events(payload)),
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
             "current_response_id": realtime_response_transform_input.get("current_response_id"),
             "current_delta_chunks": realtime_response_transform_input.get("current_delta_chunks"),

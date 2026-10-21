@@ -5,15 +5,33 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 import os
 from typing import Any, Final
 
+from pydantic import JsonValue
+
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
+
+
+def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model=request_model,
+        model_used=model_to_use,
+        tokenizer_type="azure_ai_anthropic_api",
+        error=True,
+        error_message=(
+            f"No Azure AI API base is set for model {request_model or model_to_use}, so tokens can't be counted. "
+            "Set api_base on the deployment or AZURE_AI_API_BASE or AZURE_API_BASE in the proxy environment."
+        ),
+        status_code=500,
+    )
 
 
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
@@ -34,6 +52,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
@@ -61,18 +81,15 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         if not api_key:
             api_key = os.getenv("AZURE_AI_API_KEY")
 
-        # Get API base from deployment config or environment
-        api_base = litellm_params.get("api_base")
-        if not api_base:
-            api_base = os.getenv("AZURE_AI_API_BASE")
-
-        if not api_key:
-            verbose_logger.warning("No Azure AI API key found for token counting")
-            return None
+        api_base: Final = (
+            litellm_params.get("api_base")
+            or os.getenv("AZURE_AI_API_BASE")
+            or os.getenv("AZURE_API_BASE")
+            or litellm.api_base
+        )
 
         if not api_base:
-            verbose_logger.warning("No Azure AI API base found for token counting")
-            return None
+            return _missing_api_base_response(request_model, model_to_use)
 
         try:
             result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(

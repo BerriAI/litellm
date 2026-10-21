@@ -66,6 +66,25 @@ def _response(content: str) -> ModelResponse:
     return response
 
 
+_REPLY_SHAPES: Final = ("fenced", "fenced-with-language", "prose-before", "prose-after", "fenced-then-prose")
+
+
+def _wrapped_reply(shape: str, verdict: str) -> str:
+    match shape:
+        case "fenced":
+            return f"  ```\n{verdict}\n```  "
+        case "fenced-with-language":
+            return f"```json\n{verdict}\n```"
+        case "prose-before":
+            return f"Sure {{here}} is the verdict you asked for:\n\n{verdict}"
+        case "prose-after":
+            return f"{verdict}\n\nThe efficient solver should handle this {{well}}."
+        case "fenced-then-prose":
+            return f"```json\n{verdict}\n```\n\n## Reasoning\n\nThe task is coupled, so the forecasts differ."
+        case _:
+            raise AssertionError(shape)
+
+
 def _router(content: str, config: ComplexityRouterConfig | None = None) -> tuple[ComplexityRouter, MagicMock]:
     client: Final = MagicMock(spec=Router)
     client.acompletion = AsyncMock(return_value=_response(content))
@@ -334,13 +353,12 @@ async def test_json_object_mode_supplies_schema_in_prompt() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ("json_schema", "json_object"))
-@pytest.mark.parametrize("fence", ("```json", "```"))
-async def test_fenced_forecast_routes_by_validated_probabilities(mode: str, fence: str) -> None:
+@pytest.mark.parametrize("shape", _REPLY_SHAPES)
+async def test_wrapped_forecast_routes_by_validated_probabilities(mode: str, shape: str) -> None:
     base: Final = _config().llm_v2_config
     assert base is not None
     config: Final = _config(llm_v2_config={**base.model_dump(), "response_format": mode})
-    content: Final = f"  {fence}\n{_verdict().model_dump_json()}\n```  "
-    router, client = _router(content, config)
+    router, client = _router(_wrapped_reply(shape, _verdict().model_dump_json()), config)
     result: Final = await router.async_pre_routing_hook(
         model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
     )
@@ -452,6 +470,93 @@ async def test_provider_failure_redacts_prompt_text_from_warning(caplog: pytest.
     assert outcome.cause == "llm_v2_fallback"
     assert "LLM classifier failed (ValueError)" in caplog.text
     assert "private task text" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("crux", "likely_failure"))
+async def test_long_verdict_explanations_still_route_by_validated_probabilities(field: str) -> None:
+    explanation: Final = "The solver must keep the nested retry behavior intact while it edits. " * 12
+    assert len(explanation) > 512
+    verdict: Final = _verdict().model_dump()
+    if field == "crux":
+        content: Final = json.dumps({**verdict, "crux": explanation})
+    else:
+        forecasts: Final = {**verdict["forecasts"], "efficient": {**verdict["forecasts"]["efficient"], field: explanation}}
+        content = json.dumps({**verdict, "forecasts": forecasts})
+    router, _ = _router(content)
+    outcome: Final = await router.aclassify("Fix nested behavior")
+    assert outcome.cause == "llm_v2_classifier"
+    assert outcome.llm_v2_forecast is not None
+    assert outcome.llm_v2_forecast.use_efficient
+
+
+@pytest.mark.parametrize("field", ("crux", "likely_failure"))
+def test_blank_verdict_explanations_are_still_rejected(field: str) -> None:
+    verdict: Final = _verdict().model_dump()
+    blank: Final = (
+        {**verdict, "crux": "   "}
+        if field == "crux"
+        else {**verdict, "forecasts": {**verdict["forecasts"], "capable": {"likely_failure": "   ", "p_solve": 0.5}}}
+    )
+    with pytest.raises(ValidationError):
+        LLMV2Verdict.model_validate(blank)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message_logging_off", (False, True))
+async def test_unparseable_reply_is_logged_with_its_text_unless_message_logging_is_off(
+    caplog: pytest.LogCaptureFixture, message_logging_off: bool
+) -> None:
+    reply: Final = "I cannot forecast this one, the task text is too {vague} to score."
+    router, _ = _router(reply)
+    outcome: Final = await router.aclassify("hi", request_kwargs={"turn_off_message_logging": message_logging_off})
+    assert outcome.cause == "llm_v2_fallback"
+    assert "classifier verdict rejected (" in caplog.text
+    assert "Invalid LLM V2 forecast" in caplog.text
+    assert ("raw reply withheld" in caplog.text) is message_logging_off
+    assert (reply in caplog.text) is not message_logging_off
+
+
+_MESSAGE_LOGGING_OPT_OUTS: Final = (
+    pytest.param({"turn_off_message_logging": "True"}, False, id="key-logging-settings-string"),
+    pytest.param({"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}, False, id="redaction-header"),
+    pytest.param({}, True, id="global-setting"),
+    pytest.param({"metadata": {"headers": None}}, False, id="undecidable-headers-fail-closed"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("request_kwargs", "global_off"), _MESSAGE_LOGGING_OPT_OUTS)
+async def test_unparseable_reply_text_is_withheld_under_every_message_logging_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    request_kwargs: dict[str, object],
+    global_off: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", global_off)
+    reply: Final = "I cannot forecast this one, the task text is too {vague} to score."
+    router, _ = _router(reply)
+    outcome: Final = await router.aclassify("hi", request_kwargs=request_kwargs)
+    assert outcome.cause == "llm_v2_fallback"
+    assert "raw reply withheld" in caplog.text
+    assert reply not in caplog.text
+
+
+_REPLIES_THE_JSON_SCANNER_CANNOT_DECODE: Final = (
+    pytest.param('{"a":' * 3000, id="deeply-nested"),
+    pytest.param('{"capability_p": ' + "9" * 5000 + "}", id="integer-over-the-digit-limit"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", _REPLIES_THE_JSON_SCANNER_CANNOT_DECODE)
+async def test_undecodable_reply_is_rejected_as_an_invalid_forecast(
+    caplog: pytest.LogCaptureFixture, reply: str
+) -> None:
+    router, _ = _router(reply)
+    outcome: Final = await router.aclassify("hi", request_kwargs={})
+    assert outcome.cause == "llm_v2_fallback"
+    assert "Invalid LLM V2 forecast" in caplog.text
 
 
 def test_response_schema_requires_both_model_forecasts() -> None:

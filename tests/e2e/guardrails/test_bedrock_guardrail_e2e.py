@@ -21,11 +21,13 @@ from typing import Final
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import UnknownApiError
+from e2e_http import StreamingResponse, UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import (
     BedrockGuardrailParamsBody,
     GuardrailsClient,
     poll_until_blocked,
+    poll_until_blocked_stream,
 )
 from lifecycle import ResourceManager
 from pydantic import JsonValue, TypeAdapter
@@ -57,6 +59,15 @@ class TestBedrockGuardrail:
     @pytest.mark.covers(
         "guardrail.bedrock.pre_call.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_pre_call_blocks_harmful_prompt(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -94,6 +105,14 @@ class TestBedrockGuardrail:
     @pytest.mark.covers(
         "guardrail.bedrock.post_call.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_post_call_blocks_denied_model_output(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -135,3 +154,119 @@ class TestBedrockGuardrail:
                 )
             case _:
                 pytest.fail(f"bedrock post_call guardrail did not block denied model output; got {result}")
+
+    @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_pre_call_blocks_on_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = _register_pre_call(client, resources, "e2e-bedrock-messages")
+
+        result = poll_until_blocked_stream(
+            lambda: client.messages_raw(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
+        )
+        _assert_policy_block(result, "/v1/messages")
+
+    @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_pre_call_blocks_on_responses(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = _register_pre_call(client, resources, "e2e-bedrock-responses")
+
+        result = poll_until_blocked_stream(
+            lambda: client.responses(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
+        )
+        _assert_policy_block(result, "/v1/responses")
+
+    @pytest.mark.covers("guardrail.bedrock.post_call.blocks", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
+    def test_bedrock_post_call_blocks_denied_streamed_output_and_passes_clean_streams(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        blocked_word = os.environ.get("BEDROCK_GUARDRAIL_BLOCKED_WORD", "FORBIDDENWORD")
+        name = f"e2e-bedrock-post-stream-{unique_marker()}"
+        guardrail_id = client.register(
+            name,
+            BedrockGuardrailParamsBody(
+                mode="post_call",
+                default_on=False,
+                guardrailIdentifier=os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"],
+                guardrailVersion=os.environ["BEDROCK_GUARDRAIL_VERSION"],
+            ),
+        )
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
+        blocked = poll_until_blocked_stream(
+            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+        )
+        _assert_policy_block(blocked, "streamed /chat/completions")
+        error = _blocked_stream_error(blocked)
+        assert isinstance(error, dict) and set(error) == {"error"}, (
+            f"a blocked stream must return only an error, not model content: {blocked.body[:400]}"
+        )
+        assert "violated guardrail policy" in json.dumps(error["error"]).lower(), (
+            f"the error must name the guardrail verdict; got: {blocked.body[:400]}"
+        )
+        assert blocked_word not in json.dumps(_without_assessments(error)), (
+            f"the blocked model output must not leak into the error; got: {blocked.body[:400]}"
+        )
+
+        clean = client.chat_stream_raw(
+            scoped_key, MODEL, "Reply with exactly this one word and nothing else: hello", guardrails=[name]
+        )
+        assert clean.ok and clean.is_streaming, f"a clean output must stream through the guardrail: {clean.body[:400]}"
+        assert clean.stream_events and clean.stream_error is None, f"clean stream carried no content: {clean!r}"
+
+
+def _register_pre_call(client: GuardrailsClient, resources: ResourceManager, prefix: str) -> str:
+    name = f"{prefix}-{unique_marker()}"
+    guardrail_id = client.create_bedrock_guardrail(
+        name,
+        identifier=os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"],
+        version=os.environ["BEDROCK_GUARDRAIL_VERSION"],
+    )
+    resources.defer(lambda: client.delete_guardrail(guardrail_id))
+    return name
+
+
+def _blocked_stream_error(result: StreamingResponse) -> JsonValue:
+    if not result.is_streaming:
+        return _JSON.validate_json(result.body)
+    payloads = (line.removeprefix("data:").strip() for line in result.body.splitlines() if line.startswith("data:"))
+    frames = tuple(payload for payload in payloads if payload != "[DONE]")
+    assert len(frames) == 1, f"a blocked SSE response must carry exactly one error frame, got: {result.body[:400]}"
+    return _JSON.validate_json(frames[0])
+
+
+def _assert_policy_block(result: StreamingResponse, surface: str) -> None:
+    assert result.status_code == 400, (
+        f"{surface}: a Bedrock policy block must be HTTP 400, got {result.status_code}: {result.body[:400]}"
+    )
+    assert "violated guardrail policy" in result.body.lower(), (
+        f"{surface}: block body must name the guardrail verdict; got: {result.body[:400]}"
+    )

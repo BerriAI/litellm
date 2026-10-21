@@ -2,10 +2,12 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -21,6 +23,9 @@ from ...base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from ..common_utils import DeepgramException
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -105,7 +110,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response["task"] = "transcribe"
 
             # Use detected_language if available, otherwise default to "en"
-            detected_language: Final = first_channel.get("detected_language")
+            detected_language: Final = _JSON_OBJECT.validate_python(first_channel).get("detected_language")
             response["language"] = detected_language if detected_language else "en"
 
             response["duration"] = response_json["metadata"]["duration"]
@@ -114,11 +119,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if "words" in first_alternative:
                 response["words"] = [
                     {"word": word["word"], "start": word["start"], "end": word["end"]}
-                    for word in first_alternative["words"]
+                    for word in _JSON_OBJECTS.validate_python(first_alternative["words"])
                 ]
 
             # Store full response in hidden params
-            response._hidden_params = response_json
+            response.hidden_params = response_json
 
             return response
 

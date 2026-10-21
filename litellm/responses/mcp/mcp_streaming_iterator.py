@@ -281,6 +281,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
+        served_tools: Sequence[MCPTool] | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -300,6 +301,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
         self.base_iterator: BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None = (
@@ -374,9 +376,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         if raw_headers_from_request:
             headers_obj: Final = Headers(raw_headers_from_request)
-            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            self.mcp_auth_header = MCPRequestHandler.get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler.get_oauth2_headers_from_headers(headers_obj)
 
         # Also check if headers are provided in tools array (from request body)
         tools: Final[Sequence[object] | None] = self.original_request_params.get("tools")
@@ -387,7 +389,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if tool_headers and isinstance(tool_headers, dict):
                         # Merge tool headers into mcp_server_auth_headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                        tool_mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(
                             headers_obj_from_tool
                         )
 
@@ -414,7 +416,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
+        return LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
 
     def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
         err: Final = self._stream_error
@@ -648,9 +650,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 *self._composed_output,
                 *_output_items(response_obj),
             ]
-            merged_response: Final = response_obj.model_copy(
-                update={"output": merged_output}  # mutable-ok: pydantic's update argument must be a dict
-            )
+            merged_response: Final = response_obj.model_copy(update={"output": merged_output})
             _set_event_field(chunk, "response", merged_response)
         return chunk
 
@@ -741,7 +741,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)
+                tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
             else:
                 tool_calls = []
             if not tool_calls:
@@ -759,7 +759,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     tool_name,
                     tool_arguments,
                     tool_call_id,
-                ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                ) = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
                     item_id = f"mcp_{uuid.uuid4().hex[:8]}"
                     output_index = next_output_index
@@ -767,11 +767,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     call_items[tool_call_id] = (item_id, output_index)
                     self.tool_execution_events.append(
                         OutputItemAddedEvent.model_validate(
-                            {  # mutable-ok: consumed once by model_validate
+                            {
                                 "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                                 "sequence_number": len(self.tool_execution_events) + 1,
                                 "output_index": output_index,
-                                "item": {  # mutable-ok: consumed once by model_validate
+                                "item": {
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
@@ -796,8 +796,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.tool_execution_events.extend(call_events[:-1])
 
             # Execute the tools
-            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                 tool_server_map=self.tool_server_map,
+                served_tools=self.served_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,
@@ -806,7 +807,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
-                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+                request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
             )
 
@@ -823,7 +824,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         name,
                         args,
                         call_id,
-                    ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                    ) = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)
                     if call_id == tool_call_id:
                         tool_name = name or "unknown"
                         tool_arguments = args or "{}"
@@ -849,7 +850,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
                 mcp_call_item = BaseLiteLLMOpenAIResponseObject(
-                    **{  # mutable-ok: consumed once by the model constructor
+                    **{
                         "id": item_id,
                         "type": "mcp_call",
                         "status": "completed",
@@ -899,11 +900,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Create follow-up input
             if self.collected_response is not None:
-                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
                     self.original_request_params
                 )
 
-                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
                     original_input=self.original_request_params.get("input"),

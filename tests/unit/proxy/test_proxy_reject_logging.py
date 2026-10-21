@@ -83,7 +83,7 @@ def router() -> Router:
                 "litellm_params": {
                     "model": "openai/fake",
                     "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
-                    "api_key": "sk-12345",
+                    "api_key": "sk-98765",
                 },
             }
         ]
@@ -115,7 +115,7 @@ def _register_proxy_test_logger(callback_logger: testLogger) -> None:
                 "messages": [
                     {
                         "role": "user",
-                        "content": "Hello here is my OPENAI_API_KEY = sk-12345",
+                        "content": "Hello here is my OPENAI_API_KEY = sk-98765",
                     }
                 ],
             },
@@ -154,6 +154,7 @@ async def test_chat_completion_request_with_redaction(route, body, router, monke
         scope={
             "type": "http",
             "method": "POST",
+            "path": route,
             "headers": [(b"content-type", b"application/json")],
             "query_string": query_params.encode(),
         }
@@ -173,8 +174,8 @@ async def test_chat_completion_request_with_redaction(route, body, router, monke
             response = await chat_completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
+                    api_key="sk-98765",
+                    token="hashed_sk-98765",
                     rpm_limit=0,
                     request_route=route,
                 ),
@@ -184,8 +185,8 @@ async def test_chat_completion_request_with_redaction(route, body, router, monke
             response = await completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
+                    api_key="sk-98765",
+                    token="hashed_sk-98765",
                     rpm_limit=0,
                     request_route=route,
                 ),
@@ -195,8 +196,8 @@ async def test_chat_completion_request_with_redaction(route, body, router, monke
             response = await embeddings(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
+                    api_key="sk-98765",
+                    token="hashed_sk-98765",
                     rpm_limit=0,
                     request_route=route,
                 ),

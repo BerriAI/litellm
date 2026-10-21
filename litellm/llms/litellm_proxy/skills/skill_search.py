@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.llms.litellm_proxy.skills.constants import MAX_SKILLS_PER_SEARCH
 from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.semantic_text_index import (
     SemanticTextIndex,
     router_embedder,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -63,7 +64,7 @@ SkillSearchOutcome: TypeAlias = SkillSearchHits | SkillSearchNotConfigured | Ski
 HostedSkillSearchOutcome: TypeAlias = SkillSearchOutcome | SkillSearchUnsupportedProvider
 
 
-class SkillSearchResult(BaseModel):
+class SkillSearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     skill_id: str

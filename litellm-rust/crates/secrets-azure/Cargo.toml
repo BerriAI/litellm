@@ -20,7 +20,7 @@ percent-encoding = "2.3"
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
-wiremock = "0.6.5"
+wiremock.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

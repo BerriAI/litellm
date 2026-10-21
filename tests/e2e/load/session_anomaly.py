@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, Success
+from e2e_metadata import step
 from models import CacheControl, RichMessage, TextBlock
 from transport import Transport
 
@@ -230,6 +231,7 @@ def run_session(
     )
 
 
+@step("Run {sessions} concurrent sessions of {turns_per_session} turns against {model}")
 def run_concurrent_sessions(
     transport: Transport,
     key: str,
@@ -248,6 +250,7 @@ def run_concurrent_sessions(
         return tuple(turn for future in futures for turn in future.result())
 
 
+@step("Poll the key's spend until it holds steady for {settle_seconds}s")
 def settled_spend(
     read_spend: Callable[[], float],
     poll_interval: float,

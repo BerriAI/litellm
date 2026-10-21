@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 import click
 import requests
+from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -120,6 +121,8 @@ class CliAuthResult(TypedDict):
 
 
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -485,7 +488,7 @@ def prompt_team_selection_fallback(
 
 def _response_error_detail(response: requests.Response) -> str | None:
     try:
-        body: Final[dict[str, object] | list[object] | str | int | float | bool | None] = response.json()
+        body: Final = _JSON_OBJECT.validate_python(response.json())
     except ValueError:
         return None
     detail: Final = body.get("detail") if isinstance(body, dict) else None

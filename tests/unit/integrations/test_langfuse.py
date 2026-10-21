@@ -1399,13 +1399,12 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import weakref
 
     from litellm.caching.llm_caching_handler import LLMClientCache
-
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     logger = _build_langfuse_logger(monkeypatch)
 
-    cached_handler = _get_httpx_client()
+    cached_handler = get_httpx_client()
     handler_ref = weakref.ref(cached_handler)
 
     assert logger.langfuse_client is cached_handler.client
@@ -2196,6 +2195,58 @@ def test_log_event_returns_the_v2_dict_shape_for_the_alerting_trace_id_cache():
     assert isinstance(returned, dict)
     assert returned["trace_id"] == "c" * 32
     assert returned["generation_id"]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_source"),
+    [
+        ({}, None),
+        ({"trace_id": "my-unique-trace-id"}, "my-unique-trace-id"),
+        ({"existing_trace_id": "my-unique-existing-trace-id"}, "my-unique-existing-trace-id"),
+        (
+            {"trace_id": "my-unique-trace-id", "existing_trace_id": "my-unique-existing-trace-id"},
+            "my-unique-existing-trace-id",
+        ),
+    ],
+)
+def test_logging_get_trace_id_reports_the_langfuse_trace_that_won_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, str],
+    expected_source: str | None,
+) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _steering_logger()
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", logger)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    call_id: Final = f"trace-precedence-{len(metadata)}-{expected_source}"
+    logging_obj: Final = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        litellm_call_id=call_id,
+        start_time=datetime.datetime.now(),
+        function_id="trace-precedence",
+    )
+
+    litellm.completion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "trace precedence"}],
+        mock_response="ok",
+        litellm_logging_obj=logging_obj,
+        metadata=dict(metadata),
+    )
+    deadline: Final = time.monotonic() + 5
+    while logging_obj.get_trace_id(service_name="langfuse") is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    expected_trace_id: Final = resolve_trace_id(expected_source or logging_obj.litellm_trace_id)
+    assert logging_obj.get_trace_id(service_name="langfuse") == expected_trace_id
+    assert _span_trace_id(_exported_span(logger, exporter)) == expected_trace_id
 
 
 def test_parse_langfuse_debug_only_enables_on_true_strings():

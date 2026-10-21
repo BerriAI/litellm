@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "key_hash": {
+      "type": "string"
+    },
+    "team_id": {
+      "type": "string"
+    },
+    "trace_ref": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_id",
+    "key_hash",
+    "trace_ref"
+  ],
+  "title": "FeedbackTargetRow",
+  "type": "object"
+}

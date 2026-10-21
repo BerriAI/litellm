@@ -14,20 +14,21 @@ from math import isclose, isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_cost_per_unit,
     calculate_prompt_caching_savings,
     generic_cost_per_token,
+    get_cost_per_unit,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -122,7 +123,7 @@ class PricingBasis(NamedTuple):
 _STANDARD_RATES: Final = PricingBasis()
 
 
-class BaselineCostSnapshot(BaseModel):
+class BaselineCostSnapshot(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model: str
@@ -692,7 +693,7 @@ def compute_savings_spend(
     request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
     provider: Final = request_pricing[0]
     pricing: Final = request_pricing[1]
-    input_cost: Final = (_get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
+    input_cost: Final = (get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
     compression: Final = max(compression_saved_tokens, 0) * input_cost
     prompt_caching: Final = _prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0

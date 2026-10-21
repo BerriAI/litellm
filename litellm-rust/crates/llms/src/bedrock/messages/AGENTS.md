@@ -1,0 +1,3 @@
+This directory owns Bedrock's Messages adapter: its endpoints, authentication policy, wire adaptation, and response decoding. Implement the shared adapter contract from `base_llm/messages`, consume API data contracts from `litellm-llms-types::formats::messages`, and leave call orchestration to `inference-messages`
+
+The Claude adapter may explicitly reuse payload policy from `anthropic/messages` when it applies to Bedrock's Claude backend. Keep Bedrock-specific differences here. Sharing that helper does not make Anthropic policy a format-wide default or justify a dependency from `base_llm/messages` on provider implementations

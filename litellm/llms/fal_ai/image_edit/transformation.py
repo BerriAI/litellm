@@ -82,7 +82,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
-        return list(SUPPORTED_OPENAI_PARAMS)  # mutable-ok: base class contract returns a list
+        return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
         self,
@@ -90,7 +90,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return {  # mutable-ok: base class contract returns a dict
+        return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
             if value is not None
@@ -114,7 +114,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         final_api_key: Final = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
-        return {**headers, "Authorization": f"Key {final_api_key}"}  # mutable-ok: base class contract returns a dict
+        return {**headers, "Authorization": f"Key {final_api_key}"}
 
     def use_multipart_form_data(self) -> bool:
         return False
@@ -171,7 +171,5 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
         model_response: Final = ImageResponse()
-        model_response.data = list(  # mutable-ok: ImageResponse.data is typed as a list
-            fal_images_to_image_objects(response_json.get("images", ()))
-        )
+        model_response.data = list(fal_images_to_image_objects(response_json.get("images", ())))
         return model_response

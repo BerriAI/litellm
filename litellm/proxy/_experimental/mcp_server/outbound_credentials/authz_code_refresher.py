@@ -25,7 +25,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshTokenPresented,
     enforce_oauth_identity_binding,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request, get_cimd_client_id
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -47,6 +47,7 @@ class CredentialPersist(Protocol):
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
         identity_binding_proof: str | None = None,
+        cimd_client_id: str | None = None,
     ) -> None: ...
 
 
@@ -112,12 +113,14 @@ class AuthorizationCodeRefresher:
         if not token_url:
             return None
 
+        cimd_client_id: Final = token.cimd_client_id or get_cimd_client_id(server)
         try:
             token_request: Final = build_upstream_oauth2_token_request(
                 server,
                 auth_method=server.token_endpoint_auth_method,
                 client_id=server.client_id,
                 client_secret=server.client_secret,
+                cimd_client_id=cimd_client_id,
             )
         except TokenEndpointAuthConfigError as exc:
             verbose_logger.warning("MCP OAuth refresh misconfigured for server %s: %s", server_id, exc)
@@ -155,22 +158,21 @@ class AuthorizationCodeRefresher:
         expires_in: Final = _parse_expires_in(body.get("expires_in"))
         scopes: Final = _parse_scopes(body.get("scope")) or token.scopes
 
-        if binding_proof is not None:
-            await self._persist(
-                user_id,
-                server_id,
-                access_token,
-                new_refresh,
-                expires_in,
-                scopes or None,
-                identity_binding_proof=binding_proof,
-            )
-        else:
-            await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
+        await self._persist(
+            user_id,
+            server_id,
+            access_token,
+            new_refresh,
+            expires_in,
+            scopes or None,
+            **({"identity_binding_proof": binding_proof} if binding_proof is not None else {}),
+            **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+        )
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,
             refresh_token=new_refresh,
             scopes=scopes,
             identity_binding_proof=binding_proof,
+            cimd_client_id=cimd_client_id,
         )

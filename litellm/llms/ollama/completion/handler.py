@@ -87,7 +87,7 @@ async def ollama_aembeddings(
     prompts: list[str],
     model_response: EmbeddingResponse,
     optional_params: dict,
-    logging_obj: Any,
+    logging_obj: object,
     encoding: TokenEncoder | None,
 ):
     if not api_base.endswith("/api/embed"):
@@ -114,7 +114,7 @@ def ollama_embeddings(
     prompts: list[str],
     optional_params: dict,
     model_response: EmbeddingResponse,
-    logging_obj: Any,
+    logging_obj: object,
     encoding: TokenEncoder | None = None,
 ):
     if not api_base.endswith("/api/embed"):

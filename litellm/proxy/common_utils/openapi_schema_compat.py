@@ -40,7 +40,9 @@ def get_openapi_schema_with_compat(
         from pydantic_core import core_schema
 
         # Store original method
-        original_unknown_type_schema: Final = GenerateSchema._unknown_type_schema
+        original_unknown_type_schema: Final = (
+            GenerateSchema._unknown_type_schema  # pyright: ignore[reportPrivateUsage]  # Pydantic schema internals
+        )
 
         def patched_unknown_type_schema(self, obj):
             """Patch to handle openai.Timeout and other non-serializable types"""

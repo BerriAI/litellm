@@ -5,9 +5,10 @@ from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
@@ -210,6 +211,10 @@ class AlertType(str, Enum):
     internal_user_updated = "internal_user_updated"
     internal_user_deleted = "internal_user_deleted"
 
+    # MCP tool catalog events
+    mcp_tool_description_blocked = "mcp_tool_description_blocked"
+    mcp_pinned_tools_changed = "mcp_pinned_tools_changed"
+
 
 DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # LLM related alerts
@@ -235,6 +240,9 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     AlertType.region_outage_alerts,
     # Fallback alerts
     AlertType.fallback_reports,
+    # MCP tool catalog alerts
+    AlertType.mcp_tool_description_blocked,
+    AlertType.mcp_pinned_tools_changed,
 ]
 
 
@@ -250,7 +258,7 @@ class AlertQueueItem(TypedDict):
     format: NotRequired[ReadOnly[str]]
 
 
-class HangingRequestData(BaseModel):
+class HangingRequestData(LiteLLMBaseModel):
     request_id: str
     model: str
     api_base: str | None = None

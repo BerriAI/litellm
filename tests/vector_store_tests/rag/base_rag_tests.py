@@ -77,7 +77,7 @@ class BaseRAGTest(ABC):
         """
         Test basic text file ingestion to vector store.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("basic_ingest")
         text_content = f"Test document {unique_id} for RAG ingestion.".encode("utf-8")
@@ -114,7 +114,7 @@ class BaseRAGTest(ABC):
         """
         import asyncio
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("ingest_query")
         text_content = f"""

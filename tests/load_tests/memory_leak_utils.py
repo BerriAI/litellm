@@ -36,7 +36,7 @@ from fastapi.responses import JSONResponse
 from litellm.router import Router
 
 # Test Configuration Constants
-TEST_API_KEY = "sk-1234"
+TEST_API_KEY = "sk-9876"
 TEST_MODEL_NAME = "gpt-3.5-turbo"
 
 # Timing Constants (seconds)

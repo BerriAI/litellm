@@ -89,14 +89,19 @@ module materially harder to understand.
 
 ## Tests
 
-Mirror this package under `tests/test_litellm/proxy/_experimental/mcp_server/`.
+Mirror this package under `tests/unit/proxy/_experimental/mcp_server/`.
 For regressions, extend the existing mapped test file instead of creating a new
 one. Use subdirectories that match the implementation path, such as
-`auth/test_token_exchange.py` for `auth/token_exchange.py` and
+`auth/test_token_endpoint_auth.py` for `auth/token_endpoint_auth.py` and
 `guardrail_translation/test_mcp_guardrail_handler.py` for
 `guardrail_translation/handler.py`.
 
 Use `tests/mcp_tests/` only when extending an existing broader MCP integration
 scenario that already lives there. Route, auth, tool listing, tool execution,
 OAuth, sampling, elicitation, DB, and dashboard-session changes should have
-focused coverage in the mirrored `tests/test_litellm/...` path first.
+focused coverage in the mirrored `tests/unit/proxy/...` path first.
+
+The environment-backed constants in `utils.py` (`LITELLM_MCP_SERVER_NAME`,
+`LITELLM_MCP_SERVER_DESCRIPTION`, `MCP_TOOL_PREFIX_SEPARATOR`) are read once at
+import time. Tests that override those variables must reload the module, as
+`test_mcp_server_identity_env.py` does, or they assert against stale values.

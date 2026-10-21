@@ -11,8 +11,11 @@ from typing import TYPE_CHECKING, Any, Final
 from typing_extensions import TypedDict
 
 from litellm import verbose_logger
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+HEALTH_CHECKS_TARGET: Final = "health_checks"
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -28,6 +31,7 @@ class DeploymentHealthStateValue(TypedDict):
     reason: str
 
 
+@with_service_target(HEALTH_CHECKS_TARGET)
 def _read_shared_health_snapshot(cache: DualCache, key: str) -> object:
     redis_cache: Final = cache.redis_cache
     if redis_cache is None:
@@ -53,6 +57,7 @@ class DeploymentHealthCache:
         self.cache = cache
         self.staleness_threshold = staleness_threshold
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     def set_deployment_health_states(self, states: dict[str, DeploymentHealthStateValue]) -> None:
         """Merge the given states into the shared cache entry, pruning expired ones.
 
@@ -100,6 +105,7 @@ class DeploymentHealthCache:
             and (now - state.get("timestamp", 0)) < self.staleness_threshold
         }
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:
@@ -112,6 +118,7 @@ class DeploymentHealthCache:
             )
             return set()
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     def get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Sync version: return set of deployment IDs currently marked unhealthy and not stale."""
         try:

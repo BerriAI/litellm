@@ -80,11 +80,12 @@ from e2e_config import (
     PROXY_REPLICA_URLS,
     unique_marker,
 )
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from memory_readings import RssCapture, RssReading, WorkerKey, read_rss_everywhere
 from models import ChatMessage, RouterSettingsOverride, SpendLogRow
 from proxy_client import ProxyClient
-from reliability_support import chat_override, create_never_benched_refusing_deployment
+from reliability_support import REAL_MODEL, chat_override, create_never_benched_refusing_deployment
 
 pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
@@ -222,6 +223,11 @@ def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
 
 class TestReliabilityMemory:
     @pytest.mark.covers("reliability.perf.idle_memory.under_slo")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+        )
+    )
     def test_workers_idle_under_rss_budget_before_traffic(self, idle_rss: RssCapture) -> None:
         assert not idle_rss.failures, (
             f"{len(idle_rss.failures)} replica(s) gave no RSS reading when the session started, so their idle "
@@ -242,6 +248,14 @@ class TestReliabilityMemory:
         )
 
     @pytest.mark.covers("reliability.perf.memory.under_slo")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failing_requests_do_not_grow_rss_or_stored_request(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

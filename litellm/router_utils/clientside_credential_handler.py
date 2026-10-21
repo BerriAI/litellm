@@ -13,7 +13,15 @@ Ensures cooldowns are applied correctly.
 
 from typing import Final
 
+from litellm.types.utils import server_owned_wif_litellm_params
+
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
+
+# Set on a deployment whose api_base was client-redirected, so the Anthropic auth path refuses to
+# mint a federation token there even when WIF is configured only through ANTHROPIC_* env vars (which
+# cannot be cleared from litellm_params).
+DISABLE_WORKLOAD_IDENTITY_PARAM: Final = "anthropic_disable_workload_identity_federation"
+_WIF_CLEAR_ON_BASE_OVERRIDE: Final = tuple(sorted(server_owned_wif_litellm_params))
 
 
 def _admin_config_fields_to_clear_on_base_override() -> list[str]:
@@ -59,6 +67,14 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
+        # Workload-identity federation minting fields, restated here from
+        # server_owned_wif_litellm_params the same way azure_ad_token above is restated
+        # despite also being declared on CredentialLiteLLMParams (hence covered by
+        # typed_fields too): a federation token minted for a client-redirected api_base
+        # would send the workload's OIDC assertion, and then the minted bearer, to the
+        # caller-chosen host, so this list must stay correct even if a field is ever
+        # dropped from the typed model.
+        *_WIF_CLEAR_ON_BASE_OVERRIDE,
     ]
     return typed_fields + kwargs_only_fields
 
@@ -101,5 +117,6 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
             litellm_params.pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]
+        litellm_params[DISABLE_WORKLOAD_IDENTITY_PARAM] = True
 
     return litellm_params

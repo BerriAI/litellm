@@ -106,7 +106,7 @@ class TestModelScopeConfig:
             }
         ]
 
-        result = config._transform_messages(messages=messages, model=DEFAULT_MODEL)
+        result = config.transform_messages(messages=messages, model=DEFAULT_MODEL)
 
         assert result[0]["content"] == "Hello world"
 
@@ -123,7 +123,7 @@ class TestModelScopeConfig:
             }
         ]
 
-        result = config._transform_messages(messages=messages, model=DEFAULT_MODEL)
+        result = config.transform_messages(messages=messages, model=DEFAULT_MODEL)
 
         assert isinstance(result[0]["content"], list)
         assert len(result[0]["content"]) == 2
@@ -135,7 +135,7 @@ class TestModelScopeConfig:
         config = ModelScopeChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
 
-        result = config._transform_messages(messages=messages, model=DEFAULT_MODEL)
+        result = config.transform_messages(messages=messages, model=DEFAULT_MODEL)
 
         assert result[0]["content"] == "Hello"
 
@@ -153,7 +153,7 @@ class TestModelScopeConfig:
             },
         ]
 
-        result = config._transform_messages(messages=messages, model=DEFAULT_MODEL)
+        result = config.transform_messages(messages=messages, model=DEFAULT_MODEL)
 
         assert result[0]["content"] == "Hi"
         assert result[1]["content"] == "Hello!"
@@ -174,7 +174,7 @@ class TestModelScopeConfig:
             },
         ]
 
-        result = config._transform_messages(messages=messages, model=DEFAULT_MODEL)
+        result = config.transform_messages(messages=messages, model=DEFAULT_MODEL)
 
         assert result[0]["content"] == "Hi"
         assert result[1]["content"] == "Hello!"
@@ -233,7 +233,7 @@ class TestModelScopeConfig:
         """Explicit api_base and api_key should be returned as-is."""
         config = ModelScopeChatConfig()
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
+        api_base, api_key = config.get_openai_compatible_provider_info(
             api_base="https://custom.example.com/v1",
             api_key="my-key",
         )
@@ -249,7 +249,7 @@ class TestModelScopeConfig:
             os.environ.pop("MODELSCOPE_API_BASE", None)
             os.environ.pop("MODELSCOPE_API_KEY", None)
 
-            api_base, api_key = config._get_openai_compatible_provider_info(
+            api_base, api_key = config.get_openai_compatible_provider_info(
                 api_base=None,
                 api_key=None,
             )
@@ -265,7 +265,7 @@ class TestModelScopeConfig:
             os.environ,
             {"MODELSCOPE_API_BASE": "https://env.modelscope.cn/v1"},
         ):
-            api_base, _ = config._get_openai_compatible_provider_info(
+            api_base, _ = config.get_openai_compatible_provider_info(
                 api_base=None,
                 api_key=None,
             )

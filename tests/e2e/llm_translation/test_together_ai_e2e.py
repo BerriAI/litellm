@@ -26,6 +26,7 @@ from typing import Final
 import pytest
 from e2e_config import STREAM_MIN_LEAD_SECONDS, provider_paces_stream, unique_marker
 from e2e_http import StreamingResponse, require_successful_call, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicAssistantTurn,
@@ -324,6 +325,15 @@ def _weather_call(client: PassthroughClient, key: str, model: str) -> OutMessage
 
 class TestTogetherChatCompletions:
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoning_surfaces_as_reasoning_content(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -347,6 +357,15 @@ class TestTogetherChatCompletions:
         assert message.content and "43" in message.content, f"answer lost: {message}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_reasoning_streams_as_reasoning_content_deltas(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -369,6 +388,15 @@ class TestTogetherChatCompletions:
         assert "43" in content, f"streamed answer lost: {content!r}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_call_is_returned(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -376,6 +404,15 @@ class TestTogetherChatCompletions:
         _ = _weather_call_ids(_weather_call(client, key, model))
 
     @pytest.mark.covers("llm.chat_completions.together_ai.tool_use.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_tool_call_is_streamed(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -407,6 +444,15 @@ class TestTogetherChatCompletions:
         assert "paris" in args.location.lower(), f"streamed tool arguments lost the location: {args}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.multi_turn.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_result_round_trip(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -443,6 +489,16 @@ class TestTogetherChatCompletions:
         )
 
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.template_kwargs_forwarded")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            models=(HYBRID_REASONING_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_template_kwargs_reach_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -476,6 +532,16 @@ class TestTogetherChatCompletions:
         assert treatment.content and "43" in treatment.content, f"answer lost: {treatment}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.replayed_reasoning_forwarded")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            models=(REASONING_REPLAY_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_replayed_reasoning_content_reaches_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -496,6 +562,14 @@ class TestTogetherChatCompletions:
         )
 
     @pytest.mark.covers("llm.chat_completions.together_ai.basic.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cost_header_and_spend_row_match_the_registry_price(
         self,
         client: PassthroughClient,
@@ -551,6 +625,16 @@ class TestTogetherChatCompletions:
         )
 
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.effort_none_disables")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            models=(HYBRID_REASONING_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoning_effort_none_reaches_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -584,6 +668,16 @@ class TestTogetherChatCompletions:
         assert treatment.content and "43" in treatment.content, f"answer lost: {treatment}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.structured_output.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            models=(HYBRID_REASONING_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_response_format_json_schema_shapes_the_reply(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -608,6 +702,15 @@ class TestTogetherChatCompletions:
         assert person.name, f"schema-shaped reply carries an empty name: {message.content!r}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.prompt_cache_5m.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cache_read_tokens_bill_at_the_cache_read_rate(
         self,
         client: PassthroughClient,
@@ -705,6 +808,15 @@ def _messages_weather_call(
 
 class TestTogetherMessages:
     @pytest.mark.covers("llm.messages.together_ai.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_use_block_is_returned(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -712,6 +824,15 @@ class TestTogetherMessages:
         _messages_weather_call(client, key, model)
 
     @pytest.mark.covers("llm.messages.together_ai.multi_turn.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.TOGETHER_AI,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_result_round_trip(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
@@ -744,6 +865,14 @@ class TestTogetherMessages:
 
     @pytest.mark.covers("llm.messages.together_ai.basic.stream.works")
     @pytest.mark.provider_live
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.TOGETHER_AI,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_streams_text_deltas(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:

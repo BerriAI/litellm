@@ -369,6 +369,11 @@ async def list_vector_stores(
     - page: int - Page number for pagination (default: 1)
     - page_size: int - Number of items per page (default: 100)
     """
+    if page_size < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page_size must be >= 1, got page_size={page_size}",
+        )
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
 
     from litellm.proxy.proxy_server import prisma_client
@@ -378,7 +383,7 @@ async def list_vector_stores(
 
     try:
         # Get vector stores from database first (source of truth)
-        vector_stores_from_db: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
+        vector_stores_from_db: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
 
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:

@@ -11,6 +11,7 @@ from itertools import accumulate
 from pathlib import Path
 from typing import Final
 
+from e2e_metadata import step
 from pydantic import BaseModel, TypeAdapter
 
 _LOCUSTFILE = Path(__file__).with_name("locustfile.py")
@@ -180,6 +181,7 @@ def read_generator_warnings(stderr: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(saturated))
 
 
+@step("Drive {users} locust users at {endpoints} for {duration_seconds}s")
 def run_gateway_load(
     *,
     base_url: str,

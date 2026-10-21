@@ -393,39 +393,39 @@ async def test_router_free_paid_tier_with_responses_api():
 
 
 def test_get_tags_from_request_kwargs_none():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
     # None request kwargs should safely return empty list
-    assert _get_tags_from_request_kwargs(None) == []
+    assert get_tags_from_request_kwargs(None) == []
 
 
 def test_get_tags_from_request_kwargs_various_inputs():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
     # Direct "metadata" path
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free"]}}) == ["free"]
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": []}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": None}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": {}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": None}) == []
+    assert get_tags_from_request_kwargs({"metadata": {"tags": ["free"]}}) == ["free"]
+    assert get_tags_from_request_kwargs({"metadata": {"tags": []}}) == []
+    assert get_tags_from_request_kwargs({"metadata": {"tags": None}}) == []
+    assert get_tags_from_request_kwargs({"metadata": {}}) == []
+    assert get_tags_from_request_kwargs({"metadata": None}) == []
 
     # Indirect via "litellm_params" - metadata inside
-    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
-    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
-    assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
+    assert get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
+    assert get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
+    assert get_tags_from_request_kwargs({"litellm_params": {}}) == []
 
     # Alternate metadata variable name: "litellm_metadata"
-    assert _get_tags_from_request_kwargs(
+    assert get_tags_from_request_kwargs(
         {"litellm_metadata": {"tags": ["alt"]}},
         metadata_variable_name="litellm_metadata",
     ) == ["alt"]
-    assert _get_tags_from_request_kwargs(
+    assert get_tags_from_request_kwargs(
         {"litellm_params": {"litellm_metadata": {"tags": ["nested-alt"]}}},
         metadata_variable_name="litellm_metadata",
     ) == ["nested-alt"]
 
     # No relevant keys present
-    assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
+    assert get_tags_from_request_kwargs({"foo": "bar"}) == []
 
 
 @pytest.mark.parametrize(
@@ -444,15 +444,15 @@ def test_get_tags_from_request_kwargs_reads_no_tags_from_a_non_dict_shape(reques
     """Metadata and `tags` are request-controlled, so a client can send either as a
     string, a list or null. Every shape that cannot hold string tags reads as untagged
     instead of raising, because callers run on the hot request path."""
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
-    assert _get_tags_from_request_kwargs(request_kwargs) == []
+    assert get_tags_from_request_kwargs(request_kwargs) == []
 
 
 def test_get_tags_from_request_kwargs_keeps_only_string_tags():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
+    assert get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
 
 
 # --- _split_tags unit tests ---
@@ -1168,7 +1168,7 @@ class _FakeRouterForChainOverride:
     def __init__(self, all_deployments):
         self._all_deployments = all_deployments
 
-    def _get_all_deployments(self, model_name):
+    def get_all_deployments(self, model_name):
         return self._all_deployments
 
 
@@ -1215,7 +1215,7 @@ def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_looku
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
     class _BrokenRouter:
-        def _get_all_deployments(self, model_name):
+        def get_all_deployments(self, model_name):
             raise RuntimeError("model group not found")
 
     healthy_deployments = [{"model_info": {"enable_tag_filtering": False}}]
@@ -2536,7 +2536,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     router = _quality_high_cost_low_router()
 
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -2561,7 +2561,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_a
     from unittest.mock import AsyncMock, patch
 
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         response = await router.acompletion(

@@ -68,7 +68,7 @@ class CloudZeroStreamer:
 
     def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
         """Group data by date, converting to UTC and validating dates."""
-        daily_batches: Final[dict[str, list[dict[str, Any]]]] = {}
+        daily_batches: Final[dict[str, list[dict[str, object]]]] = {}
 
         # Ensure we have the required columns
         if "time/usage_start" not in data.columns:
@@ -209,7 +209,7 @@ class CloudZeroStreamer:
 
         return payload
 
-    def _convert_cbf_to_api_format(self, row: dict[str, Any]) -> dict[str, Any] | None:
+    def _convert_cbf_to_api_format(self, row: dict[str, object]) -> dict[str, Any] | None:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names

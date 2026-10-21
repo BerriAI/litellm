@@ -5,11 +5,12 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, List, Optional
-from unittest.mock import MagicMock, patch, AsyncMock
+from typing import Dict, Final, List, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.datastructures import URL
+from starlette.types import Message
 from litellm._logging import verbose_proxy_logger
 import logging
 import litellm
@@ -21,6 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 from fastapi import WebSocket, HTTPException, status
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from tests._master_key import MASTER_KEY
 
 
 class Request:
@@ -105,7 +107,7 @@ async def test_check_blocked_team():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     _team_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -121,10 +123,10 @@ async def test_check_blocked_team():
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -146,7 +148,7 @@ async def test_team_object_has_object_permission_id():
 
     team_id = "team-vector"
     permission_id = "perm-vector-123"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
     hashed_key = hash_token(user_key)
 
     valid_token = UserAPIKeyAuth(
@@ -159,10 +161,10 @@ async def test_team_object_has_object_permission_id():
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "test-client")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common_checks:
@@ -235,7 +237,7 @@ async def test_aaauser_personal_budgets(key_ownership):
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     _user_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     if key_ownership == "user_key":
         valid_token = UserAPIKeyAuth(
@@ -260,10 +262,10 @@ async def test_aaauser_personal_budgets(key_ownership):
     user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
@@ -289,12 +291,12 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
     from fastapi import Request
 
     # Setup
-    user_key = "sk-1234"
+    user_key = MASTER_KEY
 
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     # Create request with prohibited parameter in body
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     async def return_body():
@@ -322,7 +324,7 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
 )
 async def test_auth_with_allowed_routes(route, should_raise_error):
     # Setup
-    user_key = "sk-1234"
+    user_key = MASTER_KEY
 
     general_settings = {"allowed_routes": ["/embeddings"]}
     from fastapi import Request
@@ -331,10 +333,10 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
 
     initial_general_settings = getattr(proxy_server, "general_settings")
 
-    setattr(proxy_server, "master_key", "sk-1234")
+    setattr(proxy_server, "master_key", MASTER_KEY)
     setattr(proxy_server, "general_settings", general_settings)
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
     request._url = URL(url=route)
 
     if should_raise_error:
@@ -411,7 +413,7 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
     from starlette.datastructures import URL
     from fastapi import Request
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
     request._url = URL(url=route)
 
     if should_be_allowed:
@@ -483,10 +485,10 @@ async def test_auth_not_connected_to_db():
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", None)
     setattr(
         litellm.proxy.proxy_server,
@@ -494,7 +496,7 @@ async def test_auth_not_connected_to_db():
         {"allow_requests_on_db_unavailable": True},
     )
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     valid_token = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -571,7 +573,7 @@ def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, 
 
 
 def test_read_request_body():
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from fastapi import Request
 
     payload = "()" * 1000000
@@ -581,7 +583,7 @@ def test_read_request_body():
         return payload
 
     request.body = return_body
-    result = _read_request_body(request)
+    result = read_request_body(request)
     assert result is not None
 
 
@@ -601,7 +603,7 @@ async def test_auth_with_form_data_and_model():
     )
 
     # Setup
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     # Create a virtual key with a specific model
     valid_token = UserAPIKeyAuth(
@@ -613,7 +615,7 @@ async def test_auth_with_form_data_and_model():
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     # Create request with form data
@@ -655,7 +657,7 @@ async def test_soft_budget_alert():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     # Setup
-    user_key = "sk-12345"
+    user_key = "sk-98765"
     soft_budget = 10
     current_spend = 15  # Spend exceeds soft budget
 
@@ -672,11 +674,11 @@ async def test_soft_budget_alert():
 
     # Mock proxy server settings
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
 
     # Create request
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     # Track if budget_alerts was called
@@ -813,9 +815,9 @@ def test_is_allowed_route():
     ],
 )
 def test_is_user_proxy_admin(user_obj, expected_result):
-    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
+    from litellm.proxy.auth.auth_checks import is_user_proxy_admin
 
-    assert _is_user_proxy_admin(user_obj) == expected_result
+    assert is_user_proxy_admin(user_obj) == expected_result
 
 
 @pytest.mark.parametrize(
@@ -845,9 +847,9 @@ def test_is_user_proxy_admin(user_obj, expected_result):
     ],
 )
 def test_get_user_role(user_obj, expected_role):
-    from litellm.proxy.auth.user_api_key_auth import _get_user_role
+    from litellm.proxy.auth.auth_checks import get_user_role
 
-    assert _get_user_role(user_obj) == expected_role
+    assert get_user_role(user_obj) == expected_role
 
 
 @pytest.mark.asyncio
@@ -983,7 +985,7 @@ def test_user_api_key_auth_end_user_str():
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     user_api_key_args = {
-        "api_key": "sk-1234",
+        "api_key": MASTER_KEY,
         "parent_otel_span": None,
         "user_role": LitellmUserRoles.PROXY_ADMIN,
         "end_user_id": "1",
@@ -1153,7 +1155,7 @@ async def test_x_litellm_api_key():
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
@@ -1162,7 +1164,7 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     valid_token = await user_api_key_auth(
@@ -1188,7 +1190,7 @@ async def test_user_api_key_from_query_param():
     user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(
@@ -1272,7 +1274,7 @@ async def test_user_model_max_budget_is_threaded_onto_the_auth_object():
 
     auth_obj = await _return_user_api_key_auth_obj(
         user_obj=user_obj,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         parent_otel_span=None,
         valid_token_dict={"token": "hash"},
         route="/chat/completions",
@@ -1317,7 +1319,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
     user_model_max_budget = {model: {"budget_limit": 1.0, "time_period": "1mo"}}
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "present")
 
     await user_api_key_cache.async_set_cache(
@@ -1336,7 +1338,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
         ttl=600,
     )
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     async def return_body():
@@ -1440,7 +1442,11 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def calls_before_each_return(node):
         seen_check = []
@@ -1481,7 +1487,11 @@ def test_every_jwt_branch_carries_the_user_model_budget():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     assignments = [
         node
@@ -1614,7 +1624,11 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
         for parent in ast.walk(node):
@@ -1755,7 +1769,11 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     # Half one: the shared block copies the user row's budget onto the token.
     copies_user_row = [
@@ -1794,3 +1812,91 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
         "the mapped-key branch returns before the shared virtual-key checks, so the "
         "user's per-model budget is never attached and never enforced"
     )
+
+
+def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    return WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "query_string": b"model=gpt-5.4",
+            "headers": [(b"authorization", f"Bearer {bearer}".encode())],
+        },
+        receive,
+        send,
+    )
+
+
+def _serve_virtual_key(monkeypatch: pytest.MonkeyPatch, user_key: str, token: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=token)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "connected")
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", False)
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_logs_a_model_access_denial_as_one_warning_without_a_traceback(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.proxy_server import hash_token
+
+    user_key: Final = "sk-websocket-key-limited-to-mini"
+    _serve_virtual_key(
+        monkeypatch,
+        user_key,
+        UserAPIKeyAuth(token=hash_token(user_key), models=["gpt-5.4-mini"]),
+    )
+    sent: Final[list[Message]] = []
+    with (
+        caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(_rejected_websocket(sent, user_key))
+
+    assert rejection.value.status_code == 403
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
+    assert [record.getMessage() for record in proxy_records if record.levelno == logging.WARNING] == [
+        "key not allowed to access model. This key can only access models=['gpt-5.4-mini']. Tried to access gpt-5.4"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other_auth_errors(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.proxy_server import hash_token
+
+    user_key: Final = "sk-websocket-key-expired-in-2020"
+    expired_in_2020: Final = "2020-01-01T00:00:00+00:00"
+    _serve_virtual_key(
+        monkeypatch,
+        user_key,
+        UserAPIKeyAuth(token=hash_token(user_key), expires=expired_in_2020),
+    )
+    sent: Final[list[Message]] = []
+    with (
+        caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(_rejected_websocket(sent, user_key))
+
+    assert rejection.value.status_code == 403
+    assert "expired key" in str(rejection.value.detail).lower()
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
+    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]

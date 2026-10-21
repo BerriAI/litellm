@@ -44,6 +44,20 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if $.Values.lensWorker.enabled }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              {{- if semverCompare ">=1.19-0" $.Capabilities.KubeVersion.GitVersion }}
+              service:
+                name: {{ $fullName }}-lens-worker
+                port:
+                  number: {{ $.Values.lensWorker.service.port }}
+              {{- else }}
+              serviceName: {{ $fullName }}-lens-worker
+              servicePort: {{ $.Values.lensWorker.service.port }}
+              {{- end }}
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             {{- if and .pathType (semverCompare ">=1.18-0" $.Capabilities.KubeVersion.GitVersion) }}

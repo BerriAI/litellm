@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,20 +29,20 @@ class GatewayRequestCounts:
 GatewayRequestSnapshot: TypeAlias = Mapping[GatewayRequestKey, GatewayRequestCounts]
 
 
-class GatewayRequestBreakdownEntry(BaseModel):
+class GatewayRequestBreakdownEntry(LiteLLMBaseModel):
     category: str
     route: str
     successful_requests: int = 0
     failed_requests: int = 0
 
 
-class GatewayRequestDailyEntry(BaseModel):
+class GatewayRequestDailyEntry(LiteLLMBaseModel):
     date: str
     successful_requests: int = 0
     failed_requests: int = 0
 
 
-class GatewayRequestActivityResponse(BaseModel):
+class GatewayRequestActivityResponse(LiteLLMBaseModel):
     """Response for GET /gateway/daily/activity."""
 
     total_successful_requests: int = 0

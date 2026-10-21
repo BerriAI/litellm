@@ -15,7 +15,9 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
+from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -69,7 +71,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for item in items
         if item.path.is_relative_to(root) and item.path.relative_to(root).parts[0] in OWNED_DIRECTORIES
     )
-    if owned and os.environ.get("GITHUB_ACTIONS") == "true":
+    circleci_only: Final = tuple(
+        item for item in owned if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES
+    )
+    if circleci_only and os.environ.get("GITHUB_ACTIONS") == "true":
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
@@ -124,6 +129,33 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
         yield value
+
+
+@pytest.fixture(scope="session")
+def shared_provider_server() -> Iterator[SharedProvider]:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
+    with shared_provider() as server:
+        yield server
+        late: Final = server.received()
+        assert late == (), f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+
+
+@pytest.fixture
+def provider(shared_provider_server: SharedProvider, request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
+    stray: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert stray == (), (
+        f"the shared fake provider got {[item.target for item in stray]} "
+        f"after {shared_provider_server.last_test} finished"
+    )
+    yield shared_provider_server
+    shared_provider_server.last_test = request.node.nodeid
+    unused: Final = len(shared_provider_server.replies)
+    unread: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert unused == 0, f"{unused} queued provider replies were never requested"
+    assert unread == (), f"the test never read the provider requests {[item.target for item in unread]}"
 
 
 @pytest.fixture

@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,6 +32,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -321,10 +326,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             )
                         )
 
-        if usage_metadata := response_data.get("usageMetadata", None):
-            model_response.usage = self._transform_image_usage(usage_metadata)
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if usage_metadata := response_object.get("usageMetadata", None):
+            model_response.usage = self._transform_image_usage(_JSON_DICT.validate_python(usage_metadata))
 
-        web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
+        web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
         if web_search_requests and model_response.usage is not None:
             setattr(model_response.usage, "web_search_requests", web_search_requests)
 

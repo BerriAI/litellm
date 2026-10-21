@@ -21,7 +21,6 @@ const mockTeamInfoCall = vi.fn();
 const mockUserUpdateUserCall = vi.fn();
 const mockFetchMCPServers = vi.fn();
 const mockListMCPTools = vi.fn();
-const mockUserDailyActivityCall = vi.fn();
 const mockUserDailyActivityAggregatedCall = vi.fn();
 
 const MCP_SERVER = { server_id: "srv-1", server_name: "GitHub MCP", alias: "GitHub MCP" };
@@ -65,8 +64,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
     formatDate: original.formatDate,
     serverRootPath: "/",
     userGetInfoV2: (...args: unknown[]) => mockUserGetInfoV2(...args),
-    userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-    userDailyActivityAggregatedCall: (...args: unknown[]) => mockUserDailyActivityAggregatedCall(...args),
+    dailyActivityAggregatedCall: (...args: unknown[]) => mockUserDailyActivityAggregatedCall(...args),
     userDeleteCall: vi.fn(),
     userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
@@ -349,7 +347,6 @@ const routerUsageResponse = (saved: number): AutoRouterBenchmarksResponse => ({
     saved_spend: saved,
     baseline_spend: 10 + saved,
     saved_pct: (100 * saved) / (10 + saved),
-    saved_per_session: saved / 2,
     cache: {
       coverage_pct: 100,
       hit_rate_pct: 0,
@@ -458,7 +455,6 @@ describe("UserInfoView savings", () => {
       Promise.resolve({ ...MOCK_USER_DATA_NO_TEAMS, user_id: userId }),
     );
     mockUserDailyActivityAggregatedCall.mockReset().mockResolvedValue(savingsResponse([]));
-    mockUserDailyActivityCall.mockReset().mockResolvedValue(savingsResponse([]));
   });
 
   afterEach(() => {
@@ -472,17 +468,18 @@ describe("UserInfoView savings", () => {
       const { rerender } = render(<UserInfoView {...props} userId="user-1" userRole={userRole} />);
       await user.click(await screen.findByRole("tab", { name: "Savings" }));
       expect(await screen.findByText("No usage recorded for this user in this range.")).toBeInTheDocument();
-      expect(mockUserDailyActivityAggregatedCall.mock.calls[0][3]).toBe("user-1");
+      expect(mockUserDailyActivityAggregatedCall.mock.calls[0]).toEqual([
+        "user",
+        expect.objectContaining({ entityIds: ["user-1"] }),
+      ]);
 
       mockUserDailyActivityAggregatedCall.mockClear();
-      mockUserDailyActivityCall.mockClear();
       rerender(<UserInfoView {...props} userId="another-user" userRole={userRole} />);
       await screen.findAllByText("another-user");
       expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
       expect(screen.queryByRole("tab", { name: "Savings" })).not.toBeInTheDocument();
       expect(screen.queryByText("No usage recorded for this user in this range.")).not.toBeInTheDocument();
       expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
-      expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
     },
   );
 
@@ -506,7 +503,6 @@ describe("UserInfoView savings", () => {
     render(<UserInfoView {...props} />);
     const savingsTab = await screen.findByRole("tab", { name: "Savings" });
     expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
-    expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
 
     await user.click(savingsTab);
 
@@ -516,12 +512,12 @@ describe("UserInfoView savings", () => {
     expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00Total");
     expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("-$3.00");
     expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledExactlyOnceWith(
-      "admin-token",
-      expect.any(Date),
-      expect.any(Date),
-      "user-123",
-      true,
-      null,
+      "user",
+      expect.objectContaining({
+        accessToken: "admin-token",
+        entityIds: ["user-123"],
+        includeCurrentUtcDay: true,
+      }),
     );
     expect(screen.getByTestId("user-savings-scope-note")).toHaveTextContent("JWT-authenticated requests");
     await user.click(screen.getByRole("tab", { name: "Per day" }));
@@ -544,12 +540,12 @@ describe("UserInfoView savings", () => {
     expect(await screen.findByTestId("user-savings-empty")).toHaveTextContent("Loading savings");
     expect(screen.queryByTestId("summary-card-total-recorded-savings")).not.toBeInTheDocument();
     expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
-      "admin-token",
-      expect.any(Date),
-      expect.any(Date),
-      "user-456",
-      true,
-      null,
+      "user",
+      expect.objectContaining({
+        accessToken: "admin-token",
+        entityIds: ["user-456"],
+        includeCurrentUtcDay: true,
+      }),
     );
     await act(async () => {
       nextUser.resolve(savingsResponse([savingsDay("2026-09-19", { autorouter_savings_spend: -7 })]));
@@ -596,27 +592,16 @@ describe("UserInfoView savings", () => {
     expect(await screen.findByTestId("summary-card-total-recorded-savings")).toHaveTextContent("-$7.00");
   });
 
-  it("reports an incomplete paginated read as unavailable instead of displaying a partial savings total", async () => {
+  it("reports a failed read as unavailable instead of displaying a partial savings total", async () => {
     mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
-    mockUserDailyActivityCall
-      .mockResolvedValueOnce({
-        results: [savingsDay("2026-09-19", { compression_savings_spend: 42 })],
-        metadata: { total_pages: 2, has_more: true, page: 1 },
-      })
-      .mockRejectedValueOnce(new Error("next page unavailable"));
     const user = userEvent.setup();
     render(<UserInfoView {...props} />);
     await user.click(await screen.findByRole("tab", { name: "Savings" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Savings are unavailable for this range");
-    expect(mockUserDailyActivityCall).toHaveBeenLastCalledWith(
-      "admin-token",
-      expect.any(Date),
-      expect.any(Date),
-      2,
-      "user-123",
-      true,
-      null,
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "user",
+      expect.objectContaining({ entityIds: ["user-123"] }),
     );
     expect(screen.queryByTestId("summary-card-total-recorded-savings")).not.toBeInTheDocument();
     expect(screen.queryByText(/No usage recorded/)).not.toBeInTheDocument();
@@ -639,6 +624,5 @@ describe("UserInfoView savings", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("this user has no ID");
     expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
-    expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
   });
 });

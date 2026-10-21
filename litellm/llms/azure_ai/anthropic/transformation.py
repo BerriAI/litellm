@@ -39,6 +39,10 @@ class AzureAnthropicConfig(AnthropicConfig):
     def custom_llm_provider(self) -> str | None:
         return "azure_ai"
 
+    @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return type(self) is AzureAnthropicConfig
+
     def should_strip_billing_metadata(self) -> bool:
         return True
 
@@ -73,7 +77,7 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools: Final = optional_params.get("tools")

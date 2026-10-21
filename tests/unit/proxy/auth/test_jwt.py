@@ -874,8 +874,7 @@ async def test_team_cache_update_called():
         cache,
     )
 
-    with patch.object(cache, "async_get_cache", new=AsyncMock()) as mock_call_cache:
-        cache.async_get_cache = mock_call_cache
+    with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[None])) as mock_call_cache:
         # Call the function under test
         await litellm.proxy.proxy_server.update_cache(
             token=None,
@@ -887,7 +886,7 @@ async def test_team_cache_update_called():
         )  # type: ignore
 
         await asyncio.sleep(3)
-        mock_call_cache.assert_awaited_once()
+        mock_call_cache.assert_awaited_once_with(keys=["team_id:1234"], parent_otel_span=None, throttle_redis=False)
 
 
 @pytest.fixture
@@ -1290,7 +1289,7 @@ def test_user_api_key_auth_jwt_hashing():
     assert jwt_token not in user_auth.token
 
     # Test with a regular API key (should not be hashed)
-    regular_api_key = "sk-1234567890abcdef"
+    regular_api_key = "sk-9876567890abcdef"
     user_auth_regular = UserAPIKeyAuth(api_key=regular_api_key)
 
     # Verify that regular API key is hashed normally (without "hashed-jwt-" prefix)
@@ -1321,7 +1320,7 @@ def test_jwt_handler_is_jwt_static_method():
     assert JWTHandler.is_jwt(invalid_jwt) == False
 
     # Test with regular API key
-    regular_key = "sk-1234567890abcdef"
+    regular_key = "sk-9876567890abcdef"
     assert JWTHandler.is_jwt(regular_key) == False
 
     # Test with empty string

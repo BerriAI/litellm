@@ -20,6 +20,8 @@ import time
 
 import pytest
 
+from tests._master_key import MASTER_KEY
+
 
 def is_docker_available() -> bool:
     """Check if Docker is available and running."""
@@ -140,17 +142,17 @@ class TestDockerNoNetworkOnDeploy:
         network requests are required during startup.
         """
         # Use a minimal config that doesn't require external services
-        minimal_config = """
+        minimal_config = f"""
 model_list:
   - model_name: fake-model
     litellm_params:
       model: fake/fake-model
 
 general_settings:
-  master_key: sk-test-1234
+  master_key: {MASTER_KEY}
   database_url: null
 
-environment_variables: {}
+environment_variables: {{}}
 """
 
         # Create a temporary config file
@@ -179,7 +181,7 @@ environment_variables: {}
             "-v",
             f"{config_path}:/app/config.yaml:ro",
             "-e",
-            "LITELLM_MASTER_KEY=sk-test-1234",
+            f"LITELLM_MASTER_KEY={MASTER_KEY}",
             "-e",
             "DATABASE_URL=",  # Empty to disable DB
             "-e",

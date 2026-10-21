@@ -12,6 +12,7 @@ from litellm.llms.azure.passthrough.transformation import (
     AzurePassthroughConfig,
     azure_router_model_in_endpoint,
     foreign_azure_deployment,
+    is_azure_body_model_inference_endpoint,
 )
 from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -157,7 +158,7 @@ def test_azure_passthrough_embeddings_relay_is_costed_per_input_token():
     assert isinstance(result, EmbeddingResponse)
     assert logging_obj.call_type == "aembedding"
     assert per_token > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1000 * per_token)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(1000 * per_token)
 
 
 def test_azure_passthrough_responses_relay_is_costed_per_token():
@@ -166,7 +167,7 @@ def test_azure_passthrough_responses_relay_is_costed_per_token():
 
     assert isinstance(result, ResponsesAPIResponse)
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 
@@ -320,7 +321,7 @@ def test_azure_passthrough_streaming_responses_chunks_are_costed_per_token():
     assert isinstance(response, ResponseCompletedEvent)
     assert response.response.usage.input_tokens == 1000
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 
@@ -487,3 +488,24 @@ def test_foreign_azure_deployment_skips_the_router_when_the_segment_is_the_group
 )
 def test_azure_router_model_in_endpoint_picks_the_first_router_model_segment(endpoint, expected):
     assert azure_router_model_in_endpoint(endpoint, frozenset({"gpt", "other-group"})) == expected
+
+
+@pytest.mark.parametrize(
+    "endpoint, expected",
+    [
+        ("openai/v1/responses", True),
+        ("openai/responses", True),
+        ("/openai/v1/chat/completions/", True),
+        ("openai/v1/embeddings", True),
+        ("models/chat/completions", True),
+        ("openai/v1/audio/speech", True),
+        ("openai/deployments/gpt-5.4/chat/completions", False),
+        ("openai/deployments/gpt-5.4/responses", False),
+        ("openai/v1/fine_tuning/jobs", False),
+        ("openai/v1/assistants", False),
+        ("openai/v1/responses/resp_123", False),
+        ("openai/v1/batches", False),
+    ],
+)
+def test_is_azure_body_model_inference_endpoint_admits_only_deployment_less_inference_paths(endpoint, expected):
+    assert is_azure_body_model_inference_endpoint(endpoint) is expected

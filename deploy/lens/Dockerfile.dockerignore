@@ -1,0 +1,15 @@
+**
+!deploy/
+!deploy/lens/
+!deploy/lens/python_policy.c
+!deploy/lens/python_runtime.py
+!litellm/
+!litellm/proxy/
+!litellm/proxy/lens/
+!litellm/proxy/lens/prompts/
+!litellm/proxy/lens/prompts/**
+!.cargo/
+!.cargo/**
+!litellm-rust/
+!litellm-rust/**
+litellm-rust/target/

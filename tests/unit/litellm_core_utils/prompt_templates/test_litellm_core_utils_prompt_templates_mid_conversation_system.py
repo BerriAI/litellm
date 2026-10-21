@@ -11,6 +11,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
+    anthropic_system_blocks,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -336,6 +337,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         },
         {"role": "assistant", "content": None, "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "", "signature": "s"}]},
         {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
         litellm.Message(
             role="assistant",
@@ -348,6 +350,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         "signed-thinking-block",
         "redacted-thinking-block",
         "signed-thinking-part",
+        "signed-empty-thinking-part",
         "function-call",
         "pydantic-tool-calls",
     ],
@@ -390,3 +393,23 @@ def test_flagged_placement_keeps_a_system_before_an_assistant_turn_whose_empty_t
     )
 
     assert _roles(placed) == ["user", "system", "assistant", "user"]
+
+
+def test_anthropic_system_blocks_keeps_text_parts_with_their_cache_control_and_drops_the_rest():
+    run = [
+        {"role": "system", "content": "one", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "two", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": ""},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aW1hZ2U="}},
+            ],
+        },
+        {"role": "system", "content": ""},
+    ]
+
+    assert anthropic_system_blocks(run) == (
+        {"type": "text", "text": "one", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": "two", "cache_control": {"type": "ephemeral"}},
+    )

@@ -1,0 +1,1 @@
+Return one JSON object matching response_schema. To continue, use tools and/or checkpoint with result=null. To finish, put the complete final output inside result, with tools=[] and checkpoint=null. Final-output fields belong inside result, never at the top level.

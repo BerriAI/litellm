@@ -127,6 +127,44 @@ class TestPartnerModelsCredentialReuse:
 
             assert mock_load.call_count == 1
 
+    def test_completion_works_without_the_vertexai_sdk(self):
+        """completion() reaches the HTTP handler when `import vertexai` raises ImportError."""
+        partner = VertexAIPartnerModels()
+
+        with (
+            patch.dict(sys.modules, {"vertexai": None}),
+            patch.object(
+                partner,
+                "_ensure_access_token",
+                return_value=("cached-token", "test-project"),
+            ),
+            patch(
+                "litellm.llms.vertex_ai.vertex_ai_partner_models.main.base_llm_http_handler"
+            ) as mock_handler,
+        ):
+            mock_handler.completion.return_value = "response"
+
+            result = partner.completion(
+                model="meta/llama-3.1-405b-instruct-maas",
+                messages=[{"role": "user", "content": "hello"}],
+                model_response=MagicMock(),
+                print_verbose=lambda *a, **kw: None,
+                encoding=MagicMock(),
+                logging_obj=MagicMock(),
+                api_base=None,
+                optional_params={},
+                custom_prompt_dict={},
+                headers=None,
+                timeout=30.0,
+                litellm_params={},
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                vertex_credentials=None,
+            )
+
+            assert result == "response"
+            mock_handler.completion.assert_called_once()
+
 
 class TestGemmaModelsCredentialReuse:
     def test_completion_uses_self_ensure_access_token(self):

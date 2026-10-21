@@ -810,7 +810,7 @@ async def test_maybe_run_weighted_failover_skips_when_remaining_all_in_cooldown(
 
     # Patch cooldown so B and C appear in cooldown.
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B", "C"]),
     ):
         result = await router._maybe_run_weighted_failover(
@@ -869,7 +869,7 @@ async def test_maybe_run_weighted_failover_proceeds_when_one_healthy_remains(
     monkeypatch.setattr("litellm.router.run_async_fallback", _stub_run_async_fallback)
 
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B"]),
     ):
         result = await router._maybe_run_weighted_failover(
@@ -935,7 +935,7 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
 
     # Put B in cooldown so weighted failover can't use it after A fails.
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B"]),
     ):
         response = await router.acompletion(

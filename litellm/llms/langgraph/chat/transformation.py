@@ -9,6 +9,7 @@ Non-streaming endpoint: POST /runs/wait
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
@@ -69,6 +70,13 @@ class LangGraphConfig(BaseConfig):
         api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
 
         return api_base, api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
@@ -134,7 +142,7 @@ class LangGraphConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
+    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, object]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
@@ -143,7 +151,7 @@ class LangGraphConfig(BaseConfig):
 
         Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: Final[list[dict[str, Any]]] = []
+        langgraph_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -166,7 +174,7 @@ class LangGraphConfig(BaseConfig):
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_message: dict[str, Any] = {
+            langgraph_message: dict[str, object] = {
                 "role": langgraph_role,
                 "content": content,
             }
@@ -201,7 +209,7 @@ class LangGraphConfig(BaseConfig):
         assistant_id: Final = self._get_assistant_id(model, optional_params)
         langgraph_messages: Final = self._convert_messages_to_langgraph_format(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "assistant_id": assistant_id,
             "input": {"messages": langgraph_messages},
         }
@@ -285,18 +293,21 @@ class LangGraphConfig(BaseConfig):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for synchronous streaming.
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
@@ -344,6 +355,9 @@ class LangGraphConfig(BaseConfig):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for asynchronous streaming.

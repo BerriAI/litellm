@@ -4,24 +4,23 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.chat_completions import dispatch
 from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule
+from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
-    LiteLLMChatCompletionsRequest,
     NativeAcompletion,
     NativeCompletion,
 )
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.public_call import NativeCall, native_call_hook
 from litellm.types.utils import ModelResponse
-from litellm.chat_completions import dispatch
-from litellm.rust_bridge.catalog import Rules
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final = ()
@@ -51,9 +50,7 @@ def test_python_route_forwards_original_call_shape() -> None:
         captured.append((call_args, call_kwargs))
         return response
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    def native(request: NativeCall) -> ModelResponse:
         pytest.fail("Python-only dispatch must not call native")
 
     assert (
@@ -62,7 +59,7 @@ def test_python_route_forwards_original_call_shape() -> None:
             kwargs,
             python=python,
             binding=completion_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=native_call_hook,
             rules=PYTHON_RULES,
         )
         is response
@@ -87,9 +84,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         captured.append((call_args, call_kwargs))
         return response
 
-    async def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    async def native(request: NativeCall) -> ModelResponse:
         pytest.fail("Python-only dispatch must not call native")
 
     result: Final = await _ADISPATCH.arun(
@@ -97,7 +92,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=acompletion_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=native_call_hook,
         rules=PYTHON_RULES,
     )
     assert result is response
@@ -119,15 +114,13 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
         "custom_llm_provider": "anthropic",
         "metadata": metadata,
     }
-    captured: Final[list[tuple[LiteLLMChatCompletionsRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
 
     def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: rejected Rust fallback
         pytest.fail("Required Rust dispatch must not call Python")
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
-        captured.append((request, args, kwargs))
+    def native(request: NativeCall) -> ModelResponse:
+        captured.append((request, request.args, request.kwargs))
         return ModelResponse()
 
     args: Final[tuple[object, ...]] = ("anthropic/claude-sonnet-4-5", MESSAGES)
@@ -136,19 +129,19 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=completion_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=native_call_hook,
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
-    assert request.model == "anthropic/claude-sonnet-4-5"
-    assert request.messages is MESSAGES
-    assert request.stream is True
-    assert request.api_key == "sk-test"
-    assert request.api_base == "https://example.invalid"
-    assert request.custom_llm_provider == "anthropic"
-    assert request.extra_headers == {"x-test": "1"}
-    assert request.kwargs == {"custom_llm_provider": "anthropic", "metadata": metadata}
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["messages"] is MESSAGES
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["base_url"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.resolved["extra_headers"] == {"x-test": "1"}
+    assert request.kwargs is kwargs
     assert call_args == args
     assert call_kwargs == kwargs
     assert call_kwargs["metadata"] is metadata
@@ -162,9 +155,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         called.append(True)
         return response
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    def native(request: NativeCall) -> ModelResponse:
         pytest.fail("acompletion's inner completion call must stay on Python")
 
     result: Final = _DISPATCH.run(
@@ -172,7 +163,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         {"acompletion": True},
         python=python,
         binding=completion_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=native_call_hook,
         rules=RUST_RULES,
     )
     assert result is response
@@ -194,9 +185,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
         captured.append((call_args, call_kwargs))
         return response
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    def native(request: NativeCall) -> ModelResponse:
         pytest.fail("Binding failures must be delegated to Python")
 
     assert (
@@ -205,7 +194,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
             kwargs,
             python=python,
             binding=completion_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=native_call_hook,
             rules=RUST_RULES,
         )
         is response
@@ -214,14 +203,10 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
 
 
 def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMChatCompletionsRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = ModelResponse()
 
-    def native(
-        request: LiteLLMChatCompletionsRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> ModelResponse:
+    def native(request: NativeCall) -> ModelResponse:
         captured.append(request)
         return expected
 
@@ -233,19 +218,15 @@ def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
     finally:
         NATIVE_COMPLETION.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
 async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMChatCompletionsRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = ModelResponse()
 
-    async def native(
-        request: LiteLLMChatCompletionsRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> ModelResponse:
+    async def native(request: NativeCall) -> ModelResponse:
         captured.append(request)
         return expected
 
@@ -257,7 +238,7 @@ async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.Mo
     finally:
         NATIVE_ACOMPLETION.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
@@ -275,13 +256,11 @@ def test_sync_completion_request_projects_public_arguments() -> None:
     rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
     expected: Final = ModelResponse()
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
-        assert request.model == "test-model"
-        assert request.messages == MESSAGES
-        assert request.custom_llm_provider == "openai"
-        assert request.stream is True
+    def native(request: NativeCall) -> ModelResponse:
+        assert request.resolved["model"] == "test-model"
+        assert request.resolved["messages"] == MESSAGES
+        assert request.resolved["custom_llm_provider"] == "openai"
+        assert request.resolved["stream"] is True
         return expected
 
     binding: Final[NativeBinding[NativeCompletion]] = NativeBinding("completion", validate=lambda _: None)
@@ -291,7 +270,7 @@ def test_sync_completion_request_projects_public_arguments() -> None:
         {"custom_llm_provider": "openai", "stream": True},
         python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=native_call_hook,
         rules=rules,
     )
 
@@ -309,9 +288,7 @@ async def test_async_completion_falls_back_after_native_declines() -> None:
     expected: Final = ModelResponse()
     rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_OUT),)
 
-    async def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    async def native(request: NativeCall) -> ModelResponse:
         raise declined("unsupported")
 
     async def python(*args: object, **kwargs: object) -> ModelResponse:
@@ -324,7 +301,7 @@ async def test_async_completion_falls_back_after_native_declines() -> None:
         {},
         python=python,
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=native_call_hook,
         rules=rules,
     )
 
@@ -338,9 +315,7 @@ def test_internal_acompletion_marker_bypasses_native() -> None:
     def python(*args: object, **kwargs: object) -> ModelResponse:
         return expected
 
-    def native(
-        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> ModelResponse:
+    def native(request: NativeCall) -> ModelResponse:
         pytest.fail("acompletion's inner completion call must stay on Python")
 
     binding: Final[NativeBinding[NativeCompletion]] = NativeBinding("completion", validate=lambda _: None)
@@ -350,8 +325,16 @@ def test_internal_acompletion_marker_bypasses_native() -> None:
         {"custom_llm_provider": "openai", "acompletion": True},
         python=python,
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=native_call_hook,
         rules=rules,
     )
 
     assert response is expected
+
+
+def test_positional_parameters_remain_available_to_native_projection() -> None:
+    request: Final = _DISPATCH.request(("anthropic/test-model", MESSAGES, 12.0, 0.25), {})
+    assert request is not None
+    assert request.resolved["timeout"] == 12.0
+    assert request.resolved["temperature"] == 0.25
+    assert request.resolved["messages"] is MESSAGES

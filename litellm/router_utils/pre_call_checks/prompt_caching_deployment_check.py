@@ -66,6 +66,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return healthy_deployments
         if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
             return healthy_deployments
+        if not healthy_deployments[1:]:
+            return healthy_deployments
 
         if messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
             messages=messages,

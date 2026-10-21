@@ -6,6 +6,7 @@ pull ``packaging``, ``pluggy`` and ``iniconfig`` into the environment and could 
 the very class of undeclared-dependency bug this guards against.
 """
 
+import argparse
 import importlib.util
 import sys
 import traceback
@@ -29,12 +30,26 @@ def check_environment_is_base_only() -> str:
 
 
 def check_import() -> str:
+    from importlib.metadata import distributions as installed_distributions
     from importlib.metadata import version
 
     import litellm
+    from litellm.llms.brave.search.transformation import BraveSearchConfig
 
+    _require(callable(BraveSearchConfig), "Brave search configuration unavailable")
     _require(bool(litellm.__file__), "litellm has no __file__")
-    return f"imported litellm {version('litellm')}"
+    from litellm._version import version as sdk_version
+
+    distributions = tuple(
+        distribution.metadata["Name"]
+        for distribution in installed_distributions()
+        if distribution.metadata["Name"] in ("litellm", "litellm-core")
+    )
+    _require(len(distributions) == 1, f"expected one SDK distribution, found {distributions}")
+    distribution = distributions[0]
+    _require(sdk_version == version(distribution), "SDK version does not match installed metadata")
+    _require("litellm.proxy.proxy_cli" not in sys.modules, "SDK import loaded the proxy CLI")
+    return f"imported {distribution} {sdk_version}"
 
 
 def check_completion() -> str:
@@ -97,12 +112,47 @@ def check_token_counter() -> str:
     return f"token_counter returned {count}"
 
 
+def check_tokenizer_dependencies() -> str:
+    import litellm
+    from litellm.rust_bridge import tokenizer
+    from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, Tokenizer
+    from litellm.utils import claude_json_str
+
+    _require(isinstance(litellm.encoding, Tokenizer), "runtime alias rejects the default encoding")
+    native = tokenizer.native_anthropic()
+    if native is not None:
+        _require(bool(native.encode("hello")), "native tokenizer returned no tokens")
+        _require(isinstance(HuggingFaceTokenizer(native), HuggingFace), "runtime alias rejects native tokenizers")
+    if importlib.util.find_spec("tokenizers") is not None:
+        python_tokenizer = tokenizer.from_str(claude_json_str)
+        _require(bool(python_tokenizer.encode("hello").ids), "Python tokenizer returned no tokens")
+        _require(isinstance(python_tokenizer, HuggingFace), "runtime alias rejects Python tokenizers")
+        return "installed Python tokenizer and available native tokenizer work"
+    try:
+        tokenizer.from_str(claude_json_str)
+    except ImportError as error:
+        _require("pip install tokenizers" in str(error), f"missing tokenizer guidance: {error}")
+    else:
+        raise AssertionError("Python tokenizer loaded without tokenizers")
+    return "native tokenizer works; Python tokenizer reports its missing dependency"
+
+
 def check_bedrock_credential_resolution() -> str:
     import os
     from unittest import mock
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
+    if importlib.util.find_spec("boto3") is None:
+        try:
+            BaseAWSLLM()._sign_request(
+                service_name="bedrock", headers={}, optional_params={"aws_region_name": "us-east-1"},
+                request_data={}, api_base="https://bedrock-runtime.us-east-1.amazonaws.com", api_key="",
+            )
+        except ImportError as error:
+            _require("pip install boto3" in str(error), f"missing installation guidance: {error}")
+            return "AWS signing explains how to install boto3"
+        raise AssertionError("AWS signing unexpectedly worked without boto3")
     non_aws_environ = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
     with mock.patch.dict(os.environ, non_aws_environ, clear=True):
         credentials = BaseAWSLLM().get_credentials(
@@ -125,6 +175,7 @@ CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("embedding", check_embedding),
     ("bundled model metadata", check_bundled_model_metadata),
     ("token counter", check_token_counter),
+    ("tokenizer dependencies", check_tokenizer_dependencies),
     ("bedrock credential resolution", check_bedrock_credential_resolution),
 )
 
@@ -137,7 +188,14 @@ def _run(check: Callable[[], str]) -> tuple[bool, str]:
 
 
 def main() -> int:
-    print(f"base SDK smoke check on {sys.executable}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=("legacy", "core", "dependencies"), default="legacy")
+    profile = parser.parse_args().profile
+    for module in ("boto3", "botocore", "tokenizers", "huggingface_hub"):
+        present = importlib.util.find_spec(module) is not None
+        _require(present == (profile != "core"), f"{profile}: unexpected presence of {module}: {present}")
+    _require(importlib.util.find_spec("jsonschema") is not None, "jsonschema must remain mandatory")
+    print(f"{profile} SDK smoke check on {sys.executable}")
     for label, check in CHECKS:
         passed, detail = _run(check)
         if not passed:

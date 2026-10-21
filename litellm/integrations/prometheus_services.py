@@ -113,7 +113,9 @@ class PrometheusServicesLogger:
         """
         Helper function to get a metric from the registry by name.
         """
-        return self.REGISTRY._names_to_collectors.get(metric_name)
+        return self.REGISTRY._names_to_collectors.get(  # pyright: ignore[reportPrivateUsage]  # Registry lookup has no public API
+            metric_name
+        )
 
     def create_histogram(self, service: str, type_of_request: str):
         metric_name: Final = f"litellm_{service}_{type_of_request}"
@@ -196,7 +198,7 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
-                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
@@ -233,7 +235,7 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
-                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
@@ -262,7 +264,7 @@ class PrometheusServicesLogger:
             for obj in prom_objects:
                 # increment both failed and total requests
                 if isinstance(obj, self.Counter):
-                    if "failed_requests" in obj._name:
+                    if "failed_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                         self.increment_counter(
                             counter=obj,
                             labels=payload.service.value,

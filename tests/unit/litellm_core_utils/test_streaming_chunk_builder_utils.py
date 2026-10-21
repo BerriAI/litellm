@@ -236,6 +236,31 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
     assert result[2]["signature"] == "sig_block2"
 
 
+def test_get_combined_thinking_content_keeps_signed_block_without_thinking_text():
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="claude-sonnet-4-20250514",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "sig_only"}]),
+                    finish_reason=None,
+                )
+            ],
+        )
+    ]
+
+    result: Final = ChunkProcessor(chunks=chunks).get_combined_thinking_content(chunks)
+
+    assert result is not None
+    assert [(block["type"], block["thinking"], block["signature"]) for block in result] == [
+        ("thinking", "", "sig_only")
+    ]
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",
@@ -1795,3 +1820,34 @@ def test_calculate_usage_keeps_a_reported_count_over_a_later_chunks_zero() -> No
     )
 
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (5, 17, 22)
+
+
+def _tier_chunk(content: str, service_tier: str | None, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tier",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role=None))],
+        **({"service_tier": service_tier} if service_tier is not None else {}),
+    )
+
+
+def test_stream_chunk_builder_records_the_last_service_tier_the_provider_stamped():
+    chunks = [
+        _tier_chunk("Hel", "auto"),
+        _tier_chunk("lo", None),
+        _tier_chunk("", "default", finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.model_dump()["service_tier"] == "default"
+
+
+def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
+    response = stream_chunk_builder(chunks=[_tier_chunk("Hi", None, finish_reason="stop")])
+
+    assert response is not None
+    assert "service_tier" not in response.model_dump()

@@ -1,0 +1,40 @@
+{
+  "admin": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "spend": 0.5
+    },
+    {
+      "team": "team-b",
+      "api_key": "key-b",
+      "trace_id": "01010101010101010101010101010101",
+      "spend": 0.25
+    }
+  ],
+  "team": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "spend": 0.5
+    }
+  ],
+  "key": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "spend": 0.5
+    }
+  ],
+  "other_team": [
+    {
+      "team": "team-b",
+      "api_key": "key-b",
+      "trace_id": "01010101010101010101010101010101",
+      "spend": 0.25
+    }
+  ]
+}

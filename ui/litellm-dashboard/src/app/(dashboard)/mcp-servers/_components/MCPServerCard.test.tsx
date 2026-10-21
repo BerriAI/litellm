@@ -19,6 +19,19 @@ function renderCard(overrides: Partial<MCPServer>) {
   render(<MCPServerCard server={{ ...baseServer, ...overrides } as MCPServer} onClick={vi.fn()} />);
 }
 
+describe("MCPServerCard health", () => {
+  it("explains that reachable does not verify authentication or tools", async () => {
+    const user = userEvent.setup();
+    renderCard({ status: "reachable", oauth2_flow: "authorization_code" });
+
+    await user.hover(screen.getByText("Reachable"));
+
+    expect(await screen.findByText("Server responded. Authentication and tools were not checked")).toBeInTheDocument();
+    expect(screen.queryByText("No health data")).not.toBeInTheDocument();
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerCard OAuth flow indicator", () => {
   it("shows the 'OAuth flow not set' badge for an oauth2 server with no oauth2_flow", () => {
     renderCard({ auth_type: "oauth2", oauth2_flow: null });
@@ -111,6 +124,18 @@ describe("MCPServerCard per-user credentials", () => {
     expect(screen.queryByText("Per-user credentials")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+  });
+});
+
+describe("MCPServerCard network access", () => {
+  it("shows effective network access without a hub listing badge", () => {
+    renderCard({
+      available_on_public_internet: false,
+      mcp_info: { server_name: "demo_server", is_public: true, is_public_explicit: true },
+    });
+
+    expect(screen.getByText("All Networks")).toBeInTheDocument();
+    expect(screen.queryByText(/^Hub:/)).not.toBeInTheDocument();
   });
 });
 

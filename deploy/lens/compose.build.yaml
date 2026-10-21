@@ -1,0 +1,8 @@
+services:
+  lens-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/lens/Dockerfile
+      args:
+        LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:?Set the release tag used by the gateway}
+    image: litellm-lens-worker:local

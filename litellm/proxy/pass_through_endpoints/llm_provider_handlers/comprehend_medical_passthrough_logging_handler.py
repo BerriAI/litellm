@@ -30,7 +30,7 @@ COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS: Final = frozenset(COMPREHEND_MEDICAL_CO
 class ComprehendMedicalPassthroughLoggingHandler:
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
-        target: Final = httpx_response.request.headers.get("x-amz-target", "")
+        target: Final[str] = httpx_response.request.headers.get("x-amz-target", "")
         return target.split(".")[-1]
 
     @staticmethod
@@ -67,7 +67,7 @@ class ComprehendMedicalPassthroughLoggingHandler:
             )
             model_name: Final = f"comprehendmedical/{operation}"
 
-            updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            updated_kwargs: Final = {
                 **kwargs,
                 "model": model_name,
                 "custom_llm_provider": "comprehendmedical",

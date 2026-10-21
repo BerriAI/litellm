@@ -1,0 +1,73 @@
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_http::request::string_headers;
+use litellm_http::request::with_default_headers;
+use litellm_llms::{
+    base_llm::{
+        audio_transcription::transformation::BaseAudioTranscriptionConfig,
+        auth::ValidatedEnvironment,
+    },
+    bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
+};
+use litellm_secrets::source::SecretSource;
+
+use super::Error;
+use crate::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use litellm_inference::provider::resolve_llm_provider;
+
+fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
+    match provider {
+        LlmProviders::Bedrock => Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG),
+        LlmProviders::Anthropic
+        | LlmProviders::AwsTextract
+        | LlmProviders::AzureAi
+        | LlmProviders::Cohere
+        | LlmProviders::Mistral
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => None,
+    }
+}
+
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
+pub async fn prepare_audio_transcription_provider_call(
+    request: AudioTranscriptionRequest<'_>,
+    secrets: &dyn SecretSource,
+) -> Result<ProviderAudioTranscriptionRequest, Error> {
+    let provider_info = resolve_llm_provider(
+        request.model,
+        request.custom_llm_provider,
+        "audio transcription",
+    )?;
+    let model = provider_info.model.to_string();
+    let config = provider_config(provider_info.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?;
+    let snapshot = secrets.resolve(&config.secret_names()).await?;
+    let env_lookup = |key: &str| snapshot.get(key);
+    let forwarded = string_headers("audio transcription", request.extra_headers)?;
+    let validated =
+        config.validate_environment(forwarded, &model, &request.optional_params, &env_lookup)?;
+    let environment = ValidatedEnvironment {
+        headers: with_default_headers(validated.headers, config.default_headers()),
+        auth: validated.auth,
+    };
+    let url = config.get_complete_url(
+        request.api_base,
+        &model,
+        &request.optional_params,
+        &env_lookup,
+    )?;
+    let filtered_params = config.map_transcription_params(&request.optional_params);
+    let transformed =
+        config.transform_audio_transcription_request(&model, request.audio, filtered_params)?;
+    Ok(ProviderAudioTranscriptionRequest {
+        model,
+        custom_llm_provider: <&str>::from(provider_info.provider).to_string(),
+        config,
+        url,
+        body: transformed.body,
+        environment,
+        secrets: snapshot,
+        timeout: request.timeout,
+    })
+}

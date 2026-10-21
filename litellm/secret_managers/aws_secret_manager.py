@@ -14,8 +14,12 @@ import os
 import re
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
-from litellm.proxy._types import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSystem
+
+_PARSED_LITERAL: Final = TypeAdapter(object)
 
 
 def validate_environment():
@@ -107,7 +111,7 @@ class AWSKeyManagementService_V2:
         if isinstance(secret, str):
             secret = secret.strip()
         try:
-            secret_value_as_bool: Final = ast.literal_eval(secret)
+            secret_value_as_bool: Final = _PARSED_LITERAL.validate_python(ast.literal_eval(secret))
             if isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
         except Exception:

@@ -165,6 +165,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
         - results[].text → SearchResult.snippet
+        - results[].highlights → SearchResult.snippet (fallback when "text" is absent)
+        - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
 
@@ -183,7 +185,10 @@ class ExaAISearchConfig(BaseSearchConfig):
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
+                snippet=result.get("text")
+                or "\n\n".join(result.get("highlights") or [])
+                or result.get("summary")
+                or "",
                 date=result.get("publishedDate"),  # ISO 8601 datetime string
                 last_updated=None,  # Exa AI doesn't provide last_updated in response
             )

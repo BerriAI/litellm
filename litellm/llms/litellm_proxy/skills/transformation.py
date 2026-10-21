@@ -222,9 +222,7 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills: Final = [  # mutable-ok: ListSkillsResponse.data needs list[Skill]; never mutated after
-            self.db_skill_to_response(s) for s in db_skills
-        ]
+        skills: Final = [self.db_skill_to_response(s) for s in db_skills]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,

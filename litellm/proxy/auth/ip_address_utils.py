@@ -16,7 +16,10 @@ from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_request_ip_address,
+)
 
 # One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
 # behaviour see an actionable message in their logs the first time it triggers.
@@ -368,4 +371,4 @@ class IPAddressUtils:
                     return client_ip
                 case _HopCountUnset():
                     pass
-        return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
+        return get_request_ip_address(request, use_x_forwarded_for=use_xff)

@@ -1,8 +1,9 @@
-import base64
+import asyncio, base64, importlib, uuid
+import json
 import logging
 import os
 import re
-from typing import Final
+from typing import Final, List
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,24 +17,125 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
+    _sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
+    get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
     ollama_pt,
+    parse_mime_type,
     sanitize_messages_for_tool_calling,
+    THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    function_setup,
+    Rules,
+    validate_and_fix_openai_messages,
+)
+from datetime import datetime
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    anthropic_pt,
+    claude_2_1_pt,
+    convert_to_anthropic_image_obj,
+    convert_to_anthropic_tool_invoke,
+    convert_url_to_base64,
+    create_anthropic_image_param,
+    has_tool_with_name,
+    llama_2_chat_pt,
+    prompt_factory,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.llms.openai import AllMessageValues
+
+
+def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
+    messages = [{"role": "system", "content": None}]
+
+    with pytest.raises(AttributeError):
+        function_call_prompt(messages, [])
+
+
+def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
+    messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
+
+    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+
+    system: Final = str(prompted[0]["content"])
+    assert "JSON OUTPUT ONLY" not in system
+    assert "reply to the user in plain text instead of calling a function again" in system
+    assert "{'name': 'get_weather'}" in system
+
+
+@pytest.mark.parametrize(
+    ("thought_signature", "expected"),
+    [
+        ("encoded-signature", "call_123__thought__encoded-signature"),
+        (None, "call_123"),
+        ("", "call_123"),
+    ],
+)
+def test_encode_tool_call_id_with_signature(thought_signature, expected):
+    assert encode_tool_call_id_with_signature("call_123", thought_signature) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    [
+        ({"provider_specific_fields": {"thought_signature": "tool-signature"}}, "tool-signature"),
+        (
+            {"function": {"provider_specific_fields": {"thought_signature": "function-signature"}}},
+            "function-signature",
+        ),
+        (
+            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
+            "embedded-signature",
+        ),
+        ({}, None),
+    ],
+)
+def test_get_thought_signature_from_tool(tool, expected):
+    assert get_thought_signature_from_tool(tool) == expected
+
+
+@pytest.mark.parametrize(
+    ("base64_data", "expected"),
+    [
+        ("data:image/png;base64,encoded-image", "image/png"),
+        ("data:application/pdf;base64,encoded-document", "application/pdf"),
+        ("not-a-data-url", None),
+    ],
+)
+def test_parse_mime_type(base64_data, expected):
+    assert parse_mime_type(base64_data) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        ({"type": "file"}, "missing the required 'file' field"),
+        ({"type": "file", "file": {}}, "file_data and file_id cannot both be None"),
+    ],
+)
+def test_process_file_message_rejects_missing_file_data(message, expected_error):
+    with pytest.raises(litellm.BadRequestError, match=expected_error):
+        BedrockConverseMessagesProcessor.process_file_message(message)
 
 
 def _get_gemini_function_response_inline_data_parts(result):
     assert isinstance(result, list), "expected Gemini parts list"
     assert len(result) == 1, "multimodal function responses should stay in one part"
     function_response_part = result[0]
-    assert (
-        "inline_data" not in function_response_part
-    ), "inline_data should be nested under function_response.parts"
+    assert "inline_data" not in function_response_part, "inline_data should be nested under function_response.parts"
     function_response = function_response_part["function_response"]
     nested_parts = function_response["parts"]
     return [part["inline_data"] for part in nested_parts if "inline_data" in part]
@@ -49,10 +151,42 @@ def test_ollama_pt_simple_messages():
 
     result = ollama_pt(model="llama2", messages=messages)
 
-    expected_prompt = "### System:\nYou are a helpful assistant\n\n### Assistant:\nHow can I help you?\n\n### User:\nHello\n\n"
+    expected_prompt = (
+        "### System:\nYou are a helpful assistant\n\n### Assistant:\nHow can I help you?\n\n### User:\nHello\n\n"
+    )
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
     assert result["images"] == []
+
+
+@pytest.mark.parametrize(
+    ("assistant_content", "rendered_prefix"),
+    [("", ""), ("Checking calc.py", "Checking calc.py\n")],
+)
+def test_ollama_pt_renders_tool_calls_in_function_prompt_format(assistant_content: str, rendered_prefix: str):
+    messages: Final = [
+        {"role": "user", "content": "Fix calc.py"},
+        {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"filePath": "calc.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "def add(a, b): return a - b"},
+    ]
+
+    result: Final = ollama_pt(model="gemma4:31b", messages=messages)
+
+    assert result["prompt"] == (
+        "### User:\nFix calc.py\n\n"
+        f'### Assistant:\n{rendered_prefix}{{"name": "read", "arguments": {{"filePath": "calc.py"}}}}\n\n'
+        "### User:\ndef add(a, b): return a - b\n\n"
+    )
 
 
 def test_ollama_pt_consecutive_user_messages():
@@ -71,6 +205,84 @@ def test_ollama_pt_consecutive_user_messages():
     expected_prompt = "### User:\nHello\n\n### Assistant:\nHow can I help you?\n\n### User:\nHow are you?\n\n### Assistant:\nI'm good, thanks!\n\n### User:\nI am well too.\n\n"
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
+
+
+def _ollama_tool_turn(*results: object) -> list[dict]:
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    return [
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        *({"role": "tool", "tool_call_id": "call_1", "content": result} for result in results),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("results", "forwarded"),
+    [
+        pytest.param(("Paris: 22 degrees", "Sky: clear"), "Paris: 22 degrees\nSky: clear", id="two-tool-messages"),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}, {"type": "text", "text": "clear skies"}],),
+            "Paris: 22 degrees\nclear skies",
+            id="text-parts-of-one-tool-message",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}], "Sky: clear"),
+            "Paris: 22 degrees\nSky: clear",
+            id="text-part-then-string",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": ""}, {"type": "text", "text": "clear skies"}],),
+            "clear skies",
+            id="empty-text-part-adds-no-blank-line",
+        ),
+    ],
+)
+def test_ollama_pt_separates_merged_tool_results_with_a_newline(results: tuple[object, ...], forwarded: str):
+    result: Final = ollama_pt(model="llama2", messages=_ollama_tool_turn(*results))
+
+    assert isinstance(result, dict)
+    assert result["prompt"].endswith(f"### User:\n{forwarded}\n\n"), result["prompt"]
+
+
+@pytest.mark.parametrize("content", [22, 22.5, True, {"temperature": 22}], ids=type)
+def test_ollama_pt_rejects_non_text_tool_content_as_a_bad_request(content: object):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llama2", messages=_ollama_tool_turn(content))
+
+    assert excinfo.value.status_code == 400
+    assert "content" in excinfo.value.message
+    assert "tool message at index 2" in excinfo.value.message
+    assert type(content).__name__ in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("part", "expected_detail"),
+    (
+        ({"type": "image_url", "image_url": None}, "NoneType image_url"),
+        ({"type": "text", "text": 22}, "int text part"),
+        ({"type": "text"}, "text part with no text"),
+        ({"type": "image_url"}, "image_url part with no image_url"),
+        ({"type": "image_url", "image_url": {"detail": "high"}}, "image_url object without a url string"),
+        ("hello", "str content part"),
+    ),
+    ids=(
+        "none-image-url",
+        "int-text",
+        "text-without-text",
+        "image-url-without-image-url",
+        "image-url-object-without-url",
+        "str-part",
+    ),
+)
+def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: object, expected_detail: str):
+    messages: Final = [{"role": "user", "content": [part]}]
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llava", messages=messages)
+
+    assert excinfo.value.status_code == 400
+    assert "user message at index 0" in excinfo.value.message
+    assert expected_detail in excinfo.value.message
 
 
 @pytest.mark.asyncio
@@ -104,10 +316,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
 
     # verify the result
     assert len(result) == 2
-    assert (
-        result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"]
-        == "This is a test thinking block"
-    )
+    assert result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"] == "This is a test thinking block"
 
 
 def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
@@ -175,11 +384,7 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(assistant_blocks) == 1
     for block in assistant_blocks[0]["content"]:
         if "text" in block:
-            assert block[
-                "text"
-            ].strip(), (
-                f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
-            )
+            assert block["text"].strip(), f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
     # toolUse blocks must still be present
     tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
     assert len(tool_use_blocks) == 2
@@ -220,19 +425,16 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
         {"role": "user", "content": "Now what is 3+3?"},
     ]
 
-    result = anthropic_messages_pt(
-        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
-    assert all(
-        block.get("type") not in ("thinking", "redacted_thinking") for block in content
-    ), f"unsignable thinking block must be dropped, got {content!r}"
-    assert any(
-        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
-        for block in content
-    ), f"assistant answer text must be preserved, got {content!r}"
+    assert all(block.get("type") not in ("thinking", "redacted_thinking") for block in content), (
+        f"unsignable thinking block must be dropped, got {content!r}"
+    )
+    assert any(block.get("type") == "text" and block.get("text") == "2+2 equals 4." for block in content), (
+        f"assistant answer text must be preserved, got {content!r}"
+    )
 
 
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
@@ -255,9 +457,7 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
         {"role": "user", "content": "Now what is 3+3?"},
     ]
 
-    result = anthropic_messages_pt(
-        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
     assistant = next(m for m in result if m["role"] == "assistant")
     thinking_blocks = [b for b in assistant["content"] if b.get("type") == "thinking"]
@@ -327,12 +527,12 @@ def test_convert_to_azure_openai_messages_strips_litellm_format_from_file_and_im
 
 
 def test_bedrock_validate_format_image_or_video():
-    """Test the _validate_format method for images, videos, and documents"""
+    """Test the validate_format method for images, videos, and documents"""
 
     # Test valid image formats
     valid_image_formats = ["png", "jpeg", "gif", "webp"]
     for format in valid_image_formats:
-        result = BedrockImageProcessor._validate_format(f"image/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"image/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid video formats
@@ -348,7 +548,7 @@ def test_bedrock_validate_format_image_or_video():
         "3gp",
     ]
     for format in valid_video_formats:
-        result = BedrockImageProcessor._validate_format(f"video/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid document formats
@@ -360,7 +560,7 @@ def test_bedrock_validate_format_image_or_video():
     }
     for mime, expected in valid_document_formats.items():
         print("testing mime", mime, "expected", expected)
-        result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
+        result = BedrockImageProcessor.validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
 
 
@@ -373,9 +573,7 @@ def test_bedrock_get_document_format_fallback_mimes():
     """
 
     # Test DOCX fallback
-    docx_mime = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
 
     # Mock mimetypes.guess_all_extensions to return empty list (simulating Docker container scenario)
@@ -399,15 +597,11 @@ def test_bedrock_get_document_format_mimetypes_success():
     """
     Test the _get_document_format method when mimetypes.guess_all_extensions works normally.
     """
-    docx_mime = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
 
     # Test normal mimetypes behavior (should not hit fallback)
-    result = BedrockImageProcessor._get_document_format(
-        mime_type=docx_mime, supported_doc_formats=supported_formats
-    )
+    result = BedrockImageProcessor._get_document_format(mime_type=docx_mime, supported_doc_formats=supported_formats)
     assert result == "docx", f"Expected 'docx', got '{result}'"
 
 
@@ -623,9 +817,7 @@ async def test_bedrock_process_image_async_factory():
 
     image_url = "data:application/pdf; qs=0.001;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4"
 
-    content_block = await BedrockImageProcessor.process_image_async(
-        image_url=image_url, format=None
-    )
+    content_block = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
     print(f"content_block: {content_block}")
 
 
@@ -668,9 +860,7 @@ def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
     items_schema = schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
 
     # Assertions: items_schema should now be the resolved object, not an empty dict
-    assert isinstance(
-        items_schema, dict
-    ), "Items schema should be a dict after unpacking"
+    assert isinstance(items_schema, dict), "Items schema should be a dict after unpacking"
     assert items_schema.get("type") == "object"
     # Ensure essential properties are present
     assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}
@@ -861,9 +1051,7 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
-    assert (
-        len(inline_parts) == 2
-    ), f"expected 2 inline_data parts, got {len(inline_parts)}"
+    assert len(inline_parts) == 2, f"expected 2 inline_data parts, got {len(inline_parts)}"
     mime_types = {p["mime_type"] for p in inline_parts}
     assert mime_types == {"image/png", "image/jpeg"}
 
@@ -899,9 +1087,7 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
-    assert (
-        len(inline_parts) == 1
-    ), "data-URL image string was not converted to inline_data"
+    assert len(inline_parts) == 1, "data-URL image string was not converted to inline_data"
     assert inline_parts[0]["mime_type"] == "image/png"
     assert inline_parts[0]["data"] == tiny_png_b64
 
@@ -937,9 +1123,9 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
-    assert (
-        inline_parts[0]["mime_type"] == "image/png"
-    ), f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
+    assert inline_parts[0]["mime_type"] == "image/png", (
+        f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
+    )
 
 
 def test_bedrock_tools_unpack_defs():
@@ -1036,9 +1222,7 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(
-        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert result[0]["toolSpec"]["strict"] is True
     assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
 
@@ -1060,9 +1244,7 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(
-        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert "strict" not in result[0]["toolSpec"]
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
@@ -1085,9 +1267,7 @@ def test_bedrock_image_processor_content_type_fallback_url_extension():
 
     # Test with .png URL
     image_url = "https://example.com/test-image.png"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
@@ -1111,9 +1291,7 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
 
     # Test with URL without extension
     image_url = "https://example.com/test-image-without-extension"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
@@ -1136,9 +1314,7 @@ def test_bedrock_image_processor_content_type_fallback_application_octet_stream(
 
     # Test with .gif URL
     image_url = "https://s3.amazonaws.com/bucket/image.gif"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/gif"
     assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
@@ -1161,9 +1337,7 @@ def test_bedrock_image_processor_content_type_with_query_params():
 
     # Test with URL containing query parameters (common in S3 signed URLs)
     image_url = "https://s3.amazonaws.com/bucket/image.webp?AWSAccessKeyId=123&Expires=456&Signature=789"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/webp"
     assert base64_bytes == base64.b64encode(webp_content).decode("utf-8")
@@ -1185,9 +1359,7 @@ def test_bedrock_image_processor_content_type_normal_header():
     mock_response.content = png_content
 
     image_url = "https://example.com/test-image.png"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
@@ -1207,7 +1379,7 @@ def test_bedrock_image_processor_content_type_fallback_failure():
     # Test with URL without recognizable extension
     image_url = "https://example.com/unknown-file"
 
-    with pytest.raises(ValueError, match='Unable to determine content type from URL: https') as excinfo:
+    with pytest.raises(ValueError, match="Unable to determine content type from URL: https") as excinfo:
         BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert "Unable to determine content type" in str(excinfo.value)
@@ -1227,16 +1399,12 @@ def test_bedrock_image_processor_content_type_jpeg_variants():
 
     # Test with .jpg extension
     image_url_jpg = "https://example.com/photo.jpg"
-    _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url_jpg
-    )
+    _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(mock_response, image_url_jpg)
     assert content_type_jpg == "image/jpeg"
 
     # Test with .jpeg extension
     image_url_jpeg = "https://example.com/photo.jpeg"
-    _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url_jpeg
-    )
+    _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(mock_response, image_url_jpeg)
     assert content_type_jpeg == "image/jpeg"
 
 
@@ -1258,9 +1426,7 @@ def test_bedrock_image_processor_content_type_pdf_document():
 
     # Test with .pdf URL
     pdf_url = "https://s3.amazonaws.com/bucket/document.pdf"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, pdf_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, pdf_url)
 
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
@@ -1293,12 +1459,8 @@ def test_bedrock_image_processor_content_type_document_formats():
     ]
 
     for url, expected_mime in test_cases:
-        _, content_type = BedrockImageProcessor._post_call_image_processing(
-            mock_response, url
-        )
-        assert (
-            content_type == expected_mime
-        ), f"Expected {expected_mime} for {url}, got {content_type}"
+        _, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, url)
+        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
 
 
 def test_bedrock_image_processor_content_type_s3_pdf_with_query():
@@ -1317,9 +1479,7 @@ def test_bedrock_image_processor_content_type_s3_pdf_with_query():
     # S3 signed URL with query parameters
     s3_url = "https://my-bucket.s3.us-east-1.amazonaws.com/documents/report.pdf?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1234567890&Signature=abcdef123456"
 
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, s3_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, s3_url)
 
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
@@ -1428,12 +1588,8 @@ def test_bedrock_create_bedrock_block_normalized_base64():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     # Create versions with different whitespace
-    base64_with_newlines = "\n".join(
-        [base64_content[i : i + 64] for i in range(0, len(base64_content), 64)]
-    )
-    base64_with_spaces = " ".join(
-        [base64_content[i : i + 32] for i in range(0, len(base64_content), 32)]
-    )
+    base64_with_newlines = "\n".join([base64_content[i : i + 64] for i in range(0, len(base64_content), 64)])
+    base64_with_spaces = " ".join([base64_content[i : i + 32] for i in range(0, len(base64_content), 32)])
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
@@ -1565,9 +1721,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
 
     # Check format: DocumentPDFmessages_{16_hex_chars}_{format}
     pattern = r"^DocumentPDFmessages_[0-9a-f]{16}_pdf$"
-    assert re.match(
-        pattern, document_name
-    ), f"Document name format mismatch: {document_name}"
+    assert re.match(pattern, document_name), f"Document name format mismatch: {document_name}"
 
 
 def test_bedrock_create_bedrock_block_different_document_formats():
@@ -1620,9 +1774,7 @@ def test_bedrock_nova_web_search_options_mapping():
     assert system_tool["name"] == "nova_grounding"
 
     # Test with search_context_size (should be ignored for Nova)
-    result2 = config._map_web_search_options(
-        {"search_context_size": "high"}, "us.amazon.nova-premier-v1:0"
-    )
+    result2 = config._map_web_search_options({"search_context_size": "high"}, "us.amazon.nova-premier-v1:0")
 
     assert result2 is not None
     system_tool2 = result2.get("systemTool")
@@ -1688,9 +1840,7 @@ def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
         {"type": "custom", "name": "free_form"},
     ]
 
-    result = _bedrock_tools_pt(
-        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
     assert names == ["noop"]
@@ -1720,9 +1870,7 @@ def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
         },
     ]
 
-    result = _bedrock_tools_pt(
-        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
     assert names == ["lookup"]
@@ -1924,9 +2072,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                     "tool_use_id": "srvtoolu_01ABC123",
                     "content": {
                         "type": "tool_search_tool_search_result",
-                        "tool_references": [
-                            {"type": "tool_reference", "tool_name": "get_time"}
-                        ],
+                        "tool_references": [{"type": "tool_reference", "tool_name": "get_time"}],
                     },
                 },
                 {"type": "text", "text": "I found the time tool. How can I help you?"},
@@ -1954,20 +2100,14 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
-    server_tool_use_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "server_tool_use"
-    )
+    server_tool_use_block = next(b for b in assistant_msg["content"] if b.get("type") == "server_tool_use")
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
 
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
-    tool_result_block = next(
-        b
-        for b in assistant_msg["content"]
-        if b.get("type") == "tool_search_tool_result"
-    )
+    tool_result_block = next(b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result")
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
@@ -2019,9 +2159,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
                 "anyOf": [
                     {"$ref": "#/$defs/Literal"},
                     {"$ref": "#/$defs/FieldRef"},
-                    {
-                        "$ref": "#/$defs/Expression"
-                    },  # Circular: Operand -> Expression -> Operand
+                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
                 ],
             },
             "Literal": {
@@ -2155,9 +2293,7 @@ def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider()
 
     file_block = content_blocks[0]
     assert file_block["type"] == "document"
-    assert (
-        "cache_control" in file_block
-    ), "cache_control should be preserved on file/document content blocks"
+    assert "cache_control" in file_block, "cache_control should be preserved on file/document content blocks"
     assert file_block["cache_control"]["type"] == "ephemeral"
 
     text_block = content_blocks[1]
@@ -2365,22 +2501,16 @@ def test_bedrock_tool_call_invoke_concatenated_json():
     # First block keeps original tool id
     assert result[0]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN"
     assert result[0]["toolUse"]["name"] == "shell"
-    assert result[0]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009", "-m", "10"]
-    }
+    assert result[0]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009", "-m", "10"]}
 
     # Subsequent blocks get suffixed ids
     assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
     assert result[1]["toolUse"]["name"] == "shell"
-    assert result[1]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
-    }
+    assert result[1]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]}
 
     assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
     assert result[2]["toolUse"]["name"] == "shell"
-    assert result[2]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
-    }
+    assert result[2]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]}
 
 
 def test_bedrock_tool_call_invoke_concatenated_json_with_cache_control():
@@ -2535,9 +2665,7 @@ def test_bedrock_tool_call_invoke_unconvertible_raises_non_retryable_bad_request
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
     assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
     assert (
-        make_valid_bedrock_tool_name(
-            "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
-        )
+        make_valid_bedrock_tool_name("CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q")
         == "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
     )
 
@@ -2564,9 +2692,7 @@ def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
             "function": {"name": raw_name, "arguments": "{}"},
         }
     ]
-    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"][
-        "name"
-    ]
+    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"]["name"]
 
     assert tool_spec_name == "foo_bar"
     assert tool_use_name == tool_spec_name
@@ -2589,15 +2715,8 @@ def test_bedrock_converse_messages_pt_tool_use_matches_tool_spec_hyphen_name():
             ],
         },
     ]
-    translated = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
-    tool_use_blocks = [
-        block
-        for msg in translated
-        for block in msg.get("content", [])
-        if "toolUse" in block
-    ]
+    translated = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+    tool_use_blocks = [block for msg in translated for block in msg.get("content", []) if "toolUse" in block]
     assert len(tool_use_blocks) == 1
     assert tool_use_blocks[0]["toolUse"]["name"] == tool_name
 
@@ -2694,11 +2813,7 @@ def test_sanitize_messages_deduplicates_tool_results():
         result = sanitize_messages_for_tool_calling(messages)
 
         # Count tool messages with this ID — should be exactly 1
-        tool_results = [
-            m
-            for m in result
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
-        ]
+        tool_results = [m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"]
         assert len(tool_results) == 1
         # Should keep the LAST occurrence (most complete)
         assert tool_results[0]["content"] == '{"temperature": 72, "condition": "sunny"}'
@@ -2833,11 +2948,7 @@ def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
         result = sanitize_messages_for_tool_calling(messages)
 
         # Both tool results must survive — one per turn
-        tool_results = [
-            m
-            for m in result
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
-        ]
+        tool_results = [m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"]
         assert len(tool_results) == 2, (
             f"Expected 2 tool results (one per turn), got {len(tool_results)}. "
             "Dedup may be global instead of per-turn scoped."
@@ -2891,32 +3002,26 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         tool_results = [m for m in result if m.get("role") in ("tool", "function")]
 
         # Case A: call_missing should have a dummy result injected
-        missing_results = [
-            m for m in tool_results if m.get("tool_call_id") == "call_missing"
-        ]
-        assert (
-            len(missing_results) == 1
-        ), f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        missing_results = [m for m in tool_results if m.get("tool_call_id") == "call_missing"]
+        assert len(missing_results) == 1, (
+            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        )
 
         # Case D: call_duped should have exactly 1 result (the fresh one)
-        duped_results = [
-            m for m in tool_results if m.get("tool_call_id") == "call_duped"
-        ]
-        assert (
-            len(duped_results) == 1
-        ), f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
-        assert (
-            duped_results[0]["content"] == "fresh_result"
-        ), f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        duped_results = [m for m in tool_results if m.get("tool_call_id") == "call_duped"]
+        assert len(duped_results) == 1, (
+            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        )
+        assert duped_results[0]["content"] == "fresh_result", (
+            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        )
 
         # Verify tool results immediately follow the assistant message
         asst_idx = next(i for i, m in enumerate(result) if m.get("role") == "assistant")
-        tool_msgs_after_asst = [
-            m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")
-        ]
-        assert (
-            len(tool_msgs_after_asst) == 2
-        ), f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        tool_msgs_after_asst = [m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")]
+        assert len(tool_msgs_after_asst) == 2, (
+            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        )
         # Both tool_call_ids should be present (order may vary)
         tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
         assert tool_ids == {
@@ -2958,9 +3063,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
         }
     ]
 
-    result = anthropic_messages_pt(
-        messages, model="claude-sonnet-4-20250514", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-20250514", llm_provider="anthropic")
 
     content_blocks = result[0]["content"]
     assert len(content_blocks) == 2
@@ -2968,9 +3071,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     # Document block (from file) should preserve cache_control
     doc_block = content_blocks[0]
     assert doc_block["type"] == "document"
-    assert (
-        "cache_control" in doc_block
-    ), "cache_control was dropped from file/document block"
+    assert "cache_control" in doc_block, "cache_control was dropped from file/document block"
     assert doc_block["cache_control"]["type"] == "ephemeral"
 
     # Text block should also preserve cache_control
@@ -3013,9 +3114,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
         }
 
         # Claude 4.5 model: ttl should be preserved
-        result = add_cache_point_tool_block(
-            tool_with_1h, model="jp.anthropic.claude-opus-4-7"
-        )
+        result = add_cache_point_tool_block(tool_with_1h, model="jp.anthropic.claude-opus-4-7")
         assert result is not None
         assert result["cachePoint"]["type"] == "default"
         assert result["cachePoint"]["ttl"] == "1h"
@@ -3024,16 +3123,12 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
         tool_with_5m = {
             "cache_control": {"type": "ephemeral", "ttl": "5m"},
         }
-        result_5m = add_cache_point_tool_block(
-            tool_with_5m, model="jp.anthropic.claude-opus-4-7"
-        )
+        result_5m = add_cache_point_tool_block(tool_with_5m, model="jp.anthropic.claude-opus-4-7")
         assert result_5m is not None
         assert result_5m["cachePoint"]["ttl"] == "5m"
 
         # Older model: ttl should be stripped
-        result_old = add_cache_point_tool_block(
-            tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
+        result_old = add_cache_point_tool_block(tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
         assert result_old is not None
         assert result_old["cachePoint"]["type"] == "default"
         assert "ttl" not in result_old["cachePoint"]
@@ -3052,9 +3147,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
 
         # cache_control without ttl: returns default cachePoint (unchanged behavior)
         tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
-        result_no_ttl = add_cache_point_tool_block(
-            tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
+        result_no_ttl = add_cache_point_tool_block(tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0")
         assert result_no_ttl is not None
         assert result_no_ttl["cachePoint"]["type"] == "default"
         assert "ttl" not in result_no_ttl["cachePoint"]
@@ -3127,9 +3220,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
         assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
 
         # Older model: cachePoint should not have ttl
-        result_old = _bedrock_tools_pt(
-            tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
+        result_old = _bedrock_tools_pt(tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
         cache_blocks_old = [b for b in result_old if "cachePoint" in b]
         assert len(cache_blocks_old) == 1
         assert "ttl" not in cache_blocks_old[0]["cachePoint"]
@@ -3204,9 +3295,7 @@ def test_bedrock_converse_messages_pt_document_various_formats():
             }
         ]
 
-        result = _bedrock_converse_messages_pt(
-            messages, "anthropic.claude-sonnet-4-6", "bedrock"
-        )
+        result = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
         doc_block = result[0]["content"][0]
         assert doc_block["document"]["format"] == expected_format, (
@@ -3233,12 +3322,8 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
         }
     ]
 
-    result1 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
-    result2 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    result1 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
+    result2 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
     name1 = result1[0]["content"][0]["document"]["name"]
     name2 = result2[0]["content"][0]["document"]["name"]
@@ -3272,34 +3357,18 @@ def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
         },
     ]
 
-    result1 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
-    result2 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    result1 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
+    result2 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
-    names1 = [
-        block["document"]["name"]
-        for message in result1
-        for block in message["content"]
-        if "document" in block
-    ]
-    names2 = [
-        block["document"]["name"]
-        for message in result2
-        for block in message["content"]
-        if "document" in block
-    ]
+    names1 = [block["document"]["name"] for message in result1 for block in message["content"] if "document" in block]
+    names2 = [block["document"]["name"] for message in result2 for block in message["content"] if "document" in block]
 
     assert len(names1) == 2
     assert len(set(names1)) == 2
     assert names1[1] == f"{names1[0]}_2"
     assert names1 == names2
 
-    single_turn = _bedrock_converse_messages_pt(
-        [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    single_turn = _bedrock_converse_messages_pt([messages[0]], "anthropic.claude-sonnet-4-6", "bedrock")
     assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
 
 
@@ -3321,14 +3390,10 @@ def test_rename_duplicate_bedrock_document_names_skips_organic_suffixes():
     def _names(contents):
         return [block["document"]["name"] for block in contents[0]["content"]]
 
-    organic_first = _rename_duplicate_bedrock_document_names(
-        _contents(["report", "report_2", "report"])
-    )
+    organic_first = _rename_duplicate_bedrock_document_names(_contents(["report", "report_2", "report"]))
     assert _names(organic_first) == ["report", "report_2", "report_3"]
 
-    organic_last = _rename_duplicate_bedrock_document_names(
-        _contents(["report", "report", "report_2"])
-    )
+    organic_last = _rename_duplicate_bedrock_document_names(_contents(["report", "report", "report_2"]))
     assert _names(organic_last) == ["report", "report_3", "report_2"]
 
 
@@ -3350,18 +3415,11 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
     ]
 
     with pytest.raises(ValueError, match="only supports base64-encoded"):
-        _bedrock_converse_messages_pt(
-            messages, "anthropic.claude-sonnet-4-6", "bedrock"
-        )
+        _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
 
 def _collect_cache_points(blocks):
-    return [
-        block["cachePoint"]
-        for message in blocks
-        for block in message["content"]
-        if "cachePoint" in block
-    ]
+    return [block["cachePoint"] for message in blocks for block in message["content"] if "cachePoint" in block]
 
 
 @pytest.mark.parametrize(
@@ -3527,6 +3585,189 @@ def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
     assert "Failed to parse tool call arguments" in caplog.text
 
 
+def _concatenated_json(*payloads: dict[str, object]) -> str:
+    return "".join(json.dumps(payload, separators=(",", ":")) for payload in payloads)
+
+
+def _function_tool_call(call_id: str | None, name: str, arguments: str) -> dict[str, object]:
+    return {"id": call_id, "function": {"name": name, "arguments": arguments}}
+
+
+def _chat_tool_response(*tool_calls: dict[str, object]) -> dict[str, object]:
+    return {"choices": [{"message": {"tool_calls": list(tool_calls)}}]}
+
+
+def test_get_tool_calls_from_response_expands_distinct_concatenated_arguments(caplog):
+    raw = '{"flag":true}{"box":"A","limit":50}'
+    response: Final = _chat_tool_response(_function_tool_call("call_move", "move", raw))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [
+        {"id": "call_move", "name": "move", "arguments": {"flag": True}},
+        {"id": "call_move__concat_1", "name": "move", "arguments": {"box": "A", "limit": 50}},
+    ]
+    assert "Recovered 2 tool call(s)" in caplog.text
+    assert "move" in caplog.text
+    assert "flag" not in caplog.text
+
+
+def test_get_tool_calls_from_response_expands_responses_api_concatenated_arguments():
+    response: Final = {
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_move",
+                "name": "move",
+                "arguments": '{"flag":true}{"box":"A","limit":50}',
+            }
+        ]
+    }
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_move", "name": "move", "arguments": {"flag": True}},
+        {"id": "call_move__concat_1", "name": "move", "arguments": {"box": "A", "limit": 50}},
+    ]
+
+
+def test_get_tool_calls_from_response_collapses_identical_concatenated_arguments():
+    response: Final = _chat_tool_response(_function_tool_call("call_move", "move", '{"flag":true}' * 3))
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_move", "name": "move", "arguments": {"flag": True}},
+    ]
+
+
+def test_get_tool_calls_from_response_does_not_expand_a_valid_json_array():
+    response: Final = _chat_tool_response(_function_tool_call("call_batch", "batch", '[{"a":1},{"b":2}]'))
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_batch", "name": "batch", "arguments": {}},
+    ]
+
+
+@pytest.mark.parametrize("arguments", ('{"a":1}{"b":', '0{"x":1}'))
+def test_get_tool_calls_from_response_drops_partial_concatenated_arguments(arguments: str, caplog):
+    response: Final = _chat_tool_response(_function_tool_call("call_move", "move", arguments))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_move", "name": "move", "arguments": {}}]
+    assert "Failed to parse tool call arguments" in caplog.text
+
+
+@pytest.mark.parametrize(("count", "expands"), ((8, True), (9, False)))
+def test_get_tool_calls_from_response_caps_distinct_concatenated_arguments(count: int, expands: bool):
+    raw = _concatenated_json(*({"n": index} for index in range(count)))
+    response: Final = _chat_tool_response(_function_tool_call("call", "move", raw))
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    if expands:
+        assert [call["id"] for call in tool_calls] == ["call", *(f"call__concat_{index}" for index in range(1, count))]
+        assert [call["arguments"] for call in tool_calls] == [{"n": index} for index in range(count)]
+        return
+    assert tool_calls == [{"id": "call", "name": "move", "arguments": {}}]
+
+
+def test_get_tool_calls_from_response_skips_concat_ids_taken_by_a_sibling():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(
+        _function_tool_call("call", "move", raw),
+        _function_tool_call("call__concat_1", "look", '{"x":1}'),
+    )
+
+    assert [call["id"] for call in get_tool_calls_from_response(response)] == [
+        "call",
+        "call__concat_2",
+        "call__concat_1",
+    ]
+
+
+def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(
+        _function_tool_call("a:b", "move", raw),
+        _function_tool_call("a_b__concat_1", "look", '{"x":1}'),
+    )
+
+    ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
+    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+
+    assert len(sanitized) == len(set(sanitized))
+    assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
+
+
+def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_it():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(
+        _function_tool_call("a_b", "move", raw),
+        _function_tool_call("a:b__concat_1", "look", '{"x":1}'),
+    )
+
+    ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
+    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+
+    assert len(ids) == len(sanitized)
+    assert len(sanitized) == len(set(sanitized))
+    assert ids == ["a_b", "a_b__concat_2", "a:b__concat_1"]
+
+
+def test_get_tool_calls_from_response_continues_concat_suffixes_per_sanitized_base():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(
+        _function_tool_call("x", "move", raw),
+        _function_tool_call("x", "move", raw),
+    )
+
+    assert [call["id"] for call in get_tool_calls_from_response(response)] == [
+        "x",
+        "x__concat_1",
+        "x",
+        "x__concat_2",
+    ]
+
+
+def test_get_tool_calls_from_response_skips_a_run_of_reserved_concat_ids():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    siblings: Final = tuple(_function_tool_call(f"call__concat_{index}", "look", '{"x":1}') for index in range(1, 51))
+    response: Final = _chat_tool_response(_function_tool_call("call", "move", raw), *siblings)
+
+    ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
+
+    assert ids[0] == "call"
+    assert ids[1] == "call__concat_51"
+
+
+def test_get_tool_calls_from_response_reserves_concat_ids_across_choices():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = {
+        "choices": [
+            {"message": {"tool_calls": [_function_tool_call("call", "move", raw)]}},
+            {"message": {"tool_calls": [_function_tool_call("call__concat_1", "look", '{"x":1}')]}},
+        ]
+    }
+
+    assert [call["id"] for call in get_tool_calls_from_response(response, include_all_choices=True)] == [
+        "call",
+        "call__concat_2",
+        "call__concat_1",
+    ]
+
+
+def test_get_tool_calls_from_response_does_not_invent_ids_for_a_missing_call_id():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(_function_tool_call(None, "move", raw))
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert len(tool_calls) == 2
+    assert all(call["id"] is None for call in tool_calls)
+    assert [call["arguments"] for call in tool_calls] == [{"a": 1}, {"b": 2}]
+
+
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
     from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
@@ -3625,9 +3866,7 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
         }
     ]
 
-    result = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-haiku-4-5", "bedrock"
-    )
+    result = _bedrock_converse_messages_pt(messages, "anthropic.claude-haiku-4-5", "bedrock")
 
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
@@ -3645,9 +3884,7 @@ def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
         }
     ]
 
-    result = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-haiku-4-5", "bedrock"
-    )
+    result = _bedrock_converse_messages_pt(messages, "anthropic.claude-haiku-4-5", "bedrock")
 
     assert _text_blocks(result[0]) == ["summarize this"]
 
@@ -3660,9 +3897,7 @@ def test_bedrock_converse_image_only_user_message_gets_no_text_block():
         }
     ]
 
-    result = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-haiku-4-5", "bedrock"
-    )
+    result = _bedrock_converse_messages_pt(messages, "anthropic.claude-haiku-4-5", "bedrock")
 
     assert any("image" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == []
@@ -3705,9 +3940,7 @@ def test_bedrock_converse_tool_round_trip_document_injects_text_before_cache_poi
         },
     ]
 
-    result = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-haiku-4-5", "bedrock"
-    )
+    result = _bedrock_converse_messages_pt(messages, "anthropic.claude-haiku-4-5", "bedrock")
 
     assert _text_blocks(result[0]) == ["read the pdf"]
     document_message = result[-1]
@@ -3895,3 +4128,2900 @@ def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
     result = anthropic_messages_pt(messages=messages, model="claude-opus-4-8", llm_provider="anthropic")
 
     assert [m["role"] for m in result] == ["user", "assistant"]
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    (
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"},
+                {"type": "text", "text": "4"},
+            ],
+        },
+    ),
+    ids=("thinking_blocks", "inline_content"),
+)
+def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(
+    assistant_message: ChatCompletionAssistantMessage,
+) -> None:
+    """``display: omitted`` returns signed thinking blocks with empty text, and they
+    must reach the next turn unchanged."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    result = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "What's 2+2?"}, assistant_message],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    assert assistant_msg["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}
+
+
+def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
+    """
+    Regression: a real, non-empty, signed thinking block must still pass
+    through unchanged.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me add these numbers together.",
+                    "signature": "sig_abc123_looks_valid",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    thinking_block = next((b for b in assistant_msg["content"] if b.get("type") == "thinking"), None)
+    assert thinking_block is not None, "non-empty signed thinking block must be kept"
+    assert thinking_block["thinking"] == "Let me add these numbers together."
+    assert thinking_block["signature"] == "sig_abc123_looks_valid"
+
+
+def test_anthropic_messages_pt_keeps_redacted_thinking_block():
+    """
+    Regression: `redacted_thinking` blocks carry no signature and no plaintext
+    `thinking` field by design, and must always be kept regardless of the new
+    emptiness check (which only applies to `type == "thinking"` blocks).
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "redacted_thinking",
+                    "data": "encrypted_opaque_blob",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    assert "redacted_thinking" in content_types, "redacted_thinking blocks must always be kept"
+
+
+def test_anthropic_messages_pt_drops_unsigned_thinking_block():
+    """
+    Regression (pre-existing behaviour): a thinking block with no signature
+    (or an empty/null one) must still be dropped, independent of whether the
+    thinking text is populated.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me add these numbers together.",
+                    "signature": "",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    assert "thinking" not in content_types, "unsigned thinking block must still be dropped"
+
+
+def test_anthropic_messages_pt_drops_unsigned_empty_thinking_block():
+    """
+    An empty block without a signature is the shape Claude Code replays after a
+    non-Anthropic turn, and Anthropic rejects it, so only the missing signature
+    decides whether a block is dropped.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    result = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What's 2+2?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, {"type": "text", "text": "4"}],
+            },
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    assert [block.get("type") for block in assistant_msg["content"]] == ["text"]
+
+
+_CONTENT_LESS_USER_MESSAGES: Final = ({"role": "user"}, {"role": "user", "content": None})
+_CONTENT_LESS_TOOL_MESSAGES: Final = (
+    {"role": "tool", "tool_call_id": "call_1"},
+    {"role": "tool", "tool_call_id": "call_1", "content": None},
+)
+_BOSTON_WEATHER_TOOL_CALL_TURN: Final = (
+    {"role": "user", "content": "What is the weather in Boston?"},
+    {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+            }
+        ],
+    },
+)
+
+
+def _conversation_around(
+    content_less_user_message: dict[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    with_message: Final = [
+        {"role": "user", "content": "What is the capital of France?"},
+        content_less_user_message,
+        {"role": "assistant", "content": "Paris."},
+        {"role": "user", "content": "And of Spain?"},
+    ]
+    without_message: Final = [message for message in with_message if message is not content_less_user_message]
+    return validate_and_fix_openai_messages(with_message), validate_and_fix_openai_messages(without_message)
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block(
+    content_less_user_message: dict[str, object],
+):
+    with_message, without_message = _conversation_around(content_less_user_message)
+
+    assert _bedrock_converse_messages_pt(
+        messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_user_message_without_content_adds_no_block(
+    content_less_user_message: dict[str, object],
+):
+    with_message, without_message = _conversation_around(content_less_user_message)
+
+    assert await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    ) == await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
+
+
+@pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
+def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_tool_result(
+    content_less_tool_message: dict[str, object],
+):
+    result: Final = _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    tool_result: Final = result[-1]["content"][0]["toolResult"]
+    assert result[-1]["role"] == "user"
+    assert tool_result["toolUseId"] == "call_1"
+    assert tool_result["content"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_tool_message_without_content_yields_empty_tool_result(
+    content_less_tool_message: dict[str, object],
+):
+    result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    tool_result: Final = result[-1]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "call_1"
+    assert tool_result["content"] == []
+
+
+def test_bedrock_converse_messages_pt_blank_user_text_sends_the_continue_message_text():
+    continue_message: Final = {"role": "user", "content": "Please continue."}
+    blank_last_turn: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "   "},
+    ]
+    explicit_last_turn: Final = [*blank_last_turn[:2], continue_message]
+
+    assert _bedrock_converse_messages_pt(
+        messages=blank_last_turn,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    ) == _bedrock_converse_messages_pt(
+        messages=explicit_last_turn,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_continue_message(
+    content_less_user_message: dict[str, object],
+):
+    continue_message: Final = {"role": "user", "content": "Please continue."}
+
+    assert _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    ) == _bedrock_converse_messages_pt(
+        messages=[continue_message],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_continues_under_modify_params(
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    ) == await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=[{"role": "user", "content": ""}],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert (
+        _bedrock_converse_messages_pt(
+            messages=validate_and_fix_openai_messages([content_less_user_message]),
+            model="anthropic.claude-haiku-4-5",
+            llm_provider="bedrock",
+        )
+        == []
+    )
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_function_call_non_openai_model():
+    try:
+        model = "claude-3-5-haiku-20241022"
+        messages = [{"role": "user", "content": "what's the weather in sf?"}]
+        functions = [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        ]
+        response = litellm.completion(model=model, messages=messages, functions=functions)
+        pytest.fail(f"An error occurred")
+    except Exception as e:
+        print(e)
+        pass
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_empty_content():
+    """
+    Make a chat completions request with empty content -> expect this to work
+    """
+    rules_obj = Rules()
+
+    def completion():
+        pass
+
+    function_setup(
+        original_function="completion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        messages=[],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_removal_for_non_gemini():
+    """
+    Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
+    """
+    rules_obj = Rules()
+
+    # Create messages with thought signatures (as would come from Gemini)
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "SF"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+            "content": "Sunny, 72°F",
+        },
+    ]
+
+    # Call function_setup with OpenAI model (non-Gemini)
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gpt-4",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="openai",
+    )
+
+    # Verify thought signatures were removed
+    processed_messages = kwargs["messages"]
+    assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
+    assert processed_messages[2]["tool_call_id"] == "call_123"
+    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
+    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_preserved_for_gemini():
+    """
+    Test that thought signatures are preserved when sending to Gemini models
+    """
+    rules_obj = Rules()
+
+    # Create messages with thought signatures
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+            "content": "Rainy, 65°F",
+        },
+    ]
+
+    # Call function_setup with Gemini model
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gemini-1.5-pro",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="vertex_ai",
+    )
+
+    # Verify thought signatures were preserved (messages should be unchanged)
+    processed_messages = kwargs["messages"]
+    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
+    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_removal_with_multiple_tool_calls():
+    """
+    Test that thought signatures are removed from multiple tool calls
+    """
+    rules_obj = Rules()
+
+    messages = [
+        {"role": "user", "content": "Get weather and time"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                },
+                {
+                    "id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+                    "type": "function",
+                    "function": {"name": "get_time", "arguments": "{}"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+            "content": "Sunny",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+            "content": "3:00 PM",
+        },
+    ]
+
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="claude-3-opus",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="anthropic",
+    )
+
+    processed_messages = kwargs["messages"]
+
+    # Check all tool call IDs are cleaned
+    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
+    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
+    assert processed_messages[2]["tool_call_id"] == "call_1"
+    assert processed_messages[3]["tool_call_id"] == "call_2"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_messages_without_tool_calls_unchanged():
+    """
+    Test that messages without tool calls pass through unchanged
+    """
+    rules_obj = Rules()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+    ]
+
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gpt-4",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="openai",
+    )
+
+    # Messages should be unchanged
+    assert kwargs["messages"] == messages
+
+
+def test_llama_3_prompt():
+    messages = [
+        {"role": "system", "content": "You are a good bot"},
+        {"role": "user", "content": "Hey, how's it going?"},
+    ]
+    received_prompt = prompt_factory(model="meta-llama/Meta-Llama-3-8B-Instruct", messages=messages)
+    print(f"received_prompt: {received_prompt}")
+
+    expected_prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a good bot<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nHey, how's it going?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"""
+    assert received_prompt == expected_prompt
+
+
+def test_codellama_prompt_format():
+    messages = [
+        {"role": "system", "content": "You are a good bot"},
+        {"role": "user", "content": "Hey, how's it going?"},
+    ]
+    expected_prompt = "<s>[INST] <<SYS>>\nYou are a good bot\n<</SYS>>\n [/INST]\n[INST] Hey, how's it going? [/INST]\n"
+    assert llama_2_chat_pt(messages) == expected_prompt
+
+
+def test_claude_2_1_pt_formatting():
+
+    messages = [{"role": "user", "content": "Hello"}]
+    expected_prompt = "\n\nHuman: Hello\n\nAssistant: "
+    assert claude_2_1_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": 'Please return "Hello World" as a JSON object.'},
+        {"role": "assistant", "content": "{"},
+    ]
+    expected_prompt = (
+        'You are a helpful assistant.\n\nHuman: Please return "Hello World" as a JSON object.\n\nAssistant: {'
+    )
+    assert claude_2_1_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "You are a storyteller."},
+        {"role": "assistant", "content": "Once upon a time, there "},
+    ]
+    expected_prompt = "You are a storyteller.\n\nHuman: \n\nAssistant: Once upon a time, there "
+    assert claude_2_1_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "System reboot"},
+        {"role": "user", "content": "Is everything okay?"},
+    ]
+    expected_prompt = "System reboot\n\nHuman: Is everything okay?\n\nAssistant: "
+    assert claude_2_1_pt(messages) == expected_prompt
+
+
+def test_anthropic_pt_formatting():
+
+    messages = [{"role": "user", "content": "Hello"}]
+    expected_prompt = "\n\nHuman: Hello\n\nAssistant: "
+    assert anthropic_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": 'Please return "Hello World" as a JSON object.'},
+        {"role": "assistant", "content": "{"},
+    ]
+    expected_prompt = '\n\nHuman: <admin>You are a helpful assistant.</admin>\n\nHuman: Please return "Hello World" as a JSON object.\n\nAssistant: {'
+    assert anthropic_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "You are a storyteller."},
+        {"role": "assistant", "content": "Once upon a time, there "},
+    ]
+    expected_prompt = "\n\nHuman: <admin>You are a storyteller.</admin>\n\nAssistant: Once upon a time, there "
+    assert anthropic_pt(messages) == expected_prompt
+
+    messages = [
+        {"role": "system", "content": "System reboot"},
+        {"role": "user", "content": "Is everything okay?"},
+    ]
+    expected_prompt = "\n\nHuman: <admin>System reboot</admin>\n\nHuman: Is everything okay?\n\nAssistant: "
+    assert anthropic_pt(messages) == expected_prompt
+
+
+def test_anthropic_messages_nested_pt():
+
+    messages = [
+        {"content": [{"text": "here is a task", "type": "text"}], "role": "user"},
+        {
+            "content": [{"text": "sure happy to help", "type": "text"}],
+            "role": "assistant",
+        },
+        {
+            "content": [
+                {
+                    "text": "Here is a screenshot of the current desktop with the "
+                    "mouse coordinates (500, 350). Please select an action "
+                    "from the provided schema.",
+                    "type": "text",
+                }
+            ],
+            "role": "user",
+        },
+    ]
+
+    new_messages = anthropic_messages_pt(messages, model="claude-3-sonnet-20240229", llm_provider="anthropic")
+
+    assert isinstance(new_messages[1]["content"][0]["text"], str)
+
+
+def test_bedrock_tool_calling_pt():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    converted_tools = _bedrock_tools_pt(tools=tools)
+
+    print(converted_tools)
+    assert converted_tools[0]["toolSpec"]["name"] == "get_current_weather" and (
+        converted_tools[0]["toolSpec"]["inputSchema"]["json"] == tools[0]["function"]["parameters"]
+    )
+
+
+@pytest.mark.parametrize(
+    "url, expected_media_type",
+    [
+        ("data:image/jpeg;base64,1234", "image/jpeg"),
+        ("data:application/pdf;base64,1234", "application/pdf"),
+        (r"data:image\/jpeg;base64,1234", "image/jpeg"),
+    ],
+)
+def test_base64_image_input(url, expected_media_type):
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
+
+    assert response["media_type"] == expected_media_type
+
+
+def test_create_anthropic_image_param_with_http_url():
+    """Test that HTTP/HTTPS URLs are passed as URL references, not base64."""
+    image_param = create_anthropic_image_param("https://example.com/image.jpg", format=None)
+
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_https_url():
+    """Test that HTTPS URLs are passed as URL references."""
+    image_param = create_anthropic_image_param("https://example.com/image.png", format=None)
+
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.png"
+
+
+def test_create_anthropic_image_param_with_dict_input():
+    """Test that dict input with URL is handled correctly."""
+    image_param = create_anthropic_image_param(
+        {"url": "https://example.com/image.jpg", "format": "image/jpeg"}, format=None
+    )
+
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_base64_data_uri():
+    """Test that data URIs are converted to base64."""
+    image_param = create_anthropic_image_param("data:image/jpeg;base64,/9j/4AAQSkZJRg==", format=None)
+
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/jpeg"
+    assert image_param["source"]["data"] == "/9j/4AAQSkZJRg=="
+
+
+def test_create_anthropic_image_param_with_format_override():
+    """Test that format parameter can override media type."""
+    image_param = create_anthropic_image_param("data:image/jpeg;base64,1234", format="image/png")
+
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/png"
+
+
+def test_anthropic_messages_pt_with_url_image():
+    """Test that anthropic_messages_pt correctly handles HTTP/HTTPS URLs as URL references."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.jpg",
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic")
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+
+    assert result[0]["content"][0]["type"] == "text"
+
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "url"
+    assert result[0]["content"][1]["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_anthropic_messages_pt_with_base64_image():
+    """Test that anthropic_messages_pt correctly handles data URIs as base64."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic")
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "base64"
+    assert result[0]["content"][1]["source"]["media_type"] == "image/jpeg"
+
+
+def test_anthropic_messages_tool_call():
+    messages = [
+        {
+            "role": "user",
+            "content": "Would development of a software platform be under ASC 350-40 or ASC 985?",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_call_id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+            "tool_calls": [
+                {
+                    "id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+                    "function": {
+                        "arguments": '{"completed_steps": [], "next_steps": [{"tool_name": "AccountingResearchTool", "description": "Research ASC 350-40 to understand its scope and applicability to software development."}, {"tool_name": "AccountingResearchTool", "description": "Research ASC 985 to understand its scope and applicability to software development."}, {"tool_name": "AccountingResearchTool", "description": "Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development."}], "learnings": [], "potential_issues": ["The distinction between the two standards might not be clear-cut for all types of software development.", "There might be specific circumstances or details about the software platform that could affect which standard applies."], "missing_info": ["Specific details about the type of software platform being developed (e.g., for internal use or for sale).", "Whether the entity developing the software is also the end-user or if it\'s being developed for external customers."], "done": false, "required_formatting": null}',
+                        "name": "TaskPlanningTool",
+                    },
+                    "type": "function",
+                }
+            ],
+        },
+        {
+            "role": "function",
+            "content": '{"completed_steps":[],"next_steps":[{"tool_name":"AccountingResearchTool","description":"Research ASC 350-40 to understand its scope and applicability to software development."},{"tool_name":"AccountingResearchTool","description":"Research ASC 985 to understand its scope and applicability to software development."},{"tool_name":"AccountingResearchTool","description":"Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development."}],"formatting_step":null}',
+            "name": "TaskPlanningTool",
+            "tool_call_id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(messages, model="claude-3-sonnet-20240229", llm_provider="anthropic")
+
+    print(translated_messages)
+
+    assert translated_messages[-1]["content"][0]["tool_use_id"] == "bc8cb4b6-88c4-4138-8993-3a9d9cd51656"
+
+
+def test_anthropic_cache_controls_pt():
+    "see anthropic docs for this: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#continuing-a-multi-turn-conversation"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(messages, model="claude-3-5-sonnet-20240620", llm_provider="anthropic")
+
+    for i, msg in enumerate(translated_messages):
+        if i == 0:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+        elif i == 1:
+            assert "cache_controls" not in msg["content"][0]
+        elif i == 2:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+        elif i == 3:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    print("translated_messages: ", translated_messages)
+
+
+def test_anthropic_cache_controls_tool_calls_pt():
+    """
+    Tests that cache_control is properly set in tool_calls when converting messages
+    for the Anthropic API.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "Can you help me get the weather?",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "weather-tool-id-123",
+                    "function": {
+                        "arguments": '{"location": "San Francisco"}',
+                        "name": "get_weather",
+                    },
+                    "type": "function",
+                }
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "role": "function",
+            "content": '{"temperature": 72, "unit": "fahrenheit", "description": "sunny"}',
+            "name": "get_weather",
+            "tool_call_id": "weather-tool-id-123",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(messages, model="claude-3-sonnet-20240229", llm_provider="anthropic")
+
+    print("Translated tool call messages:", translated_messages)
+
+    assert translated_messages[0]["role"] == "user"
+
+    assert translated_messages[1]["role"] == "assistant"
+    for content_item in translated_messages[1]["content"]:
+        if content_item["type"] == "tool_use":
+            assert "cache_control" not in content_item
+            assert content_item["name"] == "get_weather"
+
+    assert translated_messages[2]["role"] == "user"
+    for content_item in translated_messages[2]["content"]:
+        if content_item["type"] == "tool_result":
+            assert content_item["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize("provider", ["bedrock", "anthropic"])
+def test_bedrock_parallel_tool_calling_pt(provider):
+    """
+    Make sure parallel tool call blocks are merged correctly - https://github.com/BerriAI/litellm/issues/5277
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        Message(
+            content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    index=1,
+                    function=Function(
+                        arguments='{"city": "New York"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+                    type="function",
+                ),
+                ChatCompletionMessageToolCall(
+                    index=2,
+                    function=Function(
+                        arguments='{"city": "London"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "25 degrees celsius.",
+        },
+        {
+            "tool_call_id": "tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "28 degrees celsius.",
+        },
+    ]
+
+    if provider == "bedrock":
+        translated_messages = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+    else:
+        translated_messages = anthropic_messages_pt(
+            messages=messages,
+            model="claude-3-sonnet-20240229-v1:0",
+            llm_provider=provider,
+        )
+    print(translated_messages)
+
+    number_of_messages = len(translated_messages)
+
+    assert translated_messages[number_of_messages - 1]["role"] != translated_messages[number_of_messages - 2]["role"]
+
+
+def test_vertex_only_image_user_message():
+    base64_image = "/9j/2wCEAAgGBgcGBQ"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                },
+            ],
+        },
+    ]
+
+    response = gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
+
+    expected_response = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "inline_data": {
+                        "data": "/9j/2wCEAAgGBgcGBQ",
+                        "mime_type": "image/jpeg",
+                    }
+                },
+                {"text": " "},
+            ],
+        }
+    ]
+
+    assert len(response) == len(expected_response)
+    for idx, content in enumerate(response):
+        assert content == expected_response[idx], "Invalid gemini input. Got={}, Expected={}".format(
+            content, expected_response[idx]
+        )
+
+
+def test_no_messages_yields_user_text():
+    """
+    Test that contents are not empty and have text when called without messages
+    This is to support blha blah
+    """
+    messages: List[AllMessageValues] = []
+
+    contents = gemini_convert_messages_with_history(messages=messages)
+
+    expected_output = [{"role": "user", "parts": [{"text": " "}]}]
+
+    assert contents == expected_output
+
+
+def test_convert_url(monkeypatch):
+    import base64
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        in_memory_cache,
+    )
+
+    url = "https://picsum.photos/id/237/200/300"
+    image_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(200, content=image_bytes, headers={"Content-Type": "image/png"})
+
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+
+    result = convert_url_to_base64(url)
+
+    expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    assert result == expected
+    mock_client.get.assert_called_once()
+
+
+def test_azure_tool_call_invoke_helper():
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+        {"role": "assistant", "function_call": {"name": "get_weather"}},
+    ]
+
+    transformed_messages = litellm.AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert transformed_messages["messages"] == [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+        {
+            "role": "assistant",
+            "function_call": {"name": "get_weather", "arguments": ""},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "messages, expected_messages, user_continue_message, assistant_continue_message",
+    [
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hello! How can I assist you today?"},
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+                {"role": "assistant", "content": "I don't know anyything, do you?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue.",
+                },
+                {"role": "user", "content": "What is Azure?"},
+                {
+                    "role": "assistant",
+                    "content": "I don't know anyything, do you?",
+                },
+                {
+                    "role": "user",
+                    "content": "Please continue.",
+                },
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "user", "content": "What is Databricks?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "What is Databricks?"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue.",
+                },
+                {"role": "user", "content": "What is Azure?"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+                {"role": "assistant", "content": "I don't know anyything, do you?"},
+                {"role": "assistant", "content": "I can't repeat sentences."},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue",
+                },
+                {"role": "user", "content": "What is Azure?"},
+                {
+                    "role": "assistant",
+                    "content": "I don't know anyything, do you?",
+                },
+                {
+                    "role": "user",
+                    "content": "Ok",
+                },
+                {
+                    "role": "assistant",
+                    "content": "I can't repeat sentences.",
+                },
+                {"role": "user", "content": "Ok"},
+            ],
+            {
+                "role": "user",
+                "content": "Ok",
+            },
+            {
+                "role": "assistant",
+                "content": "Please continue",
+            },
+        ),
+    ],
+)
+def test_ensure_alternating_roles(messages, expected_messages, user_continue_message, assistant_continue_message):
+    messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=assistant_continue_message,
+        user_continue_message=user_continue_message,
+        ensure_alternating_roles=True,
+    )
+
+    print(messages)
+
+    assert messages == expected_messages
+
+
+def test_ensure_alternating_roles_with_tool_calls():
+    """Fixes Regression in #18685"""
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+
+def test_ensure_alternating_roles_three_consecutive_assistants():
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "assistant", "content": "A2"},
+        {"role": "assistant", "content": "A3"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A2"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A3"},
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_inserts_assistant_continue_across_tool_chain():
+    """[user, assistant(tc), tool, user] gets assistant_continue before the second user."""
+    messages = [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+
+def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
+    """
+    Malformed [assistant(tc), assistant(no-tc), user]:
+    user_continue inserts break between adjacents, then assistant_continue
+    fills the counted-sequence gap.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Please continue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_trailing_tool_call_assistant():
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_multiple_tool_results():
+    """[user, assistant(tc), tool, tool, user] — multiple tool results before next user."""
+    messages = [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_chained_tool_calls():
+    """[user, assistant(tc), tool, assistant(tc), tool, user] — chained tool calls."""
+    messages = [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+
+def test_ensure_alternating_roles_system_prefix_with_tool_chain():
+    """[system, user, assistant(tc), tool, user] — system prefix doesn't interfere."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_just_system_message():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as e:
+        _bedrock_converse_messages_pt(
+            messages=[],
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+
+    assert "bedrock requires at least one non-system message" in str(e.value)
+
+
+def test_hf_chat_template():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        hf_chat_template,
+    )
+
+    model = "llama/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    litellm.register_prompt_template(
+        model=model,
+        tokenizer_config={
+            "add_bos_token": True,
+            "add_eos_token": False,
+            "bos_token": {
+                "__type": "AddedToken",
+                "content": "",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "clean_up_tokenization_spaces": False,
+            "eos_token": {
+                "__type": "AddedToken",
+                "content": "",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "legacy": True,
+            "model_max_length": 16384,
+            "pad_token": {
+                "__type": "AddedToken",
+                "content": "",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "sp_model_kwargs": {},
+            "unk_token": None,
+            "tokenizer_class": "LlamaTokenizerFast",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{' ' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{' ' + tool['type'] + ' ' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + ' '}}{%- set ns.is_first = true -%}{%- else %}{{' ' + tool['type'] + ' ' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + ' '}}{{' '}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{' ' + message['content'] + ' '}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{' ' + content + ' '}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{' ' + message['content'] + ' '}}{%- set ns.is_output_first = false %}{%- else %}{{' ' + message['content'] + ' '}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{' '}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{' '}}{% endif %}",
+        },
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+    chat_template = hf_chat_template(model=model, messages=messages)
+    print(chat_template)
+    assert chat_template.rstrip() == "You are a helpful assistant. What is the weather in Copenhagen?"
+
+
+def test_ollama_pt():
+    from litellm.litellm_core_utils.prompt_templates.factory import ollama_pt
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+    ]
+    prompt = ollama_pt(model="ollama/llama3.1", messages=messages)
+    print(prompt)
+    assert "You are a helpful assistant." in prompt["prompt"] and "Hello!" in prompt["prompt"]
+
+
+def test_convert_to_anthropic_tool_invoke_regular_tool():
+    """Test that regular tool_use is converted correctly."""
+    tool_calls = [
+        {
+            "id": "toolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "San Francisco"}',
+            },
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "toolu_01ABC123"
+    assert result[0]["name"] == "get_weather"
+    assert result[0]["input"] == {"location": "San Francisco"}
+
+
+def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
+    """Test that tool_use IDs with invalid characters are sanitized.
+
+    Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$.
+    IDs from external frameworks (e.g. MiniMax) may contain characters
+    like colons that violate this pattern.
+    """
+    tool_calls = [
+        {
+            "id": "sessions_history:183",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+        },
+        {
+            "id": "composio.NOTION_SEARCH",
+            "type": "function",
+            "function": {
+                "name": "search_notes",
+                "arguments": '{"query": "test"}',
+            },
+        },
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 2
+
+    assert result[0]["id"] == "sessions_history_183"
+
+    assert result[1]["id"] == "composio_NOTION_SEARCH"
+
+    valid_tool_calls = [
+        {
+            "id": "toolu_01ABC-xyz_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "NYC"}',
+            },
+        }
+    ]
+    valid_result = convert_to_anthropic_tool_invoke(valid_tool_calls)
+    assert valid_result[0]["id"] == "toolu_01ABC-xyz_123"
+
+
+def test_convert_to_anthropic_tool_invoke_server_tool():
+    """
+    Test that a server tool call (srvtoolu_) with no stored result is replayed
+    as a regular tool_use block.
+
+    A server_tool_use block is only valid when paired with its result block, so
+    an unpaired one must degrade to tool_use for Anthropic to accept the replay.
+    A paired call still becomes server_tool_use, covered by
+    test_convert_to_anthropic_tool_invoke_with_web_search_results.
+
+    Context: https://github.com/BerriAI/litellm/issues/17737 (original
+    server_tool_use reconstruction) and LIT-6622 / PR #39144 (unpaired calls
+    degrade instead of 400ing at Anthropic).
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}',
+            },
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    assert result[0]["name"] == "web_search"
+    assert result[0]["input"] == {"query": "elephant weight"}
+
+
+def test_convert_to_anthropic_tool_invoke_with_web_search_results():
+    """
+    Test that web_search_tool_result is included after server_tool_use.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}',
+            },
+        }
+    ]
+
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://example.com",
+                    "title": "Elephant Facts",
+                    "snippet": "Elephants weigh 5000 kg",
+                }
+            ],
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+
+    assert len(result) == 2
+
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+
+    assert result[1]["type"] == "web_search_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01ABC123"
+
+
+def test_convert_to_anthropic_tool_invoke_mixed_tools():
+    """
+    Test that mixed server and regular tools are reconstructed correctly.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}',
+            },
+        },
+        {
+            "id": "toolu_01XYZ789",
+            "type": "function",
+            "function": {"name": "add_numbers", "arguments": '{"a": 5000, "b": 100}'},
+        },
+    ]
+
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [{"url": "https://example.com", "title": "Test"}],
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+
+    assert len(result) == 3
+
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+
+    assert result[1]["type"] == "web_search_tool_result"
+
+    assert result[2]["type"] == "tool_use"
+    assert result[2]["id"] == "toolu_01XYZ789"
+
+
+def test_anthropic_messages_pt_with_server_tool_use():
+    """
+    Test that anthropic_messages_pt correctly reconstructs server_tool_use from provider_specific_fields.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    messages = [
+        {"role": "user", "content": "Search for elephant weight and add 100"},
+        {
+            "role": "assistant",
+            "content": "Let me search for that.",
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ABC123",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "elephant weight"}',
+                    },
+                },
+                {
+                    "id": "toolu_01XYZ789",
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "arguments": '{"a": 5000, "b": 100}',
+                    },
+                },
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01ABC123",
+                        "content": [
+                            {
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "5000 kg",
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        {"role": "tool", "tool_call_id": "toolu_01XYZ789", "content": "5100"},
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    types = [c.get("type") for c in content]
+    assert "text" in types
+    assert "server_tool_use" in types
+    assert "web_search_tool_result" in types
+    assert "tool_use" in types
+
+    server_tool = next(c for c in content if c.get("type") == "server_tool_use")
+    assert server_tool["id"] == "srvtoolu_01ABC123"
+
+    server_idx = types.index("server_tool_use")
+    web_result_idx = types.index("web_search_tool_result")
+    assert web_result_idx == server_idx + 1
+
+    tool_use = next(c for c in content if c.get("type") == "tool_use")
+    assert tool_use["id"] == "toolu_01XYZ789"
+
+
+def test_convert_to_anthropic_tool_invoke_with_tool_results():
+    """
+    Test that non-web-search *_tool_result blocks (e.g. bash_code_execution_tool_result)
+    stored in provider_specific_fields["tool_results"] are paired with their server_tool_use
+    block when reconstructing assistant history.
+
+    Regression for: server tool result blocks dropped on multi-turn replay
+    (bash_code_execution_tool_result, text_editor_code_execution_tool_result, etc.)
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01BASH",
+            "type": "function",
+            "function": {
+                "name": "bash_code_execution",
+                "arguments": '{"command": "python3 -c \\"print(2)\\""}',
+            },
+        }
+    ]
+
+    tool_results = [
+        {
+            "type": "bash_code_execution_tool_result",
+            "tool_use_id": "srvtoolu_01BASH",
+            "content": {
+                "type": "bash_code_execution_result",
+                "stdout": "2\n",
+                "stderr": "",
+                "return_code": 0,
+                "content": [],
+            },
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, tool_results=tool_results)
+
+    assert len(result) == 2
+
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01BASH"
+    assert result[0]["name"] == "bash_code_execution"
+
+    assert result[1]["type"] == "bash_code_execution_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01BASH"
+
+
+def test_anthropic_messages_pt_raw_bash_tool_result_passthrough():
+    """
+    Test that raw assistant content lists containing bash_code_execution_tool_result
+    blocks are passed through intact to Anthropic.
+
+    Regression: the raw-block passthrough only handled tool_search_tool_result;
+    bash_code_execution_tool_result and other *_tool_result types were silently dropped.
+    """
+    messages = [
+        {"role": "user", "content": "What is 1+1?"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01BASH",
+                    "name": "bash_code_execution",
+                    "input": {"command": 'python3 -c "print(1+1)"'},
+                },
+                {
+                    "type": "bash_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_01BASH",
+                    "content": {
+                        "type": "bash_code_execution_result",
+                        "stdout": "2\n",
+                        "stderr": "",
+                        "return_code": 0,
+                        "content": [],
+                    },
+                },
+                {"type": "text", "text": "The answer is 2."},
+            ],
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert "server_tool_use" in types, "server_tool_use block must be preserved"
+    assert "bash_code_execution_tool_result" in types, "bash_code_execution_tool_result block must not be dropped"
+    assert "text" in types
+
+    srv_idx = types.index("server_tool_use")
+    result_idx = types.index("bash_code_execution_tool_result")
+    assert result_idx == srv_idx + 1
+
+    bash_result = next(c for c in content if c.get("type") == "bash_code_execution_tool_result")
+    assert bash_result["tool_use_id"] == "srvtoolu_01BASH"
+
+
+def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields():
+    """
+    Test that anthropic_messages_pt correctly reconstructs bash_code_execution_tool_result
+    from provider_specific_fields["tool_results"] when replaying LiteLLM response objects.
+
+    Regression: only web_search_results were read from provider_specific_fields;
+    tool_results (bash_code_execution_tool_result, etc.) were silently lost.
+    """
+    messages = [
+        {"role": "user", "content": "What is 1+1?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01BASH",
+                    "type": "function",
+                    "function": {
+                        "name": "bash_code_execution",
+                        "arguments": '{"command": "python3 -c \\"print(1+1)\\""}',
+                    },
+                }
+            ],
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "bash_code_execution_tool_result",
+                        "tool_use_id": "srvtoolu_01BASH",
+                        "content": {
+                            "type": "bash_code_execution_result",
+                            "stdout": "2\n",
+                            "stderr": "",
+                            "return_code": 0,
+                            "content": [],
+                        },
+                    }
+                ]
+            },
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert "server_tool_use" in types, "server_tool_use block must be reconstructed"
+    assert "bash_code_execution_tool_result" in types, (
+        "bash_code_execution_tool_result must be paired from provider_specific_fields['tool_results']"
+    )
+
+    srv_idx = types.index("server_tool_use")
+    result_idx = types.index("bash_code_execution_tool_result")
+    assert result_idx == srv_idx + 1
+
+    srv = next(c for c in content if c.get("type") == "server_tool_use")
+    assert srv["id"] == "srvtoolu_01BASH"
+    bash_result = next(c for c in content if c.get("type") == "bash_code_execution_tool_result")
+    assert bash_result["tool_use_id"] == "srvtoolu_01BASH"
+
+
+def test_parse_tool_call_arguments_valid_json():
+    """Test that valid JSON is parsed correctly."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    result = parse_tool_call_arguments('{"city": "Paris", "units": "celsius"}')
+    assert result == {"city": "Paris", "units": "celsius"}
+
+
+def test_parse_tool_call_arguments_empty_input():
+    """Test that None/empty input returns empty dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    assert parse_tool_call_arguments(None) == {}
+    assert parse_tool_call_arguments("") == {}
+
+
+def test_parse_tool_call_arguments_malformed_json():
+    """Test that malformed JSON raises ValueError with context."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'load_skill") as exc_info:
+        parse_tool_call_arguments(
+            '{"skill_name": "pptx',
+            tool_name="load_skill",
+            context="Anthropic tool invoke",
+        )
+
+    error_msg = str(exc_info.value)
+    assert "load_skill" in error_msg
+    assert "Anthropic tool invoke" in error_msg
+    assert '{"skill_name": "pptx' in error_msg
+    assert "Unterminated string" in error_msg
+
+
+def test_convert_to_anthropic_tool_invoke_malformed_json():
+    """
+    Test that convert_to_anthropic_tool_invoke raises ValueError with context
+    when tool arguments contain malformed JSON.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/18920
+    """
+    tool_calls = [
+        {
+            "id": "toolu_01_invalid",
+            "type": "function",
+            "function": {
+                "name": "bad_tool",
+                "arguments": '{"truncated',
+            },
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'bad_tool") as exc_info:
+        convert_to_anthropic_tool_invoke(tool_calls)
+
+    error_msg = str(exc_info.value)
+    assert "bad_tool" in error_msg
+    assert '{"truncated' in error_msg
+
+
+def test_attempt_json_repair_missing_closing_brace():
+    """Repair JSON truncated with a missing closing brace (issue #22312)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result["command"] == [
+        "bash",
+        "-lc",
+        "find /x/repos -name 'messages.py' -type f",
+    ]
+
+
+def test_attempt_json_repair_missing_bracket_and_brace():
+    """Repair JSON truncated with both missing ] and }."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"items": [1, 2, 3'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result["items"] == [1, 2, 3]
+
+
+def test_attempt_json_repair_trailing_comma():
+    """Repair JSON with a trailing comma before missing close."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"a": 1, "b": 2,'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"a": 1, "b": 2}
+
+
+def test_attempt_json_repair_returns_none_for_unterminated_string():
+    """Cannot repair an unterminated string — returns None."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair('{"key": "incomplete value') is None
+
+
+def test_attempt_json_repair_returns_none_for_valid_json():
+    """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair('{"key": "value"}') is None
+
+
+def test_attempt_json_repair_returns_none_for_empty():
+    """Empty / whitespace input returns None."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair("") is None
+    assert _attempt_json_repair("   ") is None
+
+
+def test_attempt_json_repair_interleaved_nesting():
+    """Repair JSON with interleaved {} and [] nesting."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"a": [{"b": 2'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"a": [{"b": 2}]}
+
+
+def test_attempt_json_repair_deeply_nested():
+    """Repair deeply nested truncated JSON."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"x": {"y": [1, {"z": [2, 3'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"x": {"y": [1, {"z": [2, 3]}]}}
+
+
+def test_parse_tool_call_arguments_whitespace_only():
+    """Whitespace-only input returns empty dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    assert parse_tool_call_arguments("   ") == {}
+    assert parse_tool_call_arguments("\n") == {}
+
+
+def test_parse_tool_call_arguments_non_object_json():
+    """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    result = parse_tool_call_arguments("[1, 2, 3]")
+    assert result == [1, 2, 3]
+
+
+def test_parse_tool_call_arguments_repairs_truncated_json():
+    """parse_tool_call_arguments should repair truncated JSON instead of raising."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    truncated = '{"command": ["bash","-lc","find /x -type f"]'
+    result = parse_tool_call_arguments(truncated, tool_name="shell", context="Anthropic tool invoke")
+    assert result == {"command": ["bash", "-lc", "find /x -type f"]}
+
+
+def test_parse_tool_call_arguments_still_raises_for_unrepairable():
+    """parse_tool_call_arguments raises ValueError when repair also fails."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'test_tool") as exc_info:
+        parse_tool_call_arguments(
+            '{"key": "unterminated',
+            tool_name="test_tool",
+            context="test context",
+        )
+
+    error_msg = str(exc_info.value)
+    assert "test_tool" in error_msg
+    assert "test context" in error_msg
+
+
+def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
+    """
+    Test that thinking blocks are interleaved with server tool calls (web search)
+    instead of being prepended all at once.
+
+    When Anthropic returns a response with extended thinking + multiple web searches,
+    the content blocks are interleaved:
+    [thinking_1, server_tool_use_1, result_1, thinking_2, server_tool_use_2, result_2]
+
+    On round-trip through OpenAI format, thinking_blocks and tool_calls are separate
+    fields. anthropic_messages_pt must reconstruct the interleaved order, otherwise
+    Anthropic rejects the request because thinking block signatures are position-dependent.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    messages = [
+        {"role": "user", "content": "Search for news about fast.ai and answer.ai"},
+        {
+            "role": "assistant",
+            "content": "Here is what I found.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I need to search for fast.ai news.",
+                    "signature": "sig_thinking_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now I should also search for answer.ai.",
+                    "signature": "sig_thinking_2",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01SEARCH1",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "fast.ai news"}',
+                    },
+                },
+                {
+                    "id": "srvtoolu_01SEARCH2",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "answer.ai news"}',
+                    },
+                },
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01SEARCH1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://fast.ai",
+                                "title": "fast.ai",
+                                "snippet": "fast.ai news",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01SEARCH2",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://answer.ai",
+                                "title": "answer.ai",
+                                "snippet": "answer.ai news",
+                            }
+                        ],
+                    },
+                ]
+            },
+        },
+        {"role": "user", "content": "Now search for news about solveit"},
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    types = [c.get("type") for c in content]
+
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ], f"Expected interleaved order but got: {types}"
+
+    thinking_1 = content[0]
+    assert thinking_1["thinking"] == "I need to search for fast.ai news."
+    assert thinking_1["signature"] == "sig_thinking_1"
+
+    thinking_2 = content[3]
+    assert thinking_2["thinking"] == "Now I should also search for answer.ai."
+    assert thinking_2["signature"] == "sig_thinking_2"
+
+    assert content[1]["id"] == "srvtoolu_01SEARCH1"
+    assert content[4]["id"] == "srvtoolu_01SEARCH2"
+
+    assert content[2]["tool_use_id"] == "srvtoolu_01SEARCH1"
+    assert content[5]["tool_use_id"] == "srvtoolu_01SEARCH2"
+
+    assert content[6]["text"] == "Here is what I found."
+
+
+def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
+    """
+    Test that the existing behavior is preserved when thinking blocks exist
+    but there are no server tool calls (only regular tool_use).
+
+    Thinking blocks should still be prepended first in this case.
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": "Let me check.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I should check the weather.",
+                    "signature": "sig_1",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_01REG",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "SF"}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01REG",
+            "content": "72F and sunny",
+        },
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert types == [
+        "thinking",
+        "text",
+        "tool_use",
+    ], f"Expected sequential order but got: {types}"
+
+
+def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
+    """
+    Test interleaving when there are more thinking blocks than server tool groups.
+    Extra thinking blocks should appear before the text block.
+    """
+    messages = [
+        {"role": "user", "content": "Search for something"},
+        {
+            "role": "assistant",
+            "content": "Found it.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "First thought",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Second thought",
+                    "signature": "sig_2",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Third thought after search",
+                    "signature": "sig_3",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ONLY",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "something"}',
+                    },
+                },
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01ONLY",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "result",
+                            }
+                        ],
+                    },
+                ]
+            },
+        },
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "thinking",
+        "text",
+    ], f"Expected order but got: {types}"
+
+
+def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
+    """
+    Test that when assistant content is already a list containing interleaved
+    thinking blocks and server tool blocks, the thinking_blocks from
+    provider_specific_fields are NOT duplicated/prepended.
+
+    This covers the gap identified by Greptile where list-content messages
+    bypass INTERLEAVED MODE and fall into SEQUENTIAL MODE, which previously
+    would prepend all thinking_blocks again, causing duplication and
+    breaking Anthropic's position-dependent signature verification.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    messages = [
+        {"role": "user", "content": "Search for AI news"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01SEARCH1",
+                    "name": "web_search",
+                    "input": {"query": "AI news"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01SEARCH1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "AI News",
+                            "snippet": "Latest AI news",
+                        }
+                    ],
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the AI news summary.",
+                },
+            ],
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+            ],
+        },
+        {"role": "user", "content": "Tell me more"},
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "text",
+    ], f"Expected preserved list order without duplicate thinking blocks, but got: {types}"
+
+    thinking_count = sum(1 for t in types if t == "thinking")
+    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+
+    assert content[0]["signature"] == "sig_1"
+    assert content[3]["signature"] == "sig_2"
+
+
+def test_get_tool_calls_from_response_chat_completions():
+    response = MagicMock()
+    response.output = None
+    response.content = None
+    tool_call = MagicMock()
+    tool_call.id = "call_abc"
+    tool_call.function.name = "my_tool"
+    tool_call.function.arguments = '{"x": 1}'
+    response.choices = [MagicMock(message=MagicMock(tool_calls=[tool_call]))]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_abc", "name": "my_tool", "arguments": {"x": 1}}]
+
+
+def test_get_tool_calls_from_response_responses_api():
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "my_tool",
+            "arguments": '{"x": 2}',
+        }
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_1", "name": "my_tool", "arguments": {"x": 2}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = [
+        {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages_plain_dict():
+
+    response = {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+        ]
+    }
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_no_tool_calls():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = None
+
+    assert get_tool_calls_from_response(response) == []
+
+
+def test_has_tool_with_name_openai_function_shape():
+    tools = [{"type": "function", "function": {"name": "my_tool"}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_custom_shape():
+    tools = [{"type": "custom", "name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_shape_without_type_field():
+
+    tools = [{"name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_not_a_list():
+    assert not has_tool_with_name(None, "my_tool")
+    assert not has_tool_with_name("not a list", "my_tool")
