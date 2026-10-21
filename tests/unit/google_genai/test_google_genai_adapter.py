@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI generate_content adapter functionality
 """
+import asyncio
 import json
 import unittest
 
@@ -1641,3 +1642,40 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
     }
     assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
     assert "text" not in response
+
+
+@pytest.mark.asyncio
+async def test_generate_content_bridge_honors_the_request_cache_controls(respx_mock, monkeypatch):
+    import httpx
+
+    from litellm.caching.caching import Cache
+    from litellm.types.caching import LiteLLMCacheType
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-capital",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4.1",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Paris"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            },
+        )
+    )
+    request = {
+        "model": "openai/gpt-4.1",
+        "contents": [{"role": "user", "parts": [{"text": "What is the capital of France?"}]}],
+        "cache": {"no-cache": True, "no-store": True},
+        "api_key": "sk-test",
+    }
+
+    await agenerate_content(**request)
+    await asyncio.sleep(0.5)
+    await agenerate_content(**request)
+
+    assert route.call_count == 2
+

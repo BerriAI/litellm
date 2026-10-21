@@ -443,20 +443,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return model_names
 
-    async def async_should_semantic_cache(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: Mapping[str, object],
-        call_type: str,
-    ) -> bool:
-        """Runs once per request the proxy's semantic cache would serve, after the pre-call hooks,
-        with the authenticated key and the request body. Return True to let the request read from
-        and write to the semantic cache. Any other return value, or an exception, skips both for that
-        request. Every callback that overrides this hook must return True for the request to be cached.
-        Exact-match cache types never call it.
-        """
-        return True
-
     async def async_post_call_response_headers_hook(
         self,
         data: dict,
