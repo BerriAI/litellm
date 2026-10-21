@@ -111,9 +111,7 @@ class Authenticator:
             try:
                 access_token = self._login()
                 try:
-                    with open(
-                        self.access_token_file, "w", opener=self._secure_opener
-                    ) as f:
+                    with open(self.access_token_file, "w", opener=self._secure_opener) as f:
                         f.write(access_token)
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
