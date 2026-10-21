@@ -32,6 +32,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     KubernetesPodsResponse,
     ModelManagementAuthChecks,
     _get_team_deployments,
+    _raise_if_model_update_adds_missing_rate_limits,
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
@@ -7438,37 +7439,117 @@ class TestEnforceRpmTpmOnModelAdd:
         assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
         assert exc_info.value.code == "400"
 
-    def test_policy_reads_the_provider_behind_a_known_api_base(self):
+    @pytest.mark.parametrize("api_base", ["https://api.groq.com/openai/v1", "os.environ/QA_GROQ_API_BASE"])
+    def test_policy_reads_the_provider_behind_a_known_api_base(self, monkeypatch: pytest.MonkeyPatch, api_base: str):
+        monkeypatch.setenv("QA_GROQ_API_BASE", "https://api.groq.com/openai/v1")
         policy: Final = ModelQuotaPolicy.model_validate({"default": [], "providers": {"groq": ["rpm", "tpm"]}})
         with pytest.raises(ProxyException) as exc_info:
             _raise_if_rate_limits_required_but_missing(
                 model_name="qa-llama", team_model=False,
-                litellm_params=LiteLLM_Params(model="qa-llama", api_base="https://api.groq.com/openai/v1"),
+                litellm_params=LiteLLM_Params(model="qa-llama", api_base=api_base),
                 policy=policy,
             )
         assert exc_info.value.message.startswith("rpm and tpm must be set to a positive value for 'qa-llama'")
 
     @pytest.mark.parametrize(
-        ("model_name", "params", "expected_missing"),
+        ("model_name", "params", "shared_missing", "team_missing"),
         [
-            ("jev-latest", LiteLLM_Params(model="vertex_ai/gemini-3.8-flash"), "rpm and tpm"),
-            ("veo-team", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=5), "tpm"),
+            pytest.param(
+                "jev-latest", LiteLLM_Params(model="vertex_ai/gemini-3.8-flash"), None, "rpm and tpm",
+                id="team-cannot-borrow-an-exempt-public-name",
+            ),
+            pytest.param(
+                "video-team", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=5), "tpm", None,
+                id="team-matches-the-model-it-calls",
+            ),
         ],
     )
-    def test_policy_model_entries_never_match_a_team_model_name(
-        self, model_name: str, params: LiteLLM_Params, expected_missing: str
+    def test_policy_matches_a_team_model_by_the_model_it_calls(
+        self, model_name: str, params: LiteLLM_Params, shared_missing: str | None, team_missing: str | None
     ):
-        assert (
-            _raise_if_rate_limits_required_but_missing(
-                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
-            )
-            is None
+        assert _model_add_error(model_name, params, team_model=False) == _missing_limits_message(shared_missing, model_name)
+        assert _model_add_error(model_name, params, team_model=True) == _missing_limits_message(team_missing, model_name)
+
+
+def _missing_limits_message(missing: str | None, model_name: str) -> str | None:
+    if missing is None:
+        return None
+    return (
+        f"{missing} must be set to a positive value for '{model_name}' when "
+        "'enforce_rpm_tpm_on_model_add' is enabled in general_settings"
+    )
+
+
+def _model_add_error(model_name: str, params: LiteLLM_Params, team_model: bool) -> str | None:
+    try:
+        _raise_if_rate_limits_required_but_missing(
+            model_name=model_name, team_model=team_model, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
         )
-        with pytest.raises(ProxyException) as exc_info:
-            _raise_if_rate_limits_required_but_missing(
-                model_name=model_name, team_model=True, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
-            )
-        assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
+    except ProxyException as error:
+        return error.message
+    return None
+
+
+_STORED_RUNWAY: Final = {"model": "runwayml/gen4_turbo"}
+
+
+def _stored_model(litellm_params: Mapping[str, object], team_id: str | None) -> Deployment:
+    return Deployment(
+        model_name="media-latest" if team_id is None else "model_name_media-team_team-row",
+        litellm_params=dict(litellm_params),
+        model_info={
+            "id": "team-row",
+            "team_id": team_id,
+            "team_public_model_name": None if team_id is None else "media-latest",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("stored", "team_id", "incoming", "missing"),
+    [
+        pytest.param(
+            _STORED_RUNWAY, "media-team", updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash"), "rpm and tpm",
+            id="team-model-moves-to-a-provider-that-needs-limits",
+        ),
+        pytest.param(
+            _STORED_RUNWAY, None, updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", rpm=10), "tpm",
+            id="proxy-model-moves-with-only-one-limit",
+        ),
+        pytest.param(
+            {**_STORED_RUNWAY, "tpm": 1000}, None, updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", rpm=10),
+            None, id="stored-limit-counts-toward-the-move",
+        ),
+        pytest.param(
+            _STORED_RUNWAY, "media-team", updateLiteLLMParams(model="vertex_ai/veo-3.1-generate-001", rpm=5), None,
+            id="team-model-moves-to-a-model-entry-it-meets",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(api_key="qa-rotated-key"), None,
+            id="unchanged-route-adds-no-limits",
+        ),
+    ],
+)
+def test_model_update_requires_only_the_limits_its_new_route_adds(
+    stored: Mapping[str, object], team_id: str | None, incoming: updateLiteLLMParams, missing: str | None
+) -> None:
+    assert _model_update_error(_stored_model(stored, team_id), incoming) == _missing_limits_message(
+        missing, "media-latest"
+    )
+
+
+def _model_update_error(existing: Deployment, incoming: updateLiteLLMParams) -> str | None:
+    try:
+        _raise_if_model_update_adds_missing_rate_limits(
+            existing=existing,
+            written_name="media-latest",
+            written_team_model=existing.model_info.team_id is not None,
+            incoming_params=incoming,
+            policy=_CUSTOMER_MODEL_ADD_POLICY,
+        )
+    except ProxyException as error:
+        return error.message
+    return None
 
 
 @pytest.mark.asyncio
@@ -7706,6 +7787,69 @@ async def test_team_model_delete_rejects_falling_back_to_a_route_its_projects_la
     assert error.value.code == "400"
     assert error.value.message.startswith("projects video-gen list 'media-latest' without a positive rpm and tpm quota")
     prisma.db.litellm_proxymodeltable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_delete_goes_through_when_nothing_else_serves_its_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+    prisma: Final = _media_team_db("media-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("media-latest", _TEAM_RUNWAY))
+    only_the_team_model: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(_TEAM_RUNWAY),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": "media-latest"},
+            }
+        ]
+    )
+    _use_quota_proxy(monkeypatch, prisma, only_the_team_model)
+
+    with pytest.raises(ProxyException) as error:
+        await delete_model(model_info=ModelInfoDelete(id="team-row"), user_api_key_dict=_ADMIN)
+
+    assert "STORE_MODEL_IN_DB" in str(error.value.message)
+    prisma.db.litellm_projecttable.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("endpoint", ["patch", "put"])
+@pytest.mark.asyncio
+async def test_team_model_update_rejects_moving_to_a_provider_that_needs_limits_it_lacks(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = _media_team_db("media-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("media-latest", _TEAM_RUNWAY))
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("media-latest", _TEAM_RUNWAY, _TEAM_RUNWAY))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []}}},
+    )
+    moved_to_vertex: Final = updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", custom_llm_provider="vertex_ai")
+
+    write: Final = (
+        patch_model(
+            model_id="team-row", patch_data=updateDeployment(litellm_params=moved_to_vertex), user_api_key_dict=_ADMIN
+        )
+        if endpoint == "patch"
+        else update_model(
+            model_params=updateDeployment(litellm_params=moved_to_vertex, model_info=ModelInfo(id="team-row")),
+            user_api_key_dict=_ADMIN,
+        )
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await write
+
+    assert error.value.code == "400"
+    assert error.value.message == _missing_limits_message("rpm and tpm", "media-latest")
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
 
 class TestBlockModelResponseSerialization:

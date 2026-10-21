@@ -30,7 +30,7 @@ from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     delete_project,
     project_info,
 )
-from litellm.proxy.management_helpers.model_quota_policy import ModelRoute, router_model_routes
+from litellm.proxy.management_helpers.model_quota_policy import ModelRoute, TeamDeployment, router_model_routes
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
@@ -1737,14 +1737,31 @@ def test_quota_policy_model_pattern_matches_from_the_start_like_the_router():
     assert _quota_error(["gemini-3.8-flash"], setting=setting) is not None
 
 
-def test_quota_policy_model_entries_never_match_a_team_model_name():
-    def team_vertex_route(_model: str) -> ModelRoute:
-        return ModelRoute(providers=frozenset({"vertex_ai"}), team_named=True)
+def _team_vertex_route(called_model: str) -> Callable[[str], ModelRoute]:
+    def route_of(_model: str) -> ModelRoute:
+        return ModelRoute(team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model=called_model)}))
 
-    exact: Final = _quota_error(["jev-latest"], route_of=team_vertex_route)
-    pattern: Final = _quota_error(["veo-team"], rpm={"veo-team": 5}, route_of=team_vertex_route)
-    assert exact is not None and "jev-latest (model_rpm_limit and model_tpm_limit)" in exact
-    assert pattern is not None and "veo-team (model_tpm_limit)" in pattern
+    return route_of
+
+
+def test_quota_policy_matches_a_team_model_by_the_model_it_calls():
+    borrowed_name: Final = _quota_error(["jev-latest"], route_of=_team_vertex_route("gemini-3.8-flash"))
+    veo_call: Final = _quota_error(
+        ["video-team"], rpm={"video-team": 5}, route_of=_team_vertex_route("veo-3.1-generate-001")
+    )
+    assert borrowed_name is not None and "jev-latest (model_rpm_limit and model_tpm_limit)" in borrowed_name
+    assert veo_call is None
+
+
+def test_quota_policy_team_model_beside_a_shared_one_needs_both_routes_limits():
+    def team_vertex_beside_shared_runway(_model: str) -> ModelRoute:
+        return ModelRoute(
+            providers=frozenset({"runwayml"}),
+            team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="gemini-3.8-flash")}),
+        )
+
+    error: Final = _quota_error(["media-latest"], rpm={"media-latest": 5}, route_of=team_vertex_beside_shared_runway)
+    assert error is not None and "media-latest (model_tpm_limit)" in error
 
 
 @pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"], {"enabled": True}, {"provider": {"runwayml": []}}])
@@ -1826,7 +1843,9 @@ def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
     route_of: Final = router_model_routes(router, "media-team")
 
     assert route_of("gen4_turbo") == ModelRoute(providers=frozenset({"runwayml"}))
-    assert route_of("gen3a_turbo") == ModelRoute(providers=frozenset({"vertex_ai"}), team_named=True)
+    assert route_of("gen3a_turbo") == ModelRoute(
+        team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="3a_turbo")})
+    )
 
 
 def test_quota_providers_read_the_provider_behind_a_known_api_base():

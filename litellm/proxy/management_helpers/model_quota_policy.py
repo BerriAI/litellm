@@ -12,6 +12,7 @@ from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.common_utils import provider_for_generic_call
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -49,9 +50,15 @@ _POLICY_KEYS: Final = frozenset(ModelQuotaPolicy.model_fields)
 
 
 @dataclass(frozen=True, slots=True)
+class TeamDeployment:
+    provider: str | None
+    called_model: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRoute:
     providers: frozenset[str] = frozenset()
-    team_named: bool = False
+    team_deployments: frozenset[TeamDeployment] = frozenset()
 
 
 RouteOf: TypeAlias = Callable[[str], ModelRoute]
@@ -89,17 +96,28 @@ def _model_entry(entries: Mapping[str, frozenset[QuotaLimit]], model: str) -> fr
     return None if pattern is None else entries[pattern]
 
 
+def _provider_limits(policy: ModelQuotaPolicy, provider: str | None) -> frozenset[QuotaLimit]:
+    return policy.default if provider is None else policy.providers.get(provider, policy.default)
+
+
+def _team_deployment_limits(policy: ModelQuotaPolicy, deployment: TeamDeployment) -> frozenset[QuotaLimit]:
+    entry: Final = None if deployment.called_model is None else _model_entry(policy.models, deployment.called_model)
+    return _provider_limits(policy, deployment.provider) if entry is None else entry
+
+
 def required_limits(policy: ModelQuotaPolicy, model: str, route: ModelRoute) -> frozenset[QuotaLimit]:
     """A model entry (exact name, then the most specific `*` pattern) wins over the providers of the
     model's deployments, which win over the default. A model served by several providers needs every
-    limit any of them requires. A team model's name is picked by its team, so model entries never match it."""
-    entry: Final = None if route.team_named else _model_entry(policy.models, model)
+    limit any of them requires. A team picks its model's public name, so a team deployment matches
+    model entries by the model it calls instead."""
+    entry: Final = None if route.team_deployments else _model_entry(policy.models, model)
     if entry is not None:
         return entry
-    if not route.providers:
+    if not route.providers and not route.team_deployments:
         return policy.default
     return frozenset[QuotaLimit]().union(
-        *(policy.providers.get(provider, policy.default) for provider in route.providers)
+        *(_team_deployment_limits(policy, deployment) for deployment in route.team_deployments),
+        *(_provider_limits(policy, provider) for provider in route.providers),
     )
 
 
@@ -119,9 +137,15 @@ def no_route(_model: str) -> ModelRoute:
     return NO_ROUTE
 
 
+def _resolved_api_base(api_base: object) -> object:
+    if isinstance(api_base, str) and api_base.startswith("os.environ/"):
+        return get_secret_str(api_base)
+    return api_base
+
+
 def _provider_behind_api_base(litellm_params: Mapping[str, object]) -> str | None:
     model: Final = litellm_params.get("model")
-    api_base: Final = litellm_params.get("api_base")
+    api_base: Final = _resolved_api_base(litellm_params.get("api_base"))
     if litellm_params.get("custom_llm_provider") or not isinstance(model, str) or not isinstance(api_base, str):
         return None
     if model.split("/", 1)[0] in litellm.provider_list or not is_openai_compatible_endpoint(api_base):
@@ -137,6 +161,27 @@ def deployment_provider(litellm_params: object) -> str | None:
     if not is_str_keyed_mapping(litellm_params):
         return None
     return _provider_behind_api_base(litellm_params) or provider_for_generic_call(litellm_params)
+
+
+def _called_model(litellm_params: Mapping[str, object]) -> str | None:
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    prefix, _, rest = model.partition("/")
+    return rest if rest and prefix in litellm.provider_list else model
+
+
+def team_deployment(litellm_params: object) -> TeamDeployment:
+    if not is_str_keyed_mapping(litellm_params):
+        return TeamDeployment(provider=None, called_model=None)
+    return TeamDeployment(provider=deployment_provider(litellm_params), called_model=_called_model(litellm_params))
+
+
+def deployment_route(litellm_params: Mapping[str, object], team_model: bool) -> ModelRoute:
+    if team_model:
+        return ModelRoute(team_deployments=frozenset((team_deployment(litellm_params),)))
+    provider: Final = deployment_provider(litellm_params)
+    return ModelRoute(providers=frozenset() if provider is None else frozenset((provider,)))
 
 
 def _routed_deployments(llm_router: "Router", model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
@@ -159,13 +204,18 @@ def router_model_routes(llm_router: "Router | None", team_id: str | None) -> Rou
 
     def route_of(model: str) -> ModelRoute:
         deployments: Final = _routed_deployments(llm_router, model, team_id)
+        shared: Final = tuple(deployment for deployment in deployments if not _is_team_deployment(deployment))
         return ModelRoute(
             providers=frozenset(
                 provider
-                for deployment in deployments
+                for deployment in shared
                 if (provider := deployment_provider(deployment.get("litellm_params"))) is not None
             ),
-            team_named=any(_is_team_deployment(deployment) for deployment in deployments),
+            team_deployments=frozenset(
+                team_deployment(deployment.get("litellm_params"))
+                for deployment in deployments
+                if _is_team_deployment(deployment)
+            ),
         )
 
     return route_of
@@ -182,7 +232,7 @@ def team_route_after_write(
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
-) -> ModelRoute:
+) -> ModelRoute | None:
     deployments: Final = () if llm_router is None else llm_router.get_all_deployments(public_name, team_id=team_id)
     kept: Final = tuple(
         deployment.get("litellm_params")
@@ -190,14 +240,11 @@ def team_route_after_write(
         if _is_team_deployment(deployment) and _deployment_id(deployment) != replaced_id
     )
     team_params: Final = kept if written_params is None else (*kept, written_params)
-    if not team_params:
-        return router_model_routes(llm_router, None)(public_name)
-    return ModelRoute(
-        providers=frozenset(
-            provider for litellm_params in team_params if (provider := deployment_provider(litellm_params)) is not None
-        ),
-        team_named=True,
-    )
+    if team_params:
+        return ModelRoute(team_deployments=frozenset(team_deployment(litellm_params) for litellm_params in team_params))
+    if llm_router is None or not _routed_deployments(llm_router, public_name, None):
+        return None
+    return router_model_routes(llm_router, None)(public_name)
 
 
 def limits_added_by_team_write(
@@ -209,5 +256,7 @@ def limits_added_by_team_write(
     written_params: Mapping[str, object] | None,
 ) -> frozenset[QuotaLimit]:
     after: Final = team_route_after_write(llm_router, team_id, public_name, replaced_id, written_params)
+    if after is None:
+        return frozenset()
     now: Final = router_model_routes(llm_router, team_id)(public_name)
     return required_limits(policy, public_name, after) - required_limits(policy, public_name, now)

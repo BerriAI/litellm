@@ -106,8 +106,8 @@ from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_mo
 from litellm.proxy.management_helpers.model_quota_policy import (
     ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
     ModelQuotaPolicy,
-    ModelRoute,
-    deployment_provider,
+    QuotaLimit,
+    deployment_route,
     limits_added_by_team_write,
     parse_model_quota_setting,
     required_limits,
@@ -774,15 +774,22 @@ ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
 
 
 _ROUTING_KEYS: Final = ("model", "custom_llm_provider", "api_base")
+_RATE_LIMIT_KEYS: Final = ("rpm", "tpm")
 _NOTHING_SENT: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _merged_litellm_params(
+    incoming: GenericLiteLLMParams | None, existing: GenericLiteLLMParams | None, keys: tuple[str, ...]
+) -> Mapping[str, object]:
+    sent: Final = _NOTHING_SENT if incoming is None else _dump_without_none(incoming)
+    stored: Final = _NOTHING_SENT if existing is None else _decrypted_litellm_params(existing)
+    return MappingProxyType({key: sent.get(key, stored.get(key)) for key in keys})
 
 
 def _written_routing_params(
     incoming: GenericLiteLLMParams | None, existing: GenericLiteLLMParams | None
 ) -> Mapping[str, object]:
-    sent: Final = _NOTHING_SENT if incoming is None else _dump_without_none(incoming)
-    stored: Final = _NOTHING_SENT if existing is None else _decrypted_litellm_params(existing)
-    return MappingProxyType({key: sent.get(key, stored.get(key)) for key in _ROUTING_KEYS})
+    return _merged_litellm_params(incoming, existing, _ROUTING_KEYS)
 
 
 def _quota_policy(general_settings: Mapping[str, object], setting: str) -> ModelQuotaPolicy | None:
@@ -806,15 +813,47 @@ def _raise_if_rate_limits_required_but_missing(
     (or effectively excluded from routing)."""
     if policy is None:
         return
-    provider: Final = deployment_provider(_written_routing_params(litellm_params, None))
-    missing: Final = unmet_limits(
-        required_limits(
-            policy,
-            model_name,
-            ModelRoute(providers=frozenset() if provider is None else frozenset((provider,)), team_named=team_model),
+    _raise_on_missing_rate_limits(
+        model_name,
+        unmet_limits(
+            required_limits(
+                policy, model_name, deployment_route(_written_routing_params(litellm_params, None), team_model)
+            ),
+            MappingProxyType({"rpm": litellm_params.rpm, "tpm": litellm_params.tpm}),
         ),
-        MappingProxyType({"rpm": litellm_params.rpm, "tpm": litellm_params.tpm}),
     )
+
+
+def _raise_if_model_update_adds_missing_rate_limits(
+    *,
+    existing: Deployment,
+    written_name: str,
+    written_team_model: bool,
+    incoming_params: GenericLiteLLMParams | None,
+    policy: ModelQuotaPolicy | None,
+) -> None:
+    if policy is None:
+        return
+    before: Final = required_limits(
+        policy,
+        existing.model_info.team_public_model_name or existing.model_name,
+        deployment_route(
+            _written_routing_params(None, existing.litellm_params), existing.model_info.team_id is not None
+        ),
+    )
+    after: Final = required_limits(
+        policy,
+        written_name,
+        deployment_route(_written_routing_params(incoming_params, existing.litellm_params), written_team_model),
+    )
+    written_limits: Final = _merged_litellm_params(incoming_params, existing.litellm_params, _RATE_LIMIT_KEYS)
+    added: Final = after - before
+    _raise_on_missing_rate_limits(
+        written_name, unmet_limits(added, MappingProxyType({limit: written_limits.get(limit) for limit in added}))
+    )
+
+
+def _raise_on_missing_rate_limits(model_name: str, missing: tuple[QuotaLimit, ...]) -> None:
     if not missing:
         return
     raise ProxyException(
@@ -1514,14 +1553,24 @@ async def patch_model(
             existing_params=db_model.litellm_params,
         )
 
+        written_team_id: Final = (
+            patch_data.model_info.team_id if patch_data.model_info else None
+        ) or db_model.model_info.team_id
+        written_name: Final = _get_public_model_name(effective_patch, db_model)
+        _raise_if_model_update_adds_missing_rate_limits(
+            existing=db_model,
+            written_name=written_name,
+            written_team_model=written_team_id is not None,
+            incoming_params=patch_data.litellm_params,
+            policy=_quota_policy(general_settings_view(), ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING),
+        )
         await _raise_if_team_update_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
             llm_router=llm_router,
             existing=db_model,
-            written_team_id=(patch_data.model_info.team_id if patch_data.model_info else None)
-            or db_model.model_info.team_id,
-            written_name=_get_public_model_name(effective_patch, db_model),
+            written_team_id=written_team_id,
+            written_name=written_name,
             incoming_params=patch_data.litellm_params,
         )
 
@@ -3085,13 +3134,21 @@ async def update_model(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
         )
+        stored_public_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
+        _raise_if_model_update_adds_missing_rate_limits(
+            existing=deployment,
+            written_name=stored_public_name,
+            written_team_model=deployment.model_info.team_id is not None,
+            incoming_params=model_params.litellm_params,
+            policy=_quota_policy(general_settings_view(), ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING),
+        )
         await _raise_if_team_update_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
             llm_router=llm_router,
             existing=deployment,
             written_team_id=deployment.model_info.team_id,
-            written_name=deployment.model_info.team_public_model_name or deployment.model_name,
+            written_name=stored_public_name,
             incoming_params=model_params.litellm_params,
         )
         effective_params: Final = _effective_complexity_router_params(
