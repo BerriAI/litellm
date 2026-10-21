@@ -4480,7 +4480,7 @@ class ComplexityRouter(CustomLogger):
                     resolved_messages=resolved_messages,
                     context_fit=context_fit,
                 )
-                if tool_turn_escalation is not None:
+                if tool_turn_escalation is not None and not isinstance(tool_turn_escalation, ClassificationOutcome):
                     return await self._finish_classified_route(
                         tool_turn_escalation, cache_key, messages, input, resolved_messages, request_kwargs, context_fit
                     )
@@ -4619,6 +4619,12 @@ class ComplexityRouter(CustomLogger):
                                         matched_keyword=pin_plan_sentinel if plan_floored else None,
                                         escalation_keyword=pin_escalation_keyword,
                                         escalated=escalated,
+                                        classifier_model=self._classifier_model_for(tool_turn_escalation)
+                                        if tool_turn_escalation is not None
+                                        else None,
+                                        classifier_cost=tool_turn_escalation.classifier_cost
+                                        if tool_turn_escalation is not None
+                                        else None,
                                         conversation_continuing=conversation_continuing,
                                         tier_litellm_params=session_tier_litellm_params,
                                         context_escalation_original_tier=pin_context_original_tier,
@@ -4664,13 +4670,14 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: bool,
         resolved_messages: Sequence[Mapping[str, object]] | None,
         context_fit: _RequestContextFit,
-    ) -> PreRoutingHookResponse | None:
+    ) -> PreRoutingHookResponse | ClassificationOutcome | None:
         """A user_turn tool turn routed on its own classification, when that outranks the held pin.
 
         With classifier_context_include_tool_turns the ask's pinned tier is a floor for its tool turns: each one is
         classified on the work done so far, and only a higher tier replaces the pin, so a loop moves up once a tool
         result shows harder work and does not drop back mid-task. The tier is compared before routing, so a turn
-        that stays on the pin leaves no routing state behind.
+        that stays on the pin leaves no routing state behind, and it gets the classification back so the held turn
+        still reports the classifier call it paid for.
         """
         if (
             self.config.classification_mode != "user_turn"
@@ -4691,7 +4698,7 @@ class ComplexityRouter(CustomLogger):
         if classification.classifier_failure_reason is not None or self._active_tier_severity(
             classification.tier
         ) <= self._active_tier_severity(held_tier):
-            return None
+            return classification
         routed: Final = await self._classify_and_route(
             model=model,
             request_kwargs=request_kwargs,
@@ -4708,7 +4715,17 @@ class ComplexityRouter(CustomLogger):
         outranks: Final = routed_tier is not None and self._active_tier_severity(
             routed_tier
         ) > self._active_tier_severity(held_tier)
-        return routed if outranks else None
+        return routed if routed is not None and outranks else classification
+
+    def _classifier_model_for(self, outcome: ClassificationOutcome) -> str | None:
+        return (
+            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
+            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+            else self.config.classifier_llm_config.model
+            if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
+            and self.config.classifier_llm_config is not None
+            else None
+        )
 
     async def _finish_classified_route(
         self,
@@ -5101,14 +5118,7 @@ class ComplexityRouter(CustomLogger):
             )
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
-        classifier_model: Final = (
-            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
-            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
-            else self.config.classifier_llm_config.model
-            if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
-            and self.config.classifier_llm_config is not None
-            else None
-        )
+        classifier_model: Final = self._classifier_model_for(outcome)
         # cause=default_model_fallback means no tier was decided: the classifier failed and the
         # operator asked for default_model. Only the plugin path reaches here (the non-plugin one
         # short-circuited above), and there `tier` exists solely to name a pool for the plugins to

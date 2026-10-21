@@ -11360,6 +11360,12 @@ class TestAgentProgressReachesClassifier:
 
         assert [response.model for response in responses if response is not None] == expected_models.split()
         assert len(client.states) == (3 if include_tool_turns else 1)
+        ask_decision: Final = responses[0].routing_decision if responses[0] is not None else None
+        held_decision: Final = responses[2].routing_decision if responses[2] is not None else None
+        assert ask_decision is not None and held_decision is not None
+        assert ask_decision.get("classifier_cost") is not None
+        assert held_decision.get("classifier_cost") == (ask_decision.get("classifier_cost") if include_tool_turns else None)
+        assert held_decision.get("classifier_model") == (ask_decision.get("classifier_model") if include_tool_turns else None)
 
     @pytest.mark.asyncio
     async def test_user_turn_classifier_failure_keeps_the_held_tier(self) -> None:
