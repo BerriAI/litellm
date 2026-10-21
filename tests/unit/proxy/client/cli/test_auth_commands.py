@@ -3,6 +3,7 @@ import os
 import stat
 import time
 from pathlib import Path
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -58,12 +59,12 @@ def _write_token_file(home: Path, *, key: str | None) -> None:
     _write_home_json(home, "token.json", payload if key is None else {**payload, "key": key})
 
 
-STALE_TOKEN_BASE_URL = "https://stale-token.example.com"
+STALE_TOKEN_BASE_URL: Final = "https://stale-token.example.com"
 
 
 def _register_models_answer(key: str, answer: int | Exception) -> None:
-    models_url = f"{STALE_TOKEN_BASE_URL}/v1/models"
-    authorized = [matchers.header_matcher({"Authorization": f"Bearer {key}"})]
+    models_url: Final = f"{STALE_TOKEN_BASE_URL}/v1/models"
+    authorized: Final = [matchers.header_matcher({"Authorization": f"Bearer {key}"})]
     if isinstance(answer, Exception):
         responses.get(models_url, body=answer, match=authorized)
     else:
@@ -719,9 +720,11 @@ class TestWhoamiCommand:
         ],
     )
     @responses.activate
-    def test_whoami_lets_the_proxy_judge_a_token_older_than_the_client_window(self, proxy_status, expected_last_line):
+    def test_whoami_lets_the_proxy_judge_a_token_older_than_the_client_window(
+        self, proxy_status: int, expected_last_line: str
+    ):
         _register_models_answer("sk-live", proxy_status)
-        token_data = CliTokenRecord(
+        token_data: Final = CliTokenRecord(
             base_url=STALE_TOKEN_BASE_URL,
             user_email="test@example.com",
             key="sk-live",
@@ -729,7 +732,7 @@ class TestWhoamiCommand:
         )
 
         with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
-            result = self.runner.invoke(whoami)
+            result: Final = self.runner.invoke(whoami)
 
         assert result.exit_code == 0
         assert result.output.splitlines()[-1] == expected_last_line
@@ -1060,7 +1063,7 @@ class TestPrintTokenCommand:
                 timestamp=time.time(),
             ),
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == 0
         assert result.output.strip() == "sk-cached-fresh"
@@ -1071,13 +1074,19 @@ class TestPrintTokenCommand:
         [
             (200, 0, "sk-stale-key\n", ""),
             (401, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (403, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (404, 1, "", "Token expired. Run 'lite login' again.\n"),
             (500, 0, "sk-stale-key\n", ""),
             (requests.ConnectionError("proxy unreachable"), 0, "sk-stale-key\n", ""),
         ],
     )
     @responses.activate
     def test_key_older_than_the_client_window_is_judged_by_the_proxy(
-        self, proxy_answer, expected_exit_code, expected_stdout, expected_stderr
+        self,
+        proxy_answer: int | Exception,
+        expected_exit_code: int,
+        expected_stdout: str,
+        expected_stderr: str,
     ):
         _register_models_answer("sk-stale-key", proxy_answer)
 
@@ -1089,7 +1098,7 @@ class TestPrintTokenCommand:
                 timestamp=time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600,
             ),
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == expected_exit_code
         assert result.stdout == expected_stdout
@@ -2060,7 +2069,7 @@ class TestPkcePrintToken:
             ),
             patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == 1
         assert result.stdout == ""

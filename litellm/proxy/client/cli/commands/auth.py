@@ -143,6 +143,7 @@ _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 _PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 10
+_PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403, 404})
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -1058,7 +1059,7 @@ def print_token(ctx: click.Context):
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
-    if not renews and _token_expired(token_data):
+    if not renews and token_expired(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
@@ -1114,11 +1115,11 @@ def whoami(ctx: click.Context):
     expires_at: Final = token_data.get("expires_at")
     if isinstance(expires_at, (int, float)):
         click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
-    elif _token_expired(token_data):
+    elif token_expired(token_data):
         click.echo("Token expired. Run 'lite login' again.")
 
 
-def _token_expired(token_data: Mapping[str, object]) -> bool:
+def token_expired(token_data: Mapping[str, object]) -> bool:
     if is_cli_token_fresh(token_data):
         return False
     if isinstance(token_data.get("expires_at"), (int, float)):
@@ -1139,7 +1140,7 @@ def _proxy_rejects_key(token_data: Mapping[str, object]) -> bool:
         )
     except requests.RequestException:
         return False
-    return response.status_code == 401
+    return response.status_code in _PROXY_REJECTED_KEY_STATUSES
 
 
 def _key_expiry_line(expires_at: float, renews: bool) -> str:
