@@ -15,6 +15,7 @@ from typing import Any, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.agents import (
@@ -67,7 +68,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         return "v1beta"
 
     def _base_url(self, api_base: str | None) -> str:
-        return f"{GeminiModelInfo.get_api_base(api_base)}/{self.api_version}"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), self.api_version)
 
     # ------------------------------------------------------------------ #
     # Shared helpers                                                       #
@@ -90,7 +91,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> str:
-        return f"{self._base_url(api_base)}/agents"
+        return join_api_base(self._base_url(api_base), "agents")
 
     def validate_environment(
         self,
@@ -177,7 +178,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, object]]:
-        url: Final = f"{self._base_url(api_base)}/agents"
+        url: Final = join_api_base(self._base_url(api_base), "agents")
         params: Final[dict[str, object]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]
@@ -210,7 +211,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, object]]:
-        url: Final = f"{self._base_url(api_base)}/agents/{name}"
+        url: Final = join_api_base(self._base_url(api_base), f"agents/{name}")
         return url, {}
 
     def transform_get_response(
@@ -239,7 +240,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> str:
-        return f"{self._base_url(api_base)}/agents/{name}"
+        return join_api_base(self._base_url(api_base), f"agents/{name}")
 
     def transform_delete_response(
         self,
@@ -265,7 +266,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, object]]:
-        url: Final = f"{self._base_url(api_base)}/agents/{name}/versions"
+        url: Final = join_api_base(self._base_url(api_base), f"agents/{name}/versions")
         params: Final[dict[str, object]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]

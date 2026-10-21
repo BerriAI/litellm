@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -172,7 +173,8 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         litellm_logging_obj.model_call_details["input"] = query_text
         litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
         litellm_logging_obj.model_call_details["top_k"] = top_k
-        return f"{api_base}/indexes/{vector_store_id}/docs/search?api-version=2024-07-01", {
+        search_route: Final = f"indexes/{vector_store_id}/docs/search"
+        return f"{join_api_base(api_base, search_route)}?api-version=2024-07-01", {
             "search": "*",
             "vectorQueries": [{"vector": query_vector, "fields": vector_field, "kind": "vector", "k": top_k}],
             "select": "id,content",

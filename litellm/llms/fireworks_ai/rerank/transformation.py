@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.fireworks_ai.common_utils import FireworksAIMixin
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -61,9 +62,9 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             api_base = api_base.rstrip("/")
             if not api_base.endswith("/rerank"):
                 if api_base.endswith("/v1") or api_base.endswith("/inference/v1"):
-                    api_base = f"{api_base}/rerank"
+                    api_base = join_api_base(api_base, "rerank")
                 else:
-                    api_base = f"{api_base}/inference/v1/rerank"
+                    api_base = join_api_base(api_base, "inference/v1/rerank")
             return api_base
         return "https://api.fireworks.ai/inference/v1/rerank"
 

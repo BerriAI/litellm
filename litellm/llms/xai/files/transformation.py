@@ -14,7 +14,7 @@ from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig, LiteLLMLoggingObj
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -101,11 +101,11 @@ class XAIFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        return f"{get_xai_api_base(api_base)}/v1/files"
+        return join_api_base(get_xai_api_base(api_base), "v1/files")
 
     def _file_url(self, file_id: str, litellm_params: Mapping[str, object], suffix: str = "") -> str:
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{_api_base_from(litellm_params)}/v1/files/{encoded_file_id}{suffix}"
+        return join_api_base(_api_base_from(litellm_params), f"v1/files/{encoded_file_id}{suffix}")
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
@@ -204,7 +204,7 @@ class XAIFilesConfig(BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
-        return f"{_api_base_from(litellm_params)}/v1/files", _NO_QUERY_PARAMS
+        return join_api_base(_api_base_from(litellm_params), "v1/files"), _NO_QUERY_PARAMS
 
     def transform_list_files_next_request(
         self,
@@ -215,7 +215,7 @@ class XAIFilesConfig(BaseFilesConfig):
         page: Final = XAIFileList.model_validate(raw_response.json())
         if not page.pagination_token or not page.data:
             return None
-        return f"{_api_base_from(litellm_params)}/v1/files", {"pagination_token": page.pagination_token}
+        return join_api_base(_api_base_from(litellm_params), "v1/files"), {"pagination_token": page.pagination_token}
 
     def transform_list_files_response(
         self,

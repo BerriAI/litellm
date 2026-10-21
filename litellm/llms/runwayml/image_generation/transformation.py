@@ -11,6 +11,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -62,12 +63,8 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        if self.IMAGE_GENERATION_ENDPOINT:
-            complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,
@@ -226,8 +223,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML task: %s", task_url)
 
@@ -275,8 +271,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML task (async): %s", task_url)
 

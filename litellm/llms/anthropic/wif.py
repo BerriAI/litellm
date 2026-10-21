@@ -15,6 +15,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
 from litellm.llms.base_llm.auth.identity_source import (
     AnthropicIdentitySourceKind,
@@ -324,7 +325,7 @@ def anthropic_internal_issuer_jwks(credential_values: Mapping[str, object]) -> A
 
 def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:
     return TokenExchangeSpec(
-        token_url=api_base.rstrip("/") + ANTHROPIC_TOKEN_EXCHANGE_PATH,
+        token_url=join_api_base(api_base, ANTHROPIC_TOKEN_EXCHANGE_PATH),
         assertion_ref=params.assertion_ref,
         assertion_field="assertion",
         static_body=MappingProxyType(

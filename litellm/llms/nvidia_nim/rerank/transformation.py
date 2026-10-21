@@ -8,6 +8,7 @@ from typing_extensions import Required, TypedDict
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -106,7 +107,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         # Strip nvidia_nim/ prefix from model name if present
         clean_model: Final = self._get_clean_model_name(model)
 
-        return f"{api_base}/v1/retrieval/{clean_model}/reranking"
+        return join_api_base(api_base, f"v1/retrieval/{clean_model}/reranking")
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         """

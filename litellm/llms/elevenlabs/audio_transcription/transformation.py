@@ -10,6 +10,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -165,12 +166,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io"
-        api_base = api_base.rstrip("/")  # Remove trailing slash if present
-
-        # ElevenLabs speech-to-text endpoint
-        url: Final = f"{api_base}/v1/speech-to-text"
-
-        return url
+        return join_api_base(api_base, "v1/speech-to-text")
 
     def validate_environment(
         self,

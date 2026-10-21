@@ -8,7 +8,7 @@ from urllib.parse import quote
 import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
@@ -98,7 +98,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         if api_base is None:
             api_base = "https://api.openai.com/v1"
 
-        return f"{api_base.rstrip('/')}/videos"
+        return join_api_base(api_base, "videos")
 
     def use_multipart_form_data(self) -> bool:
         return True
@@ -214,7 +214,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for video content download
-        url = f"{api_base.rstrip('/')}/{encoded_video_id}/content"
+        url = join_api_base(api_base, f"{encoded_video_id}/content")
         if variant is not None:
             # Encode the user-controlled ``variant`` so a value like
             # ``thumbnail&extra=1`` cannot inject additional query params
@@ -246,7 +246,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for video remix
-        url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
+        url: Final = join_api_base(api_base, f"{encoded_video_id}/remix")
 
         # Prepare the request data
         data: Final[dict[str, object]] = {"prompt": prompt}
@@ -465,7 +465,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, list]:
-        url: Final = f"{api_base.rstrip('/')}/characters"
+        url: Final = join_api_base(api_base, "characters")
         files_list: Final[list[tuple[str, FileTypes]]] = [("name", (None, name))]
         self._add_video_to_files(files_list, video, "video")
         return url, files_list
@@ -486,7 +486,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> tuple[str, dict]:
         original_character_id: Final = extract_original_character_id(character_id)
         encoded_character_id: Final = encode_url_path_segment(original_character_id, field_name="character_id")
-        url: Final = f"{api_base.rstrip('/')}/characters/{encoded_character_id}"
+        url: Final = join_api_base(api_base, f"characters/{encoded_character_id}")
         return url, {}
 
     def transform_video_get_character_response(
@@ -507,7 +507,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, object] | None = None,
     ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
-        url: Final = f"{api_base.rstrip('/')}/edits"
+        url: Final = join_api_base(api_base, "edits")
 
         if video_file is not None:
             files: Final[RequestFiles] = (self._video_file_tuple(video_file, "video"),)
@@ -547,7 +547,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         original_video_id: Final = extract_original_video_id(video_id)
-        url: Final = f"{api_base.rstrip('/')}/extensions"
+        url: Final = join_api_base(api_base, "extensions")
         data: Final[dict[str, object]] = {
             "prompt": prompt,
             "seconds": seconds,

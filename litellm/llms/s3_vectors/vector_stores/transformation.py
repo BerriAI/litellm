@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -131,7 +132,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> tuple[str, dict[str, object]]:
         litellm_logging_obj.model_call_details["query"] = query_text
-        return f"{api_base}/QueryVectors", {
+        return join_api_base(api_base, "QueryVectors"), {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": list(query_vector)},

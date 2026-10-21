@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -377,7 +378,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return "v1beta"
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: str | None = None) -> str:
         return api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
 
     @staticmethod
@@ -400,13 +401,13 @@ class GeminiModelInfo(BaseLLMModelInfo):
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
         endpoint: Final = f"/{self.api_version}/models"
-        if api_base is None or api_key is None:
+        if api_key is None:
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}{endpoint}",
+            url=join_api_base(api_base, endpoint),
             headers={"x-goog-api-key": api_key},
         )
 

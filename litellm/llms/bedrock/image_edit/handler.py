@@ -14,6 +14,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
     BedrockAmazonNovaCanvasImageEditConfig,
 )
@@ -226,7 +227,7 @@ class BedrockImageEdit(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
-        proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/invoke")
         data: Final = self._get_request_body(
             model=model,
             image=image,

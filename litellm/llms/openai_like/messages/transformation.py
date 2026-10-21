@@ -1,6 +1,7 @@
 from typing import Any, Final
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -113,7 +114,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         if base.endswith("/v1/messages"):
             return base
         base = base.removesuffix("/v1")
-        return f"{base}/v1/messages"
+        return join_api_base(base, "v1/messages")
 
 
 class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):

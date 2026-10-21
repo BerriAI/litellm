@@ -740,3 +740,15 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
     )
 
     assert mock_async_realtime.call_args.kwargs["azure_ad_token"] == "deployment-entra-token"
+
+
+@pytest.mark.parametrize("protocol", [None, "GA"])
+def test_construct_url_with_a_trailing_slash_api_base_matches_the_url_without_it(protocol):
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    def url_for(api_base: str) -> str:
+        return AzureOpenAIRealtime().construct_url(
+            api_base=api_base, model="gpt-realtime", api_version="2024-10-01-preview", realtime_protocol=protocol
+        )
+
+    assert url_for("https://gw.example.com/azure/") == url_for("https://gw.example.com/azure")

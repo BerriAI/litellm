@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -137,8 +137,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if base_url.endswith("/responses"):
             return base_url
         if base_url.endswith("/api/v3"):
-            return f"{base_url}/responses"
-        return f"{base_url}/api/v3/responses"
+            return join_api_base(base_url, "responses")
+        return join_api_base(base_url, "api/v3/responses")
 
     def map_openai_params(
         self,
@@ -345,7 +345,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         params: Final[dict[str, str | int]] = {}
         if after is not None:
             params["after"] = after
@@ -380,7 +380,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 

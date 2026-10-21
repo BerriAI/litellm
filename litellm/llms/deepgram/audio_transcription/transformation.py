@@ -10,6 +10,7 @@ from httpx import Headers, Response
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -179,7 +180,6 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
-        api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # Build query parameters including the model
         all_query_params: Final = {"model": model}
@@ -189,7 +189,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         all_query_params.update(additional_params)
 
         # Construct URL with proper query string encoding
-        base_url: Final = f"{api_base}/listen"
+        base_url: Final = join_api_base(api_base, "listen")
         query_string: Final = urlencode(all_query_params)
         url: Final = f"{base_url}?{query_string}"
 

@@ -11,6 +11,7 @@ from typing import Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -92,7 +93,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if api_base is None:
             api_base = "https://ai-gateway.vercel.sh/v1"
 
-        models_url: Final = f"{api_base}/models"
+        models_url: Final = join_api_base(api_base, "models")
         response: Final = litellm.module_level_client.get(url=models_url)
 
         if response.status_code != 200:

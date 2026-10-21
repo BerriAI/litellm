@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
     is_gpt_reasoning_series_name,
@@ -881,10 +881,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_streaming_response(
         self,
@@ -1111,7 +1108,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
@@ -1152,7 +1149,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - POST /v1/responses/{response_id}/cancel
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 

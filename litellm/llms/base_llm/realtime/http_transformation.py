@@ -7,9 +7,10 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
-from typing import Final
 
 import httpx
+
+from litellm.litellm_core_utils.url_utils import join_api_base
 
 
 class BaseRealtimeHTTPConfig(ABC):
@@ -61,7 +62,7 @@ class BaseRealtimeHTTPConfig(ABC):
         """Return the full URL for POST /realtime/transcription_sessions."""
         base = (api_base or "").rstrip("/")
         base = base.removesuffix("/v1")
-        return f"{base}/v1/realtime/transcription_sessions"
+        return join_api_base(base, "v1/realtime/transcription_sessions")
 
     @abstractmethod
     def validate_environment(
@@ -83,8 +84,7 @@ class BaseRealtimeHTTPConfig(ABC):
 
     def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
-        base: Final = (api_base or "").rstrip("/")
-        return f"{base}/v1/realtime/calls"
+        return join_api_base(api_base or "", "v1/realtime/calls")
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         """

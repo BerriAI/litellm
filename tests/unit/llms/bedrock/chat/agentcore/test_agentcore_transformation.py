@@ -1269,3 +1269,17 @@ def test_agentcore_runtime_response_becomes_assistant_message(
     assert json.loads(route.calls[0].request.content)["prompt"] == "Explain machine learning in simple terms"
     assert response.choices[0].message.content == "Machine learning lets computers learn from data."
     assert response.choices[0].finish_reason == "stop"
+
+
+def test_get_complete_url_sends_a_non_string_runtime_endpoint_to_that_endpoint():
+    vpc_endpoint: Final = "https://vpce-1.bedrock-agentcore.us-west-2.vpce.amazonaws.com"
+
+    url: Final = AmazonAgentCoreConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="agentcore/arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/my-agent",
+        optional_params={"aws_bedrock_runtime_endpoint": httpx.URL(f"{vpc_endpoint}/")},
+        litellm_params={},
+    )
+
+    assert url.startswith(f"{vpc_endpoint}/runtimes/")

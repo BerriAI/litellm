@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -126,8 +127,8 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         project_id: Final = validate_vertex_transcription_project_id(
             self.safe_get_vertex_ai_project(litellm_params) or self._resolve_project_id_from_credentials(litellm_params)
         )
-        base_url: Final = (api_base or f"https://{speech_to_text_host(location)}").rstrip("/")
-        return f"{base_url}/v2/projects/{project_id}/locations/{location}/recognizers/_:recognize"
+        base_url: Final = api_base or f"https://{speech_to_text_host(location)}"
+        return join_api_base(base_url, f"v2/projects/{project_id}/locations/{location}/recognizers/_:recognize")
 
     def _resolve_project_id_from_credentials(self, litellm_params: dict) -> str:
         _, project_id = self._ensure_access_token(

@@ -11,6 +11,7 @@ from typing import Final, cast
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -45,7 +46,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         base_url: Final = self._get_base_url(api_base=api_base)
         endpoint: Final = WatsonXAIEndpoint.RERANK.value
 
-        url: Final = base_url.rstrip("/") + endpoint
+        url: Final = join_api_base(base_url, endpoint)
 
         params: Final = optional_params or {}
 

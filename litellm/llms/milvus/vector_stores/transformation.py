@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -185,7 +186,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         }
         litellm_logging_obj.model_call_details["input"] = query_text
         litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
-        return f"{api_base}/v2/vectordb/entities/search", {
+        return join_api_base(api_base, "v2/vectordb/entities/search"), {
             "collectionName": vector_store_id,
             "data": [query_vector],
             "annsField": "book_intro_vector",

@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
@@ -148,9 +149,8 @@ class OpenAICountTokensConfig:
     """
 
     def get_openai_count_tokens_endpoint(self, api_base: str | None = None) -> str:
-        base = api_base or "https://api.openai.com/v1"
-        base = base.rstrip("/")
-        return f"{base}/responses/input_tokens"
+        base: Final = api_base or "https://api.openai.com/v1"
+        return join_api_base(base, "responses/input_tokens")
 
     def transform_request_to_count_tokens(
         self,
