@@ -846,9 +846,7 @@ class JWTHandler:
             verbose_proxy_logger.debug(
                 "JWT Auth: serving a stale JWKS copy for %s while a background refresh runs", cache_key
             )
-            self._schedule_background_refresh(
-                cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context
-            )
+            self._schedule_background_refresh(cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context)
             return stale
 
         lock: Final = self._refresh_locks.setdefault(cache_key, asyncio.Lock())
