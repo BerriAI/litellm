@@ -150,6 +150,27 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        ## APPLY KEY/TEAM ROUTER SETTINGS ##
+        # Read key/team router_settings and apply them to route_request
+        # This matches the behavior in base_process_llm_request
+        if proxy_config is not None:
+            try:
+                from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+                
+                # Create a temporary processor to get router_settings_override
+                temp_processor = ProxyBaseLLMRequestProcessing(data=data)
+                router_settings_override = temp_processor.common_processing_pre_call_logic(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route_type="aimage_generation",
+                    proxy_config=proxy_config,
+                )
+                if router_settings_override:
+                    data["router_settings_override"] = router_settings_override
+            except Exception:
+                # If reading router_settings fails, continue without override
+                pass
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
