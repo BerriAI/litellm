@@ -144,7 +144,9 @@ def test_is_multipart():
         ),
     ],
 )
-def test_get_endpoint_type_classifies_anthropic_messages_routes(url: str, expected_endpoint_type: EndpointType) -> None:
+def test_get_endpoint_type_classifies_anthropic_messages_routes(
+    url: str, expected_endpoint_type: EndpointType
+) -> None:
     assert HttpPassThroughEndpointHelpers.get_endpoint_type(url) == expected_endpoint_type
 
 
@@ -3574,7 +3576,9 @@ async def test_pass_through_request_preserves_target_query_without_client_query(
 
 
 @pytest.mark.asyncio
-async def test_config_pass_through_without_configured_headers_preserves_no_authorization(tmp_path, monkeypatch):
+async def test_config_pass_through_without_configured_headers_preserves_no_authorization(
+    tmp_path, monkeypatch
+):
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
@@ -3641,7 +3645,9 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
-        config_pass_through_endpoints=[{"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}],
+        config_pass_through_endpoints=[
+            {"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}
+        ],
         db_pass_through_endpoints=[],
         master_key=MASTER_KEY,
     )
@@ -4818,7 +4824,6 @@ from litellm.exceptions import (
     GuardrailRaisedException,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
 _PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 
 
@@ -7637,8 +7642,6 @@ ELEVENLABS_AUDIO_FRAME = json.dumps(
 
 
 class ScriptedUpstreamWebSocket:
-    """Records what the client sent and, once the expected number of frames arrived, serves its own then closes"""
-
     def __init__(self, expected_client_frames: int, *frames: str | bytes):
         self._expected_client_frames = expected_client_frames
         self._frames = iter(frames)
@@ -7663,8 +7666,6 @@ class ScriptedUpstreamWebSocket:
 
 
 class DrainingUpstreamWebSocket:
-    """Delivers one buffered frame while its closing handshake runs, the way a real connection drains on close"""
-
     def __init__(self, buffered_frame: str):
         self._buffered_frame = buffered_frame
         self._closing = asyncio.Event()

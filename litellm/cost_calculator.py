@@ -1844,7 +1844,11 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils.count_characters(text=prompt)
+                    prompt_characters = (
+                        len(prompt.strip())
+                        if custom_llm_provider == LlmProviders.ELEVENLABS.value
+                        else litellm.utils.count_characters(text=prompt)
+                    )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     # Check _hidden_params first (duration stored there to
                     # avoid polluting the response body), then fall back to
