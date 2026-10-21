@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,11 +139,12 @@ describe("VectorStoreForm submit payload", () => {
     renderForm();
 
     await chooseProvider(user, "Amazon OpenSearch");
-    await user.type(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), "litellm-qa-docs");
-    await user.type(
-      screen.getByPlaceholderText("https://abc123.us-east-1.aoss.amazonaws.com"),
-      "https://yzatq55tpsuvlwozcal4.us-east-1.aoss.amazonaws.com",
-    );
+    fireEvent.change(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), {
+      target: { value: "litellm-qa-docs" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://abc123.us-east-1.aoss.amazonaws.com"), {
+      target: { value: "https://yzatq55tpsuvlwozcal4.us-east-1.aoss.amazonaws.com" },
+    });
     await chooseFromSelect(user, 1, "text-embedding-3-small");
     await submit(user);
 
@@ -166,7 +167,9 @@ describe("VectorStoreForm submit payload", () => {
     renderForm();
 
     await chooseProvider(user, "Amazon OpenSearch");
-    await user.type(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), "litellm-qa-docs");
+    fireEvent.change(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), {
+      target: { value: "litellm-qa-docs" },
+    });
     await submit(user);
 
     expect(await screen.findByText("Please input the opensearch endpoint")).toBeInTheDocument();

@@ -9,7 +9,8 @@ from urllib.parse import quote, urlsplit
 import httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import AuthenticationError, BadRequestError
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -31,6 +32,8 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 DEFAULT_EMBEDDING_FIELD: Final = "embedding"
@@ -38,11 +41,22 @@ DEFAULT_TEXT_FIELD: Final = "text"
 DEFAULT_MAX_NUM_RESULTS: Final = 10
 MAX_MAX_NUM_RESULTS: Final = 50
 _PARAM_PREFIX: Final = "opensearch_"
-_AWS_HOST: Final = re.compile(r"\.(?P<region>[a-z0-9-]+)\.(?P<service>aoss|es)\.amazonaws\.com(?:\.cn)?\Z")
+_AWS_HOSTS: Final = (
+    re.compile(r"\.(?P<region>[a-z0-9-]+)\.(?P<service>aoss|aoss-fips|es)\.amazonaws\.com(?:\.cn)?\Z"),
+    re.compile(r"\.(?P<service>aoss|aos)\.(?P<region>[a-z0-9-]+)\.on\.aws\Z"),
+)
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _SEARCH_ONLY_MESSAGE: Final = (
     "The OpenSearch vector store is search-only. Create the k-NN index in OpenSearch, "
     "then register it here with the index name as vector_store_id."
+)
+_SIGV4_ONLY_MESSAGE: Final = (
+    "The OpenSearch vector store signs every request with AWS SigV4 and does not support api_key. "
+    "Remove api_key and give the vector store AWS credentials instead."
+)
+_CREDENTIALS_HINT: Final = (
+    "Set aws_access_key_id and aws_secret_access_key, aws_role_name, or aws_profile_name on the vector store, "
+    "or run LiteLLM with an AWS identity."
 )
 
 
@@ -50,11 +64,26 @@ def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(message=message, model=None, llm_provider="opensearch")
 
 
+def _unauthenticated(reason: str) -> AuthenticationError:
+    return AuthenticationError(
+        message=f"No usable AWS credentials to sign the OpenSearch request ({reason}). {_CREDENTIALS_HINT}",
+        llm_provider="opensearch",
+        model=None,
+    )
+
+
+def _usable_credentials(credentials: object) -> "Credentials":
+    from botocore.credentials import Credentials
+
+    if isinstance(credentials, Credentials):
+        return credentials
+    raise _unauthenticated("none were found")
+
+
 class _OpenSearchParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     litellm_embedding_model: str | None = None
-    aws_region_name: str | None = None
     opensearch_embedding_field: str | None = None
     opensearch_text_field: str | None = None
 
@@ -73,6 +102,12 @@ class _OpenSearchParams(LiteLLMBaseModel):
                 f"produced the vectors in '{self.embedding_field}', for example openai/text-embedding-3-small."
             )
         return self.litellm_embedding_model
+
+
+class _SigningRegion(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    aws_region_name: str | None = None
 
 
 class _SearchOptions(LiteLLMBaseModel):
@@ -138,10 +173,11 @@ class _SearchResponse(LiteLLMBaseModel):
 
 
 def aws_signing_target(url: str) -> tuple[Literal["aoss", "es"], str | None]:
-    match: Final = _AWS_HOST.search(urlsplit(url).hostname or "")
+    hostname: Final = urlsplit(url).hostname or ""
+    match: Final = next(filter(None, (pattern.search(hostname) for pattern in _AWS_HOSTS)), None)
     if match is None:
         return "es", None
-    return ("aoss" if match["service"] == "aoss" else "es"), match["region"]
+    return ("aoss" if match["service"].startswith("aoss") else "es"), match["region"]
 
 
 def _search_result(hit: _Hit, params: _OpenSearchParams) -> VectorStoreSearchResult:
@@ -171,7 +207,29 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
     def validate_environment(
         self, headers: Mapping[str, object], litellm_params: GenericLiteLLMParams | None
     ) -> dict[str, object]:  # mutable-ok: the shared HTTP handler requires writable headers
+        params: Final = dict(litellm_params or {})
+        self._signing_credentials(params, self._signing_region(params, str(params.get("api_base") or "")))
         return {**headers, "Content-Type": "application/json"}
+
+    def _signing_region(self, params: Mapping[str, object], api_base: str) -> str:
+        configured_region: Final = _SigningRegion.model_validate(params).aws_region_name
+        return self._aws.get_aws_region_name_for_non_llm_api_calls(configured_region or aws_signing_target(api_base)[1])
+
+    def _signing_credentials(self, params: Mapping[str, object], region: str) -> "Credentials":
+        if params.get("api_key"):
+            raise _bad_request(_SIGV4_ONLY_MESSAGE)
+        ensure_optional_import("botocore")
+        from botocore.exceptions import (
+            CredentialRetrievalError,
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+        )
+
+        try:
+            return _usable_credentials(self._aws.resolve_credentials(AwsAuthParams.model_validate(params), region))
+        except (CredentialRetrievalError, NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
+            raise _unauthenticated(str(error)) from None
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         parsed: Final = urlsplit(api_base or "")
@@ -274,15 +332,11 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         api_base: str,
         api_key: str | None = None,
     ) -> tuple[dict[str, str], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
-        service, host_region = aws_signing_target(api_base)
-        configured_region: Final = _OpenSearchParams.model_validate(optional_params).aws_region_name
-        region: Final = self._aws.get_aws_region_name_for_non_llm_api_calls(configured_region or host_region)
+        region: Final = self._signing_region(optional_params, api_base)
         body: Final = json.dumps(request_data)
         signed: Final = sign_aws_json_post(
-            get_credentials=partial(
-                self._aws.resolve_credentials, AwsAuthParams.model_validate(optional_params), region
-            ),
-            service_name=service,
+            get_credentials=partial(self._signing_credentials, optional_params, region),
+            service_name=aws_signing_target(api_base)[0],
             aws_region_name=region,
             url=api_base,
             body=body,

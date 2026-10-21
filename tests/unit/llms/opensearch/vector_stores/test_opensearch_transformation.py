@@ -3,6 +3,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -146,6 +147,9 @@ async def _search(
         (SERVERLESS, {"aws_region_name": "us-west-2"}, "aoss", "us-west-2"),
         ("https://search-docs-xyz.eu-west-1.es.amazonaws.com/", {}, "es", "eu-west-1"),
         ("https://vpc-docs-xyz.cn-north-1.es.amazonaws.com.cn", {}, "es", "cn-north-1"),
+        ("https://abc123.us-gov-west-1.aoss-fips.amazonaws.com", {}, "aoss", "us-gov-west-1"),
+        ("https://abc123.aoss.eu-central-1.on.aws", {}, "aoss", "eu-central-1"),
+        ("https://search-docs-xyz.aos.ap-southeast-2.on.aws", {}, "es", "ap-southeast-2"),
         ("https://search.docs.example", {"aws_region_name": "ap-south-1"}, "es", "ap-south-1"),
     ],
 )
@@ -234,6 +238,7 @@ async def test_opensearch_error_keeps_its_status(asynchronous: bool, status: int
         ({"extra_body": {"min_score": 0.5}}, "extra_body"),
         ({"api_base": None}, "api_base"),
         ({"api_base": "abc123.us-east-1.aoss.amazonaws.com"}, "api_base"),
+        ({"api_key": "opensearch-basic-auth"}, "api_key"),
     ],
 )
 @pytest.mark.asyncio
@@ -247,6 +252,64 @@ async def test_unsupported_search_is_rejected_before_embedding_or_any_request(
         await _search(True, respond, executor, overrides)
 
     assert error.value.status_code == 400
+    respond.assert_not_called()
+    executor.call.assert_not_called()
+
+
+_AMBIENT_AWS_ENV: Final = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_PROFILE_NAME",
+    "AWS_ROLE_NAME",
+    "AWS_ROLE_ARN",
+    "AWS_SESSION_NAME",
+    "AWS_WEB_IDENTITY_TOKEN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "credentials,env",
+    [
+        pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, id="none-anywhere"),
+        pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, id="missing-profile"),
+        pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, id="key-without-secret"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request(
+    asynchronous: bool,
+    credentials: Mapping[str, str],
+    env: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for name in _AMBIENT_AWS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
+        empty: Path = tmp_path / name
+        empty.write_text("")
+        monkeypatch.setenv(name, str(empty))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    executor: Final = RecordingEmbeddingExecutor()
+    respond: Final = MagicMock(return_value=httpx.Response(200, json={"hits": {"hits": []}}))
+
+    with pytest.raises(litellm.AuthenticationError, match="No usable AWS credentials") as error:
+        await _search(
+            asynchronous,
+            respond,
+            executor,
+            {"aws_access_key_id": None, "aws_secret_access_key": None, **credentials},
+        )
+
+    assert error.value.status_code == 401
     respond.assert_not_called()
     executor.call.assert_not_called()
 
