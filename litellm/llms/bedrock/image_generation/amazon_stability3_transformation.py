@@ -66,6 +66,13 @@ class AmazonStability3Config:
         return False
 
     @classmethod
+    def is_stability_3_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_stability_3_model(model)
+
+    @classmethod
     def transform_request_body(cls, text: str, optional_params: dict) -> AmazonStability3TextToImageRequest:
         """
         Transform the request body for the Stability 3 models

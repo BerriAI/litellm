@@ -7,9 +7,38 @@ Supports Docker, Podman, and Kubernetes backends.
 
 import base64
 import os
-from typing import Any, Final
+from typing import Any, Final, Protocol, TypedDict
+
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+
+
+class _SandboxRunResult(Protocol):
+    """Result of running code inside an llm-sandbox session."""
+
+    @property
+    def exit_code(self) -> int: ...
+
+    @property
+    def stdout(self) -> str | None: ...
+
+
+class _SandboxSession(Protocol):
+    """The subset of an llm-sandbox session used while collecting generated files."""
+
+    def run(self, code: str, /) -> _SandboxRunResult: ...
+
+    def copy_from_runtime(self, src: str, dest: str, /) -> object: ...
+
+
+class _GeneratedFile(TypedDict):
+    """A file produced inside the sandbox and carried back out as base64."""
+
+    name: ReadOnly[str]
+    path: ReadOnly[str]
+    content_base64: ReadOnly[str]
+    mime_type: ReadOnly[str]
 
 
 class SkillsSandboxExecutor:
@@ -77,7 +106,7 @@ class SkillsSandboxExecutor:
 
         try:
             # Create sandbox session
-            session_kwargs: Final[dict[str, Any]] = {
+            session_kwargs: Final[dict[str, object]] = {
                 "lang": "python",
                 "verbose": False,
             }
@@ -197,9 +226,9 @@ sys.path.insert(0, '/sandbox')
 
     def _collect_generated_files(
         self,
-        session: Any,
+        session: _SandboxSession,
         original_files: dict[str, bytes],
-    ) -> list[dict[str, Any]]:
+    ) -> list[_GeneratedFile]:
         """
         Collect files generated during execution.
 
@@ -213,7 +242,7 @@ sys.path.insert(0, '/sandbox')
         Returns:
             List of generated files with base64 content
         """
-        generated_files: Final[list[dict[str, Any]]] = []
+        generated_files: Final[list[_GeneratedFile]] = []
 
         try:
             import tempfile

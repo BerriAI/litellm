@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../../tests/test-utils";
 import { AccessGroupEditModal } from "./AccessGroupEditModal";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import * as networking from "@/components/networking";
 
 const mutate = vi.fn();
 
@@ -14,8 +15,13 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: () => ({ data: { agents: [{ agent_id: "agent-1", agent_name: "Support Bot" }] } }),
 }));
 
+const manyServers = Array.from({ length: 20 }, (_, i) => ({
+  server_id: `srv-${i + 1}`,
+  server_name: `Server ${i + 1}`,
+}));
+
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "Files" }] }),
+  useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "Files" }, ...manyServers.slice(1)] }),
 }));
 
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
@@ -23,6 +29,19 @@ vi.mock("@/components/ModelSelect/ModelSelect", () => ({
     <button type="button" aria-label="model-select" onClick={() => onChange([...(value ?? []), "gpt-4"])}>
       {(value ?? []).join(",")}
     </button>
+  ),
+}));
+
+vi.mock("@/components/networking");
+
+vi.mock("@/components/skills/SkillSelector", () => ({
+  default: ({ value, onChange }: { value?: string[]; onChange: (next: string[]) => void }) => (
+    <div>
+      <button type="button" aria-label="skill-select" onClick={() => onChange([...(value ?? []), "private-plugin"])}>
+        {(value ?? []).join(",")}
+      </button>
+      <button type="button" aria-label="skill-clear" onClick={() => onChange([])} />
+    </div>
   ),
 }));
 
@@ -39,9 +58,15 @@ const accessGroup: AccessGroupResponse = {
   description: "Engineers",
   access_model_names: ["gpt-4"],
   access_mcp_server_ids: ["srv-1"],
+  mcp_tool_permissions: { "srv-1": ["read_file"] },
   access_agent_ids: ["agent-1"],
+  access_skill_names: ["old-plugin"],
   assigned_team_ids: [],
   assigned_key_ids: [],
+  access_mcp_servers: [{ id: "srv-1", name: "Server One" }],
+  access_agents: [{ id: "agent-1", name: "Agent One" }],
+  assigned_teams: [],
+  assigned_keys: [],
   created_at: "2024-01-01T00:00:00Z",
   created_by: "user-1",
   updated_at: "2024-01-02T00:00:00Z",
@@ -58,6 +83,18 @@ const variables = () => mutate.mock.calls.at(-1)?.[0] as { accessGroupId: string
 describe("AccessGroupEditModal submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: "srv-1", server_name: "Files", alias: "Files" },
+    ]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({
+      tools: [
+        { name: "read_file", description: "Read a file" },
+        { name: "write_file", description: "Write a file" },
+      ],
+      error: false,
+    });
   });
 
   it("sends exactly the antd payload for an untouched save", async () => {
@@ -77,7 +114,35 @@ describe("AccessGroupEditModal submit payload", () => {
       access_model_names: undefined,
       access_mcp_server_ids: undefined,
       access_agent_ids: undefined,
+      access_skill_names: undefined,
     });
+  });
+
+  it("sends the skills picked on the Skills tab", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /Skills/ }));
+    await user.click(screen.getByLabelText("skill-select"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_skill_names).toStrictEqual(["old-plugin", "private-plugin"]);
+    expect(variables().params.access_agent_ids).toBeUndefined();
+  });
+
+  it("sends an empty list when every skill is removed on the Skills tab", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /Skills/ }));
+    await user.click(screen.getByLabelText("skill-clear"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_skill_names).toStrictEqual([]);
   });
 
   it("sends a tab's field only once that tab has been visited", async () => {
@@ -97,6 +162,7 @@ describe("AccessGroupEditModal submit payload", () => {
       access_model_names: undefined,
       access_mcp_server_ids: ["srv-1"],
       access_agent_ids: ["agent-1"],
+      access_skill_names: undefined,
     });
   });
 
@@ -158,6 +224,61 @@ describe("AccessGroupEditModal submit payload", () => {
     await user.type(nameInput, "{Enter}");
 
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("sends the edited tool checklist as mcp_tool_permissions, an emptied one as an explicit []", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    await user.click(await screen.findByRole("radio", { name: "Flat List" }));
+    await user.click(await screen.findByRole("checkbox", { name: "read_file" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.mcp_tool_permissions).toStrictEqual({ "srv-1": [] });
+  });
+
+  it("renders each selected MCP server as its own removable chip and drops one on remove", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    const chip = await screen.findByLabelText("Files");
+    expect(chip).toHaveAttribute("data-slot", "combobox-chip");
+    expect(screen.queryByText("srv-1")).not.toBeInTheDocument();
+
+    await user.click(within(chip).getByRole("button"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_mcp_server_ids).toStrictEqual([]);
+  });
+
+  it("keeps 20 selected MCP servers as separate chips instead of one joined string", async () => {
+    const user = setup();
+    renderModal({ ...accessGroup, access_mcp_server_ids: manyServers.map((s) => s.server_id) });
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    await screen.findByLabelText("Server 20");
+    const chips = screen.getAllByLabelText(/^(Files|Server \d+)$/);
+    expect(chips).toHaveLength(20);
+    expect(chips.map((chip) => chip.textContent)).toStrictEqual([
+      "Files",
+      ...manyServers.slice(1).map((s) => s.server_name),
+    ]);
+    expect(screen.queryByText(/Server 2, Server 3/)).not.toBeInTheDocument();
+
+    await user.click(within(screen.getByLabelText("Server 7")).getByRole("button"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_mcp_server_ids).toStrictEqual(
+      manyServers.map((s) => s.server_id).filter((id) => id !== "srv-7"),
+    );
   });
 
   it("sends models chosen on the Models tab", async () => {

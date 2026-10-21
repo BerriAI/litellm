@@ -2,7 +2,8 @@
 
 import json
 import time
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -16,7 +17,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
@@ -28,6 +32,9 @@ from litellm.types.realtime import (
     RealtimeTranscriptionSessionRequest,
     RealtimeTranscriptionSessionResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 router: Final = APIRouter()
 
@@ -43,7 +50,7 @@ def _coerce_realtime_session_type(session_type: str | None) -> str:
     return "realtime"
 
 
-def _append_model_candidate(candidates: list[str], model: Any) -> None:
+def _append_model_candidate(candidates: list[str], model: object) -> None:
     if isinstance(model, str) and model and model not in candidates:
         candidates.append(model)
 
@@ -121,7 +128,7 @@ async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,
-    llm_router: Any,
+    llm_router: "Router | None",
 ) -> tuple[str, dict | None, str]:
     session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
     session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
@@ -176,7 +183,7 @@ def _encode_realtime_token_payload(
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Final[dict[str, Any]] = {
+    payload: Final[dict[str, str | int | None]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -186,6 +193,10 @@ def _encode_realtime_token_payload(
         "session_type": session_type,
     }
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
+    return headers.get(name, default)
 
 
 def _decode_realtime_token_payload(
@@ -244,7 +255,7 @@ async def create_realtime_client_secret(
 
     data: dict = {}
     try:
-        body: Final = await _read_request_body(request=request)
+        body: Final = await read_request_body(request=request)
         req: Final = RealtimeClientSecretRequest(**body)
 
         model, session_data, session_type = await _prepare_client_secret_session(
@@ -511,7 +522,7 @@ async def proxy_realtime_calls(
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
-        media_type=upstream_resp.headers.get("content-type", "application/sdp"),
+        media_type=_header_value(upstream_resp.headers, "content-type", "application/sdp"),
     )
 
 
@@ -556,7 +567,7 @@ async def create_realtime_transcription_session(
 
     data: dict = {}
     try:
-        body: Final = await _read_request_body(request=request)
+        body: Final = await read_request_body(request=request)
         req: Final = RealtimeTranscriptionSessionRequest(**body)
 
         model: Final[str] = req.resolved_model() or "gpt-realtime-whisper"
