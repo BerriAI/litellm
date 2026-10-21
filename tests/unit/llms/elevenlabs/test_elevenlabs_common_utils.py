@@ -250,7 +250,7 @@ def test_recorded_upstream_frame_drops_audio_and_alignment_but_keeps_the_aligned
     assert elevenlabs_tts_recorded_upstream_frame(_audio_frame(None)) == {
         "contextId": "ctx",
         "isFinal": None,
-        "aligned_characters": 0,
+        "aligned_characters": None,
     }
     assert elevenlabs_tts_recorded_upstream_frame({"isFinal": True}) == {"isFinal": True}
     assert elevenlabs_tts_recorded_upstream_frame({"message": "Invalid model", "error": "invalid_request"}) == {
@@ -269,9 +269,13 @@ def _session(client_texts: tuple[str, ...], *upstream: dict[str, object]) -> int
 def test_characters_are_the_ones_elevenlabs_spoke_not_the_ones_sent():
     sent = (" ", "Hello world. ", "¿Qué tal? ", "This part was cut off before it was spoken. ")
 
-    spoken = (_audio_frame("Hello world."), _audio_frame(None), _audio_frame("¿Qué tal?"), {"isFinal": True})
+    spoken = (_audio_frame("Hello world. "), _audio_frame(None), _audio_frame(" ¿Qué tal? "), {"isFinal": True})
 
-    assert _session(sent, *spoken) == len("Hello world.") + len("¿Qué tal?")
+    assert _session(sent, *spoken) == len("Hello world.") + len(" ¿Qué tal?")
+
+
+def test_a_segment_that_is_only_whitespace_bills_nothing():
+    assert _session((" ", "  "), _audio_frame("  "), {"isFinal": True}) == 0
 
 
 def test_a_session_that_got_no_audio_back_bills_nothing():

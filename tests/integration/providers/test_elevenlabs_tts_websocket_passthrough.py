@@ -197,7 +197,7 @@ def test_a_session_reaches_elevenlabs_with_the_proxy_key_and_is_billed_per_chara
             {"text": ""},
         )
         rows: Final = _spend_rows(key)
-        characters: Final = sum(len(text) for text in SENTENCES)
+        characters: Final = sum(len(text.rstrip()) for text in SENTENCES)
         assert float(rows[0]["spend"]) == pytest.approx(characters * _per_character(FLASH))
         assert rows[0]["model"] == FLASH
         assert rows[0]["custom_llm_provider"] == "elevenlabs"
@@ -223,5 +223,5 @@ def test_an_unpriced_model_is_refused_before_elevenlabs_is_contacted_and_the_def
         )
         assert elevenlabs.upgrades.empty()
         rows: Final = _spend_rows(key)
-        assert float(rows[0]["spend"]) == pytest.approx(len(SENTENCES[0]) * _per_character(DEFAULT_MODEL))
+        assert float(rows[0]["spend"]) == pytest.approx(len(SENTENCES[0].rstrip()) * _per_character(DEFAULT_MODEL))
         assert rows[0]["model"] == DEFAULT_MODEL

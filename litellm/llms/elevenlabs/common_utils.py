@@ -131,11 +131,11 @@ class _Alignment(BaseModel):
 _ALIGNMENT: Final = TypeAdapter(_Alignment)
 
 
-def _aligned_characters(alignment: object) -> int:
+def _aligned_characters(alignment: object) -> int | None:
     try:
-        return len(_ALIGNMENT.validate_python(alignment).chars)
+        return len("".join(_ALIGNMENT.validate_python(alignment).chars).rstrip())
     except ValidationError:
-        return 0
+        return None
 
 
 def elevenlabs_tts_recorded_upstream_frame(frame: Mapping[str, object]) -> Mapping[str, object]:
@@ -148,13 +148,13 @@ def elevenlabs_tts_recorded_upstream_frame(frame: Mapping[str, object]) -> Mappi
 def elevenlabs_tts_characters(
     client_frames: Sequence[Mapping[str, object]], upstream_frames: Sequence[Mapping[str, object]]
 ) -> int:
-    """ElevenLabs bills the characters it synthesized, which its alignment lists, so text a session sent but never
-    heard (interrupted, unflushed, timed out) is free; audio that came back with no alignment at all bills the text
-    the client sent instead."""
+    """ElevenLabs bills the characters it synthesized, which its alignment lists less each segment's trailing
+    whitespace, so text a session sent but never heard (interrupted, unflushed, timed out) is free; audio that came
+    back with no alignment at all bills the text the client sent instead."""
     audio_frames: Final = tuple(frame for frame in upstream_frames if ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY in frame)
-    aligned: Final = sum(
+    aligned: Final = tuple(
         count for frame in audio_frames if isinstance(count := frame[ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY], int)
     )
     if aligned or not audio_frames:
-        return aligned
+        return sum(aligned)
     return sum(len(text) for frame in client_frames if isinstance(text := frame.get("text"), str))
