@@ -1,11 +1,13 @@
 import asyncio
+import itertools
 import json
 import math
+from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
 import aiohttp
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 COST_MAP_PATHS: Final = (
     "model_prices_and_context_window.json",
@@ -13,15 +15,64 @@ COST_MAP_PATHS: Final = (
 )
 VERCEL_AI_GATEWAY_URL: Final = "https://ai-gateway.vercel.sh/v1/models"
 VERCEL_TYPE_TO_MODE: Final = MappingProxyType({"language": "chat", "embedding": "embedding"})
+VERCEL_SERVICE_TIERS: Final = frozenset({"flex", "priority", "ultrafast"})
+VERCEL_TAG_TO_FLAG: Final = MappingProxyType(
+    {
+        "tool-use": "supports_function_calling",
+        "vision": "supports_vision",
+        "reasoning": "supports_reasoning",
+        "structured-output": "supports_response_schema",
+    }
+)
 
 
-class VercelPricing(BaseModel):
+class VercelRates(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     input: float | None = None
     output: float | None = None
     input_cache_read: float | None = None
     input_cache_write: float | None = None
+
+    def cost_map_rates(self) -> dict[str, float]:
+        candidate: Final = {
+            "input_cost_per_token": self.input,
+            "output_cost_per_token": self.output,
+            "cache_read_input_token_cost": self.input_cache_read,
+            "cache_creation_input_token_cost": self.input_cache_write,
+        }
+        return {key: cost for key, cost in candidate.items() if cost is not None}
+
+
+class VercelPriceTier(BaseModel):
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    cost: float
+    min: int = 0
+
+
+class VercelLongContextRates(VercelRates):
+    threshold: int
+
+
+class VercelServiceTierRates(VercelRates):
+    long_context: VercelLongContextRates | None = None
+
+
+class VercelPricing(VercelRates):
+    input_tiers: tuple[VercelPriceTier, ...] = ()
+    output_tiers: tuple[VercelPriceTier, ...] = ()
+    input_cache_read_tiers: tuple[VercelPriceTier, ...] = ()
+    input_cache_write_tiers: tuple[VercelPriceTier, ...] = ()
+    service_tiers: Mapping[str, VercelServiceTierRates] = Field(default_factory=dict)
+
+    def tiers_by_rate(self) -> tuple[tuple[str, tuple[VercelPriceTier, ...]], ...]:
+        return (
+            ("input_cost_per_token", self.input_tiers),
+            ("output_cost_per_token", self.output_tiers),
+            ("cache_read_input_token_cost", self.input_cache_read_tiers),
+            ("cache_creation_input_token_cost", self.input_cache_write_tiers),
+        )
 
 
 class VercelModel(BaseModel):
@@ -31,6 +82,7 @@ class VercelModel(BaseModel):
     type: str
     context_window: int | None = None
     max_tokens: int | None = None
+    tags: tuple[str, ...] = ()
     pricing: VercelPricing | None = None
 
 
@@ -215,6 +267,31 @@ def write_to_file(file_path: str, data: dict[str, object]) -> None:
     print(f"Wrote {file_path}.")
 
 
+def _threshold_label(lower_bound: int) -> str:
+    thousands: Final = round(lower_bound / 1000)
+    return f"{thousands}k" if abs(lower_bound - thousands * 1000) <= 1 else str(lower_bound - 1)
+
+
+def _rates_above(rates: dict[str, float], lower_bound: int, suffix: str = "") -> dict[str, float]:
+    label: Final = _threshold_label(lower_bound)
+    return {f"{key}_above_{label}_tokens{suffix}": cost for key, cost in rates.items()}
+
+
+def _tier_rates(pricing: VercelPricing) -> Iterator[tuple[str, float]]:
+    for key, tiers in pricing.tiers_by_rate():
+        yield from ((f"{key}_above_{_threshold_label(tier.min)}_tokens", tier.cost) for tier in tiers if tier.min > 0)
+
+
+def _service_tier_rates(name: str, rates: VercelServiceTierRates) -> dict[str, float]:
+    standard: Final = {f"{key}_{name}": cost for key, cost in rates.cost_map_rates().items()}
+    long_context: Final = (
+        {}
+        if rates.long_context is None
+        else _rates_above(rates.long_context.cost_map_rates(), rates.long_context.threshold, f"_{name}")
+    )
+    return {**standard, **long_context}
+
+
 def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
     mode: Final = VERCEL_TYPE_TO_MODE[model.type]
     pricing: Final = model.pricing if model.pricing is not None else VercelPricing()
@@ -224,9 +301,9 @@ def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
         print(f"Skipping vercel_ai_gateway/{model.id}: the catalog lists no usable per-token price for it.")
         return None
     candidate: Final = {
-        "max_tokens": model.max_tokens,
-        "max_input_tokens": model.context_window,
-        "max_output_tokens": model.max_tokens,
+        "max_tokens": model.max_tokens or None,
+        "max_input_tokens": model.context_window or None,
+        "max_output_tokens": model.max_tokens or None,
         "input_cost_per_token": pricing.input,
         "output_cost_per_token": pricing.output if pricing.output is not None else 0.0,
         "cache_read_input_token_cost": pricing.input_cache_read,
@@ -234,14 +311,31 @@ def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
         "litellm_provider": "vercel_ai_gateway",
         "mode": mode,
     }
-    return {key: value for key, value in candidate.items() if value is not None}
+    service_tiers: Final = (
+        _service_tier_rates(name, rates).items()
+        for name, rates in pricing.service_tiers.items()
+        if name in VERCEL_SERVICE_TIERS
+    )
+    flags: Final = {flag: True for tag, flag in VERCEL_TAG_TO_FLAG.items() if tag in model.tags}
+    return {
+        **{key: value for key, value in candidate.items() if value is not None},
+        **dict(_tier_rates(pricing)),
+        **dict(itertools.chain.from_iterable(service_tiers)),
+        **flags,
+    }
+
+
+def _vercel_model(row: dict[str, object]) -> VercelModel | None:
+    try:
+        return VercelModel.model_validate(row)
+    except ValidationError as error:
+        print(f"Skipping vercel_ai_gateway/{row.get('id')}: {error.error_count()} of its catalog fields do not parse.")
+        return None
 
 
 def transform_vercel_ai_gateway_data(data: list[dict[str, object]] | None) -> dict[str, dict[str, object]]:
-    models: Final = tuple(
-        VercelModel.model_validate(row) for row in data or () if row.get("type") in VERCEL_TYPE_TO_MODE
-    )
-    entries: Final = ((f"vercel_ai_gateway/{model.id}", _vercel_entry(model)) for model in models)
+    parsed: Final = (_vercel_model(row) for row in data or () if row.get("type") in VERCEL_TYPE_TO_MODE)
+    entries: Final = ((f"vercel_ai_gateway/{model.id}", _vercel_entry(model)) for model in parsed if model is not None)
     return {key: entry for key, entry in entries if entry is not None}
 
 
@@ -261,19 +355,25 @@ def load_local_data(file_path):
         print("Error decoding JSON:", e)
         return None
 
-def main():
-    local_data = load_local_data(COST_MAP_PATHS[0])
+def _fetch(url: str) -> list[dict[str, object]] | None:
+    return asyncio.run(fetch_data(url))
 
-    vercel_data = transform_vercel_ai_gateway_data(asyncio.run(fetch_data(VERCEL_AI_GATEWAY_URL)))
-    friendli_data = transform_friendli_data(asyncio.run(fetch_data(FRIENDLI_API_URL)), local_data)
-    all_remote_data = {**vercel_data, **friendli_data}
 
-    if local_data and all_remote_data:
-        sync_local_data_with_remote(local_data, all_remote_data, replace_keys=frozenset(friendli_data))
-        for path in COST_MAP_PATHS:
-            write_to_file(path, local_data)
-    else:
-        print("Failed to fetch model data from either local file or URL.")
+def main(
+    fetch: Callable[[str], list[dict[str, object]] | None] = _fetch,
+    paths: tuple[str, ...] = COST_MAP_PATHS,
+) -> None:
+    local_data: Final = load_local_data(paths[0])
+    vercel_rows: Final = fetch(VERCEL_AI_GATEWAY_URL)
+    friendli_rows: Final = fetch(FRIENDLI_API_URL)
+    if not local_data or vercel_rows is None or friendli_rows is None:
+        raise SystemExit("Failed to fetch model data from either local file or URL.")
+
+    friendli_data: Final = transform_friendli_data(friendli_rows, local_data)
+    all_remote_data: Final = {**transform_vercel_ai_gateway_data(vercel_rows), **friendli_data}
+    sync_local_data_with_remote(local_data, all_remote_data, replace_keys=frozenset(friendli_data))
+    for path in paths:
+        write_to_file(path, local_data)
 
 # Entry point of the script
 if __name__ == "__main__":

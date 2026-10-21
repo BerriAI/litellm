@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+
+from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+from litellm.types.utils import Usage
 
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[2]
@@ -219,9 +222,7 @@ def test_vercel_transform_keeps_only_per_token_priced_language_and_embedding_row
             "mode": "chat",
         },
         "vercel_ai_gateway/google/gemini-embedding-001": {
-            "max_tokens": 0,
             "max_input_tokens": 2048,
-            "max_output_tokens": 0,
             "input_cost_per_token": 1.5e-07,
             "output_cost_per_token": 0.0,
             "litellm_provider": "vercel_ai_gateway",
@@ -231,10 +232,118 @@ def test_vercel_transform_keeps_only_per_token_priced_language_and_embedding_row
 
 
 @pytest.mark.parametrize("price", ["not-a-number", "nan", "inf"])
-def test_vercel_transform_fails_loudly_on_non_numeric_prices(sync_module, price):
-    row = {**VERCEL_LANGUAGE_ROW, "pricing": {"input": price, "output": "0.000015"}}
-    with pytest.raises(ValidationError):
-        sync_module.transform_vercel_ai_gateway_data([row])
+def test_vercel_transform_skips_a_row_whose_prices_do_not_parse_and_keeps_the_rest(sync_module, price):
+    broken_row = {**VERCEL_LANGUAGE_ROW, "id": "broken/model", "pricing": {"input": price, "output": "0.000015"}}
+
+    result = sync_module.transform_vercel_ai_gateway_data([broken_row, VERCEL_LANGUAGE_ROW])
+
+    assert list(result) == ["vercel_ai_gateway/anthropic/claude-sonnet-4.5"]
+
+
+def test_vercel_transform_omits_zero_context_and_output_limits(sync_module):
+    row = {**VERCEL_EMBEDDING_ROW, "context_window": 0, "max_tokens": 0}
+
+    entry = sync_module.transform_vercel_ai_gateway_data([row])["vercel_ai_gateway/google/gemini-embedding-001"]
+
+    assert {"max_tokens", "max_input_tokens", "max_output_tokens"}.isdisjoint(entry)
+
+
+VERCEL_LONG_CONTEXT_ROW = {
+    "id": "openai/gpt-long",
+    "type": "language",
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "pricing": {
+        "input": "0.000004",
+        "input_tiers": [{"cost": "0.000004", "max": 272000}, {"cost": "0.000008", "min": 272000}],
+        "output": "0.00002",
+        "output_tiers": [{"cost": "0.00002", "min": 0, "max": 272001}, {"cost": "0.00003", "min": 272001}],
+        "input_cache_read": "0.0000004",
+        "service_tiers": {
+            "priority": {
+                "input": "0.000008",
+                "output": "0.00004",
+                "long_context": {"threshold": 272001, "input": "0.000016", "output": "0.00006"},
+            },
+            "unknown_tier": {"input": "0.1", "output": "0.1"},
+        },
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "service_tier", "expected_input_rate", "expected_output_rate"),
+    [
+        (272000, None, 4e-06, 2e-05),
+        (272001, None, 8e-06, 3e-05),
+        (272000, "priority", 8e-06, 4e-05),
+        (272001, "priority", 1.6e-05, 6e-05),
+    ],
+)
+def test_vercel_long_context_and_service_tier_prices_bill_at_the_catalog_rates(
+    sync_module, prompt_tokens, service_tier, expected_input_rate, expected_output_rate
+):
+    entry = sync_module.transform_vercel_ai_gateway_data([VERCEL_LONG_CONTEXT_ROW])["vercel_ai_gateway/openai/gpt-long"]
+    usage = Usage(prompt_tokens=prompt_tokens, completion_tokens=10, total_tokens=prompt_tokens + 10)
+
+    input_rate, output_rate, *_ = _get_token_base_cost(entry, usage, service_tier=service_tier)
+
+    assert (input_rate, output_rate) == pytest.approx((expected_input_rate, expected_output_rate))
+
+
+def test_vercel_transform_drops_service_tiers_litellm_cannot_bill(sync_module):
+    entry = sync_module.transform_vercel_ai_gateway_data([VERCEL_LONG_CONTEXT_ROW])["vercel_ai_gateway/openai/gpt-long"]
+
+    assert not [key for key in entry if "unknown_tier" in key]
+
+
+def test_vercel_capability_tags_only_ever_turn_flags_on(sync_module):
+    tagged = {**VERCEL_LANGUAGE_ROW, "tags": ["tool-use", "vision"]}
+    local = {"vercel_ai_gateway/anthropic/claude-sonnet-4.5": {"supports_reasoning": True}}
+
+    sync_module.sync_local_data_with_remote(local, sync_module.transform_vercel_ai_gateway_data([tagged]))
+
+    synced = local["vercel_ai_gateway/anthropic/claude-sonnet-4.5"]
+    assert synced["supports_function_calling"] is True
+    assert synced["supports_vision"] is True
+    assert synced["supports_reasoning"] is True
+    assert "supports_response_schema" not in synced
+
+
+def _write_cost_maps(tmp_path: Path) -> tuple[str, str]:
+    root = tmp_path / "model_prices_and_context_window.json"
+    backup = tmp_path / "model_prices_and_context_window_backup.json"
+    original = json.dumps({"sample_spec": {"mode": "chat"}}, indent=4) + "\n"
+    root.write_text(original, encoding="utf-8")
+    backup.write_text(original, encoding="utf-8")
+    return str(root), str(backup)
+
+
+def test_main_fails_the_run_and_writes_nothing_when_a_catalog_fetch_fails(sync_module, tmp_path):
+    paths = _write_cost_maps(tmp_path)
+    before = [Path(path).read_text(encoding="utf-8") for path in paths]
+
+    def fetch(url: str) -> list[dict[str, object]] | None:
+        return None if url == sync_module.VERCEL_AI_GATEWAY_URL else []
+
+    with pytest.raises(SystemExit) as exit_info:
+        sync_module.main(fetch=fetch, paths=paths)
+
+    assert exit_info.value.code not in (0, None)
+    assert [Path(path).read_text(encoding="utf-8") for path in paths] == before
+
+
+def test_main_writes_the_synced_map_to_both_cost_map_files(sync_module, tmp_path):
+    paths = _write_cost_maps(tmp_path)
+
+    def fetch(url: str) -> list[dict[str, object]] | None:
+        return [VERCEL_LANGUAGE_ROW] if url == sync_module.VERCEL_AI_GATEWAY_URL else []
+
+    sync_module.main(fetch=fetch, paths=paths)
+
+    root, backup = (json.loads(Path(path).read_text(encoding="utf-8")) for path in paths)
+    assert root == backup
+    assert root["vercel_ai_gateway/anthropic/claude-sonnet-4.5"]["input_cost_per_token"] == 3e-06
 
 
 def test_write_to_file_matches_the_checked_in_cost_map_format(sync_module, tmp_path):

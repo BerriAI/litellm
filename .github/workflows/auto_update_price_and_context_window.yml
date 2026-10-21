@@ -9,6 +9,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: auto_update_price_and_context_window
+  cancel-in-progress: false
+
 jobs:
   auto_update_price_and_context_window:
     if: github.repository == 'BerriAI/litellm'
@@ -27,7 +31,7 @@ jobs:
       - name: Look for an already-open price map update PR
         id: existing
         run: |
-          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName --jq '[.[].headRefName | select(startswith("litellm_price_map_auto_update_"))] | first // empty')"
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "head:litellm_price_map_auto_update_" --json headRefName --jq '[.[].headRefName | select(startswith("litellm_price_map_auto_update_"))] | first // empty')"
           if [ -n "$open_pr" ]; then
             echo "Skipping the sync: the price map update PR on $open_pr is still open"
           fi
