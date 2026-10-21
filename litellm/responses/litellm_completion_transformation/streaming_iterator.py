@@ -14,7 +14,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, stamp_responses_usage_cost
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     ReasoningSummaryTextDeltaEvent,
     ReasoningSummaryTextDoneEvent,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
@@ -1257,6 +1258,43 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_reasoning_item_id,
         )
         return reasoning_aligned
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        """
+        The response.incomplete event to bill when the client went away mid-stream.
+        Built from the chat completion chunks relayed so far, so the usage is what
+        stream_chunk_builder counts for them.
+        """
+        if self.completed_response is not None or not self.collected_chat_completion_chunks:
+            return None
+        built: Final = stream_chunk_builder(
+            chunks=self.collected_chat_completion_chunks,
+            messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
+                input=self.request_input,
+                responses_api_request=dict(self.responses_api_request),
+            ),
+            logging_obj=self.litellm_logging_obj,
+        )
+        if not isinstance(built, ModelResponse):
+            return None
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
+                request_input=self.request_input,
+                chat_completion_response=built,
+                responses_api_request=self.responses_api_request,
+            )
+        )
+        partial: Final = self._with_encoded_response_id(
+            responses_api_response.model_copy(
+                update={
+                    "id": self._cached_response_id or responses_api_response.id,
+                    "status": "incomplete",
+                    "output": list(self._output_with_streamed_item_ids(responses_api_response)),
+                }
+            )
+        )
+        stamp_responses_usage_cost(partial, self.litellm_logging_obj)
+        return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:
