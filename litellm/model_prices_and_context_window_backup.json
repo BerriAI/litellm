@@ -24892,27 +24892,79 @@
         ]
     },
     "elevenlabs/eleven_v3": {
-        "input_cost_per_character": 0.00018,
+        "input_cost_per_character": 8e-05,
         "litellm_provider": "elevenlabs",
         "metadata": {
-            "calculation": "$0.18/1000 characters (Scale plan pricing, 1 credit per character)",
+            "calculation": "$0.08/1000 characters (API pay-as-you-go pricing for multilingual models)",
             "notes": "ElevenLabs Eleven v3 - most expressive TTS model with 70+ languages and audio tags support"
         },
         "mode": "audio_speech",
-        "source": "https://elevenlabs.io/pricing",
+        "source": "https://elevenlabs.io/pricing/api",
         "supported_endpoints": [
             "/v1/audio/speech"
         ]
     },
     "elevenlabs/eleven_multilingual_v2": {
-        "input_cost_per_character": 0.00018,
+        "input_cost_per_character": 8e-05,
         "litellm_provider": "elevenlabs",
         "metadata": {
-            "calculation": "$0.18/1000 characters (Scale plan pricing, 1 credit per character)",
+            "calculation": "$0.08/1000 characters (API pay-as-you-go pricing for multilingual models)",
             "notes": "ElevenLabs Eleven Multilingual v2 - default TTS model with 29 languages support"
         },
         "mode": "audio_speech",
-        "source": "https://elevenlabs.io/pricing",
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "elevenlabs/eleven_flash_v2_5": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.04/1000 characters (API pay-as-you-go pricing for Flash and Turbo models)",
+            "notes": "ElevenLabs Flash v2.5 - lowest latency TTS model with 32 languages"
+        },
+        "mode": "audio_speech",
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "elevenlabs/eleven_turbo_v2_5": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.04/1000 characters (API pay-as-you-go pricing for Flash and Turbo models)",
+            "notes": "ElevenLabs Turbo v2.5 - low latency TTS model with 32 languages"
+        },
+        "mode": "audio_speech",
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "elevenlabs/eleven_flash_v2": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.04/1000 characters (API pay-as-you-go pricing for Flash and Turbo models)",
+            "notes": "ElevenLabs Flash v2 - low latency English-only TTS model"
+        },
+        "mode": "audio_speech",
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "elevenlabs/eleven_turbo_v2": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.04/1000 characters (API pay-as-you-go pricing for Flash and Turbo models)",
+            "notes": "ElevenLabs Turbo v2 - low latency English-only TTS model"
+        },
+        "mode": "audio_speech",
+        "source": "https://elevenlabs.io/pricing/api",
         "supported_endpoints": [
             "/v1/audio/speech"
         ]

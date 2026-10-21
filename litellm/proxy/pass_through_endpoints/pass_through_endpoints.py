@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Route
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -47,6 +47,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+    WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY,
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -136,8 +137,11 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    ClientTextDecision,
     EndpointType,
+    ForwardedClientText,
     PassthroughStandardLoggingPayload,
+    RefusedClientText,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
@@ -2446,6 +2450,26 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 
 
+@dataclass(frozen=True, slots=True)
+class WebsocketFramePolicy:
+    client_text: Callable[[str], ClientTextDecision]
+    recorded_upstream_frame: Callable[[Mapping[str, object]], Mapping[str, object] | None]
+
+
+def _forward_client_text_unchanged(text: str) -> ClientTextDecision:
+    return ForwardedClientText(text=text, recorded=None)
+
+
+def _record_upstream_frame_unchanged(frame: Mapping[str, object]) -> Mapping[str, object]:
+    return frame
+
+
+RELAY_FRAMES_UNCHANGED: Final = WebsocketFramePolicy(
+    client_text=_forward_client_text_unchanged,
+    recorded_upstream_frame=_record_upstream_frame_unchanged,
+)
+
+
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
     try:
         from litellm.integrations.otel.plumbing.context import inject_trace_context
@@ -2464,6 +2488,7 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    frame_policy: WebsocketFramePolicy = RELAY_FRAMES_UNCHANGED,
 ):
     """
     WebSocket passthrough request handler.
@@ -2477,6 +2502,7 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        frame_policy: What the route forwards of each client text frame and records of client and upstream frames
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2487,6 +2513,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    client_frames: Final[list[Mapping[str, object]]] = []  # mutable-ok: the relay appends each frame as it arrives
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2617,6 +2644,12 @@ async def websocket_passthrough_request(
                         bytes_data: bytes | None = message.get("bytes")
 
                         if text_data is not None:
+                            if isinstance(decision := frame_policy.client_text(text_data), RefusedClientText):
+                                await websocket.close(code=decision.code, reason=decision.reason)
+                                await upstream_ws.close()
+                                break
+                            if decision.recorded is not None:
+                                client_frames.append(decision.recorded)
                             # Try to extract model from client setup message for Vertex AI Live
                             if endpoint and "/vertex_ai/live" in endpoint:
                                 verbose_proxy_logger.debug(
@@ -2673,7 +2706,9 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            await upstream_ws.send(
+                                _rewrite_vertex_live_setup_model(decision.text, setup_model_rewriter)
+                            )
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
@@ -2702,26 +2737,34 @@ async def websocket_passthrough_request(
             is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
             json_frame_ordinal: Final = count()
 
-            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
+            async def relay_upstream_frame(upstream_message: str | bytes) -> bool:
+                if not _client_socket_is_open(websocket):
+                    return False
                 if isinstance(upstream_message, bytes):
                     await websocket.send_bytes(upstream_message)
                 else:
                     await websocket.send_text(upstream_message)
                 message_data: Final = _json_object_frame(upstream_message)
                 if message_data is None:
-                    return
+                    return True
                 if is_vertex_live and next(json_frame_ordinal) == 0:
                     _extract_vertex_live_model_from_setup_response(message_data)
-                    return
-                websocket_messages.append(message_data)
+                    return True
+                recorded_frame: Final = frame_policy.recorded_upstream_frame(message_data)
+                if recorded_frame is not None:
+                    websocket_messages.append(dict(recorded_frame))
+                return True
 
             async def forward_upstream_to_client() -> Close | None:
                 try:
-                    while True:
-                        await relay_upstream_frame(await upstream_ws.recv())
+                    while await relay_upstream_frame(await upstream_ws.recv()):
+                        pass
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
+                except WebSocketDisconnect as e:
+                    verbose_proxy_logger.debug("Client WebSocket disconnected mid-relay: %s", e.code)
+                    return None
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise
@@ -2731,6 +2774,7 @@ async def websocket_passthrough_request(
                         "WebSocket passthrough (%s): error forwarding upstream message", endpoint
                     )
                     raise
+                return None
 
             # Create tasks for bidirectional message forwarding
             tasks: Final = [
@@ -2764,6 +2808,10 @@ async def websocket_passthrough_request(
             end_time: Final = datetime.now()
 
             # Update passthrough logging payload with response data
+            request_body: Final[dict[str, object]] = (  # mutable-ok: the success handler and payload take a dict
+                {WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY: client_frames} if client_frames else {}
+            )
+            passthrough_logging_payload["request_body"] = request_body
             passthrough_logging_payload["response_body"] = websocket_messages
             passthrough_logging_payload["end_time"] = end_time
 
@@ -2812,7 +2860,7 @@ async def websocket_passthrough_request(
                     end_time=end_time,
                     logging_obj=logging_obj,
                     cache_hit=False,
-                    request_body={},
+                    request_body=request_body,
                     **success_kwargs,
                 )
             )

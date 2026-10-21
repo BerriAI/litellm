@@ -36,6 +36,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.llms.elevenlabs.common_utils import (
+    elevenlabs_tts_client_text,
+    elevenlabs_tts_recorded_upstream_frame,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -54,6 +58,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
     resolve_llm_passthrough_timeout,
     resolve_pass_through_request_timeout,
+    WebsocketFramePolicy,
     set_env_variables_in_header,
     websocket_passthrough_request,
 )
@@ -7601,7 +7606,7 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     audio_chunk = bytes(range(256)) * 4
     close_stream = json.dumps({"type": "CloseStream"})
 
-    await _relay_deepgram_listen(
+    _, success_handler = await _relay_deepgram_listen(
         upstream_ws,
         AsyncMock(
             side_effect=[
@@ -7615,6 +7620,182 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
     assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
     upstream_ws.close.assert_awaited_once()
+    assert success_handler.call_args.kwargs["request_body"] == {}
+    assert success_handler.call_args.kwargs["passthrough_logging_payload"]["request_body"] == {}
+
+
+ELEVENLABS_TTS_TARGET = (
+    "wss://api.elevenlabs.io/v1/text-to-speech/voice1/stream-input?model_id=eleven_flash_v2_5&sync_alignment=true"
+)
+ELEVENLABS_TTS_FRAME_POLICY = WebsocketFramePolicy(
+    client_text=elevenlabs_tts_client_text,
+    recorded_upstream_frame=elevenlabs_tts_recorded_upstream_frame,
+)
+ELEVENLABS_AUDIO_FRAME = json.dumps(
+    {
+        "audio": base64.b64encode(bytes(range(64))).decode(),
+        "alignment": {"chars": ["H"], "charStartTimesMs": [0], "charDurationsMs": [40]},
+        "normalizedAlignment": {"chars": ["H"], "charStartTimesMs": [0], "charDurationsMs": [40]},
+        "isFinal": None,
+    }
+)
+
+
+class ScriptedUpstreamWebSocket:
+    """Records what the client sent and, once the expected number of frames arrived, serves its own then closes"""
+
+    def __init__(self, expected_client_frames: int, *frames: str | bytes):
+        self._expected_client_frames = expected_client_frames
+        self._frames = iter(frames)
+        self._client_frames_arrived = asyncio.Event()
+        self.sent: list[str | bytes] = []
+        self.close = AsyncMock()
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent.append(message)
+        if len(self.sent) >= self._expected_client_frames:
+            self._client_frames_arrived.set()
+
+    async def recv(self, decode: bool | None = None):
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        await self._client_frames_arrived.wait()
+        frame = next(self._frames, None)
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
+
+
+class DrainingUpstreamWebSocket:
+    """Delivers one buffered frame while its closing handshake runs, the way a real connection drains on close"""
+
+    def __init__(self, buffered_frame: str):
+        self._buffered_frame = buffered_frame
+        self._closing = asyncio.Event()
+        self._drained = asyncio.Event()
+        self.sent: list[str | bytes] = []
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent.append(message)
+
+    async def recv(self, decode: bool | None = None):
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        await self._closing.wait()
+        if self._drained.is_set():
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        self._drained.set()
+        return self._buffered_frame
+
+    async def close(self) -> None:
+        self._closing.set()
+        await self._drained.wait()
+
+
+def _client_sends_then_waits(*texts: str):
+    messages = iter([{"type": "websocket.receive", "text": text} for text in texts])
+
+    async def receive():
+        message = next(messages, None)
+        if message is None:
+            await asyncio.Event().wait()
+        return message
+
+    return receive
+
+
+async def _relay_elevenlabs_tts(upstream_ws, client_receive, client_send_text=None):
+    websocket = _client_websocket(client_receive)
+    if client_send_text is not None:
+        websocket.send_text = client_send_text
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=ELEVENLABS_TTS_TARGET,
+            custom_headers={"xi-api-key": "el-provider-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/elevenlabs/v1/text-to-speech/voice1/stream-input",
+            accept_websocket=False,
+            frame_policy=ELEVENLABS_TTS_FRAME_POLICY,
+        )
+    return websocket, success_handler
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_elevenlabs_policy_keeps_caller_keys_upstream_side_and_audio_out_of_logs():
+    initial_frame = json.dumps(
+        {"text": " ", "xi_api_key": "sk-litellm-virtual", "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}}
+    )
+    text_frame = json.dumps({"text": "Hola, ¿qué tal?  ", "try_trigger_generation": True}, ensure_ascii=False)
+    end_frame = json.dumps({"text": ""})
+    final_frame = json.dumps({"isFinal": True})
+    upstream_ws = ScriptedUpstreamWebSocket(3, ELEVENLABS_AUDIO_FRAME, final_frame)
+
+    websocket, success_handler = await _relay_elevenlabs_tts(
+        upstream_ws, _client_sends_then_waits(initial_frame, text_frame, end_frame)
+    )
+
+    assert [json.loads(frame) for frame in upstream_ws.sent] == [
+        {"text": " ", "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}},
+        json.loads(text_frame),
+        {"text": ""},
+    ]
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [ELEVENLABS_AUDIO_FRAME, final_frame]
+    success_call = success_handler.call_args.kwargs
+    expected_request_body = {"client_frames": [{"text": " "}, {"text": "Hola, ¿qué tal?  "}, {"text": ""}]}
+    assert success_call["request_body"] == expected_request_body
+    assert success_call["passthrough_logging_payload"]["request_body"] == expected_request_body
+    assert success_call["response_body"] == [{"isFinal": None}, {"isFinal": True}]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_elevenlabs_refuses_a_frame_its_counter_cannot_read_and_bills_the_rest():
+    upstream_ws = DrainingUpstreamWebSocket(ELEVENLABS_AUDIO_FRAME)
+    unreadable_frame = '{"text": "a long passage nobody pays for", "x": "\\ud800"}'
+    send_after_close = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+
+    websocket, success_handler = await _relay_elevenlabs_tts(
+        upstream_ws,
+        _client_sends_then_waits(json.dumps({"text": " "}), json.dumps({"text": "Hello "}), unreadable_frame),
+        send_after_close,
+    )
+
+    assert [json.loads(frame) for frame in upstream_ws.sent] == [{"text": " "}, {"text": "Hello "}]
+    websocket.close.assert_awaited_once()
+    assert websocket.close.await_args.kwargs["code"] == 1007
+    send_after_close.assert_not_awaited()
+    assert success_handler.call_args.kwargs["request_body"] == {"client_frames": [{"text": " "}, {"text": "Hello "}]}
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_the_session_when_the_client_drops_while_audio_streams():
+    from starlette.websockets import WebSocketDisconnect
+
+    upstream_ws = ScriptedUpstreamWebSocket(
+        2, ELEVENLABS_AUDIO_FRAME, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True})
+    )
+    client_send_text = AsyncMock(side_effect=[None, WebSocketDisconnect(code=1006)])
+
+    _, success_handler = await _relay_elevenlabs_tts(
+        upstream_ws,
+        _client_sends_then_waits(json.dumps({"text": " "}), json.dumps({"text": "Hello there "})),
+        client_send_text,
+    )
+
+    assert client_send_text.await_count == 2
+    success_call = success_handler.call_args.kwargs
+    assert success_call["request_body"] == {"client_frames": [{"text": " "}, {"text": "Hello there "}]}
+    assert success_call["response_body"] == [{"isFinal": None}]
 
 
 @pytest.mark.asyncio

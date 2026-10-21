@@ -1200,7 +1200,11 @@ def _has_required_baggage_tag_mapping() -> bool:
 
 
 async def user_api_key_auth_websocket_for_model(
-    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+    websocket: WebSocket,
+    model: str | None,
+    *,
+    close_on_auth_error: bool = True,
+    api_key_headers: tuple[str, ...] = ("api-key",),
 ) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
@@ -1232,7 +1236,7 @@ async def user_api_key_auth_websocket_for_model(
     authorization: Final = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
     if not authorization:
-        api_key = websocket.headers.get("api-key")
+        api_key = next((value for header in api_key_headers if (value := websocket.headers.get(header))), None)
         if not api_key:
             # Try extracting from WebSocket subprotocol (browser clients)
             for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
