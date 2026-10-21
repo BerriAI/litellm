@@ -19,4 +19,6 @@ jobs:
           persist-credentials: false
 
       - name: Check the tag against pyproject.toml
-        run: python3 .github/scripts/check_release_tag_version.py "${{ github.ref_name }}"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/check_release_tag_version.py "$RELEASE_TAG"
