@@ -21,6 +21,8 @@ _HELP_ARGV: Final = (
     ("codex", "--help"),
     ("pi", "--help"),
     ("keys", "list", "--help"),
+    ("credentials", "connect", "--help"),
+    ("credentials", "connections", "--help"),
 )
 
 _COMMAND_ARGV: Final = (("logout",), ("whoami",))
