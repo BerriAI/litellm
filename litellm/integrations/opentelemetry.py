@@ -2839,6 +2839,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         transformed: Final = []
         for msg in messages:
+            # An embedding's input is logged as its messages, so a token-array input
+            # (`[[9906, 1917]]` or `[9906, 1917]`) yields lists or ints with no role or content.
+            if not isinstance(msg, dict):
+                continue
             role = msg.get("role", "user")
             content = msg.get("content", "")
             parts = []
