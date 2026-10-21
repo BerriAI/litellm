@@ -71873,7 +71873,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -71995,7 +71995,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
