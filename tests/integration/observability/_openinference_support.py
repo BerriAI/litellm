@@ -672,6 +672,7 @@ def _write_config(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    guardrails: Sequence[Mapping[str, JsonValue]] = (),
 ) -> Path:
     loaded: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
@@ -686,6 +687,7 @@ def _write_config(
             **loaded["general_settings"],
             **(general_settings or {}),
         },
+        **({"guardrails": [dict(guardrail) for guardrail in guardrails]} if guardrails else {}),
     }
     path: Final = directory / f"openinference-{uuid.uuid4().hex}.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -752,6 +754,7 @@ def _rig(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    guardrails: Sequence[Mapping[str, JsonValue]] = (),
     environment: Mapping[str, str] | None = None,
     remove_environment: tuple[str, ...] = (),
     disabled_environment: tuple[str, ...] = (),
@@ -782,6 +785,7 @@ def _rig(
             callback_settings=resolved_settings,
             litellm_settings=litellm_settings,
             general_settings=general_settings,
+            guardrails=guardrails,
         )
         preset_environment: Final = {
             **({"PHOENIX_COLLECTOR_ENDPOINT": destination.url + "/v1/traces"} if "arize_phoenix" in callbacks else {}),

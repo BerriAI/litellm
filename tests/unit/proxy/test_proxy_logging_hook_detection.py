@@ -401,6 +401,51 @@ async def test_post_call_stream_records_the_served_text_when_the_client_disconne
     assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == (delivered_text,)
 
 
+class _MasksReply(CustomLogger):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        async for _ in response:
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="<PERSON>"))])
+
+
+class _ReadsServedStream(CustomLogger):
+    relays_served_stream = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read: list[str | None] = []
+
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        async for chunk in response:
+            self.read.append(chunk.choices[0].delta.content)
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_served_stream_relay_reads_what_a_later_hook_serves(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reader = _ReadsServedStream()
+    monkeypatch.setattr(litellm, "callbacks", [reader, _MasksReply()])
+
+    async def fake_stream():
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="John Smith"))])
+
+    served = [
+        chunk.choices[0].delta.content
+        async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+            response=fake_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+            request_data={"model": "gpt-4o-mini", "metadata": {}},
+        )
+    ]
+
+    assert served == ["<PERSON>"]
+    assert reader.read == served
+
+
 @pytest.mark.asyncio
 async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
     """
