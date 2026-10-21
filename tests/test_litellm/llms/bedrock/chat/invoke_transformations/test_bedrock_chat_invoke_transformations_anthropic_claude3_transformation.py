@@ -1,8 +1,8 @@
 import asyncio
 import json
 import uuid
-from types import SimpleNamespace
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -601,7 +601,6 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert "tools" not in result
 
 
-
 class Relabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -637,6 +636,7 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
     assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
     assert "tools" not in result
+
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
@@ -1094,6 +1094,9 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
+
+
+
 _CITY_SCHEMA: Final = {
     "type": "object",
     "properties": {"city": {"type": "string"}},
@@ -1154,4 +1157,3 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
-

@@ -15,6 +15,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
@@ -25,6 +26,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
 )
+import litellm
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -3781,3 +3783,5 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
     assert isinstance(raised, litellm.BadRequestError)
     assert len(bedrock.bodies) == 1
 
+
+REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])

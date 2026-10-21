@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -32,6 +33,7 @@ from litellm._logging import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
+from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
@@ -59,12 +61,19 @@ from litellm.utils import (
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
+    add_custom_logger_callback_to_specific_event,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
+    check_valid_key,
     client,
+    filter_out_litellm_params,
+    get_applied_guardrails,
+    get_llm_provider,
     get_non_default_completion_params,
+    get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_potential_model_names,
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
@@ -2974,6 +2983,9 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+
+
+
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
@@ -3891,6 +3903,9 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
     )
 
 
+
+
+
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
@@ -4275,6 +4290,9 @@ async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
     assert wrapper.completion_stream is completion_stream
 
 
+
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_wrapper_async_leaves_success_deployment_hook_off_requested_fake_stream(
@@ -4347,6 +4365,9 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
+
+
+
 
 
 @pytest.mark.asyncio
