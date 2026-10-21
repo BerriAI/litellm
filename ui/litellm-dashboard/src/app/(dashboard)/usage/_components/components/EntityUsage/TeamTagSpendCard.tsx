@@ -4,10 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { DataTable, DataTablePagination } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
-import type {
-  DailyActivityTagPageResponse,
-  DailyActivityTagSpendRow,
-} from "@/components/UsagePage/dailyActivityApi";
+import type { DailyActivityTagPageResponse, DailyActivityTagSpendRow } from "@/components/UsagePage/dailyActivityApi";
 
 import { Panel } from "../overview/Primitives";
 
@@ -78,12 +75,7 @@ const columns: ColumnDef<DailyActivityTagSpendRow>[] = [
   },
 ];
 
-const useTeamTagSpendPage = ({
-  accessToken,
-  startTime,
-  endTime,
-  teamId,
-}: TeamTagSpendCardProps): TeamTagSpendPage => {
+const useTeamTagSpendPage = ({ accessToken, startTime, endTime, teamId }: TeamTagSpendCardProps): TeamTagSpendPage => {
   const startTimestamp = startTime?.getTime();
   const endTimestamp = endTime?.getTime();
   const requestScope = useMemo(
@@ -110,7 +102,8 @@ const useTeamTagSpendPage = ({
       limit: PAGE_SIZE,
       signal: controller.signal,
     };
-    void ENTITY_API.team.tagPage(tagPageRequest)
+    void ENTITY_API.team
+      .tagPage(tagPageRequest)
       .then((response) => {
         if (controller.signal.aborted) return;
         const nextPageState: TagPageState = { scope: requestScope, page, response, failed: false };
@@ -131,7 +124,7 @@ const useTeamTagSpendPage = ({
 
   const loading = enabled && currentPageState === null;
   const failed = currentPageState?.failed ?? false;
-  const rows = failed ? [] : (currentPageState?.response?.tags ?? []);
+  const rows = failed ? [] : currentPageState?.response?.tags ?? [];
   const totalTags = currentScopeState?.response?.total_tags ?? 0;
   const onPageChange = (nextPage: number) => setPageState({ scope: requestScope, page: nextPage });
 
