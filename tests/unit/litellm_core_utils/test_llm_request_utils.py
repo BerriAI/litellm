@@ -145,24 +145,49 @@ PICKER_PROVIDER: Final = "fake_picker_provider"
 @pytest.fixture
 def provider_rows_listed_most_expensive_first(monkeypatch: pytest.MonkeyPatch) -> None:
     rows: Final = {
-        "free-chat": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
         "pricey-chat": {"input_cost_per_token": 3e-12, "output_cost_per_token": 3e-12, "mode": "chat"},
+        "per-character-and-token-chat": {
+            "input_cost_per_token": 2e-12,
+            "output_cost_per_token": 2e-12,
+            "input_cost_per_character": 1e-12,
+            "mode": "chat",
+        },
         "cheapest-embedding": {"input_cost_per_token": 1e-13, "mode": "embedding"},
         "cheap-chat": {"input_cost_per_token": 1e-12, "output_cost_per_token": 1e-12, "mode": "chat"},
-        "per-character-chat": {"input_cost_per_character": 1e-12, "output_cost_per_character": 1e-12, "mode": "chat"},
+        "free-chat": {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_character": 0.0,
+            "output_cost_per_character": 0.0,
+            "mode": "chat",
+        },
+        "per-image-chat": {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "output_cost_per_image": 0.08,
+            "mode": "chat",
+        },
+        "input-per-character-chat": {"input_cost_per_character": 1e-12, "mode": "chat"},
+        "output-per-character-chat": {"output_cost_per_character": 1e-12, "mode": "chat"},
     }
     for name, row in rows.items():
         monkeypatch.setitem(litellm.model_cost, name, {**row, "litellm_provider": PICKER_PROVIDER})
     monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
 
 
-def test_pick_cheapest_chat_models_orders_per_token_cost_with_rows_billed_at_zero_last(
+def test_pick_cheapest_chat_models_sorts_by_per_token_cost_with_per_character_rows_first_on_ties(
     provider_rows_listed_most_expensive_first: None,
 ) -> None:
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
-        "per-character-chat",
-        "cheap-chat",
-        "pricey-chat",
+        "input-per-character-chat",
+        "output-per-character-chat",
         "free-chat",
+        "per-image-chat",
+        "cheap-chat",
+        "per-character-and-token-chat",
+        "pricey-chat",
     ]
-    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == ["per-character-chat", "cheap-chat"]
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == [
+        "input-per-character-chat",
+        "output-per-character-chat",
+    ]

@@ -3,6 +3,7 @@ from typing import Final, cast
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.types.utils import ModelInfo
 
 
 def _form_field_value(value: object) -> str:
@@ -155,7 +156,9 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
     known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
     chat_rows: Final = _chat_row_costs(known_models, custom_llm_provider)
-    return [model for model, _, _ in sorted(chat_rows, key=_billed_rows_cheapest_first_then_free)[:n]]
+    return [
+        model for model, _, _ in sorted(chat_rows, key=_cheapest_per_token_with_per_character_rows_first_on_ties)[:n]
+    ]
 
 
 def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
@@ -167,16 +170,20 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
         if model_info.get("mode") != "chat":
             continue
         cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
-        yield model, cost, _billed_at_zero(model_info)
+        yield model, cost, _billed_per_character(model_info)
 
 
-def _billed_at_zero(model_info: Mapping[str, object]) -> bool:
-    return not any(isinstance(value, int | float) and value > 0 for key, value in model_info.items() if "cost" in key)
+def _billed_per_character(model_info: ModelInfo) -> bool:
+    input_rate: Final = model_info.get("input_cost_per_character") or 0.0
+    output_rate: Final = model_info.get("output_cost_per_character") or 0.0
+    return input_rate > 0 or output_rate > 0
 
 
-def _billed_rows_cheapest_first_then_free(model_cost: tuple[str, float, bool]) -> tuple[bool, float]:
-    _, cost, free = model_cost
-    return (free, cost)
+def _cheapest_per_token_with_per_character_rows_first_on_ties(
+    model_cost: tuple[str, float, bool],
+) -> tuple[float, bool]:
+    _, cost, billed_per_character = model_cost
+    return (cost, not billed_per_character)
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
