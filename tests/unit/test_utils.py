@@ -5,10 +5,12 @@ import copy
 import contextlib
 import contextvars
 import io
+import itertools
 import json
 import logging
 import os
 import queue
+import socket
 import threading
 import time
 import uuid
@@ -82,8 +84,10 @@ from litellm.types.utils import (
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
+from litellm.secret_managers.main import oidc_cache
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
+    acredential_updates,
     _invalidate_model_cost_lowercase_map,
     add_custom_logger_callback_to_specific_event,
     check_valid_key,
@@ -7353,20 +7357,22 @@ async def test_router_fetches_an_oidc_google_api_key_token_off_the_event_loop_an
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_path", ["sync", "async"])
 @pytest.mark.parametrize(
-    "metadata_failure",
+    ("metadata_failure", "status_code"),
     [
-        lambda: httpx.Response(500, text="metadata server unavailable"),
-        lambda: httpx.Response(200, text=""),
-        lambda: httpx.ConnectError("[Errno -2] Name or service not known"),
-        lambda: httpx.ReadTimeout("timed out"),
+        (lambda: httpx.Response(500, text="metadata server unavailable"), 503),
+        (lambda: httpx.Response(403, text="Missing Metadata-Flavor:Google header"), 401),
+        (lambda: httpx.Response(200, text=""), 401),
+        (lambda: httpx.ConnectError("[Errno -2] Name or service not known"), 503),
+        (lambda: httpx.ReadTimeout("timed out"), 503),
     ],
-    ids=["server error", "empty token", "not on GCP", "timeout"],
+    ids=["server error", "refused", "empty token", "not on GCP", "timeout"],
 )
 async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_and_recovers_on_the_next_call(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     call_path: str,
     metadata_failure: Callable[[], httpx.Response | httpx.HTTPError],
+    status_code: int,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
@@ -7379,18 +7385,68 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
             side_effect=[metadata_failure(), httpx.Response(200, text=recovered_token)]
         )
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(
+            (litellm.AuthenticationError, litellm.ServiceUnavailableError)
+        ) as excinfo:
             await _ping_vllm_through(call_path, "vllm-sa")
         sent_while_failing: Final = chat.call_count
         await _ping_vllm_through(call_path, "vllm-sa")
         sent_after_recovery: Final = [call.request.headers["Authorization"] for call in chat.calls]
 
-    assert excinfo.value.status_code == 401
+    assert excinfo.value.status_code == status_code
     assert "api_key oidc/google secret reference could not be resolved" in excinfo.value.message
     assert audience.removeprefix("https://") not in excinfo.value.message
     assert reference in caplog.text
     assert sent_while_failing == 0
     assert sent_after_recovery == [f"Bearer {recovered_token}"]
+
+
+@pytest.mark.asyncio
+async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_though_it_expires_mid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    cached_token: Final = _google_id_token(audience, _CLOCK_START)
+    oidc_cache.set_cache(key=reference, value=cached_token, ttl=60)
+    clock: Final = itertools.chain([_CLOCK_START + 60], itertools.repeat(_CLOCK_START + 61))
+    monkeypatch.setattr(time, "time", lambda: next(clock))
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    fetched_on: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=partial(_metadata_identity, fetched_on))
+        updates: Final = await acredential_updates({"model": _VLLM_MODEL, "litellm_credential_name": "vllm-sa"})
+
+    assert updates["api_key"] == cached_token
+    assert fetched_on.empty()
+
+
+@pytest.mark.asyncio
+async def test_a_hung_metadata_server_fails_an_oidc_google_api_key_call_with_a_503_and_leaves_the_default_executor_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    monkeypatch.setenv("GCE_METADATA_TIMEOUT", "1")
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+
+    with socket.create_server(("127.0.0.1", 0)) as never_answering, respx.mock(assert_all_called=False) as upstream:
+        monkeypatch.setenv("GCE_METADATA_HOST", f"127.0.0.1:{never_answering.getsockname()[1]}")
+        upstream.route(host="127.0.0.1").pass_through()
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        call: Final = asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa"))
+        await asyncio.sleep(0.2)
+        other_work: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "done"), timeout=0.5)
+        with pytest.raises(litellm.ServiceUnavailableError) as excinfo:
+            await asyncio.wait_for(call, timeout=10)
+
+    assert other_work == "done"
+    assert excinfo.value.status_code == 503
+    assert "the metadata server did not return an ID token" in excinfo.value.message
+    assert chat.call_count == 0
 
 
 def test_an_oidc_google_api_key_sent_with_the_call_goes_upstream_as_written_without_a_metadata_fetch() -> None:

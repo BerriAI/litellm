@@ -34,7 +34,7 @@ class MockHTTPHandler:
         self.text = "mocked_token"
         self.json_data = {"value": "mocked_token"}
 
-    def get(self, url, params=None, headers=None):
+    def get(self, url, params=None, headers=None, timeout=None):
         # Store params for audience verification
         self.last_params = params
         logger.debug(
