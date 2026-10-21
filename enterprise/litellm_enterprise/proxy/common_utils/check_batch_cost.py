@@ -755,8 +755,9 @@ class CheckBatchCost:
                 failed_requests=output_file_result.failed_requests + error_file_failed_requests,
             )
         )
+        logging_model: Final = batch_result.models[0] if batch_result.models else litellm_model_name or model_id
         logging_obj = LiteLLMLogging(
-            model=batch_result.models[0],
+            model=logging_model,
             messages=[{"role": "user", "content": "<retrieve_batch>"}],
             stream=False,
             call_type="aretrieve_batch",
