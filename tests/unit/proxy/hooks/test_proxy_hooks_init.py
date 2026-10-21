@@ -15,11 +15,13 @@ silently swallowed the ImportError in `hooks/__init__.py`, leaving
 """
 
 import importlib
+import logging
 import sys
 
 import pytest
 
 import litellm.proxy
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 
 
@@ -71,3 +73,25 @@ def test_managed_hooks_register_from_litellm_enterprise_without_the_repo_only_en
 
     assert wheel_install_hooks.get_proxy_hook("managed_files") is PROXY_LiteLLMManagedFiles
     assert wheel_install_hooks.get_proxy_hook("managed_vector_stores") is PROXY_LiteLLMManagedVectorStores
+
+
+def test_proxy_hooks_still_import_and_warn_when_litellm_enterprise_cannot_load(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.setitem(sys.modules, "litellm_enterprise.proxy.hooks.managed_files", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            hooks_without_enterprise = importlib.import_module("litellm.proxy.hooks")
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert "managed_files" not in hooks_without_enterprise.PROXY_HOOKS
+    assert "managed_vector_stores" not in hooks_without_enterprise.PROXY_HOOKS
+    assert "parallel_request_limiter" in hooks_without_enterprise.PROXY_HOOKS
+    assert any(
+        "Managed files and managed vector stores are disabled" in record.getMessage() for record in caplog.records
+    )
