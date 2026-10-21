@@ -5011,13 +5011,13 @@ def _set_or_clear_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str | N
     ("provider_key", "openai_key", "sent_authorization"),
     [
         ("hosted-vllm-scoped-key", None, "Bearer hosted-vllm-scoped-key"),
-        ("hosted-vllm-scoped-key", "generic-openai-key", "Bearer generic-openai-key"),
+        ("hosted-vllm-scoped-key", "generic-openai-key", "Bearer hosted-vllm-scoped-key"),
         (None, "generic-openai-key", "Bearer generic-openai-key"),
         (None, None, "Bearer fake-api-key"),
     ],
-    ids=["provider-key-alone", "generic-key-still-wins", "generic-key-beats-placeholder", "placeholder-when-unset"],
+    ids=["provider-key-alone", "provider-key-beats-generic", "generic-key-beats-placeholder", "placeholder-when-unset"],
 )
-def test_speech_openai_compatible_falls_back_to_the_provider_scoped_key(
+def test_speech_openai_compatible_sends_the_provider_scoped_key(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     provider_key: str | None,
@@ -5041,10 +5041,10 @@ def test_speech_openai_compatible_falls_back_to_the_provider_scoped_key(
 
 @pytest.mark.parametrize(
     ("generic_azure_key", "sent_api_key"),
-    [(None, "azure-ai-scoped-key"), ("generic-azure-key", "generic-azure-key")],
-    ids=["provider-key-alone", "generic-key-still-wins"],
+    [(None, "azure-ai-scoped-key"), ("generic-azure-key", "azure-ai-scoped-key")],
+    ids=["provider-key-alone", "provider-key-beats-generic"],
 )
-def test_speech_azure_falls_back_to_the_provider_scoped_key(
+def test_speech_azure_sends_the_provider_scoped_key(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, generic_azure_key: str | None, sent_api_key: str
 ):
     _clear_global_tts_keys(monkeypatch)
@@ -5067,6 +5067,22 @@ def test_speech_azure_falls_back_to_the_provider_scoped_key(
     assert response.content == TTS_AUDIO
     assert route.call_count == 1
     assert route.calls.last.request.headers["api-key"] == sent_api_key
+
+
+def test_speech_docker_model_runner_placeholder_does_not_beat_a_real_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(monkeypatch, {"DOCKER_MODEL_RUNNER_API_KEY": None, "OPENAI_API_KEY": "generic-openai-key"})
+    route: Final = respx_mock.post("https://dmr.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="docker_model_runner/tts-1", input="which key goes out", voice="alloy", api_base="https://dmr.internal/v1"
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer generic-openai-key"
 
 
 def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(

@@ -66,6 +66,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
+    PLACEHOLDER_API_KEYS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -8588,6 +8589,7 @@ def speech(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
+    provider_api_key: Final = None if dynamic_api_key in PLACEHOLDER_API_KEYS else dynamic_api_key
     kwargs.pop("tags", [])
 
     optional_params = {}
@@ -8677,10 +8679,11 @@ def speech(
         # set API KEY
         api_key = (
             api_key
+            or provider_api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
-            or dynamic_api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or dynamic_api_key
         )
 
         organization = (
@@ -8763,11 +8766,11 @@ def speech(
 
             api_key = (
                 api_key
+                or provider_api_key
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
-                or dynamic_api_key
             )
 
             azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(
