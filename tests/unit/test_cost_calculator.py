@@ -6957,6 +6957,56 @@ def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypat
     assert cost == pytest.approx(0.000075 * 2)
 
 
+@pytest.mark.parametrize(
+    "deployment_id,deployment_rates,expected_cost",
+    [
+        ("per-second-only", {"input_cost_per_second": 0.0001}, 30 * 0.0001),
+        ("zero-token-rate", {"input_cost_per_second": 0.0001, "input_cost_per_token": 0.0}, 0.0),
+        ("token-rate", {"input_cost_per_second": 0.0001, "input_cost_per_token": 1e-6}, 500 * 1e-6),
+    ],
+)
+def test_transcription_deployment_bills_seconds_only_without_a_declared_token_rate(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_id: str,
+    deployment_rates: Mapping[str, float],
+    expected_cost: float,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_id,
+        {**deployment_rates, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={
+            "text": "What is the weather in Paris?",
+            "usage": {
+                "type": "tokens",
+                "input_tokens": 500,
+                "output_tokens": 100,
+                "total_tokens": 600,
+                "input_token_details": {"audio_tokens": 500, "text_tokens": 0},
+            },
+        },
+        model_response_object=TranscriptionResponse(),
+        hidden_params={
+            "model": "gpt-4o-transcribe",
+            "custom_llm_provider": "openai",
+            "audio_transcription_duration": 30.0,
+        },
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription,
+        model="openai/gpt-4o-transcribe",
+        call_type="atranscription",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
@@ -10017,7 +10067,19 @@ def _translation_session_cost(deployment_id: str) -> float:
     )
 
 
-def test_realtime_translation_deployment_per_second_rate_replaces_both_public_rates(_local_model_cost_map) -> None:
+@pytest.mark.parametrize(
+    "deployment_id,deployment_rates,bills_public_output_rate",
+    [
+        ("translate-input-priced", {"input_cost_per_second": 0.001}, True),
+        ("translate-free-output", {"input_cost_per_second": 0.001, "output_cost_per_second": 0.0}, False),
+    ],
+)
+def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_rates_per_key(
+    _local_model_cost_map: None,
+    deployment_id: str,
+    deployment_rates: Mapping[str, float],
+    bills_public_output_rate: bool,
+) -> None:
     litellm.Router(
         model_list=[
             {
@@ -10025,14 +10087,18 @@ def test_realtime_translation_deployment_per_second_rate_replaces_both_public_ra
                 "litellm_params": {
                     "model": "openai/gpt-realtime-translate",
                     "api_key": "sk-test",
-                    "input_cost_per_second": 0.001,
+                    **deployment_rates,
                 },
-                "model_info": {"id": "translate-input-priced"},
+                "model_info": {"id": deployment_id},
             }
         ]
     )
+    public_output_rate: Final = litellm.model_cost["gpt-realtime-translate"]["output_cost_per_second"]
 
-    assert _translation_session_cost("translate-input-priced") == pytest.approx(60 * 0.001)
+    assert public_output_rate > 0
+    assert _translation_session_cost(deployment_id) == pytest.approx(
+        60 * 0.001 + (60 * public_output_rate if bills_public_output_rate else 0.0)
+    )
 
 
 def test_realtime_translation_deployment_without_per_second_rates_bills_public_rates(_local_model_cost_map) -> None:

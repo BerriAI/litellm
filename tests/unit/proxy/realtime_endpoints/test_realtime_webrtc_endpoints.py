@@ -1613,6 +1613,7 @@ def _post_through_the_azure_deployments(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     body: object,
+    deployments: tuple[tuple[str, str], ...] = _AZURE_REALTIME_DEPLOYMENTS,
 ) -> tuple[httpx.Response, respx.Route]:
     from litellm.proxy import proxy_server
 
@@ -1626,7 +1627,7 @@ def _post_through_the_azure_deployments(
                 "api_key": "azure-test-key",
             },
         }
-        for alias, deployment in _AZURE_REALTIME_DEPLOYMENTS
+        for alias, deployment in deployments
     ]
     monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1636,7 +1637,7 @@ def _post_through_the_azure_deployments(
     monkeypatch.setitem(
         proxy_app.dependency_overrides,
         user_api_key_auth,
-        lambda: UserAPIKeyAuth(user_id="test-user", models=[alias for alias, _ in _AZURE_REALTIME_DEPLOYMENTS]),
+        lambda: UserAPIKeyAuth(user_id="test-user", models=[alias for alias, _ in deployments]),
     )
     with (
         patch(  # test-quality-ok: endpoint test isolates request metadata enrichment
@@ -1781,6 +1782,52 @@ def test_client_secrets_forward_every_session_value_the_caller_set(
 
     assert response.status_code == 200, response.text
     assert _upstream_session_value(upstream, session_path) == expected
+
+
+def test_client_secrets_without_a_model_let_the_upstream_pick_its_default_through_a_wildcard_deployment(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, upstream = _post_through_the_azure_deployments(
+        proxy_app,
+        mock_add_litellm_data,
+        mock_pre_call_hook,
+        respx_mock,
+        monkeypatch,
+        "/v1/realtime/client_secrets",
+        {"session": {"type": "realtime"}},
+        deployments=(("*", "openai/*"),),
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content)["session"] == {"type": "realtime"}
+
+
+def test_client_secrets_send_the_deployment_model_in_the_flat_transcription_field(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, upstream = _post_through_the_azure_deployments(
+        proxy_app,
+        mock_add_litellm_data,
+        mock_pre_call_hook,
+        respx_mock,
+        monkeypatch,
+        "/v1/realtime/client_secrets",
+        {"session": {"type": "transcription", "input_audio_transcription": {"model": "azure-transcribe-alias"}}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content)["session"] == {
+        "type": "transcription",
+        "input_audio_transcription": {"model": "qa-whisper-deployment"},
+    }
 
 
 @pytest.mark.parametrize(

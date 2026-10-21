@@ -211,8 +211,9 @@ async def _prepare_client_secret_session(
         session_data["type"] = session_type
 
     session_model: Final = req.session.model if req.session else None
+    requested_model: Final = session_model or req.model
     default_model: Final = "gpt-realtime-translate" if session_type == "translation" else _DEFAULT_REALTIME_MODEL
-    model: str = session_model or req.model or default_model
+    model: str = requested_model or default_model
     if session_type != "transcription":
         await can_key_call_resolved_model(
             model=model,
@@ -220,7 +221,7 @@ async def _prepare_client_secret_session(
             llm_model_list=llm_model_list,
             llm_router=llm_router,
         )
-        if session_data is not None:
+        if session_data is not None and (requested_model or session_type == "translation"):
             session_data["model"] = model
             if session_type == "translation":
                 await _authorize_and_bind_nested_transcription_models(

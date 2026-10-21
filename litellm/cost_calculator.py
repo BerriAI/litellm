@@ -316,6 +316,15 @@ def _get_additional_costs(
     return None
 
 
+_TRANSCRIPTION_TOKEN_RATE_KEYS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_audio_token",
+    "output_cost_per_audio_token",
+)
+_TRANSCRIPTION_SECOND_RATE_KEYS: Final = ("input_cost_per_second", "output_cost_per_second")
+
+
 def _transcription_uses_token_pricing(
     model: str,
     custom_llm_provider: str | None,
@@ -325,17 +334,9 @@ def _transcription_uses_token_pricing(
         return False
 
     model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-    has_token_pricing: Final = any(
-        model_info.get(field)
-        for field in (
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "input_cost_per_audio_token",
-            "output_cost_per_audio_token",
-        )
-    )
-    if not has_token_pricing and (
-        model_info.get("input_cost_per_second") is not None or model_info.get("output_cost_per_second") is not None
+    if (
+        _declared_transcription_rate(model_info, _TRANSCRIPTION_TOKEN_RATE_KEYS) is None
+        and _declared_transcription_rate(model_info, _TRANSCRIPTION_SECOND_RATE_KEYS) is not None
     ):
         return False
 
@@ -3687,9 +3688,6 @@ def _translation_session_seconds(results: OpenAIRealtimeStreamList) -> tuple[flo
     return float(input_seconds), float(output_seconds)
 
 
-_TRANSLATION_RATE_KEYS: Final = ("input_cost_per_second", "output_cost_per_second")
-
-
 def handle_realtime_translation_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
@@ -3704,12 +3702,8 @@ def handle_realtime_translation_cost_calculation(
         for model in (*potential_model_names, litellm_model_name)
         if model is not None
     )
-    priced_info: Final = next(
-        (info for info in model_infos if _declared_transcription_rate(info, _TRANSLATION_RATE_KEYS) is not None),
-        None,
-    )
-    input_cost_per_second: Final = _declared_transcription_rate(priced_info, ("input_cost_per_second",)) or 0.0
-    output_cost_per_second: Final = _declared_transcription_rate(priced_info, ("output_cost_per_second",)) or 0.0
+    input_cost_per_second: Final = _transcription_rate(("input_cost_per_second",), *model_infos)
+    output_cost_per_second: Final = _transcription_rate(("output_cost_per_second",), *model_infos)
     return input_seconds * input_cost_per_second + output_seconds * output_cost_per_second
 
 
@@ -3776,7 +3770,7 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
         return None
 
 
-def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
+def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[str, ...]) -> float | None:
     """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
     because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
@@ -3790,8 +3784,8 @@ def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) 
     )
 
 
-def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
-    rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
+def _transcription_rate(keys: tuple[str, ...], *infos: ModelInfo | None) -> float:
+    rates: Final = (_declared_transcription_rate(info, keys) for info in infos)
     return next((rate for rate in rates if rate is not None), 0.0)
 
 

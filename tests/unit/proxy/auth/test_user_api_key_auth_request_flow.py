@@ -11945,7 +11945,7 @@ async def test_translation_websocket_auth_enforces_the_default_model_budget(
     from fastapi import WebSocket
 
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_realtime_websocket
 
     model: Final = "gpt-realtime-translate"
     token: Final = UserAPIKeyAuth(
@@ -11980,7 +11980,7 @@ async def test_translation_websocket_auth_enforces_the_default_model_budget(
     )
 
     with pytest.raises(HTTPException) as denied:
-        await user_api_key_auth_websocket(websocket)
+        await user_api_key_auth_realtime_websocket(websocket)
 
     assert denied.value.status_code == 403
     assert model in str(denied.value.detail)
@@ -12041,7 +12041,7 @@ async def test_managed_agent_transcription_websocket_without_a_model_is_refused(
     from fastapi import WebSocket
 
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_realtime_websocket
     from litellm.types.agents import AgentResponse
 
     token: Final = UserAPIKeyAuth(token="test-key")
@@ -12068,10 +12068,54 @@ async def test_managed_agent_transcription_websocket_without_a_model_is_refused(
     )
 
     with pytest.raises(HTTPException) as denied:
-        await user_api_key_auth_websocket(websocket)
+        await user_api_key_auth_realtime_websocket(websocket)
 
     assert denied.value.status_code == 403
     assert "Managed inference requires an explicit or configured model" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/openai_passthrough/v1/realtime", "/v1/responses", "/vertex_ai/live"))
+async def test_non_realtime_websocket_auth_checks_no_default_transcription_model(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    exhausted_model: Final = "gpt-realtime-whisper"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={exhausted_model: {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={exhausted_model: 10.0})
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=token, model=exhausted_model)
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": b"intent=transcription",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    assert await user_api_key_auth_websocket(websocket) is token
 
 
 @pytest.mark.asyncio

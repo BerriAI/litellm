@@ -71200,7 +71200,7 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "realtime",
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/a-new-chapter-for-realtime-ai-reasoning-translation-and-real-time-transcription/4517124",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "audio"
         ],

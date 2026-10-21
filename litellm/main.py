@@ -8214,7 +8214,7 @@ async def atranscription(
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if kwargs.get("stream") is True and isinstance(response, AsyncStream):
+        if isinstance(response, AsyncStream):
             if file is not None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
@@ -8569,14 +8569,18 @@ def transcription(
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if (
+        response is not None
+        and not isinstance(response, Coroutine)
+        and (isinstance(response, (Stream, AsyncStream)) or getattr(response, "duration", None) is None)
+    ):
         calculated_duration: Final = calculate_request_duration(file)
         if isinstance(response, (Stream, AsyncStream)):
             if calculated_duration is not None:
                 response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
                     calculated_duration
                 )
-        elif getattr(response, "duration", None) is None and calculated_duration is not None:
+        elif calculated_duration is not None:
             response.set_audio_transcription_duration(calculated_duration)
 
     if response is None:

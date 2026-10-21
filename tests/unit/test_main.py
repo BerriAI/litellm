@@ -5070,6 +5070,29 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
     assert response.text == "hello"
 
 
+@pytest.mark.parametrize(
+    "provider_body,expected_upload_measurements",
+    [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],
+    ids=["provider_reports_duration", "provider_omits_duration"],
+)
+def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(
+    respx_mock: respx.MockRouter, provider_body: Mapping[str, object], expected_upload_measurements: int
+):
+    respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json=provider_body)
+    )
+
+    with patch.object(
+        litellm_main, "calculate_request_duration", wraps=litellm_main.calculate_request_duration
+    ) as measure_upload:
+        response: Final = litellm.transcription(
+            model="groq/whisper-large-v3", file=GROQ_WAV_FILE, base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+        )
+
+    assert response.text == "hello"
+    assert measure_upload.call_count == expected_upload_measurements
+
+
 @pytest.mark.parametrize("model_name", ("whisper-1", "gpt-4o-transcribe", "gpt-transcribe"))
 def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(
     respx_mock: respx.MockRouter, model_name: str

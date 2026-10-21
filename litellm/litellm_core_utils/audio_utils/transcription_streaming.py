@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import traceback
 from collections.abc import AsyncIterator, Iterator
 from typing import Final, Protocol
@@ -14,6 +15,28 @@ from openai.types.audio import (
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.types.utils import TranscriptionResponse
+
+TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
+
+
+def transcription_stream_requested(value: object) -> bool:
+    return str(value).lower() in ("1", "true")
+
+
+def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, ...]:
+    text: Final = response.text or ""
+    usage: Final = response.usage
+    languages: Final = TranscriptionResponse.detected_languages(getattr(response, "languages", None))
+    done_event: Final = {
+        "type": "transcript.text.done",
+        "text": text,
+        **({} if usage is None else {"usage": usage.model_dump(exclude_none=True)}),
+        **({} if languages is None else {"languages": [language.model_dump() for language in languages]}),
+    }
+    return tuple(
+        f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+        for event in ({"type": "transcript.text.delta", "delta": text}, done_event)
+    )
 
 
 class TranscriptionStreamLogging(Protocol):

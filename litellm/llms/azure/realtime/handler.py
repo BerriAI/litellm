@@ -5,6 +5,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
@@ -63,23 +64,29 @@ def azure_realtime_requires_ga(model: str) -> bool:
     return azure_entry is not None and azure_entry.get("realtime_ga_only") == 1
 
 
+@dataclass(frozen=True, slots=True)
+class AzureRealtimeProtocol:
+    name: str
+    bridges_beta_client_to_ga: bool = False
+
+
 def azure_realtime_protocol_for_client(
     configured_protocol: object,
     *,
     model: str,
+    base_model: str | None = None,
     realtime_mode: str,
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
-) -> str:
+) -> AzureRealtimeProtocol:
     if isinstance(configured_protocol, str) and configured_protocol:
-        return configured_protocol
-    if (
-        realtime_mode == "translation"
-        or (query_params or {}).get("intent") == "transcription"
-        or azure_realtime_requires_ga(model)
-    ):
-        return "GA"
-    return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
+        return AzureRealtimeProtocol(name=configured_protocol)
+    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
+        return AzureRealtimeProtocol(name="GA")
+    client_wants_beta: Final = client_sent_openai_beta_realtime_header(websocket)
+    if azure_realtime_requires_ga(base_model or model):
+        return AzureRealtimeProtocol(name="GA", bridges_beta_client_to_ga=client_wants_beta)
+    return AzureRealtimeProtocol(name="beta" if client_wants_beta else "GA")
 
 
 class _ProxyClientWebSocket(Protocol):
@@ -196,6 +203,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
         realtime_mode: str = "realtime",
+        bridges_beta_client_to_ga: bool = False,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -237,6 +245,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     translation_session=realtime_mode == "translation",
+                    bridges_beta_client_to_ga=bridges_beta_client_to_ga,
                 )
                 await realtime_streaming.bidirectional_forward()
 

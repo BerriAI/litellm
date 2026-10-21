@@ -996,6 +996,26 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
+    if call_type in (CallTypes.transcription, CallTypes.atranscription):
+        return isinstance(result, (openai.Stream, openai.AsyncStream))
+    return _is_streaming_request(kwargs=kwargs, call_type=call_type)
+
+
+def _transcription_runs_unstreamed(call_type: str, call_kwargs: Mapping[str, object]) -> bool:
+    return call_type == CallTypes.atranscription.value and call_kwargs.get("stream") is False
+
+
+def _marked_when_run_unstreamed(result: object, runs_unstreamed: bool) -> object:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import TRANSCRIPTION_RAN_UNSTREAMED
+
+    if not runs_unstreamed or not isinstance(result, TranscriptionResponse):
+        return result
+    marked: Final = result.model_copy()
+    marked.hidden_params = {**result.hidden_params, TRANSCRIPTION_RAN_UNSTREAMED: True}
+    return marked
+
+
 def _is_converted_stream_result(result: object) -> bool:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -1664,7 +1684,13 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
 def _unstreamed_when_post_call_guardrails_apply(
     kwargs: dict[str, object], call_type: CallTypes | None
 ) -> dict[str, object]:
-    if call_type is not CallTypes.atranscription or kwargs.get("stream") is not True:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
+
+    if (
+        call_type is not CallTypes.atranscription
+        or not transcription_stream_requested(kwargs.get("stream"))
+        or _deployment_provider(kwargs) not in (LlmProviders.OPENAI.value, LlmProviders.AZURE.value)
+    ):
         return kwargs
     unstreamed: Final = {**kwargs, "stream": False}
     custom_guardrail_class: Final = _get_cached_custom_guardrail()
@@ -2211,6 +2237,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
+            transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, modified_kwargs)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
@@ -2261,7 +2288,9 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _caching_handler_response.cached_result
+                    return _marked_when_run_unstreamed(
+                        _caching_handler_response.cached_result, transcription_runs_unstreamed
+                    )
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
@@ -2369,10 +2398,13 @@ def client(original_function):
             # Only run if call_type is a valid value in CallTypes
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
-                result = await async_post_call_success_deployment_hook(
-                    request_data=call_kwargs,
-                    response=result,
-                    call_type=_call_type_enum,
+                result = _marked_when_run_unstreamed(
+                    await async_post_call_success_deployment_hook(
+                        request_data=call_kwargs,
+                        response=result,
+                        call_type=_call_type_enum,
+                    ),
+                    transcription_runs_unstreamed,
                 )
 
             ## Add response to cache

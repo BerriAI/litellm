@@ -354,6 +354,11 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+    TRANSCRIPTION_RAN_UNSTREAMED,
+    guarded_transcription_events,
+    transcription_stream_requested,
+)
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -444,6 +449,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # lega
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_live_websocket,
+    user_api_key_auth_realtime_websocket,
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
@@ -13390,10 +13396,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
-        data = {
-            key: value is True or str(value).lower() in ("1", "true") if key == "stream" else value
-            for key, value in _form_fields_without_file(form_data).items()
-        } | data
+        data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -13496,15 +13499,20 @@ async def audio_transcriptions(
         )
         response_headers: Final = {**custom_headers, **(callback_headers or {})}
 
-        if data.get("stream") is True and hasattr(response, "__aiter__"):
-            stream_response: Final = cast(AsyncIterator[TranscriptionStreamEvent], response)
+        ran_unstreamed: Final = (
+            isinstance(response, TranscriptionResponse)
+            and response.hidden_params.get(TRANSCRIPTION_RAN_UNSTREAMED) is True
+        )
+        if transcription_stream_requested(form_data.get("stream")) and (
+            ran_unstreamed or hasattr(response, "__aiter__")
+        ):
 
             async def transcription_event_stream(
                 stream: AsyncIterator[TranscriptionStreamEvent],
             ) -> AsyncGenerator[str, None]:
                 try:
                     async for event in stream:
-                        yield f"data: {event.model_dump_json()}\n\n"
+                        yield f"data: {event.model_dump_json(exclude_unset=True)}\n\n"
                 except Exception as stream_error:  # noqa: BLE001  # stream boundary: a mid-stream failure ends the SSE body as an error event
                     replacement: Final = await proxy_logging_obj.post_call_failure_hook(
                         user_api_key_dict=user_api_key_dict,
@@ -13520,7 +13528,9 @@ async def audio_transcriptions(
                             await close_result
 
             return StreamingResponse(
-                transcription_event_stream(stream_response),
+                guarded_transcription_events(response)
+                if isinstance(response, TranscriptionResponse)
+                else transcription_event_stream(cast(AsyncIterator[TranscriptionStreamEvent], response)),
                 media_type="text/event-stream",
                 headers=response_headers,
             )
@@ -13685,7 +13695,7 @@ async def realtime_websocket_endpoint(
         None,
         description="Comma-separated list of guardrail names to apply to this request.",
     ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_realtime_websocket),
 ):
     requested_protocols: Final = tuple(
         protocol.strip()

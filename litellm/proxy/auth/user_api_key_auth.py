@@ -1181,6 +1181,10 @@ def _apply_budget_limits_to_end_user_params(
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
+
+
+async def user_api_key_auth_realtime_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     route_path: Final[object] = websocket.scope.get("path")
     model: Final = resolve_realtime_route_model(
         model=websocket.query_params.get("model"),

@@ -93,7 +93,6 @@ LlmCapability = Literal[
     "tool_search_history",
     "tool_use",
     "upstream_stream_failure",
-
     "transcription",
     "translation",
     "vision",

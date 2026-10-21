@@ -551,7 +551,9 @@ async def test_beta_client_bridged_to_a_ga_backend_receives_the_beta_session_sha
     logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=False)
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=False, bridges_beta_client_to_ga=True
+    )
 
     await streaming.backend_to_client_send_messages()
 

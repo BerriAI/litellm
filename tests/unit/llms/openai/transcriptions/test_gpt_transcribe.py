@@ -545,6 +545,48 @@ def _duration_priced_transcript(streamed: bool) -> httpx.Response:
     )
 
 
+def test_whisper_stream_request_answered_with_json_keeps_the_unstreamed_response_shape(
+    local_model_cost_map: None,
+) -> None:
+    verbose_transcript: Final = {
+        "task": "transcribe",
+        "language": "english",
+        "duration": 1.0,
+        "text": "hello world",
+        "usage": {"type": "duration", "seconds": 1},
+    }
+    with _openai_transcription_client(
+        httpx.MockTransport(lambda request: httpx.Response(200, json=verbose_transcript))
+    ) as client:
+        unstreamed: Final = litellm.transcription(model="openai/whisper-1", file=_one_second_wav(), client=client)
+        ignored_stream: Final = litellm.transcription(
+            model="openai/whisper-1", file=_one_second_wav(), stream=True, client=client
+        )
+
+    assert isinstance(ignored_stream, TranscriptionResponse)
+    assert json.loads(ignored_stream.model_dump_json()) == json.loads(unstreamed.model_dump_json())
+
+
+@pytest.mark.parametrize("requested_stream", ("true", "True", "1"))
+def test_transcription_stream_requested_as_a_form_string_streams_like_a_bool(
+    local_model_cost_map: None, requested_stream: str
+) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return _duration_priced_transcript(streamed=_asks_for_stream(sent_bodies[-1]))
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        stream: Final = litellm.transcription(
+            model="openai/gpt-transcribe", file=_one_second_wav(), stream=requested_stream, client=client
+        )
+        events: Final = [event.type for event in stream]
+
+    assert events == ["transcript.text.delta", "transcript.text.done"]
+    assert len(sent_bodies) == 1
+
+
 def _asks_for_stream(request_body: bytes) -> bool:
     return b'name="stream"\r\n\r\ntrue' in request_body
 

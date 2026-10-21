@@ -354,6 +354,7 @@ class RealTimeStreaming:
         usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
         translation_session: bool = False,
+        bridges_beta_client_to_ga: bool = False,
     ):
         self.websocket: _ClientWebSocket = websocket
         self._replay_scope: Final = client_websocket_scope(websocket)
@@ -367,6 +368,7 @@ class RealTimeStreaming:
         self.session_tools: list[dict] = []
         self.tool_calls: list[dict] = []
         self._is_translation_session = translation_session
+        self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
         self._translation_input_seconds = 0.0
         self._translation_input_bytes_per_second = 48000.0
         self._translation_output_seconds = 0.0
@@ -1143,12 +1145,7 @@ class RealTimeStreaming:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
-        if (
-            not self._client_wants_beta
-            or self._backend_uses_beta_protocol
-            or self._is_translation_session
-            or event.get("type") not in self._SESSION_EVENT_TYPES
-        ):
+        if not self._bridges_beta_client_to_ga or event.get("type") not in self._SESSION_EVENT_TYPES:
             return event
         session: Final = _mapping_field(event, "session")
         return event if session is None else {**event, "session": ga_session_to_beta(session)}

@@ -1,11 +1,24 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types.audio import (
+    Transcription,
+    TranscriptionDiarized,
+    TranscriptionStreamEvent,
+    TranscriptionVerbose,
+)
+from openai.types.audio.transcription_create_params import (
+    TranscriptionCreateParamsBase,
+    TranscriptionCreateParamsStreaming,
+)
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import (
@@ -16,6 +29,10 @@ from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
 _TRANSCRIPTION_REQUEST: Final = TypeAdapter(Mapping[str, object])
 _TRANSCRIPTION_TEXT: Final = TypeAdapter(str)
+_TRANSCRIPTION_BODY: Final = TypeAdapter(dict[str, object])
+_TRANSCRIPTION_TYPES_BY_FORMAT: Final = MappingProxyType(
+    {"verbose_json": TranscriptionVerbose, "diarized_json": TranscriptionDiarized}
+)
 
 
 def sdk_compatible_transcription_request_data(data: object) -> Mapping[str, object]:
@@ -58,10 +75,11 @@ def _is_event_stream(http_response: httpx.Response) -> bool:
     return _content_type(http_response).startswith("text/event-stream")
 
 
-def _unstreamed_transcription_response(http_response: httpx.Response) -> BaseModel | str:
-    if _content_type(http_response).startswith("application/json"):
-        return Transcription.model_validate_json(http_response.content)
-    return http_response.text
+def _unstreamed_transcription_response(http_response: httpx.Response, response_format: object) -> BaseModel | str:
+    if not _content_type(http_response).startswith("application/json"):
+        return http_response.text
+    transcription_type: Final = _TRANSCRIPTION_TYPES_BY_FORMAT.get(str(response_format), Transcription)
+    return transcription_type.model_construct(None, **_TRANSCRIPTION_BODY.validate_json(http_response.content))
 
 
 def _non_streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsBase:
@@ -79,33 +97,39 @@ def _streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsSt
 def create_sdk_transcription(
     client: OpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[dict[str, str], Stream[TranscriptionStreamEvent] | BaseModel | str]:
-    if data.get("stream") is not True:
+    if not transcription_stream_requested(data.get("stream")):
         raw_response: Final = client.audio.transcriptions.with_raw_response.create(
             **_non_streaming_params(data), timeout=timeout
         )
         return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
-    raw_stream: Final = client.audio.transcriptions.with_raw_response.create(**_streaming_params(data), timeout=timeout)
+    raw_stream: Final = client.audio.transcriptions.with_raw_response.create(
+        **_streaming_params({**data, "stream": True}), timeout=timeout
+    )
     if _is_event_stream(raw_stream.http_response):
         return dict(raw_stream.headers), raw_stream.parse(to=Stream[TranscriptionStreamEvent])
     raw_stream.http_response.read()
-    return dict(raw_stream.headers), _unstreamed_transcription_response(raw_stream.http_response)
+    return dict(raw_stream.headers), _unstreamed_transcription_response(
+        raw_stream.http_response, data.get("response_format")
+    )
 
 
 async def acreate_sdk_transcription(
     client: AsyncOpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[dict[str, str], AsyncStream[TranscriptionStreamEvent] | BaseModel | str]:
-    if data.get("stream") is not True:
+    if not transcription_stream_requested(data.get("stream")):
         raw_response: Final = await client.audio.transcriptions.with_raw_response.create(
             **_non_streaming_params(data), timeout=timeout
         )
         return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
     raw_stream: Final = await client.audio.transcriptions.with_raw_response.create(
-        **_streaming_params(data), timeout=timeout
+        **_streaming_params({**data, "stream": True}), timeout=timeout
     )
     if _is_event_stream(raw_stream.http_response):
         return dict(raw_stream.headers), raw_stream.parse(to=AsyncStream[TranscriptionStreamEvent])
     await raw_stream.http_response.aread()
-    return dict(raw_stream.headers), _unstreamed_transcription_response(raw_stream.http_response)
+    return dict(raw_stream.headers), _unstreamed_transcription_response(
+        raw_stream.http_response, data.get("response_format")
+    )
 
 
 @dataclass
