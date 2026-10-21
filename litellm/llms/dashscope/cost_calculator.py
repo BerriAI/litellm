@@ -7,7 +7,7 @@ cached, cache-creation, output, reasoning) is billed at that one tier's rate.
 See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Final
 
@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
+    resolve_explicit_cache_read_cost_rate,
 )
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -137,5 +138,13 @@ def cost_per_token(
     )
     standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
     rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
+    explicit_cache_read_rate: Final = resolve_explicit_cache_read_cost_rate(
+        model_info=model_info,
+        usage=usage,
+        current_time=current_time,
+    )
+    billed_rates: Final = (
+        rates if explicit_cache_read_rate is None else replace(rates, cache_read_rate=explicit_cache_read_rate)
+    )
 
-    return _bill(breakdown, rates)
+    return _bill(breakdown, billed_rates)

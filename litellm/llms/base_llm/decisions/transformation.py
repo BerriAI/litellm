@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
@@ -390,8 +391,51 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
+_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _normalize_answer(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    answer: Final = _MAPPING.validate_python(value)
+    legend: Final = answer.get("legend")
+    if answer.get("type") != "score" or not isinstance(legend, list):
+        return answer
+    labels: Final = _LABELS.validate_python(legend)
+    return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
+
+
+def _normalize_systemone_response(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    response: Final = _MAPPING.validate_python(payload)
+    answers: Final = response.get("answers")
+    if not isinstance(answers, Mapping):
+        return response
+    return {
+        **response,
+        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+    }
+
+
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(payload), request)
+    return systemone_response_to_ir(
+        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
+    )
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
@@ -495,6 +539,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return api_key
+
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
         return next((value for value in (get_secret_str(name) for name in names) if value), None)
@@ -505,12 +554,32 @@ class BaseDecisionsConfig(ABC):
     def request_model(self, model: str) -> str:
         return model
 
-    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
         return {
             **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
             **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
             "Content-Type": "application/json",
         }
+
+    async def avalidate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
+        return self.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
@@ -586,9 +655,10 @@ class BaseDecisionsConfig(ABC):
         try:
             return self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
 
     def get_error_class(

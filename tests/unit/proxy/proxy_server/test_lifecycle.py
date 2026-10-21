@@ -697,33 +697,61 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setup_count", [1, 2])
+async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
+    monkeypatch: pytest.MonkeyPatch, setup_count: int
+) -> None:
+    from datetime import datetime
+
     import litellm
     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+    from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, decode_spend_event
+    from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
+    from litellm.types.utils import ModelResponse, Usage
+    from litellm.utils import Rules, function_setup
 
-    fake_prisma = MagicMock()
-    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
-    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
-    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+    producer: Final = AsyncMock(spec=SpendEventProducer)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "spend_event_producer", None)
+    monkeypatch.setattr(ps, "build_spend_event_producer", lambda settings, fallback: producer)
+    for name in (
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
 
-    before_callbacks = len(litellm.callbacks)
-    before_async = len(litellm._async_success_callback)
+    for _ in range(setup_count):
+        cost_tracking()
 
-    cost_tracking()
-    cost_tracking()
-
-    observed = {
-        "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
-        "added_to_async_success": len(litellm._async_success_callback) - before_async,
-        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
-        "prisma_was_set": True,
-    }
-    assert normalize(observed) == {
-        "added_to_callbacks": 2,
-        "added_to_async_success": 1,
-        "shadow_eval_loggers": 1,
-        "prisma_was_set": True,
-    }
+    assert len(litellm.callbacks) == 2
+    assert sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks) == 1
+    assert len(litellm._async_success_callback) == 1
+    now: Final = datetime(2026, 1, 1)
+    logging_obj, _ = function_setup(
+        "acompletion",
+        Rules(),
+        now,
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        litellm_call_id="single-accounting-event",
+    )
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True, "metadata": {}}, optional_params={})
+    response: Final = ModelResponse(
+        id="chatcmpl-single-accounting-event",
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    await logging_obj.async_success_handler(response, now, now)
+    producer.publish.assert_awaited_once()
+    event: Final = decode_spend_event(producer.publish.call_args.args[0])
+    assert not isinstance(event, SpendEventDecodeError)
+    assert event.response_cost == logging_obj.model_call_details["response_cost"]
+    assert event.response_cost > 0
 
 
 def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
@@ -970,6 +998,54 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     assert (job is not None) is job_scheduled, (
         f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_task_and_again_after_it() -> None:
+    """A worker killed while shutdown waits on a slow logging task keeps the spend it had already counted,
+    and a worker that finishes the wait also commits the spend that task adds."""
+    from litellm.responses import streaming_iterator as streaming_module
+
+    task_may_finish: Final = asyncio.Event()
+    task_finished: Final = asyncio.Event()
+    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+
+    async def slow_logging_task() -> None:
+        await task_may_finish.wait()
+        task_finished.set()
+
+    def recording_flush(name: str) -> Callable[[], Awaitable[None]]:
+        async def flush() -> None:
+            flushes.append((name, task_finished.is_set()))
+            task_may_finish.set()
+
+        return flush
+
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "flush_spend_counters_on_shutdown", recording_flush("spend counters")),
+        patch.object(ps, "_flush_spend_logs_queue_on_shutdown", recording_flush("spend logs")),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                streaming_module.spawn_logging_task(
+                    asyncio.get_running_loop(), slow_logging_task(), task_name="slow spend row"
+                )
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert flushes == [
+        ("spend counters", False),
+        ("spend logs", False),
+        ("spend counters", True),
+        ("spend logs", True),
+    ]
 
 
 def test_otel_global_provider_published_after_callback_init():

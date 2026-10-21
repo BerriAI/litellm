@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
+from litellm.llms.anthropic.pass_through.messages.utils import anthropic_message_delta
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -34,8 +35,13 @@ class FakeAnthropicMessagesStreamIterator:
     - message_stop
     """
 
-    def __init__(self, response: AnthropicMessagesResponse):
+    def __init__(
+        self,
+        response: AnthropicMessagesResponse,
+        message_delta_fields: Mapping[str, object] | None = None,
+    ):
         self.response = response
+        self.message_delta_fields = message_delta_fields
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
@@ -175,14 +181,9 @@ class FakeAnthropicMessagesStreamIterator:
             cache_read_input_tokens: Final = usage.get("cache_read_input_tokens")
             if cache_read_input_tokens is not None:
                 delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
-        safeguard_results: Final = self.response.get("safeguard_results")
         message_delta: Final = {
             "type": "message_delta",
-            "delta": {
-                "stop_reason": self.response.get("stop_reason"),
-                "stop_sequence": self.response.get("stop_sequence"),
-                **({"safeguard_results": safeguard_results} if safeguard_results is not None else {}),
-            },
+            "delta": anthropic_message_delta(response_dict, self.message_delta_fields),
             "usage": delta_usage,
         }
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())

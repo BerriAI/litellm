@@ -1326,7 +1326,7 @@ async def update_sso_settings(
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client)).find_unique(
+        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client, use_writer=True)).find_unique(
             where={"param_name": "environment_variables"}
         )
 
