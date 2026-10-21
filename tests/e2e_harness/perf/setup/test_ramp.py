@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
+import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.observe import Observation, evaluate, junit_properties
 from setup.performance_test_case import Limit, Ramp, ramped
 from setup.plan import build_plan
 from setup.ramp import StepReading, send_offsets, step_properties, sustained_rps
+from setup.series import Sample, Series
+from setup.telemetry import GatewayTelemetry, HistogramTotals
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
@@ -108,8 +111,56 @@ def test_a_floor_fails_when_the_second_step_s_latency_breaks_it_and_the_properti
         "perf_ramp_step_10_gateway_added_p99": 0.5,
         "perf_ramp_step_10_completed_rps": first.completed_rps,
         "perf_ramp_step_10_unexpected": 0.0,
+        "perf_ramp_step_10_gateway_added_p50": 0.5,
         "perf_ramp_step_20_gateway_added_p99": 3.0,
         "perf_ramp_step_20_completed_rps": second.completed_rps,
         "perf_ramp_step_20_unexpected": 0.0,
+        "perf_ramp_step_20_gateway_added_p50": 3.0,
     }
     assert not evaluate(replace(case, limits=(Limit("sustained_rps", min=10),)), observation)[1]
+
+
+def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_own_window() -> None:
+    ramp: Final = Ramp(first_rps=10.0, last_rps=20.0, step_rps=10.0, step_seconds=100.0, held_p99_seconds=2.0)
+    records: Final = tuple(
+        _record(seq, 1000.0 + offset, 1.5) for seq, offset in enumerate(send_offsets(ramp, seed=1), start=1)
+    )
+    started: Final = min(record.started_at for record in records)
+    redis: Final = tuple(
+        Sample(at=started + at, value=GatewayTelemetry(redis_latency=HistogramTotals(total=total, count=count)))
+        for at, total, count in ((-1.0, 0.0, 0.0), (50.0, 1.0, 100.0), (99.0, 2.0, 200.0), (199.0, 42.0, 300.0))
+    )
+    observation: Final = Observation(
+        records=records,
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=200.0,
+        ramp=ramp,
+        cpu_series=Series(samples=tuple(Sample(at=started + at, value=5.0) for at in (10.0, 60.0, 110.0, 160.0))),
+        connection_series=Series(
+            samples=tuple(
+                Sample(at=started + at, value=n) for at, n in ((1.0, 12), (50.0, 18), (150.0, 25), (199.0, 20))
+            )
+        ),
+        telemetry_series=Series(samples=redis),
+    )
+    first, second = observation.steps()
+    first_completed: Final = round(first.completed_rps * ramp.step_seconds)
+    assert first.cpu_seconds_per_request == pytest.approx(10.0 / first_completed)
+    assert first.redis_latency_mean_seconds == pytest.approx(0.01)
+    assert first.postgres_peak_connections == 18
+    assert second.redis_latency_mean_seconds == pytest.approx(0.4)
+    assert second.postgres_peak_connections == 25
+    assert first.time_to_first_token_p99 is None
+    names: Final = {name for name, _ in step_properties((first, second)) if name.startswith("perf_ramp_step_10_")}
+    assert names == {
+        "perf_ramp_step_10_gateway_added_p99",
+        "perf_ramp_step_10_completed_rps",
+        "perf_ramp_step_10_unexpected",
+        "perf_ramp_step_10_gateway_added_p50",
+        "perf_ramp_step_10_cpu_seconds_per_request",
+        "perf_ramp_step_10_redis_latency_mean_seconds",
+        "perf_ramp_step_10_postgres_peak_connections",
+    }

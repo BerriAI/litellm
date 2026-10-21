@@ -40,6 +40,14 @@ class StepReading:
     gateway_added_p99: float | None
     unexpected: int
     held_p99_seconds: float
+    gateway_added_p50: float | None = None
+    time_to_first_token_p99: float | None = None
+    cpu_seconds_per_request: float | None = None
+    redis_latency_mean_seconds: float | None = None
+    postgres_peak_connections: int | None = None
+    """The hold verdict reads the first six. The rest say what the pod was doing on that step: CPU per request
+    from the pod sampler, Redis latency from the gateway's `/metrics`, connections from `pg_stat_activity`,
+    all cut to the step's window, so a latency jump can be told apart as CPU, waiting or neither."""
 
     @property
     def held(self) -> bool:
@@ -58,17 +66,29 @@ def sustained_rps(steps: Iterable[StepReading]) -> float:
 
 
 def step_properties(steps: Iterable[StepReading]) -> tuple[tuple[str, float], ...]:
-    """The per-step readings as JUnit properties (`perf_ramp_step_<rps>_gateway_added_p99`, `_completed_rps` and
-    `_unexpected`) plus the hold bound, so the dashboard can draw the run's curve next to the sustained rate."""
+    """The per-step readings as JUnit properties (`perf_ramp_step_<rps>_<reading>`, every reading the step has)
+    plus the hold bound, so the dashboard can draw the run's curves next to the sustained rate."""
     rows: Final = tuple(steps)
     hold: Final = (("perf_ramp_hold_p99_seconds", rows[0].held_p99_seconds),) if rows else ()
-    return (*hold, *chain.from_iterable(_step_property_pair(step) for step in rows))
+    return (*hold, *chain.from_iterable(_step_properties(step) for step in rows))
 
 
-def _step_property_pair(step: StepReading) -> tuple[tuple[str, float], ...]:
+def _step_properties(step: StepReading) -> Iterator[tuple[str, float]]:
     prefix: Final = f"perf_ramp_step_{step.rps:g}"
-    p99: Final = () if step.gateway_added_p99 is None else ((f"{prefix}_gateway_added_p99", step.gateway_added_p99),)
-    return (*p99, (f"{prefix}_completed_rps", step.completed_rps), (f"{prefix}_unexpected", float(step.unexpected)))
+    readings: Final[tuple[tuple[str, float | None], ...]] = (
+        ("gateway_added_p99", step.gateway_added_p99),
+        ("completed_rps", step.completed_rps),
+        ("unexpected", float(step.unexpected)),
+        ("gateway_added_p50", step.gateway_added_p50),
+        ("time_to_first_token_p99", step.time_to_first_token_p99),
+        ("cpu_seconds_per_request", step.cpu_seconds_per_request),
+        ("redis_latency_mean_seconds", step.redis_latency_mean_seconds),
+        (
+            "postgres_peak_connections",
+            None if step.postgres_peak_connections is None else float(step.postgres_peak_connections),
+        ),
+    )
+    return ((f"{prefix}_{name}", value) for name, value in readings if value is not None)
 
 
 def render_steps(steps: Iterable[StepReading]) -> tuple[str, ...]:
@@ -76,14 +96,21 @@ def render_steps(steps: Iterable[StepReading]) -> tuple[str, ...]:
     if not rows:
         return ()
     header: Final = (
-        f"  steps: {'rps':>6} {'planned':>8} {'completed rps':>14} {'gateway added p99':>18} {'unexpected':>11}"
+        f"  steps: {'rps':>6} {'planned':>8} {'completed rps':>14} {'gateway added p50':>18} {'p99':>8}"
+        f" {'ttft p99':>9} {'unexpected':>11} {'cpu s/req':>10} {'redis mean':>11} {'pg conns':>9}"
     )
     return (header, *(_step_line(step) for step in rows))
 
 
+def _seconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
+
+
 def _step_line(step: StepReading) -> str:
-    p99: Final = "n/a" if step.gateway_added_p99 is None else f"{step.gateway_added_p99:.4f}"
+    conns: Final = "n/a" if step.postgres_peak_connections is None else str(step.postgres_peak_connections)
     return (
-        f"         {step.rps:6.1f} {step.planned:8d} {step.completed_rps:14.2f} {p99:>18} {step.unexpected:11d}"
+        f"         {step.rps:6.1f} {step.planned:8d} {step.completed_rps:14.2f} {_seconds(step.gateway_added_p50):>18}"
+        f" {_seconds(step.gateway_added_p99):>8} {_seconds(step.time_to_first_token_p99):>9} {step.unexpected:11d}"
+        f" {_seconds(step.cpu_seconds_per_request):>10} {_seconds(step.redis_latency_mean_seconds):>11} {conns:>9}"
         f"  {'held' if step.held else 'broke'}"
     )

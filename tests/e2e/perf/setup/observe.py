@@ -16,6 +16,7 @@ from typing import Final, Literal
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 from setup.datastore import (
     DbCounters,
@@ -30,6 +31,7 @@ from setup.datastore import (
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase, Ramp
 from setup.ramp import StepReading, render_steps, sustained_rps
+from setup.series import Series
 from setup.telemetry import GatewayTelemetry
 from setup.wire import WireRecord
 
@@ -125,6 +127,9 @@ class Observation:
     telemetry_after: GatewayTelemetry | None = None
     peak_connections: int | None = None
     ramp: Ramp | None = None
+    cpu_series: Series[float] | None = None
+    connection_series: Series[int] | None = None
+    telemetry_series: Series[GatewayTelemetry] | None = None
 
     @property
     def telemetry(self) -> GatewayTelemetry | None:
@@ -243,13 +248,15 @@ class Observation:
         return sum(1 for record in self.served if pre[record.marker] != 1 or post[record.marker] != 1)
 
     def steps(self) -> tuple[StepReading, ...]:
-        """One reading per step of a ramped run: the gateway's added latency at p99 over the step's requests, the
-        rate at which requests completed inside the step's window and the step's unexpected statuses."""
+        """One reading per step of a ramped run: the gateway's added latency over the step's requests, the rate
+        at which requests completed inside the step's window, the step's unexpected statuses, and what the pod
+        was doing in that window (CPU per completed request, Redis latency, Postgres connections)."""
         ramp: Final = self.ramp
         if ramp is None or not self.records:
             return ()
         started: Final = min(record.started_at for record in self.records)
         added: Final = _by_step(ramp, self.latency_pairs("gateway_added_seconds"))
+        first_token: Final = _by_step(ramp, self.latency_pairs("time_to_first_token_seconds"))
         completed: Final = Counter(
             int((record.started_at + record.total_s - started) // ramp.step_seconds) for record in self.records
         )
@@ -264,9 +271,32 @@ class Observation:
                 gateway_added_p99=percentile(added.get(index, ()), 99),
                 unexpected=unexpected[index],
                 held_p99_seconds=ramp.held_p99_seconds,
+                gateway_added_p50=percentile(added.get(index, ()), 50),
+                time_to_first_token_p99=percentile(first_token.get(index, ()), 99),
+                **self._window_readings(started + index * ramp.step_seconds, ramp.step_seconds, completed[index]),
             )
             for index, (rate, count) in enumerate(zip(ramp.rates, ramp.counts, strict=True))
         )
+
+    def _window_readings(self, start: float, seconds: float, completed: int) -> WindowReadings:
+        end: Final = start + seconds
+        cpu: Final = None if self.cpu_series is None else sum(self.cpu_series.between(start, end))
+        conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
+        before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
+        after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
+        return WindowReadings(
+            cpu_seconds_per_request=None if cpu is None or completed == 0 else cpu / completed,
+            redis_latency_mean_seconds=None
+            if before is None or after is None
+            else after.minus(before).redis_latency.mean,
+            postgres_peak_connections=max(conns, default=None) if conns else None,
+        )
+
+
+class WindowReadings(TypedDict):
+    cpu_seconds_per_request: ReadOnly[float | None]
+    redis_latency_mean_seconds: ReadOnly[float | None]
+    postgres_peak_connections: ReadOnly[int | None]
 
 
 def _by_step(ramp: Ramp, pairs: Iterable[tuple[WireRecord, float]]) -> Mapping[int, tuple[float, ...]]:
