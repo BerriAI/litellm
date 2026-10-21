@@ -536,3 +536,25 @@ def reset_login_throttle(monkeypatch):
     _drop_throttle_keys()
     yield _drop_throttle_keys
     _drop_throttle_keys()
+
+
+@pytest.fixture
+def openai_only_router(monkeypatch) -> Any:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "gpt-4-id"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    return router

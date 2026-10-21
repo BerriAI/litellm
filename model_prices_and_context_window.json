@@ -63496,8 +63496,8 @@
             },
             {
                 "name": "typesafe-jev-ids",
-                "pattern": "^jev-[a-z0-9][a-z0-9._-]*$",
-                "description": "A bare TypeSafe Jev id (jev-latest, jev-preview, jev-1.14.0, ...), the name the /typesafe pass-through forwards to TypeSafe. Anchored to the whole name, so a namespaced id such as foo/jev-latest never resolves to typesafe. Provider inference feeds the proxy's provider/* wildcard access checks, so this rule is what lets typesafe/* on a key, team or project allowlist cover a jev-latest request.",
+                "pattern": "^jev-(?:latest|preview|\\d+\\.\\d+(?:\\.\\d+)?(?:-[a-z0-9.]+)?)$",
+                "description": "A bare TypeSafe Jev id (jev-latest, jev-preview, or a version such as jev-1.14.0), the name the /typesafe pass-through forwards to TypeSafe. Anchored to the whole name and to the names TypeSafe publishes, so foo/jev-latest or a model group such as jev-internal-router never resolves to typesafe. Provider inference feeds the proxy's provider/* wildcard access checks, so this rule is what lets typesafe/* on a key, team or project allowlist cover a jev-latest request.",
                 "model_info": {
                     "litellm_provider": "typesafe"
                 }

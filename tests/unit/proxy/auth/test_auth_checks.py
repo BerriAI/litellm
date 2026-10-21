@@ -744,6 +744,7 @@ def shipped_routing_rules() -> Iterator[None]:
         (["jev-latest"], "jev-latest", True),
         (["openai/*"], "jev-latest", False),
         (["typesafe/*"], "foo/jev-latest", False),
+        (["typesafe/*"], "jev-internal-router", False),
     ],
 )
 def test_typesafe_provider_wildcard_covers_bare_jev_model(

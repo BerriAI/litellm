@@ -9,15 +9,19 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -520,3 +524,79 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     assert response.status_code == 200
     (entry,) = response.json()["models"]
     assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])
+
+
+def _priced_jev_models() -> frozenset[str]:
+    return frozenset(name.removeprefix("typesafe/") for name in litellm.model_cost if name.startswith("typesafe/"))
+
+
+async def _admin_picker_models() -> set[str]:
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope="expand"
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(openai_only_router, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert jev_models
+    assert {"gpt-4", "typesafe/*", *jev_models} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_cannot_resolve(
+    openai_only_router, monkeypatch
+):
+    monkeypatch.delenv("LITELLM_QA_UNSET_TYPESAFE_TOKEN", raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "oidc/env/LITELLM_QA_UNSET_TYPESAFE_TOKEN")
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert {"gpt-4", "typesafe/*"} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(openai_only_router, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert "gpt-4" in picker_models
+    assert picker_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_does_not_read_the_secret_manager_for_typesafe_credentials(
+    openai_only_router, monkeypatch
+):
+    secret_manager: Final = MagicMock(spec=CustomSecretManager)
+    secret_manager.sync_read_secret.return_value = None
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+
+    picker_models: Final = await _admin_picker_models()
+
+    secrets_read: Final = {
+        call.kwargs["secret_name"]
+        for call in (*secret_manager.sync_read_secret.call_args_list, *secret_manager.async_read_secret.call_args_list)
+    }
+    assert "gpt-4" in picker_models
+    assert "TYPESAFE_API_KEY" not in secrets_read
+
+
+@pytest.mark.asyncio
+async def test_default_model_list_does_not_offer_typesafe_models(openai_only_router, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin)
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
