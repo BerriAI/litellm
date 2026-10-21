@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -27,7 +28,7 @@ from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
+from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.mark.asyncio
@@ -2936,7 +2937,6 @@ def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: 
     assert _should_track_cost_callback(
         user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
     ) is expected
-||||||| parent of b217e5fa70 (fixup! feat(proxy): write one spend row per billed timed-out retry attempt (#47416))
 
 
 class _SharedCounter:
@@ -2958,7 +2958,6 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
             "response_cost": response_cost,
             "request_tags": None,
             "cache_hit": None,
-            "custom_llm_provider": "vertex_ai",
             "cost_breakdown": {
                 "input_cost": 0.0,
                 "output_cost": 0.0,
