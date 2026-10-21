@@ -107,7 +107,14 @@ def _is_object_sequence(value: object) -> TypeGuard[Sequence[object]]:
 
 def _is_document_content_block(block: object) -> bool:
     block_mapping: Final = as_str_mapping(block)
-    return block_mapping is not None and block_mapping.get("type") in {"document", "file"}
+    if block_mapping is None:
+        return False
+    if block_mapping.get("type") in {"document", "file"}:
+        return True
+    nested_content: Final = block_mapping.get("content")
+    if not _is_object_sequence(nested_content):
+        return False
+    return any(_is_document_content_block(nested_block) for nested_block in nested_content)
 
 
 def _has_document_content_block(messages: Sequence[object] | None) -> bool:

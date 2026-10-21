@@ -143,6 +143,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.token_count_settings import (
+    CANNOT_COUNT_MODEL_STATUSES,
     TOKENIZER_LOAD_MAX_RUNNING,
     TOKENIZER_LOAD_REUSE_SECONDS,
     TOKENIZER_LOAD_WAIT_SECONDS,
@@ -14118,6 +14119,13 @@ async def count_request_tokens(
             messages=messages,
             tools=tools,
         )
+        if (
+            unreliable_reason is not None
+            and isinstance(ladder, ProviderCountFailure)
+            and not ladder.rejected_before_provider_call
+            and ladder.status_code not in CANNOT_COUNT_MODEL_STATUSES
+        ):
+            raise ladder.to_proxy_exception()
         if unreliable_reason is not None:
             raise ProxyException(
                 message=unreliable_reason,

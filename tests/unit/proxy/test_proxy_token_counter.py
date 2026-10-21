@@ -2679,6 +2679,50 @@ def test_unreliable_local_estimate_preserves_local_count(
 
 
 @pytest.mark.parametrize(
+    ("nested_content", "expected"),
+    [
+        (
+            [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQK",
+                    },
+                }
+            ],
+            "meta.llama4-maverick returned no server-side token count and LiteLLM cannot count document content locally",
+        ),
+        ("text", None),
+        ([{"type": "text", "text": "hello"}], None),
+    ],
+)
+def test_unreliable_local_estimate_detects_nested_document_content(
+    nested_content: object, expected: str | None
+) -> None:
+    reason: Final = unreliable_local_estimate(
+        custom_llm_provider="bedrock",
+        model="meta.llama4-maverick",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": nested_content,
+                    }
+                ],
+            }
+        ],
+        tools=None,
+    )
+
+    assert reason == expected
+
+
+@pytest.mark.parametrize(
     ("resolved_model", "messages", "tools", "call_endpoint", "reject"),
     [
         ("bedrock/meta.llama4-maverick", [{"role": "user", "content": [{"type": "document"}]}], None, True, True),
@@ -2752,6 +2796,130 @@ async def test_count_request_tokens_rejects_only_known_unreliable_estimates(
                 messages_format="anthropic",
             )
             assert response.count_source == "local_estimate"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_type", "expected_message"),
+    [
+        (429, "token_counting_error", "Provider count failed with 429"),
+        (500, "token_counting_error", "Provider count failed with 500"),
+        (400, "invalid_request_error", "cannot count document content locally"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_unreliable_document_estimate_preserves_transient_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    expected_type: str,
+    expected_message: str,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": "bedrock/meta.llama4-maverick",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    failure: Final = ProviderCountFailure(
+        status_code=status_code,
+        message=f"Provider count failed with {status_code}",
+    )
+    with patch.object(
+        proxy_server,
+        "_provider_token_count",
+        new=AsyncMock(return_value=failure),
+    ):
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="count-target",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "application/pdf",
+                                        "data": "JVBERi0xLjQK",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+
+    assert raised.value.code == str(status_code)
+    assert raised.value.type == expected_type
+    assert expected_message in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_count_request_tokens_rejects_nested_document_after_provider_count_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": "bedrock/meta.llama4-maverick",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    failure: Final = ProviderCountFailure(status_code=400, message="Runtime count rejected the document")
+    with patch.object(
+        proxy_server,
+        "_provider_token_count",
+        new=AsyncMock(return_value=failure),
+    ):
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="count-target",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "t1",
+                                    "content": [
+                                        {
+                                            "type": "document",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": "application/pdf",
+                                                "data": "JVBERi0xLjQK",
+                                            },
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+
+    assert raised.value.code == "400"
+    assert raised.value.type == "invalid_request_error"
+    assert "cannot count document content locally" in raised.value.message
 
 
 @pytest.mark.asyncio
