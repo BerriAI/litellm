@@ -2739,6 +2739,38 @@ def test_oversized_literal_cut_after_escape_stays_extractable():
     assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
 
 
+def test_oversized_literal_cut_after_et_inside_string_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf ("
+    literal_prefix: Final = b"x" * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(text_prefix) - len(b"ET")) + b"ET"
+    literal_suffix: Final = b"x" * 256 + b") Tj ET"
+    page: Final = _fake_pdf_page(text_prefix + literal_prefix + literal_suffix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = (literal_prefix + literal_suffix[: -len(b") Tj ET")]).count(b"x")
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_unterminated_pdf_text_object_ending_with_et_inside_string_is_closed():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    page: Final = _fake_pdf_page(path_padding + b"BT /F1 12 Tf (x ET")
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert priced - blank_price == 1
+
+
 def test_oversized_text_cut_inside_trailing_comment_stays_extractable():
     text_prefix: Final = b"BT /F1 12 Tf (x) Tj "
     comment: Final = b"%" + b"comment" * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
