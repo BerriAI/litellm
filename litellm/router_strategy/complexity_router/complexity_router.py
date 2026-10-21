@@ -888,11 +888,20 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:head_chars]}{_TRUNCATION_MARKER}{text[len(text) - tail_chars :]}"
 
 
+_DEPLOYMENT_PARAMS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _is_nadir_deployment(deployment: Mapping[str, object]) -> bool:
-    litellm_params: Final = deployment.get("litellm_params")
-    params: Final = litellm_params if isinstance(litellm_params, Mapping) else EMPTY_MAPPING
-    provider: Final = params.get("custom_llm_provider") or str(params.get("model") or "").split("/", 1)[0]
-    return provider == "nadir"
+    try:
+        params: Final = _DEPLOYMENT_PARAMS.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return False
+    provider: Final = params.get("custom_llm_provider")
+    if isinstance(provider, str) and provider:
+        return provider == "nadir"
+    model: Final = params.get("model")
+    return isinstance(model, str) and model.split("/", 1)[0] == "nadir"
 
 
 def _iter_context_turns_newest_first(
@@ -2607,7 +2616,7 @@ class ComplexityRouter(CustomLogger):
             budget_chars=self.config.classifier_context_budget_chars,
             per_turn_chars=self.config.classifier_context_per_turn_chars,
             include_assistant=self.config.classifier_context_include_assistant_turns,
-            marker_pairs=self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING),
+            marker_pairs=self._reminder_markers_for_request(request_kwargs or _NO_REQUEST_KWARGS),
         )
 
     def _classifier_context_messages(
