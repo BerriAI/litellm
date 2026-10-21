@@ -27,7 +27,7 @@ on:
       - backend/routes/allowlist.py
       - pyproject.toml
       - litellm-proxy-extras/**
-      - tests/proxy_migration_tests/**
+      - tests/integration/database/image/**
       - uv.lock
       - ui/litellm-dashboard/package-lock.json
       - ui/Dockerfile
@@ -92,7 +92,7 @@ jobs:
           LITELLM_ADMIN_MCP_SCHEMA_IMAGE: litellm-admin-mcp-schema:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_offline_image_migration.py tests/integration/database/image/test_image_bedrock_realtime_extra.py tests/integration/database/image/test_image_admin_mcp.py -v
 
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
@@ -145,7 +145,7 @@ jobs:
           LITELLM_ADMIN_MCP_SCHEMA_IMAGE: litellm-admin-mcp-schema:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_offline_image_migration.py tests/integration/database/image/test_image_bedrock_realtime_extra.py tests/integration/database/image/test_image_admin_mcp.py -v
 
 
   migrations-image:
@@ -177,7 +177,7 @@ jobs:
           LITELLM_MIGRATION_SCRIPT: /app/run.py
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_offline_image_migration.py -v
 
   gateway-image:
     name: gateway-image
@@ -208,7 +208,7 @@ jobs:
           LITELLM_IMAGE_COMPONENT: gateway
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_component_image_serves_offline.py tests/integration/database/image/test_image_bedrock_realtime_extra.py tests/integration/database/image/test_image_admin_mcp.py -v
 
   ui-image:
     name: ui-image
@@ -237,7 +237,7 @@ jobs:
           LITELLM_IMAGE: litellm-ui-scan:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_ui_image_serves_offline.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_ui_image_serves_offline.py -v
 
   backend-image:
     name: backend-image
@@ -272,4 +272,4 @@ jobs:
           LITELLM_IMAGE_COMPONENT: backend
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
+          python -m pytest --noconftest tests/integration/database/image/test_component_image_serves_offline.py tests/integration/database/image/test_image_admin_mcp.py -v

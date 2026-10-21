@@ -21,10 +21,7 @@ use serde_json::{Map, Value};
 use super::{NativeCall, RequestView};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
-        python_timeout_seconds,
-    },
+    marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
 
 pub(super) struct InferenceHost {
@@ -115,10 +112,7 @@ impl InferenceHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
-        })
+        self.view.body_params(py, arguments, self.module)
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
@@ -183,7 +177,6 @@ where
     } else {
         R::SYNC_CALL_TYPE
     };
-    crate::cache::admit_native(py, &call.kwargs, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,

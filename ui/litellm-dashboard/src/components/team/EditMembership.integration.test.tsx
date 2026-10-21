@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import EditMembership from "./EditMembership";
@@ -102,6 +104,79 @@ describe("EditMembership submit payload", () => {
       rpm_limit: 20,
       allowed_models: ["gpt-4o"],
     });
+  });
+
+  it("seeds the per-model budget editor from the member's stored budget and submits the edited cap", async () => {
+    const modelBudgetConfig = {
+      ...teamMemberConfig,
+      additionalFields: [
+        ...additionalFields,
+        {
+          name: "model_max_budget",
+          label: "Per-Model Budgets",
+          type: "model-max-budget" as const,
+          availableModels: ["gpt-4o"],
+          premiumUser: true,
+        },
+      ],
+    };
+    const member = {
+      user_id: "u1",
+      user_email: "a@b.com",
+      role: "user",
+      model_max_budget: { "gpt-4o": { max_budget: 5, budget_duration: "30d" } },
+    };
+    renderEdit(modelBudgetConfig, member);
+
+    const cap = await screen.findByPlaceholderText("Max spend ($)");
+    expect(cap).toHaveValue(5);
+    fireEvent.change(cap, { target: { value: "9" } });
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().model_max_budget).toStrictEqual({ "gpt-4o": { budget_limit: 9, time_period: "30d" } });
+  });
+
+  it("saves a role-only edit for a member with stored model caps", async () => {
+    const modelBudgetConfig = {
+      ...teamMemberConfig,
+      additionalFields: [
+        ...additionalFields,
+        {
+          name: "model_max_budget",
+          label: "Per-Model Budgets",
+          type: "model-max-budget" as const,
+          availableModels: ["gpt-4o"],
+          premiumUser: true,
+        },
+      ],
+    };
+    const member = {
+      user_id: "u1",
+      user_email: "a@b.com",
+      role: "user",
+      model_max_budget: { "gpt-4o": { max_budget: 5, budget_duration: "30d" } },
+    };
+    renderEdit(modelBudgetConfig, member);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Role(Current: User)" }));
+    await user.click(await screen.findByRole("option", { name: "Admin" }));
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    const expectedPayload = {
+      user_email: "a@b.com",
+      user_id: "u1",
+      role: "admin",
+      max_budget_in_team: null,
+      budget_duration: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      allowed_models: [],
+      model_max_budget: { "gpt-4o": { budget_limit: 5, time_period: "30d" } },
+    };
+    expect(submitted()).toStrictEqual(expectedPayload);
   });
 
   it("omits a field the config hides even when the member record carries it", async () => {
@@ -341,4 +416,58 @@ describe("EditMembership submit payload", () => {
     await waitFor(() => expect(screen.getByLabelText("User ID")).toHaveValue(""));
     expect(screen.getByLabelText("Email")).toHaveValue("");
   });
+});
+
+it("discards an unfinished per-model budget row when an edit session is reopened", async () => {
+  const user = userEvent.setup({ delay: null });
+  const modelBudgetConfig = {
+    ...teamMemberConfig,
+    additionalFields: [
+      ...additionalFields,
+      {
+        name: "model_max_budget",
+        label: "Per-Model Budgets",
+        type: "model-max-budget" as const,
+        availableModels: ["gpt-4o"],
+        premiumUser: true,
+      },
+    ],
+  };
+  const member = { user_id: "u1", user_email: "a@b.com", role: "user", model_max_budget: {} };
+  const otherMember = { ...member, user_id: "u2", user_email: "c@d.com" };
+  const Harness = ({ initialData }: { initialData: typeof member }) => {
+    const [visible, setVisible] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setVisible(true)}>
+          Open Edit Member
+        </button>
+        <EditMembership
+          visible={visible}
+          onCancel={() => setVisible(false)}
+          onSubmit={vi.fn()}
+          mode="edit"
+          config={modelBudgetConfig as never}
+          initialData={initialData as never}
+        />
+      </>
+    );
+  };
+
+  const { rerender } = renderWithProviders(<Harness initialData={member} />);
+
+  await user.click(screen.getByRole("button", { name: "Open Edit Member" }));
+  await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+  expect(screen.getByPlaceholderText("Select model")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.click(screen.getByRole("button", { name: "Open Edit Member" }));
+
+  expect(screen.queryByPlaceholderText("Select model")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+  expect(screen.getByPlaceholderText("Select model")).toBeInTheDocument();
+
+  rerender(<Harness initialData={otherMember} />);
+  expect(screen.queryByPlaceholderText("Select model")).not.toBeInTheDocument();
 });

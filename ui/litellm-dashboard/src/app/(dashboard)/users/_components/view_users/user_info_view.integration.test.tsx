@@ -62,6 +62,8 @@ vi.mock("@/components/networking", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/components/networking")>();
   return {
     formatDate: original.formatDate,
+    getRuntimeBackendBaseUrl: original.getRuntimeBackendBaseUrl,
+    getUiPageUrl: original.getUiPageUrl,
     serverRootPath: "/",
     userGetInfoV2: (...args: unknown[]) => mockUserGetInfoV2(...args),
     dailyActivityAggregatedCall: (...args: unknown[]) => mockUserDailyActivityAggregatedCall(...args),

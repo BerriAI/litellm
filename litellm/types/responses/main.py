@@ -4,7 +4,7 @@ from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
-from pydantic import PrivateAttr
+from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Any, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -131,6 +131,17 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     name: str
     input: str
     status: Literal["in_progress", "completed", "incomplete"] | None = None
+
+
+class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
+
+    id: str
+    arguments: object
+    call_id: str | None = None
+    execution: Literal["server", "client"]
+    status: Literal["in_progress", "completed", "incomplete"]
+    type: Literal["tool_search_call"]
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):

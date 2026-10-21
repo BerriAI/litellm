@@ -20,7 +20,6 @@ from _logging_only_scope_support import (
     _delete_database_guardrail,
     _direction,
     _directions_for_audit_leg,
-    _drain_upstream,
     _empty_proxy_configuration,
     _guardrail_entries,
     _guardrail_mode_values,
@@ -33,9 +32,11 @@ from _logging_only_scope_support import (
     _post_guardrail_body,
     _presidio_configuration,
     _provider_response,
+    _reset_upstream,
     _response_body_without_ids,
     _spend_row_for_call_id,
     _spend_rows,
+    _upstream_requests,
     wire_server,
 )
 from _logging_only_scope_support import (
@@ -47,6 +48,8 @@ from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 def test_G7_database_invalid_scope_reads_preserve_pre_call_blocking(gateway: Gateway, tmp_path: Path) -> None:
@@ -110,7 +113,7 @@ def test_G7_database_invalid_scope_reads_preserve_pre_call_blocking(gateway: Gat
                         {"model": model, "messages": [{"role": "user", "content": prompt}]},
                     )
                     assert blocked_response.status_code == 400, blocked_response.text
-                    assert _drain_upstream(gateway.upstream_url) == ()
+                    assert _upstream_requests(gateway.upstream_url) == ()
             finally:
                 _delete_database_guardrail(identity)
     finally:
@@ -155,7 +158,8 @@ def test_native_content_filter_scope_logs_without_blocking(
                     "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
                 )
                 assert baseline.status == 200 and baseline.text == reply, baseline
-                assert len(_drain_upstream(gateway.upstream_url)) == 1
+                assert len(_upstream_requests(gateway.upstream_url)) == 1
+                _reset_upstream(gateway.upstream_url)
                 guarded: Final = _call_client(
                     "openai_sync", "chat", candidate, model, prompt, False, f"{scenario_id}-guarded"
                 )
@@ -164,7 +168,7 @@ def test_native_content_filter_scope_logs_without_blocking(
                     _response_body_without_ids(baseline.body),
                 ), (guarded, baseline)
                 assert guarded.text == reply, guarded
-                observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+                observed_upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(observed_upstream) == 1, observed_upstream
                 assert prompt in json.dumps(observed_upstream[0]["body"]), observed_upstream
                 rows: Final = _spend_rows(model, 2)
@@ -179,16 +183,16 @@ def test_native_content_filter_scope_logs_without_blocking(
                     (
                         identity,
                         "logging_only",
-                        "guardrail_intervened" if direction == blocked_side else "success",
+                        "guardrail_flagged" if direction == blocked_side else "success",
                     )
                     for direction in expected_directions
                 ), entries
-                intervened_entries: Final = tuple(
-                    entry for entry in entries if entry["guardrail_status"] == "guardrail_intervened"
+                flagged_entries: Final = tuple(
+                    entry for entry in entries if entry["guardrail_status"] == "guardrail_flagged"
                 )
-                assert len(intervened_entries) == 1, entries
-                assert intervened_entries[0]["guardrail_response"] is not None, entries
-                assert intervened_entries[0]["guardrail_response"] == "REDACTED_BY_LITELM", entries
+                assert len(flagged_entries) == 1, entries
+                assert flagged_entries[0]["guardrail_response"] is not None, entries
+                assert flagged_entries[0]["guardrail_response"] == "REDACTED_BY_LITELM", entries
     finally:
         delete_scenario(upstream_handle)
 
@@ -250,7 +254,8 @@ def test_model_armor_directional_scope_uses_real_service_account_oauth(
                 "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
             )
             assert baseline.status == 200 and baseline.text == reply, baseline
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(oauth, policy_edge=False) as token_edge, wire_server(model_armor) as armor_edge:
                 config: Final = _model_armor_configuration(
                     tmp_path, identity, armor_edge.url, token_edge.url + "/token", scope
@@ -264,7 +269,7 @@ def test_model_armor_directional_scope_uses_real_service_account_oauth(
                         _response_body_without_ids(baseline.body),
                     ), (result, baseline)
                     assert result.text == reply, result
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
                     eventually(
                         lambda: armor_edge.received.qsize(),
@@ -389,10 +394,11 @@ def test_presidio_scope_matches_no_scope_behavior(gateway: Gateway, tmp_path: Pa
                         "openai_sync", "chat", no_scope_proxy, model, prompt, False, f"{scenario_id}-no-scope"
                     )
                     assert no_scope_result.status == 200 and no_scope_result.text == reply, no_scope_result
-                    no_scope_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    no_scope_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(no_scope_upstream) == 1 and prompt in json.dumps(no_scope_upstream[0]["body"]), (
                         no_scope_upstream
                     )
+                    _reset_upstream(gateway.upstream_url)
                     eventually(
                         lambda: no_scope_analyzer_response_seen.is_set() and no_scope_anonymizer_response_seen.is_set(),
                         bool,
@@ -416,7 +422,7 @@ def test_presidio_scope_matches_no_scope_behavior(gateway: Gateway, tmp_path: Pa
                         no_scope_result.status,
                         _response_body_without_ids(no_scope_result.body),
                     ), (scoped_result, no_scope_result)
-                    scoped_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    scoped_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(scoped_upstream) == 1 and prompt in json.dumps(scoped_upstream[0]["body"]), (
                         scoped_upstream
                     )
@@ -547,7 +553,8 @@ def test_yaml_scope_loading_keeps_guardrail_enforcement(
                     )
                     assert baseline.status_code == 200, baseline.text
                     assert baseline.json()["choices"][0]["message"]["content"] == reply, baseline.text
-                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
                     guarded: Final = candidate.request(
                         "POST",
                         "/v1/chat/completions",
@@ -556,7 +563,7 @@ def test_yaml_scope_loading_keeps_guardrail_enforcement(
                     )
                     assert guarded.status_code == expected_status, guarded.text
                     caller_body: Final = JSON_OBJECT.validate_python(guarded.json())
-                    candidate_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    candidate_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(candidate_upstream) == (0 if expected_status == 400 else 1), candidate_upstream
                     if expected_status == 200:
                         assert _response_body_without_ids(caller_body) == _response_body_without_ids(
@@ -639,7 +646,8 @@ def test_database_guardrail_load_keeps_pre_call_blocking(
                 headers={"x-litellm-call-id": f"{scenario_id}-baseline"},
             )
             assert baseline.status_code == 200, baseline.text
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 _insert_database_guardrail(identity, guardrail.url, scope)
                 try:
@@ -658,7 +666,7 @@ def test_database_guardrail_load_keeps_pre_call_blocking(
                             headers={"x-litellm-call-id": call_id},
                         )
                         assert guarded.status_code == 400 and "synthetic DB denial" in guarded.text, guarded.text
-                        assert _drain_upstream(gateway.upstream_url) == ()
+                        assert _upstream_requests(gateway.upstream_url) == ()
                         payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in guardrail.drain())
                         assert tuple(_direction(payload) for payload in payloads) == ("request",), payloads
                         assert _policy_call_id_matches(payloads[0], call_id), payloads
@@ -702,7 +710,8 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
                 headers={"x-litellm-call-id": f"{scenario_id}-baseline"},
             )
             assert baseline.status_code == 200, baseline.text
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(denial) as original_policy, wire_server(denial) as updated_policy:
                 _insert_database_guardrail(identity, original_policy.url, None)
                 try:
@@ -788,7 +797,7 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
                                 )
                                 for entry in entries
                             ) == ((identity, "pre_call", "guardrail_intervened"),), (call_id, entries)
-                        assert _drain_upstream(gateway.upstream_url) == ()
+                        assert _upstream_requests(gateway.upstream_url) == ()
                 finally:
                     _delete_database_guardrail(identity)
     finally:
@@ -829,14 +838,14 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             id="H2-post-rejects-invalid-number",
         ),
         pytest.param(
-            "H2",
+            "H3",
             "generic_guardrail_api",
             "logging_only",
             "",
-            422,
+            200,
             None,
-            "logging_only_scope",
-            id="H2-post-rejects-invalid-empty-string",
+            "",
+            id="H3-post-stores-empty-scope-as-unset",
         ),
         pytest.param(
             "H2",
@@ -879,14 +888,14 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             id="H4-post-rejects-presidio-input-scope",
         ),
         pytest.param(
-            "H4",
-            "presidio",
+            "H2",
+            "generic_guardrail_api",
             "logging_only",
             "both",
-            200,
-            "both",
-            "",
-            id="H4-post-accepts-presidio-both-scope",
+            422,
+            None,
+            "logging_only_scope",
+            id="H2-post-rejects-removed-both-scope",
         ),
     ),
 )
@@ -1057,7 +1066,7 @@ def test_H5_management_put_rejection_preserves_database_and_runtime(gateway: Gat
                 after_policy: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in guardrail.drain())
                 assert len(after_policy) == 1 and _policy_call_id_matches(after_policy[0], after_call_id), after_policy
                 assert after_policy[0]["texts"] == [prompt], after_policy
-                assert _drain_upstream(gateway.upstream_url) == ()
+                assert _upstream_requests(gateway.upstream_url) == ()
                 for call_id in (before_call_id, after_call_id):
                     entries: Final = _guardrail_entries(_spend_row_for_call_id(call_id))
                     assert tuple(
@@ -1133,7 +1142,7 @@ def test_H6_management_patch_clears_scope_when_switching_to_blocking_only_mode(
                 assert tuple(_direction(call) for call in calls) == ("request",), calls
                 assert _policy_call_id_matches(calls[0], call_id), calls
                 assert calls[0]["texts"] == [prompt], calls
-                assert _drain_upstream(gateway.upstream_url) == ()
+                assert _upstream_requests(gateway.upstream_url) == ()
                 entries: Final = _guardrail_entries(_spend_row_for_call_id(call_id))
                 assert tuple(
                     (
@@ -1223,7 +1232,7 @@ def test_H7_management_patch_rejection_preserves_pre_call_guardrail(gateway: Gat
                 assert _policy_call_id_matches(policy_after[0], after_call_id), policy_after
                 assert policy_before[0]["texts"] == [prompt], policy_before
                 assert policy_after[0]["texts"] == [prompt], policy_after
-                assert _drain_upstream(gateway.upstream_url) == ()
+                assert _upstream_requests(gateway.upstream_url) == ()
                 for call_id in (before_call_id, after_call_id):
                     entries: Final = _guardrail_entries(_spend_row_for_call_id(call_id))
                     assert tuple(
@@ -1270,7 +1279,8 @@ def test_management_patch_default_on_heals_stored_scope(
                 headers={"x-litellm-call-id": f"{scenario_id}-baseline"},
             )
             assert baseline.status_code == 200, baseline.text
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 _insert_database_guardrail(
                     identity,
@@ -1314,7 +1324,7 @@ def test_management_patch_default_on_heals_stored_scope(
                         assert tuple(_direction(call) for call in calls) == ("request",), calls
                         assert _policy_call_id_matches(calls[0], call_id), calls
                         assert calls[0]["texts"] == [prompt], calls
-                        assert _drain_upstream(gateway.upstream_url) == ()
+                        assert _upstream_requests(gateway.upstream_url) == ()
                         entries: Final = _guardrail_entries(_spend_row_for_call_id(call_id))
                         assert tuple(
                             (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
@@ -1360,7 +1370,8 @@ def test_H10_management_patch_null_scope_restores_both_directions(gateway: Gatew
                 )
                 control: Final = _call_client("openai_sync", "chat", candidate, model, prompt, False, control_call_id)
                 assert control.status == 200 and control.text == reply, control
-                assert len(_drain_upstream(gateway.upstream_url)) == 1
+                assert len(_upstream_requests(gateway.upstream_url)) == 1
+                _reset_upstream(gateway.upstream_url)
                 created: Final = _create_guardrail(
                     candidate,
                     identity,
@@ -1389,7 +1400,7 @@ def test_H10_management_patch_null_scope_restores_both_directions(gateway: Gatew
                     control.status,
                     _response_body_without_ids(control.body),
                 ), (result, control)
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(upstream) == 1, upstream
                 assert prompt in json.dumps(upstream[0]["body"]), upstream
                 expected_directions: Final = ("request", "response")
@@ -1449,7 +1460,8 @@ def test_H11_management_patch_same_scope_is_idempotent_and_output_only(gateway: 
                 )
                 control: Final = _call_client("openai_sync", "chat", candidate, model, prompt, False, control_call_id)
                 assert control.status == 200 and control.text == reply, control
-                assert len(_drain_upstream(gateway.upstream_url)) == 1
+                assert len(_upstream_requests(gateway.upstream_url)) == 1
+                _reset_upstream(gateway.upstream_url)
                 created: Final = _create_guardrail(
                     candidate,
                     identity,
@@ -1483,7 +1495,7 @@ def test_H11_management_patch_same_scope_is_idempotent_and_output_only(gateway: 
                     control.status,
                     _response_body_without_ids(control.body),
                 ), (result, control)
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
                 eventually(
                     lambda: guardrail.received.qsize(),
@@ -1586,6 +1598,166 @@ def test_H13_unauthenticated_management_and_chat_requests_do_not_scan(gateway: G
                     assert unauthorized_chat.status_code == 401, unauthorized_chat.text
                     assert _management_guardrail_rows(f"{identity}-unauthorized") == ()
                     assert guardrail.drain() == ()
-                    assert _drain_upstream(gateway.upstream_url) == ()
+                    assert _upstream_requests(gateway.upstream_url) == ()
     finally:
+        delete_scenario(upstream_handle)
+
+
+def test_K1_post_rejects_continue_flag_outside_logging_only(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k1-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            before_list: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            response: Final = candidate.request(
+                "POST",
+                "/guardrails",
+                _post_guardrail_body(
+                    identity,
+                    "generic_guardrail_api",
+                    "pre_call",
+                    "http://127.0.0.1:9",
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=True,
+                ),
+            )
+            assert response.status_code == 400, response.text
+            assert "logging_only_continue_on_input_failure" in response.text, response.text
+            assert _management_guardrail_rows(identity) == ()
+            after_list: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            assert after_list == before_list, (before_list, after_list)
+            assert identity not in {object_value(item)["guardrail_name"] for item in after_list}, after_list
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K3_patch_flag_rejection_preserves_raw_stored_row(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k3-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            created: Final = _create_guardrail(
+                candidate,
+                identity,
+                {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "synthetic-guardrail-key",
+                },
+            )
+            guardrail_id: Final = string_value(created["guardrail_id"])
+            before_raw: Final = read_rows(
+                'SELECT litellm_params::text AS raw_params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s',
+                (identity,),
+            )
+            assert len(before_raw) == 1, before_raw
+            rejected: Final = candidate.request(
+                "PATCH",
+                f"/guardrails/{guardrail_id}",
+                {"litellm_params": {"logging_only_continue_on_input_failure": True}},
+            )
+            assert rejected.status_code == 422, rejected.text
+            assert "logging_only_continue_on_input_failure" in rejected.text, rejected.text
+            after_raw: Final = read_rows(
+                'SELECT litellm_params::text AS raw_params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s',
+                (identity,),
+            )
+            assert len(after_raw) == 1, after_raw
+            # Rollback re-encrypts api_key, so ciphertext bytes differ even though the row is unchanged.
+            before_params: Final = JSON_OBJECT.validate_json(before_raw[0]["raw_params"])
+            after_params: Final = JSON_OBJECT.validate_json(after_raw[0]["raw_params"])
+            assert set(before_params) == set(after_params), (before_params, after_params)
+            assert {
+                key: before_params[key] for key in before_params if key != "api_key"
+            } == {key: after_params[key] for key in after_params if key != "api_key"}, (before_params, after_params)
+            assert str(after_params["api_key"]).startswith("litellm_enc::"), after_params
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K4_patch_dropping_logging_only_mode_clears_stored_flag(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k4-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            created: Final = _create_guardrail(
+                candidate,
+                identity,
+                {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": ["pre_call", "logging_only"],
+                    "default_on": True,
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "synthetic-guardrail-key",
+                    "logging_only_continue_on_input_failure": True,
+                },
+            )
+            guardrail_id: Final = string_value(created["guardrail_id"])
+            before: Final = _management_guardrail_rows(identity)
+            assert len(before) == 1, before
+            assert object_value(before[0]["litellm_params"]).get("logging_only_continue_on_input_failure") is True, (
+                before
+            )
+            patched: Final = candidate.request(
+                "PATCH",
+                f"/guardrails/{guardrail_id}",
+                {"litellm_params": {"mode": ["pre_call"]}},
+            )
+            assert patched.status_code == 200, patched.text
+            persisted: Final = _management_guardrail_rows(identity)
+            assert len(persisted) == 1, persisted
+            params: Final = object_value(persisted[0]["litellm_params"])
+            assert params.get("logging_only_continue_on_input_failure") is None, persisted
+            assert params["mode"] == ["pre_call"], persisted
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K5_yaml_flag_on_blocking_guardrail_boots_and_keeps_blocking(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k5-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic yaml flag marker {identity}"
+    reply: Final = f"synthetic yaml flag response {identity}"
+    scenario_id: Final = f"phase12-k5-{uuid.uuid4().hex}"
+    upstream_handle: Final = register_scenario(scenario_id, _provider_response("chat", scenario_id, reply, False))
+
+    def policy(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic yaml flag denial"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=True,
+                    mode="pre_call",
+                )
+                with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=1) as owned:
+                    candidate: Final = owned.gateway
+                    guarded: Final = candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {"model": model, "messages": [{"role": "user", "content": prompt}]},
+                        headers={"x-litellm-call-id": f"{scenario_id}-guarded"},
+                    )
+                    assert guarded.status_code == 400 and "synthetic yaml flag denial" in guarded.text, guarded.text
+                    assert _upstream_requests(gateway.upstream_url) == ()
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in guardrail.drain())
+                    assert tuple(_direction(payload) for payload in payloads) == ("request",), payloads
+                    log_text: Final = owned.log.read_text()
+                    assert "Ignoring logging_only_continue_on_input_failure" in log_text, log_text
+    finally:
+        _delete_database_guardrail(identity)
         delete_scenario(upstream_handle)
