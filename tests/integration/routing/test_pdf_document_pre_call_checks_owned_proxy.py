@@ -29,6 +29,8 @@ from integration.providers._cache_control_marks_support import anthropic_peer, m
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _WINDOW: Final = "window-claude"
 _ITPM: Final = "itpm-claude"
 _BUDGET: Final = "budget-claude"

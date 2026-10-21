@@ -18,6 +18,8 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.parser import text_string_to_metric_families
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
 DEPLOYMENT_FAILURE: Final = "litellm_deployment_failure_responses_total"
 DEPLOYMENT_REQUESTS: Final = "litellm_deployment_total_requests_total"

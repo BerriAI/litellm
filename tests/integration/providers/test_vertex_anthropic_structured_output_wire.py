@@ -31,6 +31,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_TOOL: Final = "json_tool_call"
 _USER_TOOL: Final = "lookup"
 _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"
@@ -757,12 +759,15 @@ def _vertex_deployment(gateway: Gateway, scenario: Scenario, api_base: str, back
     )
 
 
-def _bedrock_invoke_deployment(scenario: Scenario, api_base: str, backend: str) -> str:
+def _bedrock_invoke_deployment(
+    scenario: Scenario, api_base: str, backend: str, model_info: Mapping[str, JsonValue] | None = None
+) -> str:
     return scenario.model(
         model=f"bedrock/invoke/{backend}",
         api_base=api_base,
         api_key=_BEDROCK_TOKEN,
         aws_region_name="us-east-1",
+        model_info=model_info,
     )
 
 
@@ -1521,7 +1526,9 @@ def _json_tool_deployment(gateway: Gateway, scenario: Scenario, api_base: str, p
         case "vertex_ai":
             return _vertex_deployment(gateway, scenario, api_base, _TOOL_MODEL)
         case "bedrock_invoke":
-            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_JSON_TOOL_MODEL)
+            return _bedrock_invoke_deployment(
+                scenario, api_base, _BEDROCK_JSON_TOOL_MODEL, {"supports_bedrock_native_structured_output": False}
+            )
         case _:
             raise AssertionError(provider)
 
@@ -1812,25 +1819,32 @@ def test_vertex_chat_without_response_format_sends_no_tool_and_no_output_config(
         assert not {"tools", "output_config", "output_format"} & sent.body.keys(), sent.body
 
 
-@pytest.mark.parametrize(
-    "output_format",
-    [5, [], {}, "x" * 5000],
-    ids=["int", "list", "empty", "5kb"],
-)
-def test_vertex_messages_malformed_output_format_reaches_the_caller_as_the_peer_400(
+def test_vertex_messages_empty_output_format_reaches_the_caller_as_the_peer_400(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("native")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, marker, output_format={}))
+        assert response.status_code == 400, response.text
+        assert _BAD_FORMAT in response.text, response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert "output_format" not in sent.body, sent.body
+        assert object_value(sent.body["output_config"])["format"] == {}, sent.body
+        assert gateway.request("GET", "/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize("output_format", [5, [], "x" * 5000], ids=["int", "list", "5kb"])
+def test_vertex_messages_non_object_output_format_is_refused_without_reaching_the_peer(
     gateway: Gateway, output_format: JsonValue
 ) -> None:
-    marker, marker_hex = _marker("native")
+    marker, _ = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
         response: Final = gateway.request(
             "POST", "/v1/messages", _messages_body(model, marker, output_format=output_format)
         )
         assert response.status_code == 400, response.text
-        assert _BAD_FORMAT in response.text, response.text
-        sent: Final = _one_delivery(wire, marker_hex)
-        assert "output_format" not in sent.body, sent.body
-        assert object_value(sent.body["output_config"])["format"] == output_format, sent.body
+        assert "needs `output_format` to be a JSON object" in response.text, response.text
+        assert _delivered(wire) == ()
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 

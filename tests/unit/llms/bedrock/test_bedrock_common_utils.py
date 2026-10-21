@@ -1,15 +1,20 @@
 
 import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+from typing import Final
 
 
 from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
+    bedrock_native_output_is_opt_in,
+    deployment_model_info,
     extract_model_name_from_bedrock_arn,
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
+    is_bedrock_native_output_rejection,
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
+    without_bedrock_native_output_opt_in,
 )
 from collections.abc import Iterator
 from litellm import completion
@@ -1192,6 +1197,15 @@ def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value:
     assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
 
 
+def test_get_anthropic_beta_from_headers_never_splits_a_json_array_of_numbers_as_text():
+    from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+
+    betas: Final = get_anthropic_beta_from_headers({"anthropic-beta": "[1, 2]"})
+
+    assert all(isinstance(beta, str) for beta in betas)
+    assert not any("[" in beta or "]" in beta for beta in betas)
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
@@ -2054,3 +2068,85 @@ def test_bedrock_capability_model_reads_base_model_only_for_application_profile_
     from litellm.llms.bedrock.common_utils import bedrock_capability_model
 
     assert bedrock_capability_model(model, base_model) == expected
+
+
+_FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+_COMPILE_REJECTION: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_SCHEMA_PATTERN_REJECTION: Final = (
+    "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
+    "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
+    "range, or avoid nesting quantified groups"
+)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_text", "expected"),
+    [
+        (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
+        (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
+        (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
+        (400, "The model returned the following errors: messages.0.content: Field required", False),
+        (500, _FORMAT_REJECTION, False),
+        (429, _COMPILE_REJECTION, False),
+    ],
+    ids=[
+        "format_not_permitted",
+        "schema_too_complex",
+        "schema_pattern_too_complex",
+        "other_key_not_permitted",
+        "other_400",
+        "500",
+        "429",
+    ],
+)
+def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_native_output(
+    status_code, error_text, expected
+):
+    assert is_bedrock_native_output_rejection(status_code, error_text) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("global.anthropic.claude-sonnet-5", None, True),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, True),
+        ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
+    ],
+    ids=["opus_4_8", "sonnet_5", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
+)
+def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_output_on(
+    local_model_cost_map, model, model_info, expected
+):
+    assert bedrock_native_output_is_opt_in(model, model_info=model_info) is expected
+
+
+def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the_deployment(local_model_cost_map):
+    litellm_params: Final = {"api_base": "https://bedrock.example", "model_info": {"id": "deployment-1"}}
+
+    turned_off: Final = without_bedrock_native_output_opt_in(litellm_params)
+
+    assert not bedrock_native_output_is_opt_in(
+        "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
+    )
+    assert turned_off["api_base"] == "https://bedrock.example"
+    assert deployment_model_info(turned_off)["id"] == "deployment-1"
+    assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+
+def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    with (
+        patch("botocore.loaders.Loader.load_service_model", return_value=["only-in-the-description"]),
+        patch.object(mod.verbose_logger, "warning") as warning,
+    ):
+        shape: Final = mod._load_bedrock_response_stream_shape()
+
+    assert shape is None
+    (logged,) = warning.call_args_list
+    assert "only-in-the-description" not in logged.args[0] % logged.args[1:]

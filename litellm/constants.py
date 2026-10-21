@@ -25,6 +25,8 @@ CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_HOST_KEY: Final = "github_copilot_host"
+GITHUB_COPILOT_DEFAULT_HOST: Final = "github.com"
 GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
 GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
@@ -40,6 +42,14 @@ class ServerStreamingClassification(str, Enum):
 SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", 5.0
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", 300.0
+)
+KUBERNETES_POD_DISCOVERY_DNS_TIMEOUT_SECONDS: Final = 2.0
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
@@ -146,6 +156,9 @@ DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLIN
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
+HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS: Final = get_env_int_in_range(
+    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 300, 1, 86400
+)
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
@@ -183,6 +196,11 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
 # Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
+MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
+MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
+    "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
+)
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = get_env_int(
     "MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024
 )  # 1MB = 1024KB
@@ -243,7 +261,17 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKE
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
+MCP_MAX_SSE_EVENT_SIZE_BYTES: Final = get_env_int_in_range(
+    "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", 64 * 1024 * 1024, 1, sys.maxsize
+)
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
+MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
+)
+MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS", 5.0
+)
 MCP_METADATA_TIMEOUT: Final = get_env_float("LITELLM_MCP_METADATA_TIMEOUT", 10.0)
 MCP_HEALTH_CHECK_TIMEOUT: Final = get_env_float("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", 10.0)
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
@@ -1030,10 +1058,11 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.openinfer.ai/v1",
 ]
 
 
-openai_compatible_providers: Final[list] = [
+openai_compatible_providers: Final[list[str]] = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -1098,6 +1127,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
@@ -1253,14 +1283,6 @@ together_ai_models: Final[set] = set(
 )
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
 
 featherless_ai_models: Final[set] = set(
     [
@@ -1619,6 +1641,7 @@ CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = get_env_int("CLOUDZERO_EXPORT_INTERVA
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = get_env_int("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100)
 PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
+INTERNAL_CALLBACK_NAMES: Final = frozenset({"cache", "vector_store_pre_call_hook"})
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
@@ -1630,8 +1653,11 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
+VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
@@ -1795,6 +1821,7 @@ LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, get_env_int("LITELLM_EXECUTED
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER: Final = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX: Final = "litellm-session-token"
+CP_RETURN_TO_COOKIE_PREFIX: Final = "return_to.v1."
 CLI_SSO_SESSION_CACHE_KEY_PREFIX: Final = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS: Final = 600
 CLI_SESSION_KEY_PREFIX: Final = "cli-session"
@@ -1838,6 +1865,9 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = get_env_float(
 SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", 300.0)
 SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", 30.0)
 SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
+SPEND_LOG_SIZE_CHECK_JOB_NAME: Final = "spend_log_size_check"
+SPEND_LOG_SIZE_CHECK_INTERVAL: Final = os.getenv("SPEND_LOG_SIZE_CHECK_INTERVAL", "1d")
+SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES: Final = get_env_int("SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES", 10)
 SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
     "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
 )
@@ -1959,6 +1989,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups",
     "public_model_groups_links",
     "cost_discount_config",
+    "apply_search_free_tier",
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
@@ -2299,6 +2330,7 @@ HARNESS_STDERR_TAIL_LINES: Final = 40
 HARNESS_STREAM_READ_CHUNK_BYTES: Final = 64 * 1024
 HARNESS_EVENT_QUEUE_MAX_SIZE: Final = 1024
 HARNESS_PROCESS_KILL_GRACE_SECONDS: Final = 5.0
+HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS: Final = 30.0
 HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
     {
         ".git",

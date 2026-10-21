@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock("./model_info/KubernetesPodsCard", () => ({
+  default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
+}));
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../tests/mocks/complexityScorerDefaults"),
@@ -194,6 +197,91 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("shows Kubernetes pods for discovery-enabled models", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("shows Kubernetes pods for admin viewers", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Admin Viewer" isViewOnly={true} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("hides Kubernetes pods for non-admin users", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal User" />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is disabled", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: false },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is not configured", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
   });
 
   it("should display loading state when model data is loading", () => {

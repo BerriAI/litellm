@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import enum
+import gc
 import importlib
 import inspect
 import io
@@ -54,6 +55,7 @@ from typing import (
 )
 
 import anyio
+import anyio.lowlevel
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
@@ -76,6 +78,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
@@ -97,6 +100,13 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    HUGGING_FACE_SOURCE,
+    KimiK3Encodings,
+    kimi_k3_anthropic_tokens,
+    kimi_k3_template_tokens,
+    kimi_k3_tokens,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -136,7 +146,6 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -147,7 +156,17 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
+from litellm.proxy.common_utils.token_count_settings import (
+    TOKENIZER_LOAD_MAX_RUNNING,
+    TOKENIZER_LOAD_REUSE_SECONDS,
+    TOKENIZER_LOAD_WAIT_SECONDS,
+    ProviderCountFailure,
+    TokenCountSettings,
+    cost_map_entry,
+    resolve_token_count_settings,
+)
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -183,7 +202,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -283,12 +302,14 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
 )
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
@@ -302,6 +323,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -319,6 +341,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+    SPEND_LOG_SIZE_CHECK_INTERVAL,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -335,6 +358,8 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
+    iter_items,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -346,6 +371,11 @@ from litellm.litellm_core_utils.realtime_errors import (
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
+)
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    deployment_drops_params,
+    drop_non_string_tool_result_texts,
+    malformed_tool_result_count_error,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
@@ -371,6 +401,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
+    MAX_REQUEST_SIZE_MB_SETTING,
     check_response_size_is_safe,
     is_request_body_safe,
     log_model_access_denial,
@@ -432,6 +463,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
+    sse_error_payload,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -511,6 +543,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     parse_stagger_settings,
     stagger_trigger,
 )
+from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -808,6 +841,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -922,6 +956,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -941,6 +976,7 @@ from litellm.secret_managers.main import (
 )
 from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -951,7 +987,14 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
+    GenericEvent,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponseInProgressEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -983,7 +1026,13 @@ from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
+from litellm.types.utils import (
+    CredentialItem,
+    CustomHuggingfaceTokenizer,
+    RawRequestTypedDict,
+    SelectTokenizerResponse,
+    StandardLoggingPayload,
+)
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
@@ -1203,6 +1252,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
+async def _flush_spend_on_shutdown() -> None:
+    await flush_spend_counters_on_shutdown()
+    await _flush_spend_logs_queue_on_shutdown()
+
+
+async def _flush_spend_around_logging_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
+) -> None:
+    await flush_spend()
+    await drain_logging_tasks()
+    await flush_spend()
+
+
 async def _drain_audit_tasks_on_shutdown() -> None:
     try:
         from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
@@ -1295,6 +1357,7 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -1380,6 +1443,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     import json
 
     init_verbose_loggers()
+
+    running_loop: Final = asyncio.get_running_loop()
+    if isinstance(running_loop, asyncio.BaseEventLoop) and running_loop.get_debug():
+        log_slow_gc_passes(threshold_seconds=running_loop.slow_callback_duration, log=verbose_proxy_logger.warning)
 
     prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
     if prometheus_multiproc_dir:
@@ -1740,6 +1807,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    gc.freeze()
+                    verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
                 finally:
                     if model_info_scheduler is not None and model_info_scheduler.running:
@@ -1801,9 +1870,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
-
-            await _flush_spend_logs_queue_on_shutdown()
+            await _flush_spend_around_logging_drain_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()
 
@@ -1931,6 +1998,9 @@ vertex_live_passthrough_vertex_base: Final = VertexBase()
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 from fastapi.routing import APIWebSocketRoute
+from starlette.routing import BaseRoute
+
+from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
@@ -1977,10 +2047,19 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
     return openapi_schema
 
 
-def get_openapi_schema():
-    if app.openapi_schema:
-        return app.openapi_schema
+@dataclass(frozen=True, slots=True)
+class _OpenAPIInputs:
+    routes: tuple[BaseRoute, ...]
+    loaded_lazy_modules: frozenset[str]
 
+
+def _openapi_inputs() -> _OpenAPIInputs:
+    from litellm.proxy._lazy_features import loaded_lazy_modules
+
+    return _OpenAPIInputs(routes=tuple(app.routes), loaded_lazy_modules=loaded_lazy_modules(app))
+
+
+def _build_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
     # Use compatibility wrapper for FastAPI 0.120+ schema generation
     from litellm.proxy.common_utils.openapi_schema_compat import (
         get_openapi_schema_with_compat,
@@ -1991,11 +2070,11 @@ def get_openapi_schema():
         title=app.title,
         version=app.version,
         description=app.description,
-        routes=app.routes,
+        routes=list(inputs.routes),
     )
 
     # Find all WebSocket routes
-    websocket_routes: Final = [route for route in app.routes if isinstance(route, APIWebSocketRoute)]
+    websocket_routes: Final = [route for route in inputs.routes if isinstance(route, APIWebSocketRoute)]
 
     # Add a synthetic GET stub for each so they render in Swagger UI,
     # without clobbering existing HTTP operations on the same path.
@@ -2007,31 +2086,34 @@ def get_openapi_schema():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def get_openapi_schema():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi_schema()
+def _build_docs_filtered_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
+    openapi_schema = _build_openapi_schema(inputs)
 
-    # Filter routes to include only specific ones
-    openai_routes: Final = LiteLLMRoutes.openai_routes.value
-    paths_to_include: Final[dict] = {}
-    for route in openai_routes:
-        if route in openapi_schema["paths"]:
-            paths_to_include[route] = openapi_schema["paths"][route]
-    openapi_schema["paths"] = paths_to_include
+    all_paths: Final = openapi_schema.get("paths")
+    openapi_schema["paths"] = (
+        {route: all_paths[route] for route in LiteLLMRoutes.openai_routes.value if route in all_paths}
+        if isinstance(all_paths, dict)
+        else {}
+    )
 
     # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
@@ -2039,24 +2121,32 @@ def custom_openapi():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_docs_filtered_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_docs_filtered_openapi_schema)
 else:
     # For regular users, use get_openapi_schema to include LLM API schemas
     app.openapi = get_openapi_schema
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_openapi_schema)
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
@@ -2151,9 +2241,14 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
                 open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
             return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
-        if status_code >= 400:
-            open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
-        parent_otel_span.set_status(Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK))
+        parent_otel_span.set_status(
+            Status(
+                StatusCode.ERROR,
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code),
+            )
+            if status_code >= 400
+            else Status(StatusCode.OK)
+        )
         parent_otel_span.end()
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
@@ -2663,6 +2758,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+def configured_max_request_size_mb() -> int | float | None:
+    return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
+
+
+app.add_middleware(
+    RequestBodyDecompressionMiddleware,
+    get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -3015,8 +3118,9 @@ def cost_tracking():
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
-        litellm.logging_callback_manager.add_litellm_callback(ProxyDBLogger(spend_event_producer))
-        litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer))
+        db_logger: Final = ProxyDBLogger(spend_event_producer)
+        litellm.logging_callback_manager.add_litellm_callback(db_logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
@@ -4132,75 +4236,61 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     return tuple(float(current_value) for current_value in results or ())
 
 
-def update_cache_read_keys(
-    user_id: str | None,
-    end_user_id: str | None,
-    team_id: str | None,
-    tags: Sequence[object] | None,
-    response_cost: float | None,
-) -> tuple[str, ...]:
-    if response_cost is None:
-        return ()
-    user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
-    end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
-    tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + team_keys + tag_keys
+_CachedSpendObjectT = TypeVar(
+    "_CachedSpendObjectT", LiteLLM_UserTable, LiteLLM_EndUserTable, LiteLLM_TeamTableCachedObj, LiteLLM_TagTable
+)
 
 
-_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
-
-
-async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
-    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
-    round trip as the post-call spend counter read instead of its own."""
-    request: Final = active_request_redis_batches()
-    target: Final = user_api_key_cache if cache is None else cache
-    if request is None or target.redis_cache is None or not keys:
+def _add_spend_to_locally_cached_object(
+    cache: UserApiKeyCache, key: str, model_type: type[_CachedSpendObjectT], response_cost: float
+) -> None:
+    current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
+    if current is None:
         return
-    with service_target(AUTH_OBJECTS_TARGET):
-        request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
-            keys, request.batch(target.redis_cache)
-        )
+    cache.set_cache(
+        key=key,
+        value=current.model_copy(update={"spend": (current.spend or 0.0) + response_cost}),
+        local_only=True,
+        model_type=model_type,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
-async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
-    request: Final = active_request_redis_batches()
-    if request is None:
+async def _add_spend_to_shared_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> float | None:
+    if cache.redis_cache is None:
         return None
-    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
-    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
-        return None
-    values: Final = await cache.async_resolve_batch_get(armed)
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
-
-
-async def _read_update_cache_values(
-    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
-) -> Mapping[str, object]:
-    """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
-    exactly as a failed per-object GET left that object untouched."""
-    if not keys:
-        return MappingProxyType({})
-    target: Final = user_api_key_cache if cache is None else cache
     try:
-        armed: Final = await _take_armed_update_cache_read(keys, target)
-        if armed is not None:
-            return armed
-        values: Final = await target.async_batch_get_cache(
-            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
+        return await cache.redis_cache.async_increment_if_present(
+            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
         )
     except Exception as e:
         verbose_proxy_logger.warning(
-            "Spend tracking - failed to read cached spend objects. Budget enforcement may use stale spend values. "
-            "keys=%s - %s",
-            keys,
+            "Spend tracking - failed to add spend to the global proxy spend in Redis. "
+            "Budget enforcement may use stale spend values. response_cost=%s - %s",
+            response_cost,
             str(e),
         )
-        return MappingProxyType({})
-    if values is None:
-        return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
+        return None
+
+
+async def _add_spend_to_global_proxy_spend(
+    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
+) -> None:
+    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    if not isinstance(local_total, (int, float)):
+        return
+    if shared_total is not None and local_total != local_before and shared_total < local_total:
+        return
+    cache.set_cache(
+        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=local_total + response_cost if shared_total is None else shared_total,
+        local_only=True,
+        ttl=get_management_object_ttl(cache),
+    )
 
 
 async def update_cache(
@@ -4211,6 +4301,7 @@ async def update_cache(
     response_cost: float | None,
     parent_otel_span: Span | None,
     tags: list[str] | None = None,
+    cache: UserApiKeyCache | None = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -4218,14 +4309,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: Final[list[tuple[str, object]]] = []
-    with service_target(AUTH_OBJECTS_TARGET):
-        cached_values: Final = await _read_update_cache_values(
-            keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
-            ),
-            parent_otel_span=parent_otel_span,
-        )
+    target: Final = user_api_key_cache if cache is None else cache
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4235,7 +4319,7 @@ async def update_cache(
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        existing_spend_obj = await target.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -4277,191 +4361,17 @@ async def update_cache(
             )
             # set cooldown on alert
 
-    ### UPDATE USER SPEND ###
-    async def _update_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        if response_cost is None:
-            return
-        user_ids: Final = [user_id]
+    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> None:
         try:
-            for _id in user_ids:
-                # Fetch the existing cost for the given user
-                if _id is None:
-                    continue
-                cached_user = cached_values.get(_id)
-                if cached_user is None:
-                    # do nothing if there is no cache value
-                    return
-                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
-                if existing_spend_obj is None:
-                    return
-                verbose_proxy_logger.debug(
-                    "_update_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-                )
-
-                existing_spend = existing_spend_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        _id,
-                        CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
-                    )
-                )
-            ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if not isinstance(global_proxy_spend, (int, float)):
-                # do nothing if not in cache
-                return
-            elif response_cost is not None:
-                increment: Final = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
+            _add_spend_to_locally_cached_object(target, key, model_type, cost)
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Spend tracking - failed to update user spend in cache. "
+                "Spend tracking - failed to update %s spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "user_id=%s, response_cost=%s - %s\n%s",
-                user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE END-USER SPEND ###
-    async def _update_end_user_cache():
-        if end_user_id is None or response_cost is None:
-            return
-
-        _id: Final = end_user_cache_key(end_user_id)
-        try:
-            # Fetch the existing cost for the given user
-            cached_end_user: Final = cached_values.get(_id)
-            if cached_end_user is None:
-                # if user does not exist in LiteLLM_UserTable, create a new user
-                # do nothing if end-user not in api key cache
-                return
-            existing_spend_obj: Final = CacheCodec.deserialize(cached_end_user, LiteLLM_EndUserTable)
-            if existing_spend_obj is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_end_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-            )
-
-            existing_spend: Final = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_EndUserTable),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update end user spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "end_user_id=%s, response_cost=%s - %s\n%s",
-                end_user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
-        if team_id is None or response_cost is None:
-            return
-
-        _id: Final = f"team_id:{team_id}"
-        try:
-            cached_team: Final = cached_values.get(_id)
-            if cached_team is None:
-                # do nothing if team not in api key cache
-                return
-            existing_spend_obj: Final[LiteLLM_TeamTableCachedObj | None] = CacheCodec.deserialize(
-                cached_team, LiteLLM_TeamTableCachedObj
-            )
-            if existing_spend_obj is None:
-                return
-            verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
-            )
-
-            existing_spend: Final[float] = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update team spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "team_id=%s, response_cost=%s - %s\n%s",
-                team_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TAG SPEND ###
-    async def _update_tag_cache():
-        """
-        Update the tag cache with the new spend.
-        """
-        if tags is None or response_cost is None:
-            return
-
-        try:
-            for tag_name in tags:
-                if not tag_name or not isinstance(tag_name, str):
-                    continue
-
-                cache_key = tag_cache_key(tag_name)
-                # Fetch the existing tag object from cache
-                cached_tag = cached_values.get(cache_key)
-                if cached_tag is None:
-                    # do nothing if tag not in api key cache
-                    continue
-
-                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
-                if existing_tag_obj is None:
-                    continue
-
-                verbose_proxy_logger.debug(
-                    "_update_tag_cache: existing spend for tag=%s: %s; response_cost: %s",
-                    tag_name,
-                    existing_tag_obj,
-                    response_cost,
-                )
-
-                existing_spend = existing_tag_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_tag_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        cache_key,
-                        CacheCodec.serialize(existing_tag_obj, model_type=LiteLLM_TagTable),
-                    )
-                )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update tag spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "tags=%s, response_cost=%s - %s\n%s",
-                tags,
-                response_cost,
+                "key=%s, response_cost=%s - %s\n%s",
+                model_type.__name__,
+                key,
+                cost,
                 str(e),
                 traceback.format_exc(),
             )
@@ -4469,42 +4379,23 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         if token is not None and response_cost is not None:
             await _update_key_cache(token=token, response_cost=response_cost)
+    if response_cost is None:
+        return
 
-        if user_id is not None:
-            await _update_user_cache()
+    if user_id is not None:
+        _add_spend(user_id, LiteLLM_UserTable, response_cost)
+    if end_user_id is not None:
+        _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)
+    if team_id is not None:
+        _add_spend(f"team_id:{team_id}", LiteLLM_TeamTableCachedObj, response_cost)
+    for tag_name in tags or ():
+        if tag_name and isinstance(tag_name, str):
+            _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
 
-        if end_user_id is not None:
-            await _update_end_user_cache()
-
-        if team_id is not None:
-            await _update_team_cache()
-
-        if tags is not None:
-            await _update_tag_cache()
-
-    global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-    local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
-    shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
-
-    if local_object_updates:
-        with service_target(AUTH_OBJECTS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(local_object_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
-            )
-    if shared_scalar_updates:
-        with service_target(SPEND_COUNTERS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(shared_scalar_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                )
-            )
+    if litellm.max_budget <= 0:
+        return
+    with service_target(SPEND_COUNTERS_TARGET):
+        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
 
 
 def run_ollama_serve():
@@ -5634,18 +5525,42 @@ def _current_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
-_CLEANUP_SCHEDULE_KEYS: Final = (
+_RETENTION_RULE_KEYS: Final = (
     "maximum_spend_logs_retention_period",
     "maximum_autorouter_session_retention_period",
     "maximum_health_check_retention_period",
     "maximum_daily_tag_spend_retention_period",
+)
+_CLEANUP_SCHEDULE_KEYS: Final = (
+    *_RETENTION_RULE_KEYS,
     "maximum_spend_logs_cleanup_cron",
     "maximum_spend_logs_retention_interval",
+    "maximum_spend_logs_size",
+    "maximum_spend_logs_cleanup_target_size",
+    "maximum_spend_logs_size_check_interval",
 )
+_SPEND_LOG_CLEANUP_JOB_ID: Final = "spend_log_cleanup_job"
+_SPEND_LOG_SIZE_CHECK_JOB_ID: Final = "spend_log_size_check_job"
 
 
 def _cleanup_schedule_of(settings: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(settings.get(key) for key in _CLEANUP_SCHEDULE_KEYS)
+
+
+def _wants_retention_job(settings: Mapping[str, object]) -> bool:
+    """The retention job runs the age rules, and the size rule too when one cron drives both."""
+    return any(settings.get(key) is not None for key in _RETENTION_RULE_KEYS) or (
+        settings.get("maximum_spend_logs_size") is not None and bool(settings.get("maximum_spend_logs_cleanup_cron"))
+    )
+
+
+def _wants_size_check_job(settings: Mapping[str, object]) -> bool:
+    """The size rule gets its own job on maximum_spend_logs_size_check_interval unless a cleanup cron is set."""
+    return settings.get("maximum_spend_logs_size") is not None and not settings.get("maximum_spend_logs_cleanup_cron")
+
+
+def _wants_cleanup_jobs(settings: Mapping[str, object]) -> bool:
+    return _wants_retention_job(settings) or _wants_size_check_job(settings)
 
 
 @lru_cache(maxsize=4096)
@@ -6519,10 +6434,13 @@ class ProxyConfig:
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
+                if not isinstance(key, str):
+                    verbose_proxy_logger.warning("Skipping an environment_variables key that is not a string")
+                    continue
                 if key in self._BLOCKED_ENV_KEYS:
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
                     continue
-                if isinstance(key, str) and is_mcp_stdio_flag_key(key):
+                if is_mcp_stdio_flag_key(key):
                     verbose_proxy_logger.warning(
                         "Ignoring %s set in the config file. Set it in the proxy's environment instead",
                         MCP_STDIO_ENABLED_ENV_VAR,
@@ -6538,7 +6456,7 @@ class ProxyConfig:
                 if isinstance(value, str) and value.startswith("os.environ/"):
                     resolved_secret_string: str | None = get_secret_str(secret_name=value)
                     if resolved_secret_string is not None:
-                        os.environ[key] = resolved_secret_string
+                        self._set_config_environment_variable(key=key, value=resolved_secret_string)
                 else:
                     #########################################################
                     # handles this scenario:
@@ -6547,12 +6465,20 @@ class ProxyConfig:
                     #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
                     # ```
                     #########################################################
-                    os.environ[key] = str(value)
+                    self._set_config_environment_variable(key=key, value=str(value))
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
+
+    def _set_config_environment_variable(self, key: str, value: str) -> None:
+        if key in os.environ and os.environ[key] != value:
+            verbose_proxy_logger.warning(
+                "environment_variables.%s from the config file replaces the value already set in the process environment",
+                key,
+            )
+        os.environ[key] = value
 
     def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
         misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
@@ -6995,7 +6921,12 @@ class ProxyConfig:
             MappingProxyType(
                 {
                     name: typed_general_settings[name]
-                    for name in ("vector_store_deny_by_default", "search_tool_deny_by_default")
+                    for name in (
+                        "vector_store_deny_by_default",
+                        "search_tool_deny_by_default",
+                        "vertex_ai_pass_through_drop_anthropic_betas",
+                        "request_tag_mappings",
+                    )
                     if name in typed_general_settings
                 }
             )
@@ -8148,39 +8079,73 @@ class ProxyConfig:
         if scheduler is None:
             return
 
-        wants_job: Final = any(
-            general_settings.get(key) is not None
-            for key in (
-                "maximum_spend_logs_retention_period",
-                "maximum_autorouter_session_retention_period",
-                "maximum_health_check_retention_period",
-                "maximum_daily_tag_spend_retention_period",
-            )
-        )
-        if not wants_job:
-            if scheduler.get_job("spend_log_cleanup_job") is not None:
-                scheduler.remove_job("spend_log_cleanup_job")
-                verbose_proxy_logger.info("Removed existing spend log cleanup job")
-            return
-
-        trigger: Final = self._spend_log_cleanup_trigger()
-        if trigger is None:
-            return
         from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
             SpendLogCleanup,
         )
 
-        scheduler.add_job(
-            SpendLogCleanup().cleanup_old_spend_logs,
-            trigger,
+        if not _wants_retention_job(general_settings):
+            if scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None:
+                scheduler.remove_job(_SPEND_LOG_CLEANUP_JOB_ID)
+                verbose_proxy_logger.info("Removed existing spend log cleanup job")
+        else:
+            trigger: Final = self._spend_log_cleanup_trigger()
+            if trigger is not None:
+                scheduler.add_job(
+                    SpendLogCleanup().cleanup_old_spend_logs,
+                    trigger,
+                    args=[prisma_client],
+                    id=_SPEND_LOG_CLEANUP_JOB_ID,
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
+
+        if not _wants_size_check_job(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
+            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                verbose_proxy_logger.info("Removed existing spend log size check job")
+            return
+        size_trigger: Final = self._spend_log_size_check_trigger()
+        if size_trigger is None:
+            return
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            SpendLogCleanup().cleanup_spend_logs_by_size,
+            size_trigger,
             args=[prisma_client],
-            id="spend_log_cleanup_job",
+            id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
-        verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
+        verbose_proxy_logger.info("Spend log size check rescheduled with trigger: %s", size_trigger)
 
-    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+    def _spend_log_size_check_trigger(self) -> object | None:
+        return self._staggered_interval_trigger(
+            _SPEND_LOG_SIZE_CHECK_JOB_ID,
+            "maximum_spend_logs_size_check_interval",
+            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is an untyped module dict
+        )
+
+    @staticmethod
+    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> object | None:
+        if not isinstance(interval, str):
+            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
+            return None
+        # this runs against a started scheduler, which the startup stagger sweep
+        # cannot reach, so the offset is applied here or the job reconverges across
+        # replicas the first time an admin edits the settings
+        try:
+            interval_seconds: Final = duration_in_seconds(interval)
+            return stagger_trigger(
+                job_id=job_id,
+                trigger=IntervalTrigger(seconds=interval_seconds),
+                period_seconds=interval_seconds,
+                settings=parse_stagger_settings(general_settings),  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
+            )
+        except (ValueError, OverflowError):
+            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
+            return None
+
+    def _spend_log_cleanup_trigger(self) -> object | None:
         cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
         if cleanup_cron:
             from apscheduler.triggers.cron import CronTrigger
@@ -8191,24 +8156,11 @@ class ProxyConfig:
                 verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
                 return None
             return cron_trigger
-        retention_interval: Final[object] = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-        if not isinstance(retention_interval, str):
-            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
-            return None
-        # this runs against a started scheduler, which the startup stagger sweep
-        # cannot reach, so the offset is applied here or the job reconverges across
-        # replicas the first time an admin edits the retention settings
-        try:
-            interval_seconds: Final = duration_in_seconds(retention_interval)
-            return stagger_trigger(
-                job_id="spend_log_cleanup_job",
-                trigger=IntervalTrigger(seconds=interval_seconds),
-                period_seconds=interval_seconds,
-                settings=parse_stagger_settings(general_settings),
-            )
-        except (ValueError, OverflowError):
-            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
-            return None
+        return self._staggered_interval_trigger(
+            _SPEND_LOG_CLEANUP_JOB_ID,
+            "maximum_spend_logs_retention_interval",
+            general_settings.get("maximum_spend_logs_retention_interval", "1d"),
+        )
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -8239,6 +8191,7 @@ class ProxyConfig:
         previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
         effects: Final = (
+            self._apply_request_tag_mappings_setting,
             self._apply_alerting_settings,
             self._apply_pass_through_settings,
             self._apply_boolean_settings,
@@ -8249,6 +8202,19 @@ class ProxyConfig:
         )
         for effect in effects:
             await effect(db_values)
+
+    async def _apply_request_tag_mappings_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        if "request_tag_mappings" not in db_values:
+            return
+        mappings: Final = self.settings.get("request_tag_mappings")
+        try:
+            ConfigGeneralSettings.model_validate(MappingProxyType({"request_tag_mappings": mappings}))
+        except ValidationError as error:
+            self.settings.pop("request_tag_mappings", None)
+            verbose_proxy_logger.error(
+                "Ignoring invalid general_settings.request_tag_mappings from the DB, so no baggage maps to tags: %s",
+                error,
+            )
 
     async def _apply_alerting_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         alerting: Final = self.settings.get("alerting")
@@ -8351,8 +8317,11 @@ class ProxyConfig:
         if scheduler is not None and scheduler.state == STATE_STOPPED:
             return
         schedule: Final = self._resolved_cleanup_schedule()
-        wants_job: Final = any(value is not None for value in schedule[:4])
-        has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        wants_job: Final = _wants_cleanup_jobs(self.settings)
+        has_job: Final = scheduler is not None and (
+            scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None
+            or scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+        )
         baseline: Final = (
             self._last_cleanup_schedule_attempt
             if has_job and self._last_cleanup_schedule_attempt is not None
@@ -9913,7 +9882,7 @@ def _restamp_streaming_chunk_model(
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not target_model or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict, bytes)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
@@ -9925,9 +9894,21 @@ def _restamp_streaming_chunk_model(
     if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
-    downstream_model: Final = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    if isinstance(chunk, bytes):
+        if request_data.get("_litellm_raw_sse_stream"):
+            return chunk, model_mismatch_logged
+        return _restamp_nested_response_model_in_sse_frame(chunk, target_model), model_mismatch_logged
+
+    typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
+    restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
+
+    downstream_model: Final = (
+        restamped_chunk.get("model")
+        if isinstance(restamped_chunk, Mapping)
+        else getattr(restamped_chunk, "model", None)
+    )
     if downstream_model == target_model:
-        return chunk, model_mismatch_logged
+        return restamped_chunk, model_mismatch_logged
 
     if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
@@ -9945,22 +9926,92 @@ def _restamp_streaming_chunk_model(
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.client_facing_stream_model = target_model
-    if isinstance(chunk, dict):
-        return {**chunk, "model": target_model}, model_mismatch_logged
+    if isinstance(restamped_chunk, Mapping):
+        return {**restamped_chunk, "model": target_model}, model_mismatch_logged
 
     try:
-        return chunk.model_copy(update={"model": target_model}), model_mismatch_logged
+        return restamped_chunk.model_copy(update={"model": target_model}), model_mismatch_logged
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
             target_model,
-            type(chunk),
+            type(restamped_chunk),
             str(e),
             exc_info=True,
         )
 
-    return chunk, model_mismatch_logged
+    return restamped_chunk, model_mismatch_logged
+
+
+def _nested_response_of(chunk: BaseModel) -> object:
+    if isinstance(
+        chunk,
+        (
+            ResponseCreatedEvent,
+            ResponseInProgressEvent,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        ),
+    ):
+        return chunk.response
+    if isinstance(chunk, GenericEvent):
+        extra_fields: Final[Mapping[str, object]] = chunk.model_extra or {}
+        return extra_fields.get("response")
+    return None
+
+
+def _restamp_nested_response_model(
+    chunk: BaseModel | Mapping[str, object], target_model: str
+) -> BaseModel | Mapping[str, object]:
+    if not isinstance(chunk, BaseModel):
+        restamped_event: Final = _event_with_restamped_nested_model(chunk, target_model)
+        return chunk if restamped_event is None else restamped_event
+    nested_response: Final = _nested_response_of(chunk)
+    if isinstance(nested_response, ResponsesAPIResponse):
+        if nested_response.model in (None, target_model):
+            return chunk
+        return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
+    untyped_response: Final = as_str_mapping(nested_response)
+    if untyped_response is None or untyped_response.get("model") in (None, target_model):
+        return chunk
+    return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})
+
+
+def _event_with_restamped_nested_model(event: Mapping[str, object], target_model: str) -> Mapping[str, object] | None:
+    nested_response: Final = as_str_mapping(event.get("response"))
+    if nested_response is None or nested_response.get("model") in (None, target_model):
+        return None
+    return {**event, "response": {**nested_response, "model": target_model}}
+
+
+_SSE_DATA_FIELD: Final = b"data:"
+_SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
+_SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
+    if _SSE_NESTED_RESPONSE_MARKER not in frame:
+        return frame
+    return b"".join(
+        _restamp_nested_response_model_in_sse_line(line, target_model) for line in frame.splitlines(keepends=True)
+    )
+
+
+def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -> bytes:
+    if not line.startswith(_SSE_DATA_FIELD):
+        return line
+    try:
+        event: Final = _SSE_EVENT_OBJECT.validate_json(line.removeprefix(_SSE_DATA_FIELD).strip())
+    except ValidationError:
+        return line
+    restamped_event: Final = _event_with_restamped_nested_model(event, target_model)
+    if restamped_event is None:
+        return line
+    serialized_event: Final = json.dumps(restamped_event, separators=(",", ":"), ensure_ascii=False)
+    line_ending: Final = line[len(line.rstrip(b"\r\n")) :]
+    return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
 def _fast_serialize_simple_model_response_stream(
@@ -10338,6 +10389,7 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10349,6 +10401,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
+    stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10405,6 +10458,7 @@ async def async_data_generator(
                 await asyncio.sleep(0)
                 loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
+                stream_started = True
                 yield ": ping\n\n"
                 continue
             chunk = item
@@ -10416,6 +10470,7 @@ async def async_data_generator(
                     request_data=request_data,
                     str_so_far=_str_so_far,
                 )
+            stream_started = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is
@@ -10521,7 +10576,7 @@ async def async_data_generator(
         if error_message is not None:
             yield error_message
         # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
-        if not request_data.get("_litellm_skip_openai_stream_done"):
+        if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
@@ -10538,13 +10593,14 @@ async def async_data_generator(
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
-        await proxy_logging_obj.post_call_failure_hook(
+        replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
         )
+        client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
             "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
             e,
@@ -10552,31 +10608,31 @@ async def async_data_generator(
 
         if error_state is not None:
             stream_completed = True
-            error_frame: Final = error_state.format_failure(e)
+            error_frame: Final = error_state.format_failure(client_error)
             if error_frame is not None:
                 yield error_frame
-            if not request_data.get("_litellm_skip_openai_stream_done"):
+            if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
-        if isinstance(e, HTTPException):
-            raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
+            raise client_error
+        error_returned: Final = json.dumps(
+            {
+                "error": sse_error_payload(client_error)[1]
+                if isinstance(client_error, HTTPException)
+                else ProxyException(
+                    message=getattr(client_error, "message", str(client_error)),
+                    type=getattr(client_error, "type", "None"),
+                    param=getattr(client_error, "param", "None"),
+                    code=getattr(client_error, "status_code", 500),
+                ).to_dict()
+            },
+            default=str,
         )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
+        if ends_with_openai_done:
+            yield _OPENAI_STREAM_DONE_FRAME
     finally:
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
@@ -11412,12 +11468,29 @@ class ProxyStartupEvent:
 
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
-        if (
-            cleanup_settings.get("maximum_spend_logs_retention_period") is not None
-            or cleanup_settings.get("maximum_autorouter_session_retention_period") is not None
-            or cleanup_settings.get("maximum_health_check_retention_period") is not None
-            or cleanup_settings.get("maximum_daily_tag_spend_retention_period") is not None
-        ):
+        if _wants_size_check_job(cleanup_settings):
+            size_check_interval: Final = cleanup_settings.get(
+                "maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL
+            )
+            try:
+                if not isinstance(size_check_interval, str):
+                    raise TypeError(size_check_interval)
+                size_check_seconds: Final = duration_in_seconds(size_check_interval)
+                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                    SpendLogCleanup().cleanup_spend_logs_by_size,
+                    "interval",
+                    seconds=size_check_seconds + random.randint(0, 60),
+                    args=[prisma_client],
+                    id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log size check scheduled every %s", size_check_interval)
+            except (TypeError, ValueError, OverflowError):
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_size_check_interval value: %r", size_check_interval
+                )
+        if _wants_retention_job(cleanup_settings):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
@@ -11432,7 +11505,7 @@ class ProxyStartupEvent:
                         spend_log_cleanup.cleanup_old_spend_logs,
                         cron_trigger,
                         args=[prisma_client],
-                        id="spend_log_cleanup_job",
+                        id=_SPEND_LOG_CLEANUP_JOB_ID,
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
@@ -11451,7 +11524,7 @@ class ProxyStartupEvent:
                         "interval",
                         seconds=interval_seconds + random.randint(0, 60),
                         args=[prisma_client],
-                        id="spend_log_cleanup_job",
+                        id=_SPEND_LOG_CLEANUP_JOB_ID,
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
@@ -11459,6 +11532,7 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error(
                         "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
                     )
+        if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
@@ -14490,7 +14564,9 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14503,6 +14579,11 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.litellm_completion_transformation.count_request import (
+    ChatCountBridgeError,
+    chat_count_request,
+    with_provider_file_ids,
+)
 
 
 def _get_provider_token_counter(
@@ -14560,53 +14641,448 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _provider_count_outcome(
+    result: Union["TokenCountResponse", None],
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if result is not None and result.error is True:
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
+            message=result.error_message or "Token counting failed",
+            rejected_before_provider_call=result.rejected_before_provider_call,
+        )
+    return result
+
+
+def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
+    call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
+    try:
+        load_credentials_from_list(call_params)
+    except litellm.AuthenticationError as e:
+        raise ProxyException(
+            message=e.message,
+            type="auth_error",
+            param="model",
+            code=401,
+        ) from e
+    return call_params
+
+
+def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+    if deployment is None:
+        return None
+    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
+
+
+_DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_with_request_drop_params(
+    deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    drop_params: object,
+) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    if drop_params is None:
+        return deployment
+    resolved_deployment: Final = deployment or {}
+    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+
+
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
     model_to_use: str,
+    region: str | None,
     messages: list | None,
     contents: list | None,
-    deployment: dict[str, object] | None,
+    deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
-) -> Optional["TokenCountResponse"]:
-    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
+    deployment_in_region: Final = (
+        None
+        if deployment is None
+        else dict(deployment)
+        if region is None
+        else {
+            **deployment,
+            "litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), "aws_region_name": region},
+        }
+    )
     try:
         result: Final = await provider_counter.count_tokens(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=deployment,
+            deployment=_with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            chat_params=chat_params,
         )
     except httpx.HTTPStatusError as e:
-        error_message: Final = getattr(e, "message", None) or str(e)
-        status_code: Final = getattr(e, "status_code", None) or e.response.status_code
-        raise ProxyException(
-            message=error_message,
-            type="token_counting_error",
-            param="model",
-            code=status_code,
+        return ProviderCountFailure(
+            status_code=getattr(e, "status_code", None) or e.response.status_code,
+            message=getattr(e, "message", None) or str(e),
         )
-    if result is not None and result.error is True:
-        raise ProxyException(
-            message=result.error_message or "Token counting failed",
-            type="token_counting_error",
-            param="model",
-            code=result.status_code or 500,
+    return _provider_count_outcome(result)
+
+
+async def _try_native_responses_count(
+    provider_counter: OpenAITokenCounter,
+    custom_llm_provider: str | None,
+    model_to_use: str,
+    _region: str | None,
+    responses_request: Mapping[str, object],
+    policy: DropPolicy,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
+        return None
+    return _provider_count_outcome(
+        await provider_counter.count_responses_request(
+            model_to_use=model_to_use,
+            request=responses_request,
+            policy=policy,
+            deployment=_with_resolved_credentials(deployment),
+            request_model=request_model,
         )
-    return result
+    )
+
+
+async def _provider_token_count(
+    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    model_to_use: str,
+    settings: TokenCountSettings,
+    local_estimate_allowed: bool,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    """Count with the provider, using the token_count_model in its region when one is set.
+
+    Returns None when the count should be estimated locally, or the provider's failure when the framed local
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    count_model: Final = settings.count_model
+    counting_model: Final = (
+        model_to_use
+        if count_model is None
+        else count_model.model
+        if count_model.litellm_provider is None
+        else f"{count_model.litellm_provider}/{count_model.model.removeprefix('bedrock/').removeprefix('bedrock_mantle/')}"
+    )
+    counted: Final = await count_with(counting_model, None if count_model is None else count_model.region)
+    if counted is None:
+        return None
+    if isinstance(counted, TokenCountResponse):
+        if count_model is None:
+            return counted.model_copy(update={"count_source": "provider"})
+        return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
+    failure: Final = (
+        counted
+        if count_model is None or count_model.region is None
+        else counted.with_hint(
+            f"This model counts tokens with {count_model.model} in {count_model.region}. "
+            "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
+        )
+    )
+    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+        return failure
+    raise failure.to_proxy_exception()
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalTokenEstimate:
+    total_tokens: int
+    tokenizer_type: str
+
+
+def _is_fork_guard_error(error: BaseException) -> bool:
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+    return isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking))
+
+
+def _is_tokenizer_panic(error: BaseException) -> bool:
+    return type(error).__module__ == "pyo3_runtime" and type(error).__name__ == "PanicException"
+
+
+def _answers_provider_error(error: BaseException) -> bool:
+    return (isinstance(error, Exception) or _is_tokenizer_panic(error)) and not _is_fork_guard_error(error)
+
+
+def _provider_error_after_failed_estimate(
+    provider_failure: ProviderCountFailure, error: BaseException
+) -> ProxyException:
+    verbose_proxy_logger.warning(
+        "Local token estimate failed after the provider's count error %s, answering that error: %s",
+        provider_failure.status_code,
+        type(error).__name__,
+    )
+    return provider_failure.to_proxy_exception()
+
+
+async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
+    try:
+        return await estimate
+    except BaseException as e:
+        if not _answers_provider_error(e):
+            raise
+        raise _provider_error_after_failed_estimate(provider_failure, e) from e
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomTokenizerKey:
+    identifier: str
+    revision: str
+    auth_token: str | None
+
+
+class _TokenizerLoadsBusy(Exception):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenizerLoadOutcome:
+    tokenizer: SelectTokenizerResponse | BaseException
+    finished_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedTokenizerLoad:
+    outcome: asyncio.Task[_TokenizerLoadOutcome]
+    started_at: float
+
+    def reusable(self, now: float) -> bool:
+        return not self.outcome.done() or now - self.outcome.result().finished_at < TOKENIZER_LOAD_REUSE_SECONDS
+
+
+async def _loaded_tokenizer(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> SelectTokenizerResponse | BaseException:
+    try:
+        return await asyncify(litellm.utils.select_tokenizer, limiter=threads)(
+            model=model, custom_tokenizer=custom_tokenizer
+        )
+    except asyncio.CancelledError:
+        raise
+    except BaseException as e:  # noqa: BLE001  # every count sharing this load decides what it answers, pyo3 panics included
+        return e
+
+
+async def _tokenizer_load_outcome(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> _TokenizerLoadOutcome:
+    tokenizer: Final = await _loaded_tokenizer(model, custom_tokenizer, threads)
+    return _TokenizerLoadOutcome(tokenizer=tokenizer, finished_at=asyncio.get_running_loop().time())
+
+
+@dataclass(slots=True)
+class _TokenizerLoads:
+    threads: anyio.CapacityLimiter
+    running: int = 0
+
+    def start(
+        self, model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loop: asyncio.AbstractEventLoop
+    ) -> _SharedTokenizerLoad | None:
+        if self.running >= self.threads.total_tokens:
+            return None
+        self.running += 1
+        outcome: Final = loop.create_task(_tokenizer_load_outcome(model, custom_tokenizer, self.threads))
+        outcome.add_done_callback(self._finished)
+        return _SharedTokenizerLoad(outcome=outcome, started_at=loop.time())
+
+    def _finished(self, _outcome: asyncio.Task[_TokenizerLoadOutcome]) -> None:
+        self.running -= 1
+
+
+_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+
+
+def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
+    existing: Final = _TOKENIZER_LOADS.get(None)
+    if existing is not None:
+        return existing
+    created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
+    _TOKENIZER_LOADS.set(created)
+    return created
+
+
+@dataclass(slots=True)
+class _TokenizerLoadSlot:
+    model: str
+    custom_tokenizer: CustomHuggingfaceTokenizer | None
+    current: _SharedTokenizerLoad | None = None
+
+    def load(self, loads: _TokenizerLoads, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad | None:
+        current: Final = self.current
+        if current is not None and current.reusable(loop.time()):
+            return current
+        self.current = loads.start(self.model, self.custom_tokenizer, loop)
+        return self.current
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _tokenizer_load_slot(
+    model: str, custom_tokenizer: _CustomTokenizerKey | None, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _TokenizerLoadSlot(
+        model=model,
+        custom_tokenizer=None
+        if custom_tokenizer is None
+        else CustomHuggingfaceTokenizer(
+            identifier=custom_tokenizer.identifier,
+            revision=custom_tokenizer.revision,
+            auth_token=custom_tokenizer.auth_token,
+        ),
+    )
+
+
+async def _tokenizer_after_provider_error(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+) -> SelectTokenizerResponse | BaseException:
+    loop: Final = asyncio.get_running_loop()
+    try:
+        load: Final = _tokenizer_load_slot(
+            model,
+            None
+            if custom_tokenizer is None
+            else _CustomTokenizerKey(
+                identifier=custom_tokenizer["identifier"],
+                revision=custom_tokenizer["revision"],
+                auth_token=custom_tokenizer["auth_token"],
+            ),
+            loop,
+        ).load(_tokenizer_loads_for_this_loop(), loop)
+        if load is None:
+            return _TokenizerLoadsBusy()
+        outcome: Final = await asyncio.wait_for(
+            asyncio.shield(load.outcome),
+            timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
+        )
+    except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
+        return e
+    return outcome.tokenizer
+
+
+async def _tokenizer_or_provider_error(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
+) -> SelectTokenizerResponse:
+    tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
+    if not isinstance(tokenizer, BaseException):
+        return tokenizer
+    if not _answers_provider_error(tokenizer):
+        raise tokenizer.with_traceback(None)
+    raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+
+
+async def _local_token_estimate(
+    model: str,
+    prompt: str | None,
+    messages: Sequence[AllMessageValues] | None,
+    tools: list[ChatCompletionToolParam] | None,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    provider_failure: ProviderCountFailure | None,
+) -> _LocalTokenEstimate:
+    tokenizer: Final = (
+        await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+        if provider_failure is None
+        else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+    )
+    count: Final = offload_token_count(litellm.token_counter)(
+        model=model,
+        text=prompt,
+        messages=messages,
+        tools=tools,
+        custom_tokenizer=tokenizer,
+    )
+    total_tokens: Final = await (
+        count if provider_failure is None else _estimate_or_provider_error(count, provider_failure)
+    )
+    return _LocalTokenEstimate(total_tokens=total_tokens, tokenizer_type=str(tokenizer["type"]))
+
+
+_KIMI_K3_ENCODINGS: Final = KimiK3Encodings(
+    source=HUGGING_FACE_SOURCE, retry_after_seconds=TOKENIZER_LOAD_REUSE_SECONDS
+)
+
+
+async def _kimi_k3_count(
+    request: TokenCountRequest,
+    messages_format: TokenCountMessagesFormat,
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+) -> int | None:
+    encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
+    if encoding is None:
+        return None
+    match messages_format:
+        case "anthropic":
+            return await offload_token_count(kimi_k3_anthropic_tokens)(
+                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+            )
+        case "openai":
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+
+
+class _TokenCountDeployment(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+_TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
+    group: Final = () if router is None else router.get_all_deployments(model_name=model_group)
+    return group[0] if group else None
+
+
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    params: Final = deployment.get("litellm_params", {})
+    return BaseAWSLLM().get_aws_region_name(
+        {"aws_region_name": params.get("aws_region_name")}, model=_non_empty_str(params.get("model"))
+    )
+
+
+def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
+    model_info: Final = deployment.get("model_info", {})
+    params: Final = deployment.get("litellm_params", {})
+    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    if base_model is not None:
+        return base_model, None
+    model: Final = _non_empty_str(params.get("model"))
+    if model is None:
+        return request_model, None
+    return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
@@ -14614,12 +15090,15 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
-def _drops_params(deployment: Mapping[str, object] | None) -> bool:
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
-    return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+_ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
-def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+def _estimable_contents(contents: Sequence[Mapping[str, object]]) -> bool:
+    parts: Final = chain.from_iterable(iter_items(content.get("parts") or ()) for content in contents)
+    return all(set(as_str_mapping(part) or ()) <= _ESTIMABLE_GOOGLE_PART_KEYS for part in parts)
+
+
+def _router_default_litellm_params(router: Router | None) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
         return {}
@@ -14648,8 +15127,45 @@ def _count_context_management(
     return CountContextManagement(
         spec=context_management,
         drop_invalid_edits=litellm.drop_params is True
-        or any(params.get("drop_params") is True for params in sent_params),
+        or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
+
+
+def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
+    previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
+    return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
+
+
+def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+
+
+def _native_responses_count(
+    provider_counter: BaseTokenCounter,
+    custom_llm_provider: str | None,
+    responses_request: Mapping[str, object] | None,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
+    if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
+        return None
+    return partial(
+        _try_native_responses_count,
+        provider_counter,
+        custom_llm_provider,
+        responses_request=responses_request,
+        policy=_count_drop_policy(deployment, responses_request),
+        deployment=deployment,
+        request_model=request_model,
+    )
+
+
+def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -14684,6 +15200,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    responses_request: Mapping[str, object] | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14705,7 +15222,7 @@ async def count_request_tokens(
         try:
             deployment = await llm_router.async_get_available_deployment(
                 model=request.model,
-                request_kwargs={},
+                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
             )
         except Exception:
             verbose_proxy_logger.exception(
@@ -14714,13 +15231,26 @@ async def count_request_tokens(
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})
-        load_credentials_from_list(deployment.get("litellm_params", {}))
+        deployment = {  # rebind-ok: merge the named credential into a copy
+            **deployment,
+            "litellm_params": with_named_credential(
+                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            ),
+        }
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
 
     model_to_use: str = (
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
+    )
+    deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
+        deployment or _model_group_deployment(llm_router, request.model) or {}
+    )
+    settings: Final = await asyncify(resolve_token_count_settings)(
+        configured=deployment_view.get("model_info", {}),
+        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
@@ -14732,8 +15262,10 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
+    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
-    if prompt and not conversation_empty and not _drops_params(deployment):
+    if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
             message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
             type="invalid_request_error",
@@ -14741,24 +15273,69 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
-    if provider_counter is not None:
-        prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
-        result: Final = await _try_provider_token_count(
-            provider_counter=provider_counter,
-            custom_llm_provider=custom_llm_provider,
-            model_to_use=model_to_use,
-            messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
-            contents=None if prompt_as_message else contents,
-            deployment=deployment,
-            request_model=request.model,
-            tools=tools,
-            system=system,
-            messages_format=messages_format,
-            output_format=output_format,
-            context_management=_count_context_management(context_management, request.model, request_litellm_params),
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
+    contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
+    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
+    routed_request: Final = (
+        None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
+    )
+    chat_count: Final = (
+        None
+        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        else await chat_count_request(
+            model_to_use,
+            custom_llm_provider,
+            _deployment_api_base(deployment_view),
+            routed_request,
+            _count_drop_policy(routed_deployment, routed_request),
         )
-        if result is not None:
-            return result
+    )
+    if isinstance(chat_count, ChatCountBridgeError):
+        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    ladder: Final = (
+        None
+        if provider_counter is None
+        else await _provider_token_count(
+            count_with=_native_responses_count(
+                provider_counter,
+                custom_llm_provider,
+                routed_request,
+                routed_deployment,
+                request.model,
+            )
+            or partial(
+                _try_provider_token_count,
+                provider_counter,
+                custom_llm_provider,
+                messages=(
+                    [dict(message) for message in chat_count.messages]
+                    if chat_count is not None
+                    else [{"role": "user", "content": prompt}]
+                    if prompt_as_message
+                    else request_messages
+                ),
+                contents=None if prompt_as_message else contents,
+                deployment=count_deployment,
+                request_model=request.model,
+                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
+                system=system,
+                messages_format=messages_format,
+                output_format=output_format,
+                context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+            ),
+            model_to_use=model_to_use,
+            settings=settings,
+            local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+        )
+    )
+    if isinstance(ladder, TokenCountResponse):
+        return ladder
+
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    if local_count_error is not None:
+        raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -14776,16 +15353,11 @@ async def count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await asyncify(litellm.utils.select_tokenizer)(
-        model=model_to_use, custom_tokenizer=custom_tokenizer
-    )
-
-    tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -14793,18 +15365,38 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await offload_token_count(litellm.token_counter)(
+    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
+    exact: Final = (
+        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        if kimi_k3_messages is not None and custom_tokenizer is None
+        else None
+    )
+    if exact is not None:
+        return TokenCountResponse(
+            total_tokens=exact + framing,
+            request_model=request.model,
+            model_used=model_to_use,
+            tokenizer_type="huggingface_tokenizer",
+            count_source="local_estimate",
+        )
+    estimate: Final = await _local_token_estimate(
         model=model_to_use,
-        text=prompt if counted_messages is None else None,
+        prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
-        custom_tokenizer=_tokenizer_used,
+        custom_tokenizer=custom_tokenizer,
+        provider_failure=ladder,
+    )
+    template: Final = (
+        0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
     )
     return TokenCountResponse(
-        total_tokens=total_tokens,
+        total_tokens=estimate.total_tokens + template + framing,
         request_model=request.model,
         model_used=model_to_use,
-        tokenizer_type=tokenizer_used,
+        tokenizer_type=estimate.tokenizer_type,
+        count_source="local_estimate",
     )
 
 
@@ -17035,7 +17627,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models)
+    all_models = expand_wildcard_deployments_for_model_info(all_models, llm_router)
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -17153,23 +17745,31 @@ async def model_deprecations(
 
 
 def get_model_group_info(
-    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
-    unique_models: Final = []
-    for model in all_models_str:
-        if model not in unique_models:
-            unique_models.append(model)
+    unique_models: Final = tuple(dict.fromkeys(all_models_str))
 
     for model in unique_models:
         if model_group is not None and model_group != model:
             continue
 
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
+            model_groups.append(
+                ModelGroupInfoProxy.model_validate(
+                    {
+                        **_model_group_info.model_dump(),
+                        **model_group_custom_fields(
+                            llm_router.get_model_list_of_routed_group(
+                                resolve_model_group_alias(llm_router.model_group_alias, model) or model
+                            )
+                        ),
+                    }
+                )
+            )
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -17398,7 +17998,10 @@ async def model_group_info(
 
     model_groups: Final = await append_agents_to_model_group(
         model_groups=get_model_group_info(
-            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+            llm_router=llm_router,
+            all_models_str=listed_group_names,
+            model_group=model_group,
+            team_id=user_api_key_dict.team_id,
         ),
         user_api_key_dict=user_api_key_dict,
     )
@@ -17617,6 +18220,7 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        data.pop(STREAM_USAGE_INJECTED_FIELD, None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
@@ -17674,6 +18278,7 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse:
@@ -17685,6 +18290,7 @@ async def async_queue_request(
                         request=request,
                     ),
                     media_type="text/event-stream",
+                    headers={"x-litellm-priority": str(queued_priority)},
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -17699,7 +18305,7 @@ async def async_queue_request(
             )
 
         response: Final = await router.schedule_acompletion(**data)
-        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
+        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -17714,6 +18320,10 @@ async def async_queue_request(
             )
         elif isinstance(e, ProxyException):
             raise e
+        elif isinstance(e, litellm.BadRequestError):
+            raise ProxyException(
+                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+            )
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
@@ -17801,6 +18411,7 @@ async def login(request: Request):
     # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
     # one-shot cookie is cleared after use.
     from litellm.proxy.management_endpoints.ui_sso import (
+        read_return_to_cookie,
         set_session_token_cookie,
         sso_return_to_redirect,
     )
@@ -17812,7 +18423,7 @@ async def login(request: Request):
     # return_to is honored for EVERY sign-in branch, so the write and read sets cannot diverge: it
     # sets the token cookie on the same-origin arm and hands off via a one-time login code on the
     # cross-origin arm, and clears the one-shot cookie in both.
-    cp_return_to: Final = request.cookies.get("litellm_cp_return_to")
+    cp_return_to: Final = read_return_to_cookie(request)
     if cp_return_to:
         try:
             resumed = await sso_return_to_redirect(  # rebind-ok: pre-existing rebinding on a rename-only line
@@ -17836,7 +18447,7 @@ async def login(request: Request):
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     set_session_token_cookie(redirect_response, request, jwt_token)
-    if cp_return_to:
+    if "litellm_cp_return_to" in request.cookies:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
 
@@ -19026,6 +19637,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "request_tag_mappings": "RequestTagMappings",
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_in_flight_requests_per_worker": "Integer",
@@ -19491,9 +20103,9 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
     "personal_key_model_access_from_teams": {
         "type": "Boolean",
         "description": (
-            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
-            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
-            "can call any model one of those teams can call. Team keys are unaffected."
+            "Caps each personal key (a key with no team) to the models, MCP servers, MCP tools and agents its "
+            "owner's current teams can reach, re-evaluated on every request. A user in no team gets none of them. "
+            "A user in several teams gets the union of what those teams grant. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
@@ -20029,8 +20641,7 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
         if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     )
     configured_modules: Final = frozenset(name.rsplit(".", 1)[0] for name in configured_callback_names if "." in name)
-    internal_callback_names: Final = frozenset({"cache", "vector_store_pre_call_hook"})
-    return internal_callback_names | frozenset(
+    return INTERNAL_CALLBACK_NAMES | frozenset(
         callback_name
         for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
         if isinstance(callback, CustomGuardrail)
@@ -20919,7 +21530,7 @@ attach_lazy_features(app)
 app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 app.add_middleware(
