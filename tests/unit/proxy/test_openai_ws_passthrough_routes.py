@@ -1,21 +1,22 @@
 """OpenAI passthrough WebSocket route: registration, opt-in gating, refusals, and per-frame model checks."""
 
 import json
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from starlette.routing import WebSocketRoute
+from starlette.websockets import WebSocket
 
 import litellm
 from litellm.llms.openai.workload_identity import _workload_identity_auth
-from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
     _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL,
@@ -24,7 +25,16 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     openai_websocket_proxy_route,
     router,
 )
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import WebsocketFrameModelGate
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+    openai_websocket_frame_kind,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    WebsocketFrameModelAllowed,
+    WebsocketFrameModelGate,
+    WebsocketFrameModelRefused,
+    WebsocketFrameModelVerdict,
+    WebsocketUpstreamFrameClassifier,
+)
 
 ENABLED: Final = MappingProxyType({"enable_openai_websocket_passthrough": True})
 DISABLED_SETTINGS: Final = (
@@ -76,6 +86,7 @@ class _RelayCall:
     endpoint: str
     accept_websocket: bool
     client_frame_model_gate: WebsocketFrameModelGate | None
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None
 
 
 class _FakeRelay:
@@ -93,6 +104,7 @@ class _FakeRelay:
         endpoint: str,
         accept_websocket: bool,
         client_frame_model_gate: WebsocketFrameModelGate | None = None,
+        upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
     ) -> None:
         self.calls.append(
             _RelayCall(
@@ -102,18 +114,14 @@ class _FakeRelay:
                 endpoint=endpoint,
                 accept_websocket=accept_websocket,
                 client_frame_model_gate=client_frame_model_gate,
+                upstream_frame_kind=upstream_frame_kind,
             )
         )
 
 
 class _FakeFrameModelGate:
-    def __init__(self, refusal: str | None = None) -> None:
-        self.refusal = refusal
-        self.checked: list[str] = []
-
-    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> str | None:
-        self.checked.append(model)
-        return self.refusal
+    async def __call__(self, websocket: object, model: str, /) -> WebsocketFrameModelVerdict:
+        return WebsocketFrameModelAllowed(access_groups=())
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +165,7 @@ async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, m
             endpoint=f"/{prefix}/v1/realtime",
             accept_websocket=False,
             client_frame_model_gate=served.frame_model_gate,
+            upstream_frame_kind=openai_websocket_frame_kind,
         )
     ]
     assert websocket.accepts == [None]
@@ -310,26 +319,53 @@ async def test_openai_websocket_connects_model_restricted_keys(key_models):
     assert websocket.closed is None
 
 
-@pytest.mark.asyncio
-async def test_proxy_frame_model_gate_allows_a_model_the_key_owns():
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"])
+class _FrameAuthorizer:
+    """Stands in for the full key, team, user and budget auth the gate re-runs for every model a frame names."""
 
-    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
-        assert await gate("gpt-realtime-2.1", token) is None
+    def __init__(self, token: UserAPIKeyAuth | None = None, denial: Exception | None = None) -> None:
+        self.token = token or UserAPIKeyAuth()
+        self.denial = denial
+        self.authorized: list[str] = []
+
+    async def __call__(self, websocket: object, model: str) -> UserAPIKeyAuth:
+        self.authorized.append(model)
+        if self.denial is not None:
+            raise self.denial
+        return self.token
+
+
+SOCKET: Final = WebSocket({"type": "websocket"}, receive=AsyncMock(), send=AsyncMock())
+
+
+async def _gate_verdict(authorizer: _FrameAuthorizer, model: str) -> WebsocketFrameModelVerdict:
+    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the model checks need no database
+        return await _proxy_frame_model_gate(authorizer)(SOCKET, model)
+
+
+def _refusal(verdict: WebsocketFrameModelVerdict) -> WebsocketFrameModelRefused:
+    assert isinstance(verdict, WebsocketFrameModelRefused)
+    return verdict
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_runs_full_auth_for_the_model_the_frame_names():
+    authorizer: Final = _FrameAuthorizer(UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"]))
+
+    verdict: Final = await _gate_verdict(authorizer, "gpt-realtime-2.1")
+
+    assert verdict == WebsocketFrameModelAllowed(access_groups=())
+    assert authorizer.authorized == ["gpt-realtime-2.1"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requested_model", ["gpt-5.4", "gpt-realtime-2.1-mini"])
 async def test_proxy_frame_model_gate_refuses_a_model_the_key_lacks(requested_model):
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"])
+    authorizer: Final = _FrameAuthorizer(UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"]))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
-        refusal = await gate(requested_model, token)
+    refusal: Final = _refusal(await _gate_verdict(authorizer, requested_model))
 
-    assert refusal is not None
-    assert requested_model in refusal
+    assert requested_model in refusal.message
+    assert refusal.error_type == ProxyErrorTypes.key_model_access_denied.value
 
 
 @pytest.mark.asyncio
@@ -341,7 +377,6 @@ async def test_proxy_frame_model_gate_refuses_a_model_the_key_lacks(requested_mo
 async def test_proxy_frame_model_gate_refuses_a_model_the_agent_was_not_granted(granted_models, refusal_names):
     from litellm.types.agents import AgentResponse
 
-    gate: Final = _proxy_frame_model_gate()
     token: Final = UserAPIKeyAuth(models=[], agent_id="agent-fake")
     token.managed_agent_policy = AgentResponse(
         agent_id="agent-fake",
@@ -350,132 +385,105 @@ async def test_proxy_frame_model_gate_refuses_a_model_the_agent_was_not_granted(
         object_permission={"object_permission_id": "grant-fake", "models": granted_models},
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
-        refusal = await gate("gpt-5.4", token)
+    refusal: Final = _refusal(await _gate_verdict(_FrameAuthorizer(token), "gpt-5.4"))
 
-    assert refusal is not None
-    assert refusal_names in refusal
-
-
-GET_USER_OBJECT: Final = "litellm.proxy.auth.auth_checks.get_user_object"
-
-
-def _personal_user(models: list[str]) -> LiteLLM_UserTable:
-    return LiteLLM_UserTable(user_id="user-fake", models=models, max_budget=None, spend=0.0)
-
-
-@contextmanager
-def _personal_user_allowlist(models: list[str]) -> Iterator[AsyncMock]:
-    """Stand up the database-backed owner lookup the allowlist check runs, and report every call it made."""
-    lookup: Final = AsyncMock(return_value=_personal_user(models))
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: read at call time
-        patch(GET_USER_OBJECT, lookup),
-    ):
-        yield lookup
-
-
-@pytest.mark.asyncio
-async def test_proxy_frame_model_gate_refuses_a_model_the_person_behind_the_key_lacks():
-    """
-    A key with no team of its own carries its owner's model allowlist, the same
-    one every HTTP route applies, so a frame naming a model that person cannot
-    use is refused even when the key itself names no models at all.
-    """
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=[], user_id="user-fake")
-
-    with _personal_user_allowlist(["gpt-5.4-mini"]):
-        refusal = await gate("gpt-5.4", token)
-
-    assert refusal is not None
-    assert "gpt-5.4" in refusal
-
-
-@pytest.mark.asyncio
-async def test_proxy_frame_model_gate_allows_a_model_the_person_behind_the_key_owns():
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=[], user_id="user-fake")
-
-    with _personal_user_allowlist(["gpt-5.4-mini", "gpt-realtime-2.1"]):
-        assert await gate("gpt-realtime-2.1", token) is None
-
-
-@pytest.mark.asyncio
-async def test_proxy_frame_model_gate_leaves_a_team_key_to_the_teams_allowlist():
-    """
-    A key that belongs to a team is governed by the team's models, not by the
-    personal allowlist of whoever created it, so the owner's own restrictions
-    must not close a session the team is entitled to.
-    """
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=[], user_id="user-fake", team_id="team-fake")
-
-    with _personal_user_allowlist(["gpt-5.4-mini"]) as owner_lookup:
-        assert await gate("gpt-5.4", token) is None
-
-    assert owner_lookup.await_args_list == []
+    assert refusal_names in refusal.message
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unrestricted_models", [[], ["all-proxy-models"], ["*"]])
 async def test_proxy_frame_model_gate_allows_every_model_for_unrestricted_keys(unrestricted_models):
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=unrestricted_models)
+    verdict: Final = await _gate_verdict(_FrameAuthorizer(UserAPIKeyAuth(models=unrestricted_models)), "gpt-5.4")
 
-    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
-        assert await gate("gpt-realtime-2.1", token) is None
+    assert verdict == WebsocketFrameModelAllowed(access_groups=())
 
 
-ENFORCE_GROUP_BUDGET: Final = (
-    "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.enforce_model_access_group_budget"
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_hands_back_the_access_groups_that_authorized_the_model():
+    """The turn a frame starts is billed to the groups that let its model through, so the gate has to report them."""
+    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"], matched_model_access_groups=["tier-a"])
+
+    verdict: Final = await _gate_verdict(_FrameAuthorizer(token), "gpt-5.4-mini")
+
+    assert verdict == WebsocketFrameModelAllowed(access_groups=("tier-a",))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["gpt-5.4-mini", "gpt-5.4"],
+    ids=["allowed", "refused_by_the_model_check"],
 )
+async def test_proxy_frame_model_gate_releases_the_budget_it_reserved_for_the_check(requested_model):
+    """
+    Full auth reserves budget for the request it authorizes, but a frame check is
+    not a request, so a reservation the gate leaves open would hold the key's
+    spend counter above its real spend and refuse later calls on every route.
+    """
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"], budget_reservation=reservation)
+
+    await _gate_verdict(_FrameAuthorizer(token), requested_model)
+
+    assert token.budget_reservation == {**reservation, "finalized": True}
 
 
 @pytest.mark.asyncio
-async def test_proxy_frame_model_gate_refuses_a_model_whose_access_group_is_out_of_budget():
-    """
-    A model that sits in a budgeted access group is refused on every other route once
-    that group has spent its budget, so a frame naming it closes the session instead
-    of quietly running on an empty pool. The key is allowed the model outright here,
-    so nothing but the group's budget can produce the refusal.
-    """
-    exhausted: Final = litellm.BudgetExceededError(
-        current_cost=2.0,
-        max_budget=1.0,
-        message="Budget has been exceeded! Model access group=tier-a Current cost: 2.0, Max budget: 1.0",
-        entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
-        entity_id="tier-a",
-    )
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"])
+@pytest.mark.parametrize(
+    "denial, error_type, message",
+    [
+        (
+            ProxyException(
+                message="Budget has been exceeded! Key=hashed Spend=2.0, Budget=1.0",
+                type=ProxyErrorTypes.budget_exceeded,
+                param=None,
+                code=400,
+            ),
+            "budget_exceeded",
+            "Budget has been exceeded! Key=hashed",
+        ),
+        (
+            litellm.BudgetExceededError(
+                current_cost=2.0,
+                max_budget=1.0,
+                message="Budget has been exceeded! Model access group=tier-a Current cost: 2.0, Max budget: 1.0",
+                entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
+                entity_id="tier-a",
+            ),
+            "budget_exceeded",
+            "Model access group=tier-a",
+        ),
+        (
+            ProxyException(
+                message="team not allowed to access model. This team can only access models=['gpt-5.4-mini']",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=401,
+            ),
+            "team_model_access_denied",
+            "team not allowed to access model",
+        ),
+        (HTTPException(status_code=403, detail="Invalid Authorization header format"), "invalid_request_error", ""),
+    ],
+    ids=["key_budget", "group_budget", "team_allowlist", "malformed_auth"],
+)
+async def test_proxy_frame_model_gate_refuses_what_full_auth_denies_with_its_reason(denial, error_type, message):
+    """A frame is denied for the same reasons a request is, and the caller reads which reason in the error event."""
+    refusal: Final = _refusal(await _gate_verdict(_FrameAuthorizer(denial=denial), "gpt-5.4-mini"))
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: the model check needs no database
-        patch(ENFORCE_GROUP_BUDGET, AsyncMock(side_effect=exhausted)),
-    ):
-        refusal = await gate("gpt-5.4-mini", token)
-
-    assert refusal is not None
-    assert "Budget has been exceeded" in refusal
-    assert "Model access group=tier-a" in refusal
+    assert refusal.error_type == error_type
+    assert message in refusal.message
 
 
 @pytest.mark.asyncio
-async def test_proxy_frame_model_gate_refuses_out_loud_when_it_cannot_reach_the_budgets():
+async def test_proxy_frame_model_gate_refuses_out_loud_when_auth_cannot_answer():
     """
     A gate that cannot answer has to close the session with a reason the caller can read.
     Letting the failure escape drops the socket with no frame at all, which the caller
     cannot tell apart from the network going away.
     """
-    gate: Final = _proxy_frame_model_gate()
-    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"])
+    refusal: Final = _refusal(
+        await _gate_verdict(_FrameAuthorizer(denial=ConnectionError("connection pool is exhausted")), "gpt-5.4-mini")
+    )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: the model check needs no database
-        patch(ENFORCE_GROUP_BUDGET, AsyncMock(side_effect=ConnectionError("connection pool is exhausted"))),
-    ):
-        refusal = await gate("gpt-5.4-mini", token)
-
-    assert refusal == _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL
-    assert "connection pool" not in refusal
+    assert refusal == WebsocketFrameModelRefused(message=_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL, error_type="server_error")

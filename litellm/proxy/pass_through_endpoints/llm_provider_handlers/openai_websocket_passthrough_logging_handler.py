@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage
+from litellm.types.passthrough_endpoints.pass_through_endpoints import WebsocketUpstreamFrameKind
 from litellm.types.utils import LlmProviders, ModelResponse, Usage
 
 WebsocketMessages: TypeAlias = Sequence[Mapping[str, object]]
@@ -22,10 +23,9 @@ OPENAI_WEBSOCKET_PROVIDER: Final = LlmProviders.OPENAI.value
 _SESSION_CREATED: Final = "session.created"
 _RESPONSE_CREATED: Final = "response.created"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
-_RESPONSES_COMPLETED: Final = "response.completed"
-_MODEL_NAMING_EVENTS: Final = frozenset(
-    {_SESSION_CREATED, _RESPONSE_CREATED, _REALTIME_RESPONSE_DONE, _RESPONSES_COMPLETED}
-)
+_RESPONSES_TURN_ENDS: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
+_TURN_ENDS: Final = _RESPONSES_TURN_ENDS | {_REALTIME_RESPONSE_DONE}
+_MODEL_NAMING_EVENTS: Final = _TURN_ENDS | {_SESSION_CREATED, _RESPONSE_CREATED}
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
@@ -42,22 +42,22 @@ class _ModelNamingEvent(BaseModel):
     response: _NamedModel | None = None
 
 
-class _CompletedResponse(BaseModel):
+class _EndedResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     model: str | None = None
-    usage: ResponseAPIUsage
+    usage: ResponseAPIUsage | None = None
 
 
-class _ResponsesCompletedEvent(BaseModel):
+class _ResponsesTurnEndEvent(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    type: Literal["response.completed"]
-    response: _CompletedResponse
+    type: Literal["response.completed", "response.incomplete", "response.failed"]
+    response: _EndedResponse
 
 
 _MODEL_NAMING_EVENT: Final = TypeAdapter(_ModelNamingEvent)
-_RESPONSES_COMPLETED_EVENT: Final = TypeAdapter(_ResponsesCompletedEvent)
+_RESPONSES_TURN_END_EVENT: Final = TypeAdapter(_ResponsesTurnEndEvent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +93,15 @@ def observed_websocket_model(messages: WebsocketMessages) -> str | None:
     return next((model for model in map(_event_model, messages) if model is not None), None)
 
 
+def openai_websocket_frame_kind(frame: Mapping[str, object]) -> WebsocketUpstreamFrameKind:
+    frame_type: Final = frame.get("type")
+    if frame_type in _TURN_ENDS:
+        return "ends_turn"
+    if frame_type == _SESSION_CREATED:
+        return "opens_session"
+    return "relayed"
+
+
 def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: LiteLLMLoggingObj) -> _Billing | None:
     if not any(event.get("type") == _REALTIME_RESPONSE_DONE for event in messages):
         return None
@@ -111,19 +120,21 @@ def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: Lite
 
 
 def _responses_turn(event: Mapping[str, object], session_model: str) -> _CompletedTurn | None:
-    if event.get("type") != _RESPONSES_COMPLETED:
+    if event.get("type") not in _RESPONSES_TURN_ENDS:
         return None
     try:
-        completed: Final = _RESPONSES_COMPLETED_EVENT.validate_python(event)
+        ended: Final = _RESPONSES_TURN_END_EVENT.validate_python(event)
     except ValidationError:
         verbose_proxy_logger.warning(
-            "OpenAI websocket passthrough: a response.completed frame carried no readable usage, so it is not billed"
+            "OpenAI websocket passthrough: a %s frame carried no readable usage, so it is not billed", event.get("type")
         )
         return None
+    if ended.response.usage is None:
+        return None
     return _CompletedTurn(
-        model=completed.response.model or session_model,
+        model=ended.response.model or session_model,
         usage=ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # the one shared Responses usage converter
-            completed.response.usage
+            ended.response.usage
         ),
     )
 

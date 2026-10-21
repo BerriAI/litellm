@@ -42,9 +42,13 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import route
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     SafeRouteAdder,
+    WebsocketFrameModelAllowed,
+    WebsocketFrameModelRefused,
+    WebsocketFrameModelVerdict,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
@@ -57,6 +61,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     set_env_variables_in_header,
     websocket_passthrough_request,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+    openai_websocket_frame_kind,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -7211,7 +7218,7 @@ def _patched_websocket_passthrough_environment(upstream_ws):
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
-        yield
+        yield mock_proxy_logging
 
 
 async def _pending_receive():
@@ -7522,14 +7529,28 @@ SUCCESS_HANDLER: Final = (
 )
 
 
+KEY_MODEL_REFUSAL: Final = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+KEY_MODEL_CLOSE_REASON: Final = "key not allowed to access model."
+
+
 class RecordingFrameModelGate:
-    def __init__(self, refusals: Mapping[str, str] = MappingProxyType({})):
+    def __init__(
+        self,
+        refusals: Mapping[str, str] = MappingProxyType({}),
+        groups: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        error_type: str = "key_model_access_denied",
+    ):
         self.refusals = refusals
+        self.groups = groups
+        self.error_type = error_type
         self.checked: list[str] = []
 
-    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> Optional[str]:
+    async def __call__(self, websocket: object, model: str, /) -> WebsocketFrameModelVerdict:
         self.checked.append(model)
-        return self.refusals.get(model)
+        refusal = self.refusals.get(model)
+        if refusal is not None:
+            return WebsocketFrameModelRefused(message=refusal, error_type=self.error_type)
+        return WebsocketFrameModelAllowed(access_groups=self.groups.get(model, ()))
 
 
 def _received_frame(frame):
@@ -7594,8 +7615,7 @@ async def test_websocket_passthrough_checks_the_model_a_client_frame_asks_for(fr
 
 @pytest.mark.asyncio
 async def test_websocket_passthrough_refuses_a_frame_naming_a_model_the_key_cannot_call():
-    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
-    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
     frame = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}})
 
     relayed = await _relay_client_frames([frame], gate)
@@ -7603,16 +7623,34 @@ async def test_websocket_passthrough_refuses_a_frame_naming_a_model_the_key_cann
     assert relayed.upstream.send.await_args_list == []
     assert json.loads(relayed.client.send_text.await_args.args[0]) == {
         "type": "error",
-        "error": {"type": "invalid_request_error", "message": refusal},
+        "error": {"type": "key_model_access_denied", "message": KEY_MODEL_REFUSAL},
     }
-    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
     relayed.upstream.close.assert_awaited()
 
 
 @pytest.mark.asyncio
+async def test_websocket_passthrough_closes_with_the_whole_first_sentence_of_the_refusal():
+    """
+    The close frame only has room for 123 bytes, so a refusal cut at that limit
+    reads as a truncated number. The first sentence names the reason whole, and
+    the error event before the close still carries every word with its type.
+    """
+    refusal = "Budget has been exceeded! Key=" + "f" * 64 + " Spend=1.23456789, Budget=1.0"
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": refusal}), error_type="budget_exceeded")
+
+    relayed = await _relay_client_frames([json.dumps({"type": "response.create", "model": "gpt-5.4"})], gate)
+
+    assert relayed.client.close.await_args_list == [call(code=1008, reason="Budget has been exceeded!")]
+    assert json.loads(relayed.client.send_text.await_args.args[0])["error"] == {
+        "type": "budget_exceeded",
+        "message": refusal,
+    }
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_refuses_the_whole_frame_when_any_named_model_is_denied():
-    refusal = "key not allowed to access model. This key can only access models=['gpt-realtime-2.1']."
-    gate = RecordingFrameModelGate(MappingProxyType({"gpt-4o-transcribe": refusal}))
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-4o-transcribe": KEY_MODEL_REFUSAL}))
     frame = json.dumps(
         {
             "type": "session.update",
@@ -7624,13 +7662,12 @@ async def test_websocket_passthrough_refuses_the_whole_frame_when_any_named_mode
 
     assert gate.checked == ["gpt-realtime-2.1", "gpt-4o-transcribe"]
     assert relayed.upstream.send.await_args_list == []
-    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
 
 
 @pytest.mark.asyncio
 async def test_websocket_passthrough_stops_relaying_after_a_refused_frame():
-    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
-    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
     frames = [
         json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
         json.dumps({"type": "response.create"}),
@@ -7697,27 +7734,76 @@ async def test_websocket_passthrough_checks_a_model_named_with_escaped_json(fram
     "\\u006dodel" asks for a model just as plainly as one carrying "model" and
     has to face the same check.
     """
-    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
-    gate = RecordingFrameModelGate(MappingProxyType({expected_model: refusal}))
+    gate = RecordingFrameModelGate(MappingProxyType({expected_model: KEY_MODEL_REFUSAL}))
 
     relayed = await _relay_client_frames([frame], gate)
 
     assert gate.checked == [expected_model]
     assert relayed.upstream.send.await_args_list == []
-    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
 
 
 @pytest.mark.asyncio
 async def test_websocket_passthrough_checks_the_model_a_binary_frame_asks_for():
-    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
-    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
     frame = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}).encode()
 
     relayed = await _relay_client_frames([frame], gate)
 
     assert gate.checked == ["gpt-realtime-2.1"]
     assert relayed.upstream.send.await_args_list == []
-    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
+
+
+STORED_PROMPT_FRAMES: Final = (
+    {"type": "response.create", "prompt": {"id": "pmpt_fake", "version": "2"}},
+    {"type": "response.create", "response": {"prompt": {"id": "pmpt_fake"}}},
+    {"type": "session.update", "session": {"prompt": {"id": "pmpt_fake"}}},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame", STORED_PROMPT_FRAMES)
+async def test_websocket_passthrough_refuses_a_stored_prompt_for_a_key_limited_to_some_models(frame):
+    """
+    A stored prompt carries its own model on the provider side, so a key held to
+    a model list could reach any model through one. The gateway cannot see that
+    model, so a key that is not allowed every model cannot run a stored prompt.
+    """
+    gate = RecordingFrameModelGate(MappingProxyType({STORED_PROMPT_PROBE_MODEL: KEY_MODEL_REFUSAL}))
+
+    relayed = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert gate.checked == [STORED_PROMPT_PROBE_MODEL]
+    assert relayed.upstream.send.await_args_list == []
+    assert "stored prompt" in json.loads(relayed.client.send_text.await_args.args[0])["error"]["message"]
+    assert relayed.client.close.await_args.kwargs["code"] == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame", STORED_PROMPT_FRAMES)
+async def test_websocket_passthrough_forwards_a_stored_prompt_for_a_key_allowed_every_model(frame):
+    gate = RecordingFrameModelGate()
+
+    relayed = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [json.dumps(frame)]
+    assert relayed.client.close.await_args_list == [call()]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_the_budget_reason_when_a_stored_prompt_is_refused_for_spend():
+    refusal = "Budget has been exceeded! Key=hashed Spend=2.0, Budget=1.0"
+    gate = RecordingFrameModelGate(
+        MappingProxyType({STORED_PROMPT_PROBE_MODEL: refusal}), error_type="budget_exceeded"
+    )
+
+    relayed = await _relay_client_frames([json.dumps(STORED_PROMPT_FRAMES[0])], gate)
+
+    assert json.loads(relayed.client.send_text.await_args.args[0])["error"] == {
+        "type": "budget_exceeded",
+        "message": refusal,
+    }
 
 
 @pytest.mark.asyncio
@@ -7789,6 +7875,196 @@ async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out
         "response.done",
         "response.output_text.delta",
     ]
+
+
+class ScriptedUpstreamWebSocket:
+    """Answers each client frame with its scripted reply, and flushes what was still in flight when it is closed"""
+
+    def __init__(self, *opening: str, replies: Sequence[Sequence[str]] = (), in_flight: Sequence[str] = ()):
+        self._frames: asyncio.Queue[str | None] = asyncio.Queue()
+        for frame in opening:
+            self._frames.put_nowait(frame)
+        self._replies = iter(replies)
+        self._in_flight = in_flight
+        self._closed = False
+        self.send = AsyncMock(side_effect=self._reply)
+        self.close = AsyncMock(side_effect=self._flush_and_close)
+
+    async def _reply(self, frame: str | bytes) -> None:
+        for reply in next(self._replies, ()):
+            self._frames.put_nowait(reply)
+
+    async def _flush_and_close(self, *args: object, **kwargs: object) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for frame in self._in_flight:
+            self._frames.put_nowait(frame)
+        self._frames.put_nowait(None)
+        while not self._frames.empty():
+            await asyncio.sleep(0)
+
+    async def recv(self, decode: bool | None = None) -> str:
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        frame = await self._frames.get()
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
+
+
+def _turn_taking_client(frames: Sequence[str], answered_by: str) -> MagicMock:
+    """A client that sends its next frame only once the answer to the last one reached it, and that Starlette
+    refuses to send to once it is closed"""
+    from starlette.websockets import WebSocketState
+
+    delivered: list[str] = []
+    script = iter(frames)
+    receives = iter(range(len(frames) + 1))
+
+    async def receive():
+        answers_due = next(receives)
+        while sum(answered_by in text for text in delivered) < answers_due:
+            await asyncio.sleep(0)
+        frame = next(script, None)
+        return {"type": "websocket.disconnect"} if frame is None else _received_frame(frame)
+
+    websocket = _client_websocket(receive)
+
+    async def send_text(text: str) -> None:
+        if websocket.application_state == WebSocketState.DISCONNECTED:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+        delivered.append(text)
+
+    websocket.send_text = AsyncMock(side_effect=send_text)
+    return websocket
+
+
+async def _relay_turns(client, upstream_ws, gate, endpoint="/openai_passthrough/v1/responses"):
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+                forward_headers=False,
+                endpoint=endpoint,
+                accept_websocket=False,
+                client_frame_model_gate=gate,
+                upstream_frame_kind=openai_websocket_frame_kind,
+            ),
+            timeout=10,
+        )
+    return SimpleNamespace(success_handler=success_handler, proxy_logging=proxy_logging)
+
+
+def _responses_turn(model: str) -> list[str]:
+    return [
+        json.dumps({"type": "response.created", "response": {"model": model}}),
+        json.dumps(
+            {
+                "type": "response.completed",
+                "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
+            }
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_each_turn_on_its_own_row_charged_to_the_groups_that_allowed_it():
+    """
+    One socket can run a model from one access group and then a model from
+    another. Each turn has to reach spend as it finishes, under its own call,
+    and be charged to the group that let its model through, so a group budget
+    sees its share during the session and never pays for the other group's turn.
+    """
+    gate = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.completed"',
+    )
+    upstream_ws = ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")])
+
+    relayed = await _relay_turns(client, upstream_ws, gate)
+
+    rows = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[frame["response"]["model"] for frame in row["response_body"]] for row in rows] == [
+        ["gpt-5.4-mini", "gpt-5.4-mini"],
+        ["gpt-5.4", "gpt-5.4"],
+    ]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+    assert [row["litellm_params"]["metadata"]["user_api_key"] for row in rows] == ["hashed-key", "hashed-key"]
+    assert rows[0]["litellm_call_id"] != rows[1]["litellm_call_id"]
+    assert rows[1]["start_time"] == rows[0]["end_time"]
+    relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_carries_the_session_the_provider_opened_into_every_later_turn():
+    """
+    A realtime provider names the session's model once, when it opens the
+    session, and never again. Each later turn logs on its own, so it has to
+    carry that opening frame or it would be priced as a model nobody named.
+    """
+    client = _turn_taking_client(
+        [json.dumps({"type": "response.create"}), json.dumps({"type": "response.create"})],
+        answered_by='"response.done"',
+    )
+    upstream_ws = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED, replies=[[REALTIME_RESPONSE_DONE], [REALTIME_RESPONSE_DONE]]
+    )
+
+    relayed = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["session.created", "response.done"], ["session.created", "response.done"]]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused():
+    """
+    A refused frame closes the client while the provider may still be sending the
+    answer to an earlier, allowed frame. That answer cannot go to a closed client,
+    but it was paid for, so it has to reach spend instead of turning the whole
+    session into a failure that bills nothing.
+    """
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
+    client = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.created"',
+    )
+    created, completed = _responses_turn("gpt-5.4-mini")
+    upstream_ws = ScriptedUpstreamWebSocket(replies=[[created]], in_flight=[completed])
+
+    relayed = await _relay_turns(client, upstream_ws, gate)
+
+    assert [json.loads(text.args[0])["type"] for text in client.send_text.await_args_list] == [
+        "response.created",
+        "error",
+    ]
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["response.created", "response.completed"]]
+    relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
 
 
 DEEPGRAM_LISTEN_TARGET = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
@@ -8718,15 +8994,6 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
     )
 
 
-class StampingFrameModelGate:
-    def __init__(self, groups: list[str]):
-        self.groups = groups
-
-    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> Optional[str]:
-        valid_token.matched_model_access_groups = self.groups
-        return None
-
-
 async def _billed_metadata(gate) -> dict:
     served = await _relay_client_frames(
         [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
@@ -8740,7 +9007,7 @@ async def _billed_metadata(gate) -> dict:
 async def test_websocket_session_is_charged_to_the_group_its_frames_were_authorized_through():
     """A websocket names its model in a frame, long after the relay built its logging metadata, so the
     groups the gate matched have to be picked up at the end or the group pays for nothing it allowed."""
-    metadata = await _billed_metadata(StampingFrameModelGate(["tier-a"]))
+    metadata = await _billed_metadata(RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)})))
 
     assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
     assert metadata["user_api_key"] == "hashed-key"

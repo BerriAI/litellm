@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
     OpenAIWebsocketPassthroughLoggingHandler,
+    openai_websocket_frame_kind,
 )
 
 REALTIME_MODEL: Final = "gpt-realtime-2.1"
@@ -42,9 +43,11 @@ def _realtime_response_done(text_in: int, audio_in: int, text_out: int, audio_ou
     }
 
 
-def _responses_completed(model: str, input_tokens: int, output_tokens: int) -> dict:
+def _responses_completed(
+    model: str, input_tokens: int, output_tokens: int, event: str = "response.completed"
+) -> dict:
     return {
-        "type": "response.completed",
+        "type": event,
         "response": {
             "id": "resp_fake",
             "model": model,
@@ -288,3 +291,47 @@ def test_a_turn_the_caller_walked_out_of_still_names_the_model_it_ran():
     assert handled["result"] is None
     assert handled["kwargs"] == {"model": REASONING_MODEL, "custom_llm_provider": "openai"}
     assert logging_obj.model_call_details["model"] == REASONING_MODEL
+
+
+@pytest.mark.parametrize("event", ["response.incomplete", "response.failed"])
+def test_a_responses_turn_that_ended_early_is_billed_for_the_tokens_it_used(event):
+    """
+    A turn cut short by max_output_tokens or a provider failure still reports
+    the tokens it burned, and OpenAI bills them, so the row has to as well.
+    """
+    handled = _handle(
+        [_responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5, event=event)],
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    prices = litellm.model_cost[RESPONSES_MODEL]
+    expected_cost = 13 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"]
+    assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert handled["result"].usage.total_tokens == 18
+
+
+def test_a_failed_responses_turn_that_reported_no_usage_is_not_billed():
+    handled = _handle(
+        [{"type": "response.failed", "response": {"model": RESPONSES_MODEL, "status": "failed", "usage": None}}],
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    assert handled["result"] is None
+    assert handled["kwargs"] == {"model": RESPONSES_MODEL, "custom_llm_provider": "openai"}
+
+
+@pytest.mark.parametrize(
+    ("frame_type", "kind"),
+    [
+        ("response.completed", "ends_turn"),
+        ("response.incomplete", "ends_turn"),
+        ("response.failed", "ends_turn"),
+        ("response.done", "ends_turn"),
+        ("session.created", "opens_session"),
+        ("response.created", "relayed"),
+        ("response.output_text.delta", "relayed"),
+        ("error", "relayed"),
+    ],
+)
+def test_every_frame_that_settles_a_turn_closes_it_and_nothing_else_does(frame_type, kind):
+    assert openai_websocket_frame_kind({"type": frame_type}) == kind
