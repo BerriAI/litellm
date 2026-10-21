@@ -1223,6 +1223,28 @@ def test_router_constructs_with_per_user_credential_deployment(per_user_credenti
     assert any(d["model_name"] == "copilot" for d in deployments)
 
 
+@pytest.mark.parametrize(
+    ("env_name", "env_value"),
+    [
+        ("GITHUB_COPILOT_API_KEY_URL", "https://api.octo.ghe.com/copilot_internal/v2/token"),
+        ("GITHUB_COPILOT_API_BASE", "copilot-api.example.com"),
+    ],
+)
+def test_router_keeps_a_ghe_per_user_deployment_whatever_the_github_com_env_says(monkeypatch, env_name, env_value):
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    monkeypatch.setenv(env_name, env_value)
+    with patch.object(litellm, "credential_list", [_credential(github_host="octo.ghe.com")]):
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "copilot-ghe",
+                    "litellm_params": {"model": "github_copilot/gpt-4.1", "litellm_credential_name": "copilot-cred"},
+                }
+            ]
+        )
+    assert [d["model_name"] for d in router.get_model_list() or []] == ["copilot-ghe"]
+
+
 @pytest.mark.parametrize("deployment_base", [None, "https://deployment.example.com"])
 def test_provider_info_per_user_without_session_returns_the_copilot_base_and_no_key(
     per_user_credential, deployment_base
