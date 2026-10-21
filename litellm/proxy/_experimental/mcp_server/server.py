@@ -136,78 +136,29 @@ _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _mcp_setup_request_limiter(user_api_key_auth: UserAPIKeyAuth | None) -> object | None:
-    if user_api_key_auth is None:
-        return None
-
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        PROXY_MaxParallelRequestsHandler_v3,
-        RateLimitedModel,
+def _has_request_rate_limit(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    return (
+        user_api_key_auth.rpm_limit is not None
+        or user_api_key_auth.max_parallel_requests is not None
+        or user_api_key_auth.user_rpm_limit is not None
+        or user_api_key_auth.team_rpm_limit is not None
+        or user_api_key_auth.team_member_rpm_limit is not None
+        or user_api_key_auth.organization_rpm_limit is not None
+        or user_api_key_auth.end_user_rpm_limit is not None
     )
-    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
-    from litellm.router_utils.common_utils import resolve_model_group_alias
-
-    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
-        return None
-
-    if user_api_key_auth.api_key and (
-        user_api_key_auth.rpm_limit is not None or user_api_key_auth.max_parallel_requests is not None
-    ):
-        return limiter
-    if user_api_key_auth.user_id and user_api_key_auth.user_rpm_limit is not None:
-        return limiter
-    if user_api_key_auth.team_id and user_api_key_auth.team_rpm_limit is not None:
-        return limiter
-    if user_api_key_auth.user_id and user_api_key_auth.team_member_rpm_limit is not None:
-        return limiter
-    if user_api_key_auth.org_id and user_api_key_auth.organization_rpm_limit is not None:
-        return limiter
-    if user_api_key_auth.end_user_id and user_api_key_auth.end_user_rpm_limit is not None:
-        return limiter
-
-    from litellm.proxy.auth.auth_utils import get_key_model_rpm_limit, get_model_rate_limit_from_metadata
-
-    model_name: Final = "mcp-tool-call"
-    model_group: Final = (
-        resolve_model_group_alias(llm_router.model_group_alias, model_name) if llm_router is not None else None
-    )
-    model: Final = RateLimitedModel(requested=model_name, group=model_group or model_name)
-    key_model_rpm_limit: Final = model.limit_in(get_key_model_rpm_limit(user_api_key_auth, model_name=model.group))
-    if key_model_rpm_limit is not None:
-        return limiter
-
-    team_model_rpm_limit: Final = model.limit_in(
-        get_model_rate_limit_from_metadata(user_api_key_auth, "team_metadata", "model_rpm_limit")
-    )
-    if team_model_rpm_limit is not None:
-        return limiter
-
-    organization_model_rpm_limit: Final = model.limit_in(
-        get_model_rate_limit_from_metadata(user_api_key_auth, "organization_metadata", "model_rpm_limit")
-    )
-    if organization_model_rpm_limit is not None:
-        return limiter
-
-    project_model_rpm_limit: Final = model.limit_in(
-        get_model_rate_limit_from_metadata(user_api_key_auth, "project_metadata", "model_rpm_limit")
-    )
-    if project_model_rpm_limit is not None:
-        return limiter
-
-    return None
 
 
 def _mcp_setup_request_capacity(
     method: str | None,
     user_api_key_auth: UserAPIKeyAuth | None,
-    limiter: object | None,
 ) -> contextlib.AbstractAsyncContextManager[None]:
-    if method not in _MCP_SETUP_REQUEST_METHODS or user_api_key_auth is None or limiter is None:
+    if method not in _MCP_SETUP_REQUEST_METHODS or user_api_key_auth is None:
         return contextlib.nullcontext()
 
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import proxy_logging_obj
 
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return contextlib.nullcontext()
     return limiter.request_capacity(user_api_key_auth, "mcp-tool-call", request_data={})
@@ -2781,23 +2732,15 @@ if MCP_AVAILABLE:
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
 
-            setup_request_limiter: Final = (
-                _mcp_setup_request_limiter(user_api_key_auth)
-                if mcp_method in _MCP_SETUP_REQUEST_METHODS
-                or (mcp_method is None and peek is not None and len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES)
-                else None
-            )
             charged_method: Final = (
                 _jsonrpc_request_method(await peek.full_body())
                 if mcp_method is None
                 and peek is not None
                 and len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
-                and setup_request_limiter is not None
+                and _has_request_rate_limit(user_api_key_auth)
                 else mcp_method
             )
-            request_capacity: Final = _mcp_setup_request_capacity(
-                charged_method, user_api_key_auth, setup_request_limiter
-            )
+            request_capacity: Final = _mcp_setup_request_capacity(charged_method, user_api_key_auth)
             try:
                 async with (
                     session_lock if session_lock is not None else contextlib.nullcontext(),
