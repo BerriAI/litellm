@@ -64,8 +64,10 @@ from litellm.utils import get_llm_provider, get_optional_params
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
+    deployment_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
+    without_bedrock_native_output_opt_in,
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
@@ -899,10 +901,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
+            litellm_params: Final = without_bedrock_native_output_opt_in(MappingProxyType({}))
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
                 messages=messages,
+                model_info=deployment_model_info(litellm_params),
                 **MappingProxyType(
                     {
                         k: v
@@ -914,10 +918,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return config.transform_request(
                 model=model,
                 messages=messages,
-                optional_params={
+                optional_params={  # mutable-ok: provider transform consumes and removes request options
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
-                litellm_params={},
+                litellm_params=dict(litellm_params),  # mutable-ok: legacy provider transform requires a private dict
                 headers={},
             )
 

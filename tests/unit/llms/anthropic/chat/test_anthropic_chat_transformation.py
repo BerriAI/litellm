@@ -1,11 +1,13 @@
 import copy
 import json
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -1300,6 +1302,80 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
+
+
+@pytest.mark.parametrize(
+    ("field_schema", "native"),
+    [
+        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+    ],
+    ids=["closed-object", "dict-field", "nullable-dict-field"],
+)
+def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {"type": "object", "properties": {"field": field_schema}, "required": ["field"]},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert ("output_format" in optional_params) is native
+    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
+        ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
+        ("claude-sonnet-5-5", {}),
+        (
+            "claude-opus-4-8",
+            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
+)
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
 
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
@@ -6798,3 +6874,55 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+
+
+
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+    thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.reasoning_content == thinking_block["thinking"]
+    assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
+
+
+class JsonModeMessageBody(TypedDict):
+    id: ReadOnly[str]
+    type: ReadOnly[Literal["message"]]
+    role: ReadOnly[Literal["assistant"]]
+    model: ReadOnly[str]
+    stop_reason: ReadOnly[str]
+    stop_details: ReadOnly[dict[str, JsonValue] | None]
+    usage: ReadOnly[dict[str, int]]
+    content: ReadOnly[list[dict[str, JsonValue]]]
+
+
+def _json_mode_message_body(
+    stop_reason: str, stop_details: dict[str, JsonValue] | None
+) -> JsonModeMessageBody:
+    return {
+        "id": "msg_json_mode",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fable-5",
+        "stop_reason": stop_reason,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 8},
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: JsonModeMessageBody) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=dict(body),
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )

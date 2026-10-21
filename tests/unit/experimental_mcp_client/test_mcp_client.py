@@ -1236,8 +1236,8 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
     }
 
     specifier: Final = Requirement(mcp_extra["mcp"]).specifier
-    assert not specifier.contains("1.28.1")
-    assert specifier.contains("2.2.0")
+    assert not specifier.contains("2.2.0")
+    assert specifier.contains("2.3.0")
     with (pyproject_path.parent / "uv.lock").open("rb") as f:
         locked = tomllib.load(f)
     mcp_versions: Final = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
@@ -1633,7 +1633,9 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
 
 @pytest.mark.asyncio
 async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+        ClientCredentialsBearerAuth,
+    )
 
     seen = []
 
@@ -1887,6 +1889,7 @@ async def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
 async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
     from mcp import ClientSession
+
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()

@@ -350,10 +350,13 @@ def test_azure_gpt_6_astra_takes_the_reasoning_series_request_shape():
     assert params["reasoning_effort"] == "max"
 
 
-@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
-def test_azure_gpt6_astra_reasoning_effort_none_unlocks_temperature(config: AzureOpenAIGPT5Config, model: str):
-    """Foundry's gpt-6-astra accepts reasoning_effort='none' and, only then, a non-default
-    temperature (verified live against a Foundry deployment), unlike OpenAI's gpt-6-astra."""
+@pytest.mark.parametrize("model", ["azure/gpt-6-sol", "azure/us/gpt-6-sol"])
+def test_azure_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    config: AzureOpenAIGPT5Config, monkeypatch: pytest.MonkeyPatch, model: str
+):
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = config.map_openai_params(
         non_default_params={"temperature": 0.2, "reasoning_effort": "none"},
         optional_params={},

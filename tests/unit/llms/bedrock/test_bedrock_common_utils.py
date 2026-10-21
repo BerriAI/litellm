@@ -1,8 +1,29 @@
+import asyncio
+import importlib
+from collections.abc import Iterator
+from typing import Final
+from unittest.mock import Mock, patch
 
 import pytest
 
-
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+import litellm
+import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
+from litellm import completion
+from litellm.llms.bedrock.common_utils import (
+    AmazonBedrockGlobalConfig,
+    BedrockModelInfo,
+    bedrock_native_output_is_opt_in,
+    deployment_model_info,
+    extract_model_name_from_bedrock_arn,
+    get_bedrock_base_model,
+    get_bedrock_cross_region_inference_regions,
+    is_bedrock_native_output_rejection,
+    strip_bedrock_routing_prefix,
+    strip_bedrock_throughput_suffix,
+    without_bedrock_native_output_opt_in,
+)
+from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -25,14 +46,12 @@ def test_bedrock_response_stream_shape_lazy_loads_once():
     """
     get_bedrock_response_stream_shape() loads from botocore at most once per process.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     import litellm.llms.bedrock.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_bedrock_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_bedrock_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_bedrock_response_stream_shape() is sentinel
         assert mod.get_bedrock_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -55,7 +74,6 @@ def test_bedrock_response_stream_shape_load_failure_returns_none():
     should return None rather than propagating the exception, so the module
     still imports cleanly.
     """
-    from unittest.mock import patch
 
     import litellm.llms.bedrock.common_utils as mod
 
@@ -79,9 +97,7 @@ def test_bedrock_response_stream_shape_is_structure_shape():
     from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
     loaded_shape = get_bedrock_response_stream_shape()
-    assert (
-        loaded_shape is not None
-    ), "get_bedrock_response_stream_shape() is None — botocore may not be installed"
+    assert loaded_shape is not None, "get_bedrock_response_stream_shape() is None — botocore may not be installed"
     shape: StructureShape = loaded_shape
     assert isinstance(shape, StructureShape)
     assert shape.name == "ResponseStream"
@@ -119,7 +135,7 @@ def test_bedrock_parse_message_from_event_raises_on_none_shape():
     _parse_message_from_event must raise BedrockError before touching the
     botocore parser — not an opaque AttributeError from inside botocore.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     import litellm.llms.bedrock.common_utils as mod
     from litellm.llms.bedrock.common_utils import (
@@ -146,9 +162,7 @@ def test_deepseek_cris():
     Test that DeepSeek models with cross-region inference prefix use converse route
     """
     bedrock_model_info = BedrockModelInfo
-    bedrock_route = bedrock_model_info.get_bedrock_route(
-        model="bedrock/us.deepseek.r1-v1:0"
-    )
+    bedrock_route = bedrock_model_info.get_bedrock_route(model="bedrock/us.deepseek.r1-v1:0")
     assert bedrock_route == "converse"
 
 
@@ -221,27 +235,19 @@ def test_govcloud_cross_region_inference_prefix():
     bedrock_model_info = BedrockModelInfo
 
     # Test us-gov prefix is stripped correctly for Claude models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test us-gov prefix is stripped correctly for different Claude versions
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert base_model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test us-gov prefix is stripped correctly for Haiku models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0")
     assert base_model == "anthropic.claude-3-haiku-20240307-v1:0"
 
     # Test us-gov prefix is stripped correctly for Meta models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0")
     assert base_model == "meta.llama3-8b-instruct-v1:0"
 
 
@@ -253,25 +259,15 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     Models configured like `bedrock/us.anthropic.claude-opus-4-6-v1[1m]`
     should resolve to the base model name so pricing can be found.
     """
-    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]")
-        == "anthropic.claude-opus-4-6-v1"
-    )
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]")
-        == "anthropic.claude-sonnet-4-6"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]") == "anthropic.claude-opus-4-6-v1"
+    assert get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]") == "anthropic.claude-sonnet-4-6"
     assert (
         get_bedrock_base_model("global.anthropic.claude-opus-4-5-20251101-v1:0[1m]")
         == "anthropic.claude-opus-4-5-20251101-v1:0"
     )
     # Ensure models without suffix are unaffected
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1")
-        == "anthropic.claude-opus-4-6-v1"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1") == "anthropic.claude-opus-4-6-v1"
     # Ensure :51k throughput suffix still works
     assert (
         get_bedrock_base_model("anthropic.claude-3-5-sonnet-20241022-v2:0:51k")
@@ -282,7 +278,6 @@ def test_context_window_suffix_stripped_for_cost_lookup():
 def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
     """The mantle/ route token is a routing prefix like openai/, so a bedrock/mantle/<model>
     deployment must resolve the bare Bedrock model for cost lookup while still routing to Mantle."""
-    from litellm.llms.bedrock.common_utils import get_bedrock_base_model, strip_bedrock_routing_prefix
 
     assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
@@ -321,9 +316,7 @@ def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch)
         ("us.anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
-    model, expected_ceiling
-):
+def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(model, expected_ceiling):
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
@@ -342,54 +335,24 @@ def test_route_prefix_matched_as_path_segment_not_substring():
     or a ``/`` boundary.
     """
     # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
-    )
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
-    )
-    assert (
-        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
-        is False
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
+    assert BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5") is False
 
     # A genuine mantle route still resolves, via the startswith branch...
-    assert (
-        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
     # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
-    assert (
-        BedrockModelInfo.get_bedrock_route(
-            "bedrock/mantle/anthropic.claude-mythos-preview"
-        )
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-mythos-preview") == "mantle"
 
 
 def test_model_has_route_prefix_exercises_both_branches():
     """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
     # startswith branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # f"/{prefix}" boundary branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock/mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # neither branch: the token only appears glued to another segment
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock_mantle/openai.gpt-5.5", "mantle/"
-        )
-        is False
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock_mantle/openai.gpt-5.5", "mantle/") is False
 
 
 @pytest.mark.parametrize(
@@ -439,16 +402,10 @@ def test_explicit_invoke_route_does_not_match_async_invoke():
     """
     async_invoke_model = "async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
     assert BedrockModelInfo._explicit_invoke_route(async_invoke_model) is False
-    assert (
-        BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}")
-        is False
-    )
+    assert BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}") is False
     # ...while async_invoke/ is still detected as its own route.
     assert BedrockModelInfo._explicit_async_invoke_route(async_invoke_model) is True
-    assert (
-        BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
-        is True
-    )
+    assert BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}") is True
 
 
 def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_field(monkeypatch):
@@ -457,7 +414,6 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     must not shadow a base entry that has it (`get(model) or get(base)` used to
     short-circuit on the truthy regional dict and drop the capability).
     """
-    import litellm
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_parallel_tool_use_config,
         is_claude_4_5_on_bedrock,
@@ -557,8 +513,14 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
         apply_bedrock_invoke_structured_output,
     )
 
-    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
-    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    legacy = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": False},
+    }
+    newer = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"b": {"type": "string"}}, "additionalProperties": False},
+    }
     body = {
         "messages": [{"role": "user", "content": "hi"}],
         "output_format": legacy,
@@ -577,7 +539,6 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
 def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
     import datetime
-    from unittest.mock import patch
 
     import boto3
     from botocore.exceptions import ClientError
@@ -630,7 +591,6 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
 def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     """Batch and file signing must carry the deployment's session tags into the AssumeRole call too."""
     import datetime
-    from unittest.mock import patch
 
     import boto3
     from botocore.exceptions import ClientError
@@ -889,7 +849,6 @@ def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
 
 
 def _bedrock_configs_with_get_error_class():
-    import importlib
     import inspect
     import pathlib
 
@@ -974,10 +933,82 @@ def test_unmapped_openai_family_model_routes_to_converse():
     """
     from typing import Final
 
-    import litellm
 
     unmapped: Final = "bedrock/global.openai.gpt-99-unmapped"
     assert unmapped.removeprefix("bedrock/") not in litellm.bedrock_converse_models
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+_FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+
+
+_COMPILE_REJECTION: Final = (
+    "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+)
+
+
+_SCHEMA_PATTERN_REJECTION: Final = (
+    "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
+    "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
+    "range, or avoid nesting quantified groups"
+)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_text", "expected"),
+    [
+        (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
+        (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
+        (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
+        (400, "The model returned the following errors: messages.0.content: Field required", False),
+        (500, _FORMAT_REJECTION, False),
+        (429, _COMPILE_REJECTION, False),
+    ],
+    ids=[
+        "format_not_permitted",
+        "schema_too_complex",
+        "schema_pattern_too_complex",
+        "other_key_not_permitted",
+        "other_400",
+        "500",
+        "429",
+    ],
+)
+def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_native_output(
+    status_code, error_text, expected
+):
+    assert is_bedrock_native_output_rejection(status_code, error_text) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("global.anthropic.claude-sonnet-5", None, True),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, True),
+        ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
+    ],
+    ids=["opus_4_8", "sonnet_5", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
+)
+def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_output_on(
+    local_model_cost_map, model, model_info, expected
+):
+    assert bedrock_native_output_is_opt_in(model, model_info=model_info) is expected
+
+
+def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the_deployment(local_model_cost_map):
+    litellm_params: Final = {"api_base": "https://bedrock.example", "model_info": {"id": "deployment-1"}}
+
+    turned_off: Final = without_bedrock_native_output_opt_in(litellm_params)
+
+    assert not bedrock_native_output_is_opt_in(
+        "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
+    )
+    assert turned_off["api_base"] == "https://bedrock.example"
+    assert deployment_model_info(turned_off)["id"] == "deployment-1"
+    assert litellm_params["model_info"] == {"id": "deployment-1"}

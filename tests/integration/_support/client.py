@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -20,6 +20,11 @@ T = TypeVar("T")
 
 def object_value(value: JsonValue) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_python(value)
+
+
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
+    return value
 
 
 def string_value(value: JsonValue) -> str:
@@ -214,3 +219,25 @@ def gateway_from_environment() -> Iterator[Gateway]:
     upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
     with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
         yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
+
+
+def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
+    """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        converged: Final = eventually(read, satisfied, seconds=max(deadline - time.monotonic(), 0.0))
+        misses: Final = _misses_within(read, satisfied, holding)
+        if not misses:
+            return converged
+        assert time.monotonic() < deadline, f"State did not hold: {misses[0]!r}"
+        time.sleep(0.1)
+
+
+def _misses_within(read: Callable[[], T], satisfied: Callable[[T], bool], holding: float) -> tuple[T, ...]:
+    until: Final = time.monotonic() + holding
+    while time.monotonic() < until:
+        time.sleep(0.1)
+        observed: Final = read()
+        if not satisfied(observed):
+            return (observed,)
+    return ()

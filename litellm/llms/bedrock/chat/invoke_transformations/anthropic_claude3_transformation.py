@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -18,11 +20,15 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
+    bedrock_chat_uses_native_structured_output,
+    bedrock_cleaned_output_schema,
     bedrock_supports_tool_search,
+    deployment_model_info,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    requests_opt_in_native_output,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -40,6 +46,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -62,6 +70,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     anthropic_version: str = "bedrock-2023-05-31"
 
+    def __init__(self, model_info: Mapping[str, object] | None = None) -> None:
+        super().__init__()
+        self._deployment_model_info: Final = model_info
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
@@ -72,6 +84,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return AnthropicConfig.native_output_schema(json_schema)
+
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        return bedrock_chat_uses_native_structured_output(
+            model, self.is_thinking_requested(request_params), model_info=self._deployment_model_info
+        ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
+
+    def uses_opt_in_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        return requests_opt_in_native_output(model, optional_params, deployment_model_info(litellm_params))
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -79,18 +109,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201) unless the model map advertises
-        # native structured output
-        from litellm.utils import supports_native_structured_output
-
         original_model: Final = model
-        if "response_format" in non_default_params and not supports_native_structured_output(
-            model=model, custom_llm_provider="bedrock"
-        ):
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
-
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
         # downstream effort gate runs. Mirrors the converse path's
@@ -229,6 +248,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
+            model_info=deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params)),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,
