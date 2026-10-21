@@ -1249,7 +1249,7 @@ async def test_latency_based_override_learns_from_the_overriding_requests():
     )
 
     def samples(deployment_id: str) -> list[float]:
-        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency", [])
+        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency_normalized", [])
         return [latency for latency in recorded if latency > 0]
 
     async def overriding_call() -> str:
@@ -1316,7 +1316,7 @@ async def test_override_matching_a_routing_group_strategy_records_each_request_o
     deployment_id = response._hidden_params["model_id"]
     await _async_wait_until(lambda: (router.cache.get_cache("grp_map") or {}).get(deployment_id) is not None)
 
-    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency"]) == 1
+    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency_normalized"]) == 1
     assert request["litellm_logging_obj"].dynamic_success_callbacks is None
 
 
