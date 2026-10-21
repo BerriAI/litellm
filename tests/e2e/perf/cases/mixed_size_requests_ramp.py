@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
-from setup.performance_test_case import Ramp, ramped
+from setup.performance_test_case import Limit, Ramp, ramped
 
 from cases.mixed_size_requests_2rps import CASE as MIXED
 
@@ -20,5 +20,5 @@ CASE: Final = replace(
     MIXED,
     name="mixed_size_requests_ramp",
     traffic=ramped(MIXED.traffic, RAMP, seed=9, concurrency=300),
-    limits=(),
+    limits=(Limit("sustained_rps", min=8),),
 )
