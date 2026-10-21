@@ -58,6 +58,7 @@ _TEXT_ONLY_MODALITIES: Final = TypeAdapter(list[Literal["TEXT"]])
 
 _VERTEX_V1_PATH: Final = "/v1/projects/"
 _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
+_CANDIDATE_COUNT_KEYS: Final = ("candidate_count", "candidateCount")
 
 LongDecodeHops: TypeAlias = tuple[GenerateContentResponseBody, ...]
 AsyncHopPost: TypeAlias = Callable[[RequestBody], Awaitable[httpx.Response]]
@@ -84,11 +85,15 @@ def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _asks_for_one_candidate(generation_config: Mapping[str, object]) -> bool:
+    return all(_int_or_none(generation_config[key]) == 1 for key in _CANDIDATE_COUNT_KEYS if key in generation_config)
+
+
 def continuation_cap_of(request_body: RequestBody) -> int | None:
     generation_config: Final = request_body.get("generationConfig")
     if generation_config is None or "max_output_tokens" not in generation_config:
         return None
-    if "candidate_count" in generation_config and _int_or_none(generation_config["candidate_count"]) != 1:
+    if not _asks_for_one_candidate(generation_config):
         return None
     return _int_or_none(generation_config["max_output_tokens"])
 

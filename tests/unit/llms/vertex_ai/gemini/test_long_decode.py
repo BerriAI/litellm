@@ -516,9 +516,16 @@ async def test_unary_answer_cut_at_the_callers_cap_is_returned_with_its_token_in
     assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTE="
 
 
+@pytest.mark.parametrize(
+    "choice_count_request",
+    [{"max_tokens": 100_000, "n": 2}, {"extra_body": {"generationConfig": {"candidateCount": 2}}}],
+)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_unary_request_for_more_than_one_choice_is_never_continued(is_async: bool):
+async def test_unary_request_for_more_than_one_choice_is_never_continued(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, choice_count_request: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "100000")
     sent: Final[list[dict[str, object]]] = []
     # Vertex AI answered 400 "Candidate count greater than 1 is not supported when continuation_token is set"
     # on 2026-10-13
@@ -526,9 +533,8 @@ async def test_unary_request_for_more_than_one_choice_is_never_continued(is_asyn
     kwargs: Final = {
         "model": MODEL,
         "messages": list(MESSAGES),
-        "max_tokens": 100_000,
-        "n": 2,
         "api_key": "fake-gemini-key",
+        **choice_count_request,
     }
 
     response: Final = (
