@@ -88,7 +88,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 {
                     {model_group}_map: {
                         id: {
-                            "latency": [..]
+                            "latency_normalized": [..]
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
@@ -150,10 +150,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
+                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
                 else:
-                    request_count_dict[id]["latency"] = request_count_dict[id]["latency"][1:] + [final_value]
+                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
+                        final_value
+                    ]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -219,7 +221,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     {
                         {model_group}_map: {
                             id: {
-                                "latency": [..]
+                                "latency_normalized": [..]
                                 f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                             }
                         }
@@ -232,10 +234,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         request_count_dict[id] = {}
 
                     ## Latency - give 1000s penalty for failing
-                    if len(request_count_dict[id].get("latency", [])) < self.routing_args.max_latency_list_size:
-                        request_count_dict[id].setdefault("latency", []).append(1000.0)
+                    if (
+                        len(request_count_dict[id].get("latency_normalized", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency_normalized", []).append(1000.0)
                     else:
-                        request_count_dict[id]["latency"] = request_count_dict[id]["latency"][1:] + [1000.0]
+                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
+                            1:
+                        ] + [1000.0]
 
                     await self.router_cache.async_set_cache(
                         key=latency_key,
@@ -277,7 +284,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 {
                     {model_group}_map: {
                         id: {
-                            "latency": [..]
+                            "latency_normalized": [..]
                             "time_to_first_token_seconds": [..]
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
@@ -343,10 +350,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
+                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
                 else:
-                    request_count_dict[id]["latency"] = request_count_dict[id]["latency"][1:] + [final_value]
+                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
+                        final_value
+                    ]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -415,7 +424,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = {
-                    "latency": [0],
+                    "latency_normalized": [0],
                     precise_minute: {"tpm": 0, "rpm": 0},
                 }
 
@@ -455,7 +464,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_latency = item_map.get("latency", [])
+            item_latency = item_map.get("latency_normalized", [])
             item_ttft_latency = item_map.get("time_to_first_token_seconds", [])
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
