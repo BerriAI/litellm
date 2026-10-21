@@ -171,9 +171,14 @@ class PrivaiteGuardrail(CustomGuardrail):
             return None
         anonymized, mapping = await engine.process_request([*messages, *(_pseudo_message(text) for text, _ in slots)])
         count: Final = len(messages)
+        if len(anonymized) != count + len(slots):
+            raise RuntimeError(
+                f"privaite returned {len(anonymized)} messages for {count + len(slots)}, "
+                "refusing to forward a request it did not scrub in full"
+            )
         if messages:
             messages[:] = anonymized[:count]
-        for (_, write), leaf_message in zip(slots, anonymized[count:]):
+        for (_, write), leaf_message in zip(slots, anonymized[count:], strict=True):
             content = read_field(leaf_message, "content")
             write(content if isinstance(content, str) else "")
         return mapping

@@ -717,6 +717,24 @@ async def test_pre_call_anonymizes_both_messages_and_input():
     assert out["metadata"]["privaite_map"] == _FAKES
 
 
+class _EngineReturningOneMessageFewer(_FakeEngine):
+    async def process_request(self, messages):
+        anonymized, mapping = await super().process_request(messages)
+        return anonymized[:-1], mapping
+
+
+@pytest.mark.asyncio
+async def test_pre_call_refuses_a_request_the_engine_did_not_fully_return(monkeypatch):
+    monkeypatch.setattr(sys.modules["privaite.pii.engine"], "PIIEngine", _EngineReturningOneMessageFewer)
+    gr = _make_guardrail()
+    data = {"messages": [{"role": "user", "content": "Email Marie Dupont"}], "input": "also reach marie@acme.com"}
+
+    messages = data["messages"]
+    with pytest.raises(RuntimeError, match="returned 1 messages for 2"):
+        await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert data["messages"] is messages and messages[0]["content"] == "Email Marie Dupont", "nothing is half written"
+
+
 @pytest.mark.asyncio
 async def test_pre_call_unhandled_input_shape_is_passthrough():
     # an unexpected input shape (neither str nor list) is left untouched.
