@@ -1,6 +1,6 @@
 """Image-level regression net for the prisma bake in the shipped runtime image.
 
-Boots a built image's migration entrypoint the way an OpenShift / air-gapped
+Boots a built image's `migrations` component the way an OpenShift / air-gapped
 deployment does (an internal-only network with no egress, an arbitrary non-root
 uid in GID 0) against a brand-new Postgres, and asserts the schema was created.
 
@@ -14,6 +14,7 @@ the normal unit-test run and exercised only where an image has been built (the
 image-scan workflow). Requires a working docker CLI.
 """
 
+import shlex
 import shutil
 import subprocess
 import uuid
@@ -26,10 +27,7 @@ POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 MIN_TABLES = int(os.getenv("LITELLM_TEST_MIN_TABLES", "20"))
 NON_ROOT_UID = "12345:0"  # arbitrary uid in GID 0, as OpenShift restricted-v2 assigns
 
-MIGRATION_INTERPRETER = os.getenv("LITELLM_MIGRATION_INTERPRETER", "python")
-MIGRATION_SCRIPT = os.getenv(
-    "LITELLM_MIGRATION_SCRIPT", "litellm/proxy/prisma_migration.py"
-)
+MIGRATION_ARGS = tuple(shlex.split(os.getenv("LITELLM_MIGRATION_ARGS", "migrations")))
 
 pytestmark = [
     pytest.mark.skipif(IMAGE is None, reason="requires a built image (set LITELLM_IMAGE)"),
@@ -113,8 +111,7 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
         "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
         "-e", "LITELLM_MASTER_KEY=sk-offline-migration-test",
         "-e", "DISABLE_SCHEMA_UPDATE=false",
-        "-w", "/app", "--entrypoint", MIGRATION_INTERPRETER,
-        IMAGE, MIGRATION_SCRIPT,
+        IMAGE, *MIGRATION_ARGS,
         check=False,
     )
     tables = _table_count(pg)
