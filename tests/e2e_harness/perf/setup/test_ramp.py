@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Final
 
-import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.observe import Observation, evaluate, junit_properties
@@ -148,10 +148,12 @@ def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_ow
     )
     first, second = observation.steps()
     first_completed: Final = round(first.completed_rps * ramp.step_seconds)
-    assert first.cpu_seconds_per_request == pytest.approx(10.0 / first_completed)
-    assert first.redis_latency_mean_seconds == pytest.approx(0.01)
+    assert first.cpu_seconds_per_request is not None and math.isclose(
+        first.cpu_seconds_per_request, 10.0 / first_completed
+    )
+    assert first.redis_latency_mean_seconds is not None and math.isclose(first.redis_latency_mean_seconds, 0.01)
     assert first.postgres_peak_connections == 18
-    assert second.redis_latency_mean_seconds == pytest.approx(0.4)
+    assert second.redis_latency_mean_seconds is not None and math.isclose(second.redis_latency_mean_seconds, 0.4)
     assert second.postgres_peak_connections == 25
     assert first.time_to_first_token_p99 is None
     names: Final = {name for name, _ in step_properties((first, second)) if name.startswith("perf_ramp_step_10_")}
