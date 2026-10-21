@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
-
+from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -36,6 +35,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    StandardLoggingPayload,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
@@ -601,6 +601,91 @@ async def test_streaming_handler_with_usage(
                 assert chunk.usage == final_usage_block
             chunk_has_usage = True
     assert chunk_has_usage
+
+
+def _usage_test_logging(
+    caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool = False
+) -> Logging:
+    logging_obj: Final = Logging(
+        model="hosted_vllm/m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=1_790_000_000.0,
+        litellm_call_id="12345",
+        function_id="1245",
+        kwargs={"_litellm_stream_usage_injected": True} if stream_usage_injected else {},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="hosted_vllm/m", stream_options=caller_stream_options
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_injected", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, False, 0),
+        (None, False, 1),
+        ({"include_usage": True}, True, 1),
+    ],
+    ids=["caller-asked", "provider-handler-injected", "proxy-injected"],
+)
+@pytest.mark.parametrize("plain_iterator", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_usage_chunk_has_empty_choices_only_for_callers_that_asked(
+    sync_mode: bool,
+    plain_iterator: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_injected: bool,
+    usage_chunk_choice_count: int,
+):
+    usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
+    provider_chunks: Final = [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+        ModelResponseStream(id="c1", choices=[], provider_specific_fields={"citations": ["a"]}),
+        ModelResponseStream(id="c1", choices=[], usage=usage),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(provider_chunks) if plain_iterator else ModelResponseListIterator(model_responses=provider_chunks)
+        ),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
+        stream_options={"include_usage": True},
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+
+    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0, usage_chunk_choice_count]
+    assert chunks[2].provider_specific_fields == {"citations": ["a"]}
+    assert [getattr(chunk, "usage", None) is not None for chunk in chunks] == [False, False, False, True]
+    assert chunks[-1].usage.total_tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_plain_iterator_stream_keeps_usage_on_its_chunk_when_usage_was_not_requested():
+    usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
+    provider_chunks: Final = [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
+        ModelResponseStream(
+            id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")], usage=usage
+        ),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(provider_chunks),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
+    assert chunks[-1].usage.total_tokens == 6
 
 
 @pytest.mark.parametrize("sync_mode", [False])
@@ -4178,6 +4263,68 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
     assert stashed.completion_tokens == 1
     assert stashed.total_tokens == 31
     assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[tuple[int, int], ...] = ()
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.failures = (*self.failures, (payload["prompt_tokens"], payload["completion_tokens"]))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_router_discards_its_usage() -> None:
+    """The dropped attempt's failure log is queued, and the router discards the stashed usage as it opens the
+    fallback hop before that log runs. The log must still bill what the dropped attempt consumed, and the shared
+    logging object must not be marked as already failed, since the hop's own failure still has to reach the
+    integrations."""
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="partial-usage-copy",
+        function_id="1245",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-copy",
+            created=1742056047,
+            model="gpt-5.6",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The", role="assistant"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
+    logging_obj.carry_failed_attempt_usage()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert recorder.failures == ((30, 1),)
+    assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
 
 
 def test_record_partial_usage_for_failure_noop_without_chunks():
