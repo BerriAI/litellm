@@ -26,10 +26,12 @@ class _RustTranscriptionResult(BaseModel):
     usage: TranscriptionUsageTokensObject | None = None
 
 
-def _transcription_response(result: Mapping[str, object]) -> TranscriptionResponse:
+def _transcription_response(
+    result: Mapping[str, object], optional_params: Mapping[str, object]
+) -> TranscriptionResponse:
     parsed: Final = _RustTranscriptionResult.model_validate(result)
-    response: Final = TranscriptionResponse(text=parsed.text)
-    response.usage = parsed.usage
+    response: Final = TranscriptionResponse(text=parsed.text).model_copy(update={"usage": parsed.usage})
+    response.hidden_params = {**response.hidden_params, "region_name": optional_params.get("aws_region_name")}
     return response
 
 
@@ -80,7 +82,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
             call: Final = NativeCall(args=(), kwargs=fields, base={})
-            return _transcription_response(rust(call))
+            return _transcription_response(rust(call), optional_params)
 
         return runtime.run(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
@@ -113,7 +115,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
             call: Final = NativeCall(args=(), kwargs=fields, base={})
-            return _transcription_response(await rust(call))
+            return _transcription_response(await rust(call), optional_params)
 
         return await runtime.arun(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),

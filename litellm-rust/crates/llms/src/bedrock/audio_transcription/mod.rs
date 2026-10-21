@@ -109,10 +109,10 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         if let Some(prompt) = optional_string(&optional_params, "prompt") {
             instruction.push_str(&format!(" Additional context: {prompt}"));
         }
-        let mut inference_config = Map::from_iter([("maxTokens".to_string(), json!(4096))]);
-        if let Some(temperature) = optional_params.get("temperature") {
-            inference_config.insert("temperature".to_string(), temperature.clone());
-        }
+        let temperature = optional_params
+            .get("temperature")
+            .cloned()
+            .unwrap_or(json!(0));
         Ok(AudioTranscriptionRequestData {
             body: json!({
                 "messages": [{
@@ -122,7 +122,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                         {"text": instruction}
                     ]
                 }],
-                "inferenceConfig": inference_config,
+                "inferenceConfig": {"maxTokens": 4096, "temperature": temperature},
             }),
         })
     }
@@ -221,13 +221,21 @@ mod tests {
     }
 
     #[rstest]
-    fn request_sends_audio_and_instruction_without_system_block() {
-        let params = Map::from_iter([
-            ("language".to_string(), json!("en")),
-            ("prompt".to_string(), json!("Speaker names")),
-            ("temperature".to_string(), json!(0)),
-            ("timestamp_granularities".to_string(), json!(["word"])),
-        ]);
+    #[case::caller_temperature(Some(json!(0.4)), json!(0.4))]
+    #[case::default_temperature(None, json!(0))]
+    fn request_sends_audio_and_instruction_without_system_block(
+        #[case] temperature: Option<Value>,
+        #[case] expected_temperature: Value,
+    ) {
+        let params = Map::from_iter(
+            [
+                ("language".to_string(), json!("en")),
+                ("prompt".to_string(), json!("Speaker names")),
+                ("timestamp_granularities".to_string(), json!(["word"])),
+            ]
+            .into_iter()
+            .chain(temperature.map(|value| ("temperature".to_string(), value))),
+        );
         let params = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.map_transcription_params(&params);
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_audio_transcription_request(
@@ -246,7 +254,7 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
+                "inferenceConfig": {"maxTokens": 4096, "temperature": expected_temperature}
             })
         );
     }

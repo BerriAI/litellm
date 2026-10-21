@@ -217,12 +217,21 @@ async def test_async_missing_native_binding_raises_without_python_fallback() -> 
         )
 
 
-def test_bedrock_transcription_bills_the_converse_token_usage() -> None:
+@pytest.mark.parametrize(
+    ("region_kwargs", "priced_model"),
+    [
+        ({}, MODEL),
+        ({"aws_region_name": "ap-southeast-2"}, "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507"),
+    ],
+)
+def test_bedrock_transcription_bills_the_converse_token_usage(
+    region_kwargs: dict[str, str], priced_model: str
+) -> None:
     NATIVE_TRANSCRIPTION.override(UsageBridge())
 
-    response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE)
+    response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, **region_kwargs)
 
-    model_info: Final = litellm.get_model_info(MODEL)
+    model_info: Final = litellm.get_model_info(priced_model)
     expected_cost: Final = 390 * (model_info.get("input_cost_per_token") or 0.0) + 60 * (
         model_info.get("output_cost_per_token") or 0.0
     )
