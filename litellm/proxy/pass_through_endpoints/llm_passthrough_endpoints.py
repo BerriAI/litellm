@@ -737,7 +737,7 @@ async def eu_jev_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
     """
-    body: Final = await read_request_body(request)
+    body: Final = TypeAdapter(dict[str, object]).validate_python(await read_request_body(request))
     if "custom_body" in body:
         raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
     if body.get("stream"):
