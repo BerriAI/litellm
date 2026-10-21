@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import OpenCodeOptions
@@ -31,6 +31,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -162,8 +163,15 @@ class OpenCodeStreamState:
     step_texts: Sequence[str] = ()
 
 
-def _as_dict(value: object) -> Mapping[str, Any]:
+def _as_dict(value: object) -> Mapping[str, object]:
     return value if isinstance(value, dict) else MappingProxyType({})
+
+
+def _spread_items(value: object) -> Iterable[object]:
+    try:
+        return iter_items(value)
+    except TypeError:
+        raise TypeError(f"Value after * must be an iterable, not {type(value).__name__}") from None
 
 
 def _tool_events(part: Mapping[str, object]) -> Sequence[Event]:
@@ -239,7 +247,7 @@ def build_opencode_config(
     token_path: str,
     permissions: PermissionMode,
     disable_tools: Sequence[str] = (),
-    user_config: Mapping[str, Any] | None = None,
+    user_config: Mapping[str, object] | None = None,
     instructions_path: str | None = None,
     skills_path: str | None = None,
 ) -> Mapping[str, object]:
@@ -248,10 +256,16 @@ def build_opencode_config(
     validate_user_config(user)
     qualified = f"{OPENCODE_PROVIDER_ID}/{model}"
     extra_instructions: Final = (instructions_path,) if instructions_path else ()
-    instructions: Final = [*(user.get("instructions") or ()), *extra_instructions]  # mutable-ok: opencode config JSON
+    instructions: Final = [
+        *_spread_items(user.get("instructions") or ()),
+        *extra_instructions,
+    ]  # mutable-ok: opencode config JSON
     user_skills = _as_dict(user.get("skills"))
     extra_skills: Final = (skills_path,) if skills_path else ()
-    skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
+    skill_paths: Final = [
+        *_spread_items(user_skills.get("paths") or ()),
+        *extra_skills,
+    ]  # mutable-ok: opencode config JSON
     options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
     models: Final[dict[str, Mapping[str, object]]] = {model: {}}  # mutable-ok: opencode config JSON
     provider: Final = {  # mutable-ok: opencode config JSON

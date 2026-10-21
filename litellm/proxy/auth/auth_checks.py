@@ -393,7 +393,7 @@ def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[st
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str) -> object: ...
+    async def async_get_cache(self, *, key: str, local_only: bool = ...) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
@@ -2663,7 +2663,7 @@ async def _load_team_membership_on_cache_miss(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_TeamMembership | None:
-    redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+    redis_cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     redis_membership: Final = _membership_from_cached_payload(redis_cached)
     if not isinstance(redis_membership, _TeamMembershipCacheMiss):
         return redis_membership
@@ -2712,7 +2712,7 @@ async def get_team_membership(
             use_writer=True,
         )
 
-    l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
+    l1_cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=_key, local_only=True)
     l1_membership: Final = _membership_from_cached_payload(l1_cached)
     if not isinstance(l1_membership, _TeamMembershipCacheMiss):
         return l1_membership

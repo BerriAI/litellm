@@ -21,6 +21,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -1020,11 +1021,12 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         tool_function = get_attribute_or_key(tool, "function")
         tool_name = get_attribute_or_key(tool_function, "name")
         tool_arguments = get_attribute_or_key(tool_function, "arguments")
-        parsed_args = parse_tool_call_arguments(
-            tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
+        parsed_args = _DECODED_JSON.validate_python(
+            parse_tool_call_arguments(tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke")
         )
-        if isinstance(parsed_args, dict):
-            parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items())
+        parsed_mapping = as_str_mapping(parsed_args)
+        if parsed_mapping is not None:
+            parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in parsed_mapping.items())
         else:
             parameters = f"<result>{parsed_args}</result>\n"
         invokes += f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
@@ -2341,7 +2343,7 @@ def _add_missing_tool_results(
                         else:
                             tool_name = getattr(function, "name", "unknown_tool")
                     else:
-                        function = getattr(tool_call, "function", None)
+                        function = attribute_or_none(tool_call, "function")
                         if function:
                             tool_name = getattr(function, "name", "unknown_tool")
                     break
@@ -3967,13 +3969,15 @@ def _convert_to_bedrock_tool_call_invoke(
                     arguments_dict = {}
                 else:
                     try:
-                        arguments_dict = json.loads(arguments)
+                        decoded_arguments = as_str_mapping(_DECODED_JSON.validate_python(json.loads(arguments)))
                         # Ensure arguments_dict is always a dict
                         # (Bedrock requires toolUse.input to be an object).
                         # Some providers return arguments: '""' which
                         # json.loads decodes to a bare string.
-                        if not isinstance(arguments_dict, dict):
+                        if decoded_arguments is None:
                             arguments_dict = {}
+                        else:
+                            arguments_dict = dict(decoded_arguments)
                     except json.JSONDecodeError:
                         # The model may return multiple JSON objects
                         # concatenated in a single arguments string, e.g.
@@ -5936,7 +5940,11 @@ def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str)
         return ({},)
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     try:
-        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
+        parsed: Final = as_str_mapping(
+            _DECODED_JSON.validate_python(
+                parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
+            )
+        )
     except ValueError as e:
         salvaged: Final = salvage_concatenated_tool_arguments(normalized_raw)
         if salvaged:
@@ -5949,7 +5957,7 @@ def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str)
             return salvaged
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return ({},)
-    return (parsed,) if isinstance(parsed, dict) else ({},)
+    return (dict(parsed),) if parsed is not None else ({},)
 
 
 def _choice_tool_calls(choice: object) -> tuple[object, ...]:

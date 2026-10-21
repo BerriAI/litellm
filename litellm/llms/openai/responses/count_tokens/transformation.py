@@ -5,11 +5,12 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
@@ -55,6 +56,36 @@ class _AnthropicCountMessage(TypedDict):
 
 
 _ANTHROPIC_COUNT_MESSAGES: Final = TypeAdapter(tuple[_AnthropicCountMessage, ...])
+
+
+@runtime_checkable
+class _FieldReader(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+@runtime_checkable
+class _FunctionFields(_FieldReader, Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _missing_get_error(value: object) -> AttributeError:
+    return AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
+def _field_reader(value: object) -> _FieldReader:
+    if isinstance(value, _FieldReader):
+        return value
+    raise _missing_get_error(value)
+
+
+def _function_fields(value: object) -> _FunctionFields:
+    if isinstance(value, _FunctionFields):
+        return value
+    raise _missing_get_error(value)
+
+
 _ANTHROPIC_OUTPUT_SCHEMA: Final = TypeAdapter(AnthropicOutputSchema)
 
 
@@ -191,7 +222,7 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def _transform_tools_for_responses_api(
-        tools: list[dict[str, Any]],
+        tools: list[dict[str, object]],
     ) -> list[dict[str, object]]:
         """
         Transform OpenAI chat and Anthropic tools to Responses API tools format.
@@ -203,7 +234,7 @@ class OpenAICountTokensConfig:
         transformed: Final[list[dict[str, object]]] = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
-                func = tool["function"]
+                func = _function_fields(tool["function"])
                 item: dict[str, object] = {
                     "type": "function",
                     "name": func.get("name", ""),
@@ -230,7 +261,7 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def messages_to_responses_input(
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
     ) -> tuple[list[dict[str, object]], str | None]:
         """
         Convert standard chat messages format to OpenAI Responses API input format.
@@ -271,14 +302,17 @@ class OpenAICountTokensConfig:
                 if content:
                     input_items.append({"role": "assistant", "content": content})
                 if tool_calls:
-                    for tc in tool_calls:
-                        func = tc.get("function", {})
+                    for tc in iter_items(tool_calls):
+                        tool_call = _field_reader(tc)
+                        function = tool_call.get("function", {})
+                        call_id = tool_call.get("id", "")
+                        function_fields = _field_reader(function)
                         input_items.append(
                             {
                                 "type": "function_call",
-                                "call_id": tc.get("id", ""),
-                                "name": func.get("name", ""),
-                                "arguments": func.get("arguments", ""),
+                                "call_id": call_id,
+                                "name": function_fields.get("name", ""),
+                                "arguments": function_fields.get("arguments", ""),
                             }
                         )
                 elif not content:

@@ -1,4 +1,5 @@
-from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
+from collections.abc import Sequence
+from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -53,7 +54,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

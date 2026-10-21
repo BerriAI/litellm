@@ -1096,7 +1096,7 @@ class Logging(LiteLLMLoggingBaseClass):
         automatically extracts metadata/litellm_metadata from kwargs,
         so callers don't need to manually plumb them into litellm_params.
         """
-        base_litellm_params: Final[dict[str, Any]] = {}
+        base_litellm_params: Final[dict[str, object]] = {}
 
         if isinstance(kwargs.get("metadata"), dict):
             base_litellm_params["metadata"] = kwargs["metadata"].copy()
@@ -1113,10 +1113,11 @@ class Logging(LiteLLMLoggingBaseClass):
             lp_metadata: Final = litellm_params.pop("metadata", None)
             base_litellm_params.update(litellm_params)
             if lp_metadata and isinstance(lp_metadata, dict):
-                base_litellm_params.setdefault("metadata", {})
-                for k, v in lp_metadata.items():
-                    if k not in base_litellm_params["metadata"]:
-                        base_litellm_params["metadata"][k] = v
+                merged_metadata: Final = base_litellm_params.setdefault("metadata", {})
+                if isinstance(merged_metadata, dict):
+                    for k, v in lp_metadata.items():
+                        if k not in merged_metadata:
+                            merged_metadata[k] = v
 
         self.update_environment_variables(
             litellm_params=base_litellm_params,
@@ -3151,7 +3152,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if callback_logging_payload is not None or shared_logging_payload is None
                 else shared_logging_payload.copy()
             )
-            call_details: dict[str, Any]  # mutable-ok: legacy loggers take a plain dict
+            call_details: dict[str, object]  # mutable-ok: legacy loggers take a plain dict
             call_details = (  # rebind-ok: logging hooks may return a new dict
                 self.model_call_details
                 if not for_async_request
@@ -4773,7 +4774,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
-        httpx_response: Final = self.model_call_details.get("httpx_response", None)
+        httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
         dict_result: Final = httpx_response.json()
@@ -4803,7 +4804,7 @@ class Logging(LiteLLMLoggingBaseClass):
             The response object with usage added if available
         """
         # Get usage from model_call_details (set by asend_message)
-        usage: Final = self.model_call_details.get("usage")
+        usage: Final[Usage | None] = self.model_call_details.get("usage")
         if usage is None:
             return result
 
@@ -5636,7 +5637,9 @@ def build_custom_logger_compatible_class(
                 return callback
 
         # Get global BitBucket config
-        bitbucket_config: Final = getattr(litellm, "global_bitbucket_config", None)
+        bitbucket_config: Final = (
+            litellm.global_bitbucket_config if hasattr(litellm, "global_bitbucket_config") else None
+        )
         if bitbucket_config is None:
             raise ValueError("BitBucket configuration not found. Please set litellm.global_bitbucket_config first.")
 

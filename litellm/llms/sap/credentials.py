@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 import httpx
 from pydantic import TypeAdapter
@@ -73,7 +73,7 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     return cur
 
 
-def _load_json_env(var_name: str) -> dict[str, object] | None:
+def _load_json_env(var_name: str) -> Mapping[str, Sequence[Mapping[str, object]]] | None:
     raw: Final = os.environ.get(var_name)
     if not raw:
         return None
@@ -90,7 +90,7 @@ def _str_or_none(value: object) -> str | None:
         return None
 
 
-def _load_vcap() -> dict[str, Any]:
+def _load_vcap() -> Mapping[str, Sequence[Mapping[str, object]]]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 

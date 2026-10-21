@@ -437,6 +437,14 @@ def _team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.
     return TeamRepository(prisma_client).table
 
 
+class _ExecuteRaw(Protocol):
+    async def __call__(self, query: str, *args: object) -> int: ...
+
+
+def _execute_raw(prisma_client: PrismaClient) -> _ExecuteRaw:
+    return prisma_client.db.execute_raw
+
+
 def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return cast(  # cast-ok: generated actions type Json columns as str; TableActions widens inputs to Mapping
         "TableActions[prisma_models.LiteLLM_TeamTable]", tx.litellm_teamtable
@@ -4723,7 +4731,7 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
     appended in between. It locks the user rows in the order `USER_ROWS_LOCK_SQL` takes them, so it
     never waits on a SCIM group push in a cycle.
     """
-    _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
+    _ = await _execute_raw(prisma_client)(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
 
@@ -6348,7 +6356,7 @@ async def append_team_models(
     # When the team currently has models=[] (unrestricted access), the
     # CASE expression inserts the 'all-proxy-models' sentinel first.
     models_to_add: Final = list(data.models)
-    await prisma_client.db.execute_raw(
+    await _execute_raw(prisma_client)(
         'UPDATE "LiteLLM_TeamTable" '
         "SET models = ("
         "  SELECT ARRAY(SELECT DISTINCT unnest("

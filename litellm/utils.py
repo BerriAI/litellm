@@ -1599,7 +1599,7 @@ def _deployment_provider(kwargs: Mapping[str, object]) -> str:
         return ""
 
 
-async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
+async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -8996,8 +8996,9 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
+    model_info: Mapping[str, object] | None
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
         if model_info is not None:

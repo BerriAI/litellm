@@ -792,6 +792,11 @@ def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, 
     return TranscriptionResponse(**cached_response_dict)
 
 
+def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TextCompletionResponse:
+    fields: Final = {key: value for key, value in cached_response_dict.items() if key != "stream"}
+    return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
+
+
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
@@ -3558,7 +3563,7 @@ def _complete_nadir(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
         encoding=_get_encoding(),
         api_key=api_key,
         logging_obj=ctx.logging,
-        client=ctx.client,
+        client=_dispatch_client_http(ctx),
     )
     ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
 
@@ -7707,7 +7712,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(init_response, TextCompletionResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
-                response = TextCompletionResponse(**init_response)
+                response = _text_completion_response_from_cached_dict(init_response)
             else:
                 response = init_response
         elif asyncio.iscoroutine(init_response):

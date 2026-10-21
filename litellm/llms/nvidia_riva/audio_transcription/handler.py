@@ -26,7 +26,7 @@ without the optional STT extras installed.
 
 import asyncio
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -40,6 +40,8 @@ from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
     RIVA_TARGET_SAMPLE_RATE_HZ,
     NvidiaRivaAudioTranscriptionConfig,
+    RivaFinalResult,
+    RivaWordTiming,
 )
 from litellm.llms.nvidia_riva.common_utils import (
     NvidiaRivaException,
@@ -429,14 +431,14 @@ class NvidiaRivaAudioTranscription:
             yield chunk
 
     @staticmethod
-    def _collect_final_results(stream) -> list[dict[str, object]]:
+    def _collect_final_results(stream) -> Sequence[RivaFinalResult]:
         """
         Walk the gRPC stream, ignore empty / non-final chunks, and return a
         list of normalized final-result dicts. Matching the user's note: the
         ``id`` blocks with no ``results`` are streaming heartbeats and must
         be skipped.
         """
-        final_results: Final[list[dict[str, object]]] = []
+        final_results: Final[list[RivaFinalResult]] = []
         for response in stream:
             results = getattr(response, "results", None) or []
             for result in results:
@@ -448,16 +450,19 @@ class NvidiaRivaAudioTranscription:
                 top = alternatives[0]
                 transcript = getattr(top, "transcript", "") or ""
                 words_proto = getattr(top, "words", None) or []
-                words = []
-                for word in words_proto:
-                    words.append(
-                        {
-                            "word": getattr(word, "word", ""),
-                            "start_time_ms": int(getattr(word, "start_time", 0) or 0),
-                            "end_time_ms": int(getattr(word, "end_time", 0) or 0),
-                        }
-                    )
-                final_results.append({"transcript": transcript, "words": words})
+                final_results.append(
+                    {
+                        "transcript": transcript,
+                        "words": [
+                            RivaWordTiming(
+                                word=getattr(word, "word", ""),
+                                start_time_ms=int(getattr(word, "start_time", 0) or 0),
+                                end_time_ms=int(getattr(word, "end_time", 0) or 0),
+                            )
+                            for word in words_proto
+                        ],
+                    }
+                )
         return final_results
 
 

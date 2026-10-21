@@ -1,7 +1,7 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -111,12 +111,22 @@ def _get_response_id(response: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _dump_response(response: Any) -> dict[str, object]:
+@runtime_checkable
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+@runtime_checkable
+class _SupportsPydanticDict(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _dump_response(response: object) -> Mapping[str, object]:
     if isinstance(response, dict):
         return dict(response)
-    if hasattr(response, "model_dump"):
+    if isinstance(response, _SupportsModelDump):
         return response.model_dump()
-    if hasattr(response, "dict"):
+    if isinstance(response, _SupportsPydanticDict):
         return response.dict()
     return {"id": _get_response_id(response)}
 
@@ -199,9 +209,11 @@ async def record_container_owner(
 
     original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
     model_object_id: Final = _container_model_object_id(original_container_id, resolved_provider)
-    file_object: Final = _dump_response(response)
-    file_object["custom_llm_provider"] = resolved_provider
-    file_object["provider_container_id"] = original_container_id
+    file_object: Final = {
+        **_dump_response(response),
+        "custom_llm_provider": resolved_provider,
+        "provider_container_id": original_container_id,
+    }
     # Prisma Python requires Json fields to be serialized as a JSON string.
     file_object_json: Final[str] = json.dumps(file_object)
 

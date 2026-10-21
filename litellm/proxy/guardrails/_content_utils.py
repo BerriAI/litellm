@@ -9,7 +9,9 @@ every text fragment.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Final
+
+from litellm.litellm_core_utils.core_helpers import iter_items
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -222,7 +224,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
+def apply_redacted_messages_back(data: dict[str, object], redacted_messages: Sequence[object]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -240,9 +242,9 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     carry exactly one message per inspected element: a partial rewrite would
     forward the remaining originals unredacted. Callers must block on False.
     """
+    input_value: Final = data.get("input")
     if is_string_batch_input(data):
-        batch: Final = data["input"]
-        inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
+        inspected_indices: Final = tuple(idx for idx, item in enumerate(iter_items(input_value)) if item)
         if len(redacted_messages) != len(inspected_indices):
             return False
         if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
@@ -250,12 +252,12 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
         redacted_texts: Final = tuple(
             "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
         )
-        for idx, text in zip(inspected_indices, redacted_texts):
-            batch[idx] = text
+        if isinstance(input_value, list):
+            for idx, text in zip(inspected_indices, redacted_texts):
+                input_value[idx] = text
         return True
     if "messages" in data:
         data["messages"] = redacted_messages
-    input_value: Final = data.get("input")
     if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:

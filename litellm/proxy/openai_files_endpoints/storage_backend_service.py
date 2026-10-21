@@ -8,7 +8,7 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 import base64
 import time
 from collections.abc import Sequence
-from typing import Any, Final, cast
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
@@ -19,6 +19,7 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
+from litellm.types.passthrough_endpoints.managed_id_rewriter import ManagedFileIdWriter
 from litellm.types.utils import ExtractedFileData, SpecialEnums
 
 
@@ -232,11 +233,10 @@ class StorageBackendFileService:
             proxy_logging_obj: Proxy logging object
             user_api_key_dict: User API key authentication data
         """
-        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         if not managed_files_obj or not isinstance(managed_files_obj, BaseFileEndpoints):
             verbose_proxy_logger.warning("Managed files hook not available, skipping managed files storage")
             return
-        managed_files_obj = cast(Any, managed_files_obj)
 
         # Create model mappings using storage URL
         model_mappings: Final = {model_name: storage_url for model_name in target_model_names}
@@ -260,7 +260,14 @@ class StorageBackendFileService:
         )
 
         # Store in managed files
-        await managed_files_obj.store_unified_file_id(
+        managed_files_writer: Final = managed_files_obj if isinstance(managed_files_obj, ManagedFileIdWriter) else None
+        if managed_files_writer is None:
+            raise AttributeError(
+                f"'{type(managed_files_obj).__name__}' object has no attribute 'store_unified_file_id'",
+                name="store_unified_file_id",
+                obj=managed_files_obj,
+            )
+        await managed_files_writer.store_unified_file_id(
             file_id=base64_unified_file_id,
             file_object=file_object,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,

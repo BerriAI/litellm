@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
     WorkflowEventRepository,
     WorkflowMessageRepository,
@@ -145,6 +146,32 @@ class _MessageCreateData(TypedDict, total=False):
     content: str
     sequence_number: int
     session_id: str
+
+
+class _TxEventTable(Protocol):
+    async def create(self, data: _EventCreateData) -> object: ...
+
+
+class _TxRunTable(Protocol):
+    async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> object: ...
+
+
+class _EventAppendTx(Protocol):
+    @property
+    def litellm_workflowevent(self) -> _TxEventTable: ...
+
+    @property
+    def litellm_workflowrun(self) -> _TxRunTable: ...
+
+
+class _EventAppendTransaction(Protocol):
+    async def __aenter__(self) -> _EventAppendTx: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
+
+
+def _event_append_transaction(prisma_client: PrismaClient) -> _EventAppendTransaction:
+    return prisma_client.db.tx()
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +413,7 @@ async def append_workflow_event(
             if data.data is not None:
                 event_data["data"] = _json(data.data)
 
-            async with prisma_client.db.tx() as tx:
+            async with _event_append_transaction(prisma_client) as tx:
                 event: object = await tx.litellm_workflowevent.create(data=event_data)
                 if new_status:
                     await tx.litellm_workflowrun.update(

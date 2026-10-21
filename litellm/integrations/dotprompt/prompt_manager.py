@@ -20,6 +20,11 @@ class _PromptFileJson(TypedDict):
     metadata: ReadOnly[NotRequired[dict[str, object]]]
 
 
+class PromptJsonEntry(TypedDict):
+    content: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
+
+
 def strip_version_suffix(prompt_id: str) -> str | None:
     base, separator, version = prompt_id.rpartition(".v")
     if separator and base and version.isdigit():
@@ -358,19 +363,19 @@ class PromptManager:
 
         return f"---\n{frontmatter_yaml}---\n{content}"
 
-    def get_all_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_all_prompts_as_json(self) -> dict[str, PromptJsonEntry]:
         """Get all loaded prompts in JSON format.
 
         Returns:
             Dictionary mapping prompt_id to prompt data
         """
-        result: Final = {}
-        for prompt_id, template in self.prompts.items():
-            result[prompt_id] = {
+        return {
+            prompt_id: {
                 "content": template.content,
                 "metadata": template.metadata,
             }
-        return result
+            for prompt_id, template in self.prompts.items()
+        }
 
     def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, object]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""

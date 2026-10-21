@@ -1360,7 +1360,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
-            error_code: Final = getattr(e, "status_code", None)
+            error_code: Final[object] = getattr(e, "status_code", None)
             if error_code is not None:
                 raise AzureOpenAIError(status_code=error_code, message=str(e))
             else:

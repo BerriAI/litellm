@@ -37,7 +37,6 @@ from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -112,9 +111,11 @@ def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
     return all(value is None or isinstance(value, (str, int, float, bool)) for _, value in fields)
 
 
-def _delta_from_upstream(upstream_delta: BaseModel | None) -> Delta | None:
+def _delta_from_upstream(upstream_delta: "BaseModel | _UpstreamDeltaLike | None") -> Delta | None:
     if upstream_delta is None:
         return Delta()
+    if not isinstance(upstream_delta, BaseModel):
+        return None
     try:
         return Delta(**dict(iter(upstream_delta)))
     except Exception:
@@ -183,6 +184,33 @@ class _AlephAlphaStreamData(TypedDict):
 class _DeltaDumpDict(TypedDict):
     role: NotRequired[str | None]
     tool_calls: NotRequired[Sequence[Mapping[str, object]]]
+
+
+class _UpstreamFunctionCallLike(Protocol):
+    arguments: str | None
+
+
+class _UpstreamToolCallLike(Protocol):
+    function: _UpstreamFunctionCallLike
+
+
+class _UpstreamDeltaLike(Protocol):
+    function_call: _UpstreamFunctionCallLike | None
+    tool_calls: Sequence[_UpstreamToolCallLike] | None
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+    def model_dump(self) -> _DeltaDumpDict: ...
+
+
+class _UpstreamChoiceLike(Protocol):
+    delta: _UpstreamDeltaLike | None
+
+
+class _UpstreamChunkLike(Protocol):
+    id: str
+    choices: Sequence[_UpstreamChoiceLike]
+    system_fingerprint: str | None
 
 
 class _TextCompletionChoiceLike(Protocol):
@@ -910,7 +938,7 @@ class CustomStreamWrapper:
 
     def copy_model_response_level_provider_specific_fields(
         self,
-        original_chunk: ModelResponseStream | OpenAIChatCompletionChunk,
+        original_chunk: object,
         model_response: ModelResponseStream,
     ) -> ModelResponseStream:
         """
@@ -1105,7 +1133,8 @@ class CustomStreamWrapper:
                 ## check if openai/azure chunk
                 original_chunk: Final = response_obj.get("original_chunk", None)
                 if original_chunk:
-                    if len(original_chunk.choices) > 0:
+                    upstream_chunk: Final[_UpstreamChunkLike] = original_chunk
+                    if len(upstream_chunk.choices) > 0:
                         original_chunk_for_reuse: Final[object] = cast(  # cast-ok: runtime type-check before access
                             object,
                             original_chunk,
@@ -1141,7 +1170,7 @@ class CustomStreamWrapper:
                             )
                         else:
                             choices: Final = []
-                            for choice in original_chunk.choices:
+                            for choice in upstream_chunk.choices:
                                 try:
                                     if isinstance(choice, BaseModel):
                                         choice_json = choice.model_dump()
@@ -1154,11 +1183,11 @@ class CustomStreamWrapper:
                             setattr(model_response, "choices", choices)
                     else:
                         return
-                    model_response.system_fingerprint = original_chunk.system_fingerprint
+                    model_response.system_fingerprint = upstream_chunk.system_fingerprint
                     setattr(
                         model_response,
                         "citations",
-                        stored_attribute(original_chunk, "citations"),
+                        stored_attribute(upstream_chunk, "citations"),
                     )
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
@@ -1601,7 +1630,9 @@ class CustomStreamWrapper:
 
             model_response.model = self.model
             ## FUNCTION CALL PARSING
-            original_chunk: Final = response_obj.get("original_chunk") if response_obj is not None else None
+            original_chunk: Final[_UpstreamChunkLike | None] = (
+                response_obj.get("original_chunk") if response_obj is not None else None
+            )
             if (
                 original_chunk is not None
             ):  # function / tool calling branch - only set for openai/azure compatible endpoints
@@ -1613,31 +1644,19 @@ class CustomStreamWrapper:
                         original_chunk, model_response
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
-                    delta = original_chunk.choices[0].delta
+                    delta: Final = original_chunk.choices[0].delta
                     if delta is not None and (delta.function_call is not None or delta.tool_calls is not None):
                         try:
                             model_response.system_fingerprint = original_chunk.system_fingerprint
                             ## AZURE - check if arguments is not None
-                            if original_chunk.choices[0].delta.function_call is not None:
-                                if (
-                                    getattr(
-                                        original_chunk.choices[0].delta.function_call,
-                                        "arguments",
-                                    )
-                                    is None
-                                ):
-                                    original_chunk.choices[0].delta.function_call.arguments = ""
-                            elif original_chunk.choices[0].delta.tool_calls is not None:
-                                if isinstance(original_chunk.choices[0].delta.tool_calls, list):
-                                    for t in original_chunk.choices[0].delta.tool_calls:
-                                        if hasattr(t, "functions") and hasattr(t.functions, "arguments"):
-                                            if (
-                                                getattr(
-                                                    t.function,
-                                                    "arguments",
-                                                )
-                                                is None
-                                            ):
+                            if delta.function_call is not None:
+                                if delta.function_call.arguments is None:
+                                    delta.function_call.arguments = ""
+                            elif delta.tool_calls is not None:
+                                if isinstance(delta.tool_calls, list):
+                                    for t in delta.tool_calls:
+                                        if hasattr(t, "functions") and hasattr(getattr(t, "functions"), "arguments"):
+                                            if t.function.arguments is None:
                                                 t.function.arguments = ""
                             _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
@@ -1876,7 +1895,7 @@ class CustomStreamWrapper:
         else:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
-        litellm_params: Final = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: Final[Mapping[str, object]] = self.logging_obj.model_call_details.get("litellm_params", {})
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 

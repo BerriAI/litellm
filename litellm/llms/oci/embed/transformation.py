@@ -55,6 +55,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # OCI sends up to 96 texts per embedText request (Cohere limit).
 OCI_EMBED_BATCH_LIMIT: Final = 96
@@ -271,7 +272,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            json_response: Final = raw_response.json()
+            json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OCIError(
                 status_code=raw_response.status_code,

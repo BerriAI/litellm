@@ -16,6 +16,7 @@ from typing import Any, Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -54,6 +55,7 @@ from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -93,9 +95,22 @@ _ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "ro
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
 
 
+class _BudgetMetadata(TypedDict, total=False):
+    user_api_key_spend: ReadOnly[float | None]
+    user_api_key_max_budget: ReadOnly[float | None]
+    user_api_key_budget_reset_at: ReadOnly[object]
+
+
+def _logging_metadata_of(standard_logging_payload: StandardLoggingPayload) -> StandardLoggingMetadata | None:
+    return standard_logging_payload.get("metadata")
+
+
 def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
-    metadata: Final = standard_logging_payload.get("metadata")
-    return metadata or _EMPTY_MAPPING
+    return _logging_metadata_of(standard_logging_payload) or _EMPTY_MAPPING
+
+
+def _budget_metadata_of(standard_logging_payload: StandardLoggingPayload) -> _BudgetMetadata:
+    return _logging_metadata_of(standard_logging_payload) or {}
 
 
 def _router_span_fields(
@@ -1056,7 +1071,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         spend_metrics["response_cost"] = standard_logging_payload.get("response_cost", 0.0)
 
         # Get budget information from metadata
-        metadata: Final = _metadata_of(standard_logging_payload)
+        metadata: Final = _budget_metadata_of(standard_logging_payload)
 
         # API key max budget
         user_api_key_max_budget: Final = metadata.get("user_api_key_max_budget")

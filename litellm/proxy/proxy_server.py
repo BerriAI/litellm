@@ -24,6 +24,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Container,
     Iterable,
     Mapping,
     MutableMapping,
@@ -52,6 +53,7 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    runtime_checkable,
 )
 
 import anyio
@@ -475,6 +477,7 @@ from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
+from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
@@ -1466,11 +1469,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     )
                 _module_path, _func_name = _hook_spec.rsplit(":", 1)
                 _module = importlib.import_module(_module_path)
-                _hook_fn = getattr(_module, _func_name)
+                _hook_fn = _UNTYPED_VALUE.validate_python(getattr(_module, _func_name))
                 if inspect.iscoroutinefunction(_hook_fn):
                     await _hook_fn()
-                else:
+                elif callable(_hook_fn):
                     _hook_fn()
+                else:
+                    raise TypeError(f"'{type(_hook_fn).__name__}' object is not callable")
                 verbose_proxy_logger.info("Worker startup hook '%s' executed successfully", _hook_spec)
             except Exception as e:
                 verbose_proxy_logger.error("Worker startup hook '%s' failed: %s", _hook_spec, e)
@@ -1918,15 +1923,25 @@ def _strip_operation_id_method_suffix(operation_id: str) -> str:
     return operation_id
 
 
+@runtime_checkable
+class _SupportsValues(Protocol):
+    def values(self) -> Iterable[object]: ...
+
+
+def _openapi_path_items(openapi_schema: JsonObject) -> Iterable[JsonObject]:
+    paths: Final = openapi_schema.get("paths", {})
+    if isinstance(paths, _SupportsValues):
+        return (path_item for path_item in paths.values() if isinstance(path_item, dict))
+    raise AttributeError(f"'{type(paths).__name__}' object has no attribute 'values'")
+
+
 def ensure_unique_openapi_operation_ids(
-    openapi_schema: dict[str, Any],
+    openapi_schema: JsonObject,
     reserved_operation_ids: set[str] | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     operation_entries: Final = []
     operation_id_counts: Final[dict[str, int]] = {}
-    for path_item in openapi_schema.get("paths", {}).values():
-        if not isinstance(path_item, dict):
-            continue
+    for path_item in _openapi_path_items(openapi_schema):
         for method, operation in path_item.items():
             if method not in _OPENAPI_HTTP_METHODS or not isinstance(operation, dict):
                 continue
@@ -2003,6 +2018,21 @@ from starlette.routing import BaseRoute
 from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
+@runtime_checkable
+class _OpenAPIQueryParam(Protocol):
+    @property
+    def name(self) -> object: ...
+
+    @property
+    def required(self) -> object: ...
+
+
+def _query_param_name_and_required(param: object) -> tuple[object, object]:
+    if isinstance(param, _OpenAPIQueryParam):
+        return param.name, param.required
+    raise AttributeError(f"'{type(param).__name__}' object has no attribute 'name' or 'required'")
+
+
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
     """
     Add a synthetic GET stub for each WebSocket route so it appears in Swagger UI.
@@ -2019,14 +2049,15 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
         try:
             if hasattr(route, "dependant") and route.dependant is not None:
                 # Handle both FastAPI <0.120 and >=0.120
-                query_params = getattr(route.dependant, "query_params", [])
+                query_params = _UNTYPED_VALUE.validate_python(getattr(route.dependant, "query_params", []))
                 if query_params:
-                    for param in query_params:
+                    for param in iter_items(query_params):
+                        name, required = _query_param_name_and_required(param)
                         parameters.append(
                             {
-                                "name": param.name,
+                                "name": name,
                                 "in": "query",
-                                "required": param.required,
+                                "required": required,
                                 "schema": {"type": "string"},
                             }
                         )
@@ -5755,6 +5786,13 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
 _DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
     {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
 )
+_DB_CONFIG_CALLBACK_LISTS: Final[Mapping[str, Callable[[], Container[object]]]] = MappingProxyType(
+    {
+        "success_callback": lambda: litellm.success_callback,
+        "failure_callback": lambda: litellm.failure_callback,
+        "callbacks": lambda: litellm.callbacks,
+    }
+)
 _CALLBACK_LIST_NAMES: Final = (
     "callbacks",
     "success_callback",
@@ -5765,7 +5803,9 @@ _CALLBACK_LIST_NAMES: Final = (
 
 
 def _callback_list_entries(list_name: str) -> tuple[tuple[str, object], ...]:
-    return tuple((list_name, entry) for entry in getattr(litellm, list_name))
+    return tuple(
+        (list_name, entry) for entry in iter_items(_UNTYPED_VALUE.validate_python(getattr(litellm, list_name)))
+    )
 
 
 def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
@@ -5794,7 +5834,7 @@ def _restore_displaced_callback(list_name: str, entry: object) -> None:
 def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
     for list_name, entry in registration.added:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
-            getattr(litellm, list_name), entry, require_self=False
+            _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
     for list_name, entry in registration.displaced:
         _restore_displaced_callback(list_name, entry)
@@ -8003,7 +8043,7 @@ class ProxyConfig:
         self,
         callback: str,
         event_types: list[Literal["success", "failure"]],
-        existing_callbacks: list,
+        existing_callbacks: Container[object],
     ) -> None:
         """
         Helper method to add a single callback to litellm for specified event types.
@@ -8046,7 +8086,7 @@ class ProxyConfig:
         self._add_callback_from_db_to_in_memory_litellm_callbacks(
             callback=callback,
             event_types=list(_DB_CONFIG_CALLBACK_EVENT_TYPES[setting_key]),
-            existing_callbacks=getattr(litellm, setting_key),
+            existing_callbacks=_DB_CONFIG_CALLBACK_LISTS[setting_key](),
         )
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
@@ -16024,7 +16064,29 @@ async def _get_caller_byok_team_scope(
     return key_team_scope | set(user_row.teams or [])
 
 
-def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowed_team_ids: set[str] | None) -> bool:
+@runtime_checkable
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _with_get(value: object) -> _SupportsGet:
+    if isinstance(value, _SupportsGet):
+        return value
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'get'")
+
+
+@runtime_checkable
+class _SupportsLower(Protocol):
+    def lower(self) -> object: ...
+
+
+def _lowered(value: object) -> object:
+    if isinstance(value, _SupportsLower):
+        return value.lower()
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'lower'")
+
+
+def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: set[str] | None) -> bool:
     """Whether a team BYOK row belongs to a team the caller is not a member of.
 
     `team_id` is only set on team BYOK rows; non-team rows fall through
@@ -16032,7 +16094,7 @@ def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowe
     """
     if allowed_team_ids is None:
         return False
-    team_id: Final = model_info_dict.get("team_id")
+    team_id: Final = _with_get(model_info_dict).get("team_id")
     if team_id is None:
         return False
     return team_id not in allowed_team_ids
@@ -16133,7 +16195,7 @@ async def _fetch_db_models_for_search(
 
 
 async def _apply_search_filter_to_models(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     search: str,
     prisma_client: PrismaClient | None,
     proxy_config: ProxyConfig,
@@ -16185,7 +16247,7 @@ async def _apply_search_filter_to_models(
         prisma_client=prisma_client,
     )
 
-    def _is_byok_outside_caller_teams(model_info_dict: dict[str, JsonValue]) -> bool:
+    def _is_byok_outside_caller_teams(model_info_dict: object) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
     def _model_matches_search(m: dict[str, Any]) -> bool:
@@ -16222,7 +16284,7 @@ async def _apply_search_filter_to_models(
     db_model_ids_in_router: Final = set()
 
     for m in filtered_router_models:
-        model_info = m.get("model_info", {})
+        model_info = _with_get(m.get("model_info", {}))
         is_db_model = model_info.get("db_model", False)
         model_id = model_info.get("id")
 
@@ -16333,7 +16395,7 @@ def _sort_models(
     reverse: Final = sort_order.lower() == "desc"
 
     def get_sort_key(model: dict[str, Any]) -> Any:
-        model_info: Final = model.get("model_info", {})
+        model_info: Final = _with_get(_UNTYPED_VALUE.validate_python(model.get("model_info", {})))
 
         if sort_by == "model_name":
             # Team BYOK models persist an internal `model_name` (e.g.
@@ -16345,7 +16407,7 @@ def _sort_models(
             team_public_model_name: Final = model_info.get("team_public_model_name")
             if team_public_model_name:
                 return str(team_public_model_name).lower()
-            return model.get("model_name", "").lower()
+            return _lowered(_UNTYPED_VALUE.validate_python(model.get("model_name", "")))
 
         elif sort_by == "created_at":
             created_at: Final = model_info.get("created_at")
@@ -16371,8 +16433,8 @@ def _sort_models(
             return normalized_dt
 
         elif sort_by == "costs":
-            input_cost: Final = model_info.get("input_cost_per_token", 0) or 0
-            output_cost: Final = model_info.get("output_cost_per_token", 0) or 0
+            input_cost: Final = model.get("model_info", {}).get("input_cost_per_token", 0) or 0
+            output_cost: Final = model.get("model_info", {}).get("output_cost_per_token", 0) or 0
             total_cost: Final = input_cost + output_cost
             # Put 0 or None costs at the end for asc, at the start for desc
             if total_cost == 0:
@@ -16607,7 +16669,7 @@ async def _authorize_team_id_query(
 
 
 async def _filter_models_by_team_id(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     team_id: str,
     prisma_client: PrismaClient,
     llm_router: Router,
@@ -16651,7 +16713,7 @@ async def _filter_models_by_team_id(
     # every public model the admin can call.
     filtered_models: Final = []
     for _model in all_models:
-        model_info = _model.get("model_info", {})
+        model_info = _with_get(_model.get("model_info", {}))
         model_id = model_info.get("id", None)
 
         # BYOK rows owned by this team are always accessible to it, even if

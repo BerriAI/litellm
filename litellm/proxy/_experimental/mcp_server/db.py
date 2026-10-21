@@ -477,8 +477,9 @@ def _prepare_mcp_server_data(
     # Serialize JSON fields from ``data_dict`` (not ``data``) so the
     # exclude_unset filter is respected. Reading back from ``data`` would
     # reintroduce defaults (e.g. ``env={}``) for fields the caller never set.
-    if data_dict.get("static_headers") is not None:
-        data_dict["static_headers"] = encrypt_secret_map(data_dict["static_headers"])
+    static_headers: Final[Mapping[str, str] | None] = data_dict.get("static_headers")
+    if static_headers is not None:
+        data_dict["static_headers"] = encrypt_secret_map(static_headers)
 
     # env_vars is read from ``data_dict`` (not ``data``) like every other JSON
     # column so the exclude_unset filter is respected: a partial update that
@@ -490,11 +491,13 @@ def _prepare_mcp_server_data(
         _encrypt_global_env_var_values(serialized_env_vars)
         data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 
-    if data_dict.get("mcp_info") is not None:
-        data_dict["mcp_info"] = safe_dumps(data_dict["mcp_info"])
+    mcp_info: Final[object] = data_dict.get("mcp_info")
+    if mcp_info is not None:
+        data_dict["mcp_info"] = safe_dumps(mcp_info)
 
-    if data_dict.get("env") is not None:
-        data_dict["env"] = encrypt_secret_map(data_dict["env"])
+    env: Final[Mapping[str, str] | None] = data_dict.get("env")
+    if env is not None:
+        data_dict["env"] = encrypt_secret_map(env)
 
     if "tool_name_to_display_name" in data_dict:
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})

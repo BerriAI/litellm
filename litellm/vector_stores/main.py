@@ -698,7 +698,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     List vector stores.
 
@@ -996,7 +996,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     Delete a vector store.
 

@@ -277,6 +277,12 @@ class _CustomSsoCall(Protocol):
     async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
 
 
+def _configured_custom_sso() -> _CustomSsoCall | None:
+    from litellm.proxy.proxy_server import user_custom_sso
+
+    return user_custom_sso
+
+
 class _ServicePrincipalAssignment(Protocol):
     def get(self, key: str) -> str: ...
 
@@ -1050,6 +1056,11 @@ class _UserinfoFallbackCapableSSO(Protocol):
     ) -> CustomOpenID | None: ...
 
 
+class _GenericSSOClient(_UserinfoFallbackCapableSSO, Protocol):
+    @property
+    def refresh_token(self) -> str | None: ...
+
+
 async def _verify_generic_sso_or_fall_back_to_id_token(
     generic_sso: _UserinfoFallbackCapableSSO,
     request: Request,
@@ -1640,7 +1651,7 @@ async def get_generic_sso_response(
         discovery_document=discovery,
         response_convertor=response_convertor,
     )
-    generic_sso: Final = SSOProvider(
+    generic_sso: Final[_GenericSSOClient] = SSOProvider(
         client_id=generic_client_id,
         client_secret=generic_client_secret,
         redirect_uri=redirect_url,
@@ -1739,9 +1750,7 @@ async def get_generic_sso_response(
             access_token_str: str | None = combined_response.get("access_token")
         else:
             result = await _verify_generic_sso_or_fall_back_to_id_token(
-                generic_sso=cast(  # cast-ok: fastapi-sso builds the provider class dynamically via create_provider
-                    _UserinfoFallbackCapableSSO, generic_sso
-                ),
+                generic_sso=generic_sso,
                 request=request,
                 token_exchange_params=token_exchange_params,
                 additional_headers=additional_generic_sso_headers_dict,
@@ -2380,9 +2389,7 @@ async def _build_cli_sso_user_defined_values(
     result: OpenID | dict,
     parsed_openid_result: ParsedOpenIDResult,
 ) -> SSOUserDefinedValues | None:
-    from litellm.proxy.proxy_server import user_custom_sso
-
-    custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
+    custom_sso_handler: Final = _configured_custom_sso()
     user_id: Final = parsed_openid_result.get("user_id")
     if custom_sso_handler is not None:
         if inspect.iscoroutinefunction(custom_sso_handler):
@@ -2468,10 +2475,8 @@ async def _complete_cli_sso_callback_session(
 ):
     from fastapi.responses import HTMLResponse
 
-    from litellm.proxy.proxy_server import user_custom_sso
-
     user_id: Final = parsed_openid_result.get("user_id")
-    if user_custom_sso is None:
+    if _configured_custom_sso() is None:
         _require_sso_user_id(user_id)
     user_email: Final = parsed_openid_result.get("user_email")
     user_info: Final = await get_user_info_from_db(
@@ -3787,7 +3792,6 @@ class SSOAuthenticationHandler:
             proxy_logging_obj,
             redis_usage_cache,
             user_api_key_cache,
-            user_custom_sso,
         )
         from litellm.proxy.utils import get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
@@ -3812,7 +3816,7 @@ class SSOAuthenticationHandler:
         # But if it is, we want their models preferences
         user_defined_values: SSOUserDefinedValues | None = None
 
-        custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
+        custom_sso_handler: Final = _configured_custom_sso()
         if custom_sso_handler is not None:
             if inspect.iscoroutinefunction(custom_sso_handler):
                 user_defined_values = await custom_sso_handler(result)

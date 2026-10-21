@@ -1003,8 +1003,8 @@ class CheckBatchCost:
         from litellm.proxy.proxy_server import proxy_config
         from litellm.secret_managers.main import str_to_bool
 
-        api_key: Final = getattr(job, "api_key", None)
-        team_id: Final = getattr(job, "team_id", None)
+        api_key: Final = job.api_key
+        team_id: Final = job.team_id
         has_key_row: Final = api_key is not None and is_valid_sha256_hash(api_key)
         try:
             key_row: Final = (

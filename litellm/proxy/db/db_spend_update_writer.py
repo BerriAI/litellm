@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequen
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
@@ -33,6 +34,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -102,6 +104,8 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+_CALL_KWARG_VALUE: Final = TypeAdapter(object)
 
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
@@ -263,6 +267,20 @@ def _spend_tables_left_to_send(
         name: (None if name in committed or name in dropped else txns) for name, txns in transactions.items()
     }
     return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
+
+
+class _SpendRestore(TypedDict, total=False):
+    db_spend_update_transactions: ReadOnly[DBSpendUpdateTransactions]
+    daily_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_team_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_org_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_end_user_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_agent_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    window_spend_update_transactions: ReadOnly[Sequence[WindowSpendTransaction]]
+
+
+def _merged_spend_restore(first: _SpendRestore, second: _SpendRestore) -> _SpendRestore:
+    return {**first, **second}
 
 
 def _timed_request_duration_ms(
@@ -751,7 +769,7 @@ class DBSpendUpdateWriter:
                 spend=payload["spend"],
                 total_tokens=payload["total_tokens"],
                 completion_response=completion_response,
-                realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+                realtime_tool_calls=_CALL_KWARG_VALUE.validate_python((kwargs or {}).get("realtime_tool_calls")),
             )
             if transaction is None:
                 return
@@ -1441,9 +1459,9 @@ class DBSpendUpdateWriter:
                 return
 
             # Parse tags from JSON string
-            tags: Sequence[object] = []
+            tags: object = []
             if isinstance(request_tags, str):
-                tags = safe_json_loads(request_tags, default=[])
+                tags = _DECODED_JSON.validate_python(safe_json_loads(request_tags, default=[]))
                 if not tags:
                     verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
                     return
@@ -1453,7 +1471,7 @@ class DBSpendUpdateWriter:
                 return
 
             # Update spend for each tag
-            for tag_name in tags:
+            for tag_name in iter_items(tags):
                 if tag_name and isinstance(tag_name, str):
                     await self.spend_update_queue.add_update(
                         update=SpendUpdateQueueItem(
@@ -1606,7 +1624,7 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
-            uncommitted: dict[str, Any] = {}  # mutable-ok: tracks popped categories still needing commit
+            uncommitted: dict[str, _SpendRestore] = {}  # mutable-ok: tracks popped categories still needing commit
             committed_spend_tables: Final[list[_SpendTableName]] = []  # mutable-ok: filled as each table lands
 
             try:
@@ -1621,13 +1639,41 @@ class DBSpendUpdateWriter:
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
                 uncommitted = {
-                    "db_spend_update_transactions": db_spend_update_transactions,
-                    "daily_spend_update_transactions": daily_spend_update_transactions,
-                    "daily_team_spend_update_transactions": daily_team_spend_update_transactions,
-                    "daily_org_spend_update_transactions": daily_org_spend_update_transactions,
-                    "daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions,
-                    "daily_agent_spend_update_transactions": daily_agent_spend_update_transactions,
-                    "window_spend_update_transactions": window_spend_update_transactions,
+                    "db_spend_update_transactions": (
+                        {}
+                        if db_spend_update_transactions is None
+                        else {"db_spend_update_transactions": db_spend_update_transactions}
+                    ),
+                    "daily_spend_update_transactions": (
+                        {}
+                        if daily_spend_update_transactions is None
+                        else {"daily_spend_update_transactions": daily_spend_update_transactions}
+                    ),
+                    "daily_team_spend_update_transactions": (
+                        {}
+                        if daily_team_spend_update_transactions is None
+                        else {"daily_team_spend_update_transactions": daily_team_spend_update_transactions}
+                    ),
+                    "daily_org_spend_update_transactions": (
+                        {}
+                        if daily_org_spend_update_transactions is None
+                        else {"daily_org_spend_update_transactions": daily_org_spend_update_transactions}
+                    ),
+                    "daily_end_user_spend_update_transactions": (
+                        {}
+                        if daily_end_user_spend_update_transactions is None
+                        else {"daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions}
+                    ),
+                    "daily_agent_spend_update_transactions": (
+                        {}
+                        if daily_agent_spend_update_transactions is None
+                        else {"daily_agent_spend_update_transactions": daily_agent_spend_update_transactions}
+                    ),
+                    "window_spend_update_transactions": (
+                        {}
+                        if window_spend_update_transactions is None
+                        else {"window_spend_update_transactions": window_spend_update_transactions}
+                    ),
                 }
 
                 if db_spend_update_transactions is not None:
@@ -1656,8 +1702,11 @@ class DBSpendUpdateWriter:
                             on_table_committed=committed_spend_tables.append,
                         )
                     except Exception as e:
-                        uncommitted["db_spend_update_transactions"] = _spend_tables_left_to_send(
+                        left_to_send: Final = _spend_tables_left_to_send(
                             db_spend_update_transactions, committed_spend_tables, e
+                        )
+                        uncommitted["db_spend_update_transactions"] = (
+                            {} if left_to_send is None else {"db_spend_update_transactions": left_to_send}
                         )
                         raise
                 uncommitted.pop("db_spend_update_transactions", None)
@@ -1732,7 +1781,7 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
             finally:
-                to_restore = {name: txns for name, txns in uncommitted.items() if txns is not None}
+                to_restore: Final = reduce(_merged_spend_restore, uncommitted.values(), _SpendRestore())
                 if to_restore:
                     await self.redis_update_buffer.restore_transactions_to_redis(**to_restore)
                 await self.pod_lock_manager.release_lock(

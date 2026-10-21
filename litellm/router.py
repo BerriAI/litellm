@@ -6355,7 +6355,7 @@ class Router:
         has_generated_content: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
-        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        initial_kwargs: dict[str, object],  # mutable-ok: _aanthropic_messages_fallback_attempt mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
         close_superseded: Callable[[], Awaitable[None]],
     ) -> AsyncGenerator[bytes, None]:

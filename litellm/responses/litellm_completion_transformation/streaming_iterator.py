@@ -5,7 +5,7 @@ from itertools import filterfalse
 from typing import Any, Final, cast
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import attribute_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -83,9 +83,13 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     )
 
 
+def _is_signed_thinking_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and isinstance(block, dict) and bool(fields.get("signature") or fields.get("data"))
+
+
 def _delta_has_signed_thinking_block(delta: object) -> bool:
-    blocks: Final = getattr(delta, "thinking_blocks", None) or ()
-    return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
+    return any(_is_signed_thinking_block(block) for block in attribute_items(delta, "thinking_blocks"))
 
 
 def _delta_carries_output(delta: ChatCompletionDelta) -> bool:

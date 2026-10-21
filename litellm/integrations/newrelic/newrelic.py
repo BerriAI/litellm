@@ -49,7 +49,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -126,13 +126,13 @@ class NewRelicLogger(CustomLogger):
                 verbose_logger.error("Failed to initialize New Relic agent: %s. Integration will be disabled.", e)
                 self.enabled = False
 
-    def _get_newrelic_params(self) -> dict:
+    def _get_newrelic_params(self) -> Mapping[str, object]:
         """
         Get the newrelic_params from litellm.newrelic_params
 
         These are params specific to initializing the NewRelicLogger e.g. turn_off_message_logging
         """
-        dict_newrelic_params: dict = {}
+        dict_newrelic_params: Mapping[str, object] = {}
         if litellm.newrelic_params is not None:
             if isinstance(litellm.newrelic_params, NewRelicInitParams):
                 dict_newrelic_params = litellm.newrelic_params.model_dump()
@@ -401,9 +401,9 @@ class NewRelicLogger(CustomLogger):
             return choices[0].get("finish_reason") or "unknown"
         return "unknown"
 
-    def _to_epoch_ms(self, t: Any) -> float:
+    def _to_epoch_ms(self, t: datetime | float) -> float:
         """Convert a datetime or float timestamp to epoch milliseconds."""
-        if hasattr(t, "timestamp"):
+        if isinstance(t, datetime):
             return t.timestamp() * 1000.0
         return float(t) * 1000.0
 
@@ -518,13 +518,13 @@ class NewRelicLogger(CustomLogger):
         sequence = 0
 
         # Extract timestamps, preferring StandardLoggingPayload
-        start_time = None
+        start_time: datetime | float | None = None
         if standard_logging_object:
             start_time = standard_logging_object.get("startTime")
         if not start_time:
             start_time = kwargs.get("start_time")
 
-        end_time = None
+        end_time: datetime | float | None = None
         if standard_logging_object:
             end_time = standard_logging_object.get("endTime")
         if not end_time:

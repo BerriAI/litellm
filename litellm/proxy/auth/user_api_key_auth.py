@@ -178,6 +178,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.router_utils.fallback_event_handlers import (
@@ -1320,7 +1321,7 @@ async def fetch_global_spend_with_event_coordination(
 
     async def _load_global_spend() -> float | None:
         proxy_budget_row: Final = await bounded_db_lookup(
-            prisma_client.db.litellm_usertable.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
+            UserRepository(prisma_client).table.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
             name="proxy_budget",
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
@@ -1636,7 +1637,7 @@ async def _auto_register_jwt_mapping(
             if minted:
                 try:
                     async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
-                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
+                        await VerificationTokenRepository(prisma_client).table.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.

@@ -99,6 +99,7 @@ if TYPE_CHECKING:
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 
 def _normalize_caller_admission_credential(value: str) -> str:
@@ -4253,7 +4254,7 @@ class MCPRequestHandler:
 
         cache_key: Final = f"agent_object_permission_id:{agent_id}"
         try:
-            cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final = _CACHED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:

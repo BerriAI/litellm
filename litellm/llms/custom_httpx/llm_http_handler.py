@@ -49,7 +49,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
@@ -493,6 +493,7 @@ _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encodin
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -3640,7 +3641,7 @@ class BaseLLMHTTPHandler:
         response: httpx.Response,
         upload_url_location: str,
         upload_url_key: str = "upload_url",
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[object, Mapping[str, object] | None]:
         """
         Extract upload URL from initial file creation response.
 
@@ -3660,8 +3661,10 @@ class BaseLLMHTTPHandler:
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
-                response_data: Final = response.json()
-                upload_url = response_data.get(upload_url_key)
+                response_data: Final = as_str_mapping(_DECODED_JSON.validate_python(response.json()))
+                if response_data is None:
+                    return None, None
+                upload_url: Final = response_data.get(upload_url_key)
                 return upload_url, response_data if upload_url else None
             except Exception:
                 return None, None
@@ -3827,7 +3830,7 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
-            file_request: Final = cast(dict[str, Any], transformed_request)
+            file_request: Final = cast(dict[str, object], transformed_request)
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,

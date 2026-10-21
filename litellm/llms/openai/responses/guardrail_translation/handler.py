@@ -36,7 +36,7 @@ from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -220,6 +220,11 @@ class ResponsesStreamChunk(TypedDict, total=False):
     item_id: ReadOnly[str]
     output_index: ReadOnly[int]
     content_index: ReadOnly[int]
+
+
+@runtime_checkable
+class _StreamEventFields(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
@@ -1216,7 +1221,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _sync_stream_events_with_rewrites(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewrites_by_position: Mapping[tuple[int, int], str],
     ) -> None:
         """Sync pre-completion stream events with the rewritten completed
@@ -1230,7 +1235,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
         for event in stream_events:
-            if not (isinstance(event, dict) or hasattr(event, "get")):
+            if not isinstance(event, _StreamEventFields):
                 continue
             event_type = event.get("type")
             output_index = event.get("output_index")

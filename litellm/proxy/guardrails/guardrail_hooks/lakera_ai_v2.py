@@ -42,6 +42,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 _DETECTOR_CATEGORY_PHRASES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -806,7 +807,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                         choice_idx = choice_indices[idx]
                         response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-                return ModelResponse(**response_dict)
+                return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
 
             # inject_system_message has nothing left to inject into once a response
             # already exists, so it is treated the same as monitor: log and allow.

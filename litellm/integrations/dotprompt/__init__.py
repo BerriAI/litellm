@@ -61,7 +61,7 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
     prompt_file: Final = getattr(litellm_params, "prompt_file", None)
 
     # Handle dotprompt_content from database
-    dotprompt_content: Final = getattr(litellm_params, "dotprompt_content", None)
+    dotprompt_content: Final = litellm_params.dotprompt_content
     if dotprompt_content and not prompt_data and not prompt_file:
         prompt_data = get_prompt_data_from_dotprompt_content(dotprompt_content)
 
