@@ -111,6 +111,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.types.router import Deployment, DeploymentTypedDict
 
 router: Final = APIRouter()
 
@@ -1673,7 +1674,7 @@ def _as_file_list_page(response: object) -> object:
 
 
 async def _list_owned_managed_files(
-    managed_files_obj: object | None,
+    managed_files_obj: BaseFileEndpoints,
     user_api_key_dict: UserAPIKeyAuth,
     purpose: str | None,
     limit: int | None,
@@ -1681,11 +1682,6 @@ async def _list_owned_managed_files(
     before: str | None,
     deployment_ids: frozenset[str] | None,
 ) -> FileListPage:
-    if not isinstance(managed_files_obj, BaseFileEndpoints):
-        raise HTTPException(
-            status_code=500,
-            detail="Managed file listing is unavailable, so require_managed_files cannot scope the list to the caller.",
-        )
     return await managed_files_obj.afile_list(
         purpose=purpose,
         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -1716,22 +1712,50 @@ async def _requested_custom_llm_provider(request: Request, provider: str | None)
     )
 
 
+def _deployment_ids(deployments: Sequence[DeploymentTypedDict]) -> frozenset[str]:
+    return frozenset(
+        deployment_id
+        for deployment in deployments
+        if (deployment_id := Deployment.model_validate(deployment).model_info.id) is not None
+    )
+
+
 def _deployment_ids_serving_model(llm_router: Router, model: str) -> frozenset[str]:
     if llm_router.has_model_id(model):
         return frozenset((model,))
-    return frozenset(llm_router.get_model_ids(model_name=model))
+    return _deployment_ids(llm_router.get_model_list(model_name=model) or ())
 
 
-def _deployment_ids_on_provider(llm_router: Router | None, custom_llm_provider: str) -> frozenset[str]:
+def _resolved_deployment_provider(deployment: Deployment | None) -> str | None:
+    if deployment is None:
+        return None
+    try:
+        return litellm.get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )[1]
+    except litellm.BadRequestError:
+        return None
+
+
+def _router_deployment_ids_on_provider(llm_router: Router | None, custom_llm_provider: str) -> frozenset[str]:
     if llm_router is None:
         return frozenset()
     return frozenset(
         deployment_id
         for deployment_id in llm_router.get_model_ids()
-        if (llm_router.get_deployment_credentials_with_provider(model_id=deployment_id) or {}).get(
-            "custom_llm_provider"
-        )
-        == custom_llm_provider
+        if _resolved_deployment_provider(llm_router.get_deployment(model_id=deployment_id)) == custom_llm_provider
+    )
+
+
+def _deployment_ids_on_provider(llm_router: Router | None, custom_llm_provider: str) -> frozenset[str]:
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import passthrough_file_model_id
+
+    if custom_llm_provider not in litellm.provider_list:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{custom_llm_provider}' for listing files.")
+    passthrough_model_id: Final = passthrough_file_model_id(custom_llm_provider)
+    return _router_deployment_ids_on_provider(llm_router, custom_llm_provider) | frozenset(
+        (passthrough_model_id,) if passthrough_model_id is not None else ()
     )
 
 
@@ -1831,6 +1855,11 @@ async def list_files(
 
         response: Any | None = None
         list_owned_files_only: Final = litellm.require_managed_files is True
+        if after and after_id and after != after_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Pass the list cursor as either 'after' or 'after_id', not both with different ids.",
+            )
         page_after: Final = after or after_id
 
         # Check for model-based credential routing (no file_id encoding check for list)
@@ -1844,8 +1873,14 @@ async def list_files(
         )
 
         if list_owned_files_only:
+            owned_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+            if not isinstance(owned_files_hook, BaseFileEndpoints):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Managed file listing is unavailable, so require_managed_files cannot scope the list to the caller.",
+                )
             response = await _list_owned_managed_files(  # rebind-ok: each dispatch branch binds response
-                managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+                managed_files_obj=owned_files_hook,
                 user_api_key_dict=user_api_key_dict,
                 purpose=purpose,
                 limit=limit,

@@ -2287,13 +2287,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if after and before:
             raise ProxyException(
-                message="Pass either 'after' or 'before' when listing files, not both.",
+                message="Pass either 'after' (or 'after_id') or 'before_id' when listing files, not both.",
                 type="invalid_request_error",
-                param="before",
+                param="before_id",
                 code=400,
                 openai_code="invalid_value",
             )
-        cursor_param: Final = "before" if before else "after"
+        cursor_param: Final = "before_id" if before else "after"
         cursor: Final = before or after
         if cursor:
             cursor_row = await _managed_file_table(self.prisma_client).find_first(
@@ -2307,6 +2307,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     code=400,
                     openai_code="invalid_value",
                 )
+
+        if deployment_ids is not None and not deployment_ids:
+            return FileListPage.model_validate(build_list_page([]))
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
         matches: Final[List[OpenAIFileObject]] = []

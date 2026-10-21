@@ -6280,6 +6280,99 @@ def test_require_managed_files_lists_the_callers_files_on_the_named_provider_or_
     provider_list.assert_not_awaited()
 
 
+def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:
+    unprefixed_anthropic_model: Final = next(model for model in sorted(litellm.anthropic_models) if "/" not in model)
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "openai_api_key"},
+                "model_info": {"id": "gpt-3.5-turbo-id"},
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "anthropic_api_key"},
+                "model_info": {"id": "anthropic-wildcard-id"},
+            },
+            {
+                "model_name": "claude-unprefixed",
+                "litellm_params": {"model": unprefixed_anthropic_model, "api_key": "anthropic_api_key"},
+                "model_info": {"id": "claude-unprefixed-id"},
+            },
+        ]
+    )
+
+
+def _callers_files_on_wildcard_unprefixed_and_passthrough_deployments() -> list[MagicMock]:
+    return [
+        _managed_file_row("unified-wildcard", model_mappings={"anthropic-wildcard-id": "file-wildcard"}),
+        _managed_file_row("unified-unprefixed", model_mappings={"claude-unprefixed-id": "file-unprefixed"}),
+        _managed_file_row("unified-gpt", model_mappings={"gpt-3.5-turbo-id": "file-gpt"}),
+        _managed_file_row(
+            "unified-passthrough",
+            model_mappings={
+                "_passthrough_openai": "file-passthrough",
+                "_passthrough_provider_marker": "_passthrough_provider:openai",
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "headers", "expected_ids"),
+    [
+        ("/v1/files", {"target_model_names": "anthropic/claude-haiku-5-5"}, {}, ["unified-wildcard"]),
+        ("/v1/files", {}, {"x-litellm-model": "anthropic/claude-haiku-5-5"}, ["unified-wildcard"]),
+        ("/anthropic/v1/files", {}, {}, ["unified-wildcard", "unified-unprefixed"]),
+        ("/openai/v1/files", {}, {}, ["unified-gpt", "unified-passthrough"]),
+    ],
+    ids=["wildcard-target-model-names", "wildcard-model-header", "unprefixed-provider", "passthrough-provider"],
+)
+def test_require_managed_files_lists_the_callers_files_wherever_the_router_put_them(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+    expected_ids: list[str],
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_wildcard_and_unprefixed_anthropic_deployments(),
+        _callers_files_on_wildcard_unprefixed_and_passthrough_deployments(),
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, params, headers)
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == expected_ids
+    provider_list.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [("/antropic/v1/files", {}), ("/openai/v1/files", {"after": "unified-gpt", "after_id": "unified-wildcard"})],
+    ids=["unknown-provider", "conflicting-after-cursors"],
+)
+def test_require_managed_files_rejects_a_list_it_cannot_scope(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, path: str, params: dict[str, str]
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_wildcard_and_unprefixed_anthropic_deployments(),
+        _callers_files_on_wildcard_unprefixed_and_passthrough_deployments(),
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, params, {})
+
+    assert response.status_code == 400, response.text
+    provider_list.assert_not_awaited()
+
+
 @pytest.mark.parametrize("cursor_param", ["after", "after_id"])
 def test_require_managed_files_pages_a_provider_list_with_either_cursor_param(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router, cursor_param: str
