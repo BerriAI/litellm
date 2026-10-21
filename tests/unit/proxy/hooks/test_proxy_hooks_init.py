@@ -14,8 +14,12 @@ silently swallowed the ImportError in `hooks/__init__.py`, leaving
 ``managed_files`` unregistered and the /files endpoint returning 500.
 """
 
+import importlib
+import sys
+
 import pytest
 
+import litellm.proxy
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 
 
@@ -49,3 +53,21 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules
     assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules
+
+
+def test_managed_hooks_register_from_litellm_enterprise_without_the_repo_only_enterprise_package(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pytest.importorskip("litellm_enterprise")
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
+
+    monkeypatch.setitem(sys.modules, "enterprise", None)
+    monkeypatch.setitem(sys.modules, "enterprise.enterprise_hooks", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+
+    wheel_install_hooks = importlib.import_module("litellm.proxy.hooks")
+
+    assert wheel_install_hooks.get_proxy_hook("managed_files") is PROXY_LiteLLMManagedFiles
+    assert wheel_install_hooks.get_proxy_hook("managed_vector_stores") is PROXY_LiteLLMManagedVectorStores
