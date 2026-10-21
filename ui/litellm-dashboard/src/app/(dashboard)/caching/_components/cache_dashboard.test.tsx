@@ -289,11 +289,12 @@ describe("CacheDashboard cache analytics charts", () => {
     useCacheActivity.mockReturnValue(failedActivity);
     renderDashboard();
 
-    const card = await screen.findByText("Cache Hits vs API Requests").then((el) => el.closest("[data-slot=card]"));
-    const alert = within(card as HTMLElement).getByRole("alert");
+    await screen.findByText(REQUESTS_CHART_TITLE);
+    const card = cardTitled(REQUESTS_CHART_TITLE);
+    const alert = within(card).getByRole("alert");
     expect(alert).toHaveTextContent("Failed to load cache activity");
     expect(alert).toHaveTextContent("Request timed out after 30s");
-    expect(within(card as HTMLElement).getByText(/Click a red failed-requests segment/)).toBeInTheDocument();
+    expect(within(card).getByText(/Click a red failed-requests segment/)).toBeInTheDocument();
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
