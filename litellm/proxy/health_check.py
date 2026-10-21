@@ -135,7 +135,7 @@ _AUDIO_OUTPUT_PROBE_PROVIDERS: Final[frozenset[str]] = frozenset({"openai", "azu
 
 
 def _health_check_requires_audio_output(
-    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: object
 ) -> bool:
     if (mode or "chat") != "chat":
         return False
@@ -152,16 +152,16 @@ def _health_check_requires_audio_output(
     if provider not in _AUDIO_OUTPUT_PROBE_PROVIDERS:
         return False
     base_model: Final = model_info.get("base_model") or probe_params.get("base_model")
-    probes_own_model: Final = model_info.get("health_check_model") is None
     return litellm.supports_audio_output(
-        model=base_model if isinstance(base_model, str) and probes_own_model else model, custom_llm_provider=provider
+        model=base_model if isinstance(base_model, str) and model == deployment_model else model,
+        custom_llm_provider=provider,
     )
 
 
 def _health_check_audio_output_params(
-    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: object
 ) -> Mapping[str, object]:
-    if not _health_check_requires_audio_output(model_info, probe_params, mode):
+    if not _health_check_requires_audio_output(model_info, probe_params, mode, deployment_model):
         return MappingProxyType({})
     voice: Final = model_info.get("health_check_voice")
     return MappingProxyType(
@@ -826,7 +826,9 @@ _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
+def update_litellm_params_for_health_check(
+    model_info: dict, litellm_params: dict, deployment_model: str | None = None
+) -> dict:
     """
     Update the litellm params for health check.
 
@@ -842,11 +844,13 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
-    - asks OpenAI and Azure chat models that support audio output (`base_model` from `model_info`, then
-      `litellm_params`, first, unless `health_check_model` replaces the probed model) for `modalities`
-      text + audio and a wav `audio` in the `health_check_voice` (default "alloy"), since those models reject
-      text-only requests. Keys already set through `health_check_params` are kept as they are
+    - asks OpenAI and Azure chat models that support audio output for `modalities` text + audio and a wav
+      `audio` in the `health_check_voice` (default "alloy"), since those models reject text-only requests.
+      `base_model` (from `model_info`, then `litellm_params`) decides it only while the probe still targets
+      `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
+      in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept
     """
+    base_model_owner: Final = deployment_model or _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
     mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
@@ -922,7 +926,7 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
 
     probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
     audio_output_params: Final = _health_check_audio_output_params(
-        _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode
+        _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
     )
     return {
         key: value

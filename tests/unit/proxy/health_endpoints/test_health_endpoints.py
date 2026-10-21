@@ -394,7 +394,7 @@ async def test_test_model_connection_loads_config_from_router():
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
     # Mock _update_litellm_params_for_health_check
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model=None):
         # Just return params with messages added
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
@@ -545,7 +545,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model=None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -656,7 +656,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model=None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -938,7 +938,9 @@ async def test_test_model_connection_stored_audio_base_model_follows_the_stored_
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
         )
 
-    assert ("modalities" in ahealth_check.call_args.kwargs["model_params"]) is expects_audio_probe
+    probe_params: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert ("modalities" in probe_params) is expects_audio_probe
+    assert probe_params.get("base_model") == deployment_params.get("base_model")
 
 
 @pytest.mark.asyncio
