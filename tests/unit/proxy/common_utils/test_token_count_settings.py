@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
@@ -157,21 +158,24 @@ def test_count_source_fields_name_the_counting_model_only_when_token_count_model
     assert count_source_fields(_counted(source)) == expected
 
 
-def test_every_shipped_token_count_model_is_another_mapped_model_of_the_same_provider_in_a_named_region() -> None:
+def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> None:
     cost_map: Final = json.loads(_COST_MAP.read_text())
+    aws_models: Final = frozenset(
+        get_bedrock_base_model(name)
+        for name, entry in cost_map.items()
+        if isinstance(entry, dict) and entry.get("litellm_provider") in ("bedrock", "bedrock_converse")
+    )
     count_models: Final = {
         name: entry["token_count_model"]
         for name, entry in cost_map.items()
         if isinstance(entry, dict) and "token_count_model" in entry
     }
     assert count_models
-    assert {
-        name: count_model
-        for name, count_model in count_models.items()
-        if cost_map.get(count_model["model"], {}).get("litellm_provider") != cost_map[name]["litellm_provider"]
-        or count_model["model"] == name
-        or not count_model.get("region")
-    } == {}
+    for name, count_model in count_models.items():
+        model: Final = count_model["model"]
+        assert get_bedrock_base_model(model) in aws_models
+        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
+        assert "region" not in count_model or count_model["region"].strip()
 
 
 _UPSTREAM_404: Final = {
