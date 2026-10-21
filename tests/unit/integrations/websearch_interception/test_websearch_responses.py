@@ -7,6 +7,7 @@ builds a Responses-format follow-up request.
 """
 
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -257,14 +258,14 @@ async def test_build_responses_plan_produces_responses_input():
 
 
 @pytest.mark.asyncio
-async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model(monkeypatch):
+async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """#38829 on the Responses surface: a provider-stripped model whose remainder still holds a
     slash was left unqualified, so the follow-up could not resolve a provider."""
-    logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "asearch", AsyncMock(return_value=SearchResponse(object="search", results=[])))
 
-    tools_dict = {
+    tools_dict: Final = {
         "tool_calls": [
             {
                 "id": "fc_1",
@@ -280,7 +281,7 @@ async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model(monke
         "response_format": "responses",
     }
 
-    plan = await logger.async_build_responses_agentic_loop_plan(
+    plan: Final = await logger.async_build_responses_agentic_loop_plan(
         tools=tools_dict,
         model="mantle/anthropic.claude-sonnet-5",
         messages=[{"role": "user", "content": "What's the latest AI news?"}],
@@ -294,7 +295,7 @@ async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model(monke
         },
     )
 
-    patch_obj = plan.request_patch
+    patch_obj: Final = plan.request_patch
     assert patch_obj is not None
     assert patch_obj.model == "bedrock/mantle/anthropic.claude-sonnet-5"
     litellm.asearch.assert_awaited_once()

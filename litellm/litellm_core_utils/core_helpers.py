@@ -37,7 +37,18 @@ def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str
     """Put the provider prefix back on a provider-stripped model."""
     if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
         return model
+    if _already_routes_to(model, custom_llm_provider):
+        return model
     return f"{custom_llm_provider}/{model}"
+
+
+def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    leading_segment: Final = model.split("/", 1)[0]
+    if leading_segment == model or not names_a_provider(leading_segment):
+        return False
+    return inferred_provider(model) == custom_llm_provider
 
 
 def names_a_provider(candidate: str) -> bool:
