@@ -8,6 +8,7 @@ from openai import OpenAI
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.proxy.auth.model_checks import get_provider_models
 
 ZEROGPU_API_BASE: Final = "https://api.zerogpu.ai/v1"
 
@@ -205,3 +206,12 @@ def test_zerogpu_api_base_alone_selects_the_zerogpu_provider(monkeypatch: pytest
         "zerogpu-env-key",
         ZEROGPU_API_BASE,
     )
+
+
+def test_zerogpu_wildcard_lists_every_zerogpu_catalog_model():
+    catalog_models: Final = sorted(
+        key for key, row in litellm.model_cost.items() if row.get("litellm_provider") == "zerogpu"
+    )
+
+    assert catalog_models
+    assert sorted(get_provider_models("zerogpu") or []) == catalog_models
