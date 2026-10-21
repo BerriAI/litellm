@@ -8,19 +8,22 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 SKIP_CACHE_CONTROLS: Final = MappingProxyType({"no-cache": True, "no-store": True})
-CACHED_CALL_TYPES_BY_ROUTE: Final = MappingProxyType(
+SEMANTIC_CACHE_ROUTES: Final = frozenset(
     {
-        "aresponses": frozenset({"aresponses", "responses", "acompletion"}),
-        "anthropic_messages": frozenset({"anthropic_messages", "aanthropic_messages", "acompletion"}),
-        "agenerate_content": frozenset({"acompletion"}),
-        "agenerate_content_stream": frozenset({"acompletion"}),
+        "acompletion",
+        "atext_completion",
+        "aembedding",
+        "atranscription",
+        "arerank",
+        "aresponses",
+        "_aresponses_websocket",
+        "anthropic_messages",
+        "agenerate_content",
+        "agenerate_content_stream",
+        "acreate_interaction",
+        "asend_message",
     }
 )
-
-
-def _cache_serves(cache: Cache, call_type: str) -> bool:
-    cached_call_types: Final = CACHED_CALL_TYPES_BY_ROUTE.get(call_type, frozenset({call_type}))
-    return not cached_call_types.isdisjoint(cache.supported_call_types or ())
 
 
 async def _gate_allows(
@@ -57,7 +60,7 @@ async def gated_cache_controls(
     gates: Sequence[CustomLogger],
     cache: Cache | None,
 ) -> Mapping[str, object] | None:
-    if not gates or cache is None or not cache.is_semantic_cache() or not _cache_serves(cache, call_type):
+    if not gates or cache is None or not cache.is_semantic_cache() or call_type not in SEMANTIC_CACHE_ROUTES:
         return None
     if await _every_gate_allows(gates, user_api_key_dict, data, call_type):
         return None

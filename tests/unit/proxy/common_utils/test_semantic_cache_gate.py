@@ -112,16 +112,12 @@ async def test_the_gate_is_never_consulted_without_a_semantic_cache(cache: Cache
 
 
 @pytest.mark.asyncio
-async def test_the_gate_is_never_consulted_for_a_call_type_the_cache_does_not_serve():
+@pytest.mark.parametrize("route", ["acreate_batch", "avector_store_search", "aspeech"])
+async def test_the_gate_is_never_consulted_for_a_route_that_cannot_reach_the_cache(route: str):
     gate = _TeamAllowlist(frozenset())
-    data = _request()
 
     result = await gated_cache_controls(
-        data=data,
-        user_api_key_dict=_key(OTHER_TEAM),
-        call_type="aembedding",
-        gates=(gate,),
-        cache=_semantic_cache(supported_call_types=("acompletion",)),
+        data=_request(), user_api_key_dict=_key(OTHER_TEAM), call_type=route, gates=(gate,), cache=_semantic_cache()
     )
 
     assert result is None
@@ -132,14 +128,17 @@ async def test_the_gate_is_never_consulted_for_a_call_type_the_cache_does_not_se
 @pytest.mark.parametrize(
     ("route", "served_call_type"),
     [
-        ("aresponses", "responses"),
         ("aresponses", "acompletion"),
-        ("anthropic_messages", "acompletion"),
+        ("acompletion", "aresponses"),
+        ("anthropic_messages", "aresponses"),
         ("agenerate_content", "acompletion"),
         ("agenerate_content_stream", "acompletion"),
+        ("acreate_interaction", "aresponses"),
+        ("_aresponses_websocket", "aresponses"),
+        ("asend_message", "acompletion"),
     ],
 )
-async def test_the_gate_covers_routes_that_reach_a_served_call_type_through_an_alias_or_a_bridge(
+async def test_the_gate_covers_routes_that_reach_the_cache_through_a_bridge_whatever_call_types_it_serves(
     route: str, served_call_type: CachingSupportedCallTypes
 ):
     gate = _TeamAllowlist(frozenset())
@@ -194,7 +193,11 @@ async def test_only_callbacks_that_override_the_hook_act_as_gates(monkeypatch: p
 
     gates = ProxyLogging.callback_capabilities().semantic_cache_gates
     result = await gated_cache_controls(
-        data=_request(), user_api_key_dict=_key(OTHER_TEAM), call_type="acompletion", gates=gates, cache=_semantic_cache()
+        data=_request(),
+        user_api_key_dict=_key(OTHER_TEAM),
+        call_type="acompletion",
+        gates=gates,
+        cache=_semantic_cache(),
     )
 
     assert gates == (gate,)

@@ -13,6 +13,8 @@ import pytest
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints import litellm_executed_batches
@@ -38,6 +40,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.router import Router
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse, SpecialEnums
 
@@ -380,6 +383,8 @@ def make_runner(
     heartbeat_seconds: float = 30.0,
     completion_window_seconds: float = 24 * 60 * 60,
     user: UserAPIKeyAuth | None = None,
+    semantic_cache_gates: Sequence[CustomLogger] = (),
+    semantic_cache: Cache | None = None,
 ) -> Harness:
     store = store_factory({INPUT_FILE_ID: managed_input_file()} if files is None else files)
     router = FakeRouter()
@@ -397,6 +402,8 @@ def make_runner(
         batches=ManagedBatchRepository(prisma),
         proxy_logging_obj=MagicMock(spec=ProxyLogging),
         general_settings=general_settings,
+        semantic_cache_gates=semantic_cache_gates,
+        semantic_cache=semantic_cache,
         concurrency=concurrency,
         heartbeat_seconds=heartbeat_seconds,
         completion_window_seconds=completion_window_seconds,
@@ -700,6 +707,42 @@ async def test_create_dispatches_each_row_with_the_batch_model_and_the_key_metad
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_alias"] == "alias-1"
         assert metadata["user_api_key_user_email"] == "user@example.com"
+
+
+class _TeamAllowlist(CustomLogger):
+    def __init__(self, team_id: str) -> None:
+        super().__init__()
+        self.team_id = team_id
+        self.seen: list[tuple[str | None, object, str]] = []
+
+    async def async_should_semantic_cache(
+        self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+    ) -> bool:
+        self.seen.append((user_api_key_dict.team_id, data.get("messages"), call_type))
+        return user_api_key_dict.team_id == self.team_id
+
+
+@pytest.mark.parametrize(
+    ("allowed_team", "row_cache_controls"),
+    [("team-1", None), ("team-other", {"no-cache": True, "no-store": True})],
+    ids=["allowed-team", "rejected-team"],
+)
+async def test_create_runs_the_semantic_cache_check_on_each_row(
+    allowed_team: str, row_cache_controls: Mapping[str, object] | None
+) -> None:
+    gate = _TeamAllowlist(allowed_team)
+    semantic_cache = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
+    )
+    harness = make_runner(semantic_cache_gates=(gate,), semantic_cache=semantic_cache)
+    await harness.create_and_finish()
+
+    calls = harness.router.acompletion.await_args_list
+    assert [call.kwargs.get("cache") for call in calls] == [row_cache_controls, row_cache_controls]
+    assert sorted(gate.seen, key=str) == [
+        ("team-1", [{"role": "user", "content": "hi 1"}], "acompletion"),
+        ("team-1", [{"role": "user", "content": "hi 2"}], "acompletion"),
+    ]
 
 
 async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_inherited_tags() -> None:

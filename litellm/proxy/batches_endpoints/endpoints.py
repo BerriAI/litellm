@@ -110,6 +110,8 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
         batches=ManagedBatchRepository(prisma_client),
         proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
+        semantic_cache_gates=ProxyLogging.callback_capabilities().semantic_cache_gates,
+        semantic_cache=litellm.cache,
     )
 
 

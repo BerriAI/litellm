@@ -18,8 +18,11 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.agents import AgentCaller
+from litellm.types.caching import LiteLLMCacheType
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 
@@ -28,6 +31,7 @@ AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    litellm_params: Mapping[str, object] | None
 
 
 @pytest.mark.asyncio
@@ -611,7 +615,11 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        litellm_params=kwargs.get("litellm_params"),
+    )
 
 
 @pytest.mark.asyncio
@@ -623,6 +631,29 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
     captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
 
     assert captured.request_id == 0
+
+
+class _RejectEveryTeam(CustomLogger):
+    async def async_should_semantic_cache(
+        self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+    ) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_hand_the_semantic_cache_check_result_to_the_agent_call(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    semantic_cache = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
+    )
+
+    with patch.object(litellm, "callbacks", [_RejectEveryTeam()]), patch.object(litellm, "cache", semantic_cache):
+        captured = await _invoke_message_method(
+            method, mock_request, UserAPIKeyAuth(api_key="sk-test", team_id="team-other"), _add_proxy_data
+        )
+
+    assert (captured.litellm_params or {}).get("cache") == {"no-cache": True, "no-store": True}
 
 
 @pytest.mark.asyncio
