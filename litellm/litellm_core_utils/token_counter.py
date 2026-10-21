@@ -355,6 +355,7 @@ EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
 PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?"
 PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*")
+PDF_SIMPLE_LITERAL_STRING: Final = re.compile(rb"\([^()]*\)")
 PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s\S])")
 PDF_INLINE_IMAGE: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
@@ -961,6 +962,7 @@ class _PdfTextObjectRecord:
     start: int
     end: int
     first_in_stream: bool
+    truncated: bool
 
 
 _PDF_EMPTY_RESOURCES: Final[_PdfResourceDictionary] = (
@@ -992,6 +994,10 @@ def _pdf_inline_image_replacement(match: re.Match[bytes]) -> bytes:
     return b" " if inline_image is not None and image_end is not None else match.group(0)
 
 
+def _pdf_strip_inline_images(content: bytes) -> bytes:
+    return PDF_INLINE_IMAGE.sub(_pdf_inline_image_replacement, content) if b"BI" in content else content
+
+
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
     form_metrics_memo: Final[dict[int, _PdfStreamMetrics]] = {}  # mutable-ok: page-local cache avoids repeated walks
 
@@ -1002,10 +1008,14 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
     ) -> _PdfStreamMetrics:
         xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
         xobject_resources: Final = xobjects if isinstance(xobjects, _PdfResourceDictionary) else _PDF_EMPTY_RESOURCES
-        invoked_names: Final = tuple(
-            name
-            for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
-            if (name := _pdf_invocation_name(invocation)) is not None
+        invoked_names: Final = (
+            tuple(
+                name
+                for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
+                if (name := _pdf_invocation_name(invocation)) is not None
+            )
+            if xobject_resources
+            else ()
         )
         form_metrics: Final = tuple(
             form_metrics_for_xobject(
@@ -1037,7 +1047,7 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
         cached: Final = form_metrics_memo.get(identity)
         if cached is not None:
             return cached
-        content: Final = PDF_INLINE_IMAGE.sub(_pdf_inline_image_replacement, resolved.get_data())
+        content: Final = _pdf_strip_inline_images(resolved.get_data())
         form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
         resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
         metrics: Final = stream_metrics(content, resources, ancestors | {identity})
@@ -1056,6 +1066,10 @@ def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
 
 
 def _pdf_string_operand_bytes(content: bytes) -> int:
+    if b"\\" not in content and b"%" not in content and b"<" not in content and b"BI" not in content:
+        content_without_literals, literal_count = PDF_SIMPLE_LITERAL_STRING.subn(b"", content)
+        if literal_count == content.count(b"(") == content.count(b")"):
+            return len(content) - len(content_without_literals) - 2 * literal_count
     return sum(len(operand) for operand in _pdf_decoded_string_operands(content))
 
 
@@ -1099,7 +1113,7 @@ def _pdf_decoded_string_operands(content: bytes) -> Iterable[bytes]:
     )
 
 
-_PdfTextObjectSpans: TypeAlias = tuple[tuple[int, int], ...]
+_PdfTextObjectSpans: TypeAlias = tuple[tuple[int, int, bool], ...]
 _PdfTextTreeWalkItem: TypeAlias = tuple[_PdfStreamMetrics, bool]
 _PdfTextRecordWalkItem: TypeAlias = tuple[_PdfStreamMetrics, tuple[int, ...]]
 
@@ -1111,18 +1125,69 @@ def _pdf_text_object_records(
     text_object_span_memo: Final[dict[int, _PdfTextObjectSpans]] = {}  # mutable-ok: page-local regex cache
     subtree_text_memo: Final[dict[int, bool]] = {}  # mutable-ok: page-local subtree cache
 
+    def partial_text_object_end(content: bytes, start: int) -> int:
+        end: Final = min(len(content), start + PDF_PAGE_MAX_EXACT_CONTENT_BYTES)
+        bounded_content: Final = content[start:end]
+        return next(
+            (
+                start + match.end("text_object")
+                for match in PDF_TEXT_OBJECT.finditer(bounded_content)
+                if match.group("text_object") is not None
+            ),
+            start,
+        )
+
+    def text_object_spans_in_window(content: bytes, window_end: int) -> Iterable[tuple[int, int, bool]]:
+        window_content: Final = content[:window_end]
+        for match in PDF_TEXT_OBJECT.finditer(window_content):
+            if match.group("text_object") is None:
+                continue
+            if (
+                match.end("text_object") == window_end
+                and window_end < len(content)
+                and content[match.end("text_object") - 2 : match.end("text_object")] != b"ET"
+            ):
+                yield (
+                    match.start("text_object"),
+                    partial_text_object_end(content, match.start("text_object")),
+                    True,
+                )
+                return
+            yield (
+                match.start("text_object"),
+                match.end("text_object"),
+                content[match.end("text_object") - 2 : match.end("text_object")] != b"ET",
+            )
+
+    def scan_text_object_spans(
+        content: bytes,
+        window_end: int,
+    ) -> tuple[_PdfTextObjectSpans, int]:
+        spans: Final[list[tuple[int, int, bool]]] = []  # mutable-ok: capped page-local span cache
+        cumulative_length: int = 0  # rebind-ok: accumulates record lengths until the sample cap
+        for start, end, truncated in text_object_spans_in_window(content, window_end):
+            spans.append((start, end, truncated))
+            cumulative_length += (
+                end - start + (len(b"\nET") if truncated else 0) + (0 if len(spans) == 1 else len(b"\n"))
+            )
+            if cumulative_length >= PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+                break
+        return tuple(spans), cumulative_length
+
     def text_object_spans_for(stream_metrics: _PdfStreamMetrics) -> _PdfTextObjectSpans:
         identity: Final = id(stream_metrics)
         cached: Final = text_object_span_memo.get(identity)
         if cached is not None:
             return cached
-        spans: Final = tuple(
-            (match.start("text_object"), match.end("text_object"))
-            for match in PDF_TEXT_OBJECT.finditer(stream_metrics.content)
-            if match.group("text_object") is not None
+        first_window_end: Final = min(len(stream_metrics.content), PDF_PAGE_MAX_EXACT_CONTENT_BYTES)
+        first_spans, first_length = scan_text_object_spans(stream_metrics.content, first_window_end)
+        cached_spans: Final = (
+            first_spans
+            if first_length >= PDF_PAGE_MAX_EXACT_CONTENT_BYTES or first_window_end == len(stream_metrics.content)
+            else scan_text_object_spans(stream_metrics.content, len(stream_metrics.content))[0]
         )
-        text_object_span_memo[identity] = spans
-        return spans
+        text_object_span_memo[identity] = cached_spans
+        return cached_spans
 
     def subtree_has_text(stream_metrics: _PdfStreamMetrics) -> bool:
         identity: Final = id(stream_metrics)
@@ -1151,8 +1216,8 @@ def _pdf_text_object_records(
     pending_records: Final[list[_PdfTextRecordWalkItem]] = [(metrics, invocation_path)]  # mutable-ok: DFS stack
     while pending_records:
         current_metrics, current_path = pending_records.pop()
-        for index, (start, end) in enumerate(text_object_spans_for(current_metrics)):
-            yield _PdfTextObjectRecord(current_metrics, current_path, start, end, index == 0)
+        for index, (start, end, truncated) in enumerate(text_object_spans_for(current_metrics)):
+            yield _PdfTextObjectRecord(current_metrics, current_path, start, end, index == 0, truncated)
         pending_records.extend(
             (form_metrics, current_path + (index,))
             for index, form_metrics in reversed(tuple(enumerate(current_metrics.forms)))
@@ -1175,36 +1240,96 @@ def _pdf_text_object_record_bytes(record: _PdfTextObjectRecord) -> bytes:
     return separator + text_object + closure
 
 
-def _pdf_truncated_operand_closures(prefix: bytes) -> bytes:
-    operands: Final = tuple(PDF_STRING_OPERAND.finditer(prefix))
-    last_operand: Final = operands[-1] if operands else None
-    if last_operand is not None and last_operand.end() == len(prefix):
-        operand: Final = last_operand.group(0)
-        if operand.startswith(b"%"):
-            return b""
-        if operand.startswith(b"("):
-            unescaped_literal: Final = PDF_LITERAL_ESCAPE.sub(b"", operand)
-            open_parentheses: Final = max(0, unescaped_literal.count(b"(") - unescaped_literal.count(b")"))
-            trailing_backslashes: Final = re.search(rb"\\+$", operand)
-            escaped_trailing_backslash: Final = (
-                b"\\" if trailing_backslashes is not None and len(trailing_backslashes.group(0)) % 2 else b""
+def _pdf_truncated_text_sample_closures(prefix: bytes, include_text_show: bool) -> tuple[int, bytes]:
+    comment_open: bool = False  # rebind-ok: scans one bounded PDF prefix
+    escape_open: bool = False  # rebind-ok: scans one bounded PDF prefix
+    literal_depth: int = 0  # rebind-ok: tracks balanced literal strings
+    hex_open: bool = False  # rebind-ok: scans one bounded PDF prefix
+    array_depth: int = 0  # rebind-ok: tracks arrays outside strings
+    bare_string_complete: bool = False  # rebind-ok: tracks the final string operand
+    best_prefix_length: int = 0  # rebind-ok: retains the latest prefix whose closures fit the sample cap
+    best_state: tuple[bool, bool, int, bool, int, bool] = (  # rebind-ok: scanner state
+        False,
+        False,
+        0,
+        False,
+        0,
+        False,
+    )
+    for index, byte in enumerate(prefix):
+        if comment_open:
+            if byte in (ord("\r"), ord("\n")):
+                comment_open = False
+        elif literal_depth:
+            if escape_open:
+                escape_open = False
+            elif byte == ord("\\"):
+                escape_open = True
+            elif byte == ord("("):
+                literal_depth += 1
+            elif byte == ord(")"):
+                literal_depth -= 1
+                if literal_depth == 0:
+                    bare_string_complete = True
+        elif hex_open:
+            if byte == ord(">"):
+                hex_open = False
+                bare_string_complete = True
+        elif byte == ord("%"):
+            comment_open = True
+        elif byte == ord("("):
+            literal_depth = 1
+            bare_string_complete = False
+        elif byte == ord("<") and (index + 1 == len(prefix) or prefix[index + 1] != ord("<")):
+            hex_open = True
+            bare_string_complete = False
+        elif byte == ord("["):
+            array_depth += 1
+            bare_string_complete = False
+        elif byte == ord("]"):
+            array_depth = max(0, array_depth - 1)
+            bare_string_complete = False
+        elif byte not in b" \t\r\n\f\x00":
+            bare_string_complete = False
+        if index + 1 + (1 if comment_open else 0) + (2 if escape_open else 0) + literal_depth + (
+            1 if hex_open else 0
+        ) + (
+            array_depth + len(b" TJ")
+            if include_text_show and array_depth
+            else len(b" Tj")
+            if include_text_show and (literal_depth or hex_open or bare_string_complete)
+            else 0
+        ) <= len(prefix):
+            best_prefix_length = index + 1
+            best_state = (
+                comment_open,
+                escape_open,
+                literal_depth,
+                hex_open,
+                array_depth,
+                bare_string_complete,
             )
-            return escaped_trailing_backslash + b")" * open_parentheses
-    if re.search(rb"<[0-9A-Fa-f\s]*$", prefix) is not None:
-        return b">"
-    return b""
-
-
-def _pdf_truncated_text_show_closures(prefix: bytes) -> bytes:
-    operands: Final = tuple(PDF_STRING_OPERAND.finditer(prefix))
-    last_operand: Final = operands[-1] if operands else None
-    structural_content: Final = PDF_STRING_OPERAND.sub(b"", prefix)
-    open_array_count: Final = max(0, structural_content.count(b"[") - structural_content.count(b"]"))
-    if open_array_count:
-        return b"]" * open_array_count + b" TJ"
-    if last_operand is not None and last_operand.end() == len(prefix) and not last_operand.group(0).startswith(b"%"):
-        return b" Tj"
-    return b""
+    (
+        best_comment_open,
+        best_escape_open,
+        best_literal_depth,
+        best_hex_open,
+        best_array_depth,
+        best_bare_string_complete,
+    ) = best_state
+    operand_closures: Final = (
+        (b"\\\\" if best_escape_open else b"")
+        + (b")" * best_literal_depth if best_literal_depth else b"")
+        + (b">" if best_hex_open else b"")
+    )
+    comment_closure: Final = b"\n" if best_comment_open else b""
+    if not include_text_show:
+        return best_prefix_length, comment_closure + operand_closures
+    if best_array_depth:
+        return best_prefix_length, comment_closure + operand_closures + b"]" * best_array_depth + b" TJ"
+    if best_literal_depth or best_hex_open or best_bare_string_complete:
+        return best_prefix_length, comment_closure + operand_closures + b" Tj"
+    return best_prefix_length, comment_closure + operand_closures
 
 
 def _pdf_truncated_text_object_prefix(
@@ -1212,30 +1337,25 @@ def _pdf_truncated_text_object_prefix(
     start: int,
     prefix_length: int,
 ) -> bytes:
-    current_prefix_length: int = prefix_length  # rebind-ok: shrinks until the closures fit
-    while True:
-        prefix = content[start : start + current_prefix_length]
-        operand_closures = _pdf_truncated_operand_closures(prefix)
-        text_show_closures = _pdf_truncated_text_show_closures(prefix)
-        closures = operand_closures + text_show_closures + b"\nET"
-        if len(prefix) + len(closures) <= PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
-            return prefix + closures
-        current_prefix_length = (current_prefix_length + PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(closures)) // 2
+    prefix: Final = content[start : start + prefix_length]
+    closed_prefix_length, closures = _pdf_truncated_text_sample_closures(prefix, include_text_show=True)
+    return prefix[:closed_prefix_length] + closures + b"\nET"
 
 
 def _pdf_truncated_string_operand_prefix(operand: bytes, prefix_length: int) -> bytes:
-    current_length: int = prefix_length  # rebind-ok: shrinks until the operand closure fits
-    while True:
-        prefix = operand[:current_length]
-        operand_closures = _pdf_truncated_operand_closures(prefix)
-        if len(prefix) + len(operand_closures) <= prefix_length:
-            return prefix + operand_closures
-        reduced_length = (current_length + prefix_length - len(operand_closures)) // 2
-        current_length = reduced_length
+    prefix: Final = operand[:prefix_length]
+    closed_prefix_length, closures = _pdf_truncated_text_sample_closures(prefix, include_text_show=False)
+    return prefix[:closed_prefix_length] + closures
 
 
 def _pdf_truncated_text_object(record: _PdfTextObjectRecord) -> bytes:
     content: Final = record.stream.content
+    if record.truncated:
+        return _pdf_truncated_text_object_prefix(
+            content,
+            record.start,
+            PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(b"\nET"),
+        )
     string_operands: Final = (
         operand
         for operand in PDF_STRING_OPERAND.finditer(content, record.start, record.end)
@@ -1279,7 +1399,7 @@ def _pdf_bounded_text_samples(metrics: _PdfStreamMetrics) -> tuple[tuple[_PdfRes
     if first_record is None:
         return ()
     first_record_length: Final = _pdf_text_object_record_length(first_record)
-    if first_record_length > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+    if first_record.truncated or first_record_length > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
         return ((first_record.stream.resources, _pdf_truncated_text_object(first_record)),)
     record_sizes: Final = (_pdf_text_object_record_length(record) for record in islice(sized_records, 1, None))
     cumulative_sizes: Final = islice(accumulate(record_sizes, initial=first_record_length), 1, None)
@@ -1323,10 +1443,7 @@ def _pdf_extract_sample_text(
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
     """Oversized pages use bounded pypdf text-object samples scaled to decoded operand bytes."""
     contents: Final = page.get_contents()
-    content: Final = PDF_INLINE_IMAGE.sub(
-        _pdf_inline_image_replacement,
-        contents.get_data() if contents is not None else b"",
-    )
+    content: Final = _pdf_strip_inline_images(contents.get_data() if contents is not None else b"")
     metrics: Final = _pdf_page_content_metrics(page, content)
     if metrics.content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
         samples: Final = _pdf_bounded_text_samples(metrics)

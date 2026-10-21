@@ -90,6 +90,15 @@ def test_pdf_text_object_scan(content: bytes):  # test-quality-ok: CodSpeed perf
 
 
 @pytest.mark.benchmark
+def test_pdf_16m_text_object_stream_is_capped():  # test-quality-ok: CodSpeed performance benchmark
+    text_object: Final = b"BT (x) Tj ET\n"
+    repetitions: Final = 16 * 1024 * 1024 // len(text_object) + 1
+    page: Final = _pdf_page(text_object * repetitions)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
 def test_pdf_textless_doubling_form_tree_skips_subtrees():  # test-quality-ok: CodSpeed performance benchmark
     metrics: Final = _pdf_doubling_form_metrics(30, b"q Q\n")
 

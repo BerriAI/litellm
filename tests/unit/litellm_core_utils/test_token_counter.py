@@ -386,9 +386,7 @@ def test_token_counter_legacy_function_call_counts_arguments():
     MESSAGES_TEXT,
 )
 def test_token_counter_textonly(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-35-turbo", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-35-turbo", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -412,9 +410,7 @@ def test_token_counter_count_response_tokens(message_count_pair):
     MESSAGES_WITH_IMAGES,
 )
 def test_token_counter_with_images(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-4o", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-4o", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -437,18 +433,16 @@ def test_token_counter_with_tools(message_count_pair):
             pass  # expected
         else:
             tolerated_diff = message_count_pair["count-tolerate"] - expected_tokens
-            assert (
-                actual_diff <= tolerated_diff
-            ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            assert actual_diff <= tolerated_diff, (
+                f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            )
             if actual_diff != tolerated_diff:
                 raise NeedsToleranceUpdateError(
                     f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}"
                 )
 
     else:
-        assert (
-            expected_tokens == counted_tokens
-        ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
+        assert expected_tokens == counted_tokens, f"Expected {expected_tokens} tokens, got {counted_tokens}."
 
 
 def test_token_counter_counts_gemini_function_declarations():
@@ -784,9 +778,7 @@ def test_load_test_token_counter(model):
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
-def test_get_modified_max_tokens(
-    model, base_model, input_tokens, user_max_tokens, expected_value
-):
+def test_get_modified_max_tokens(model, base_model, input_tokens, user_max_tokens, expected_value):
     """
     - Test when max_output is not known => expect user_max_tokens
     - Test when max_output == max_input,
@@ -819,9 +811,7 @@ def test_get_modified_max_tokens(
     if expected_value is None:
         assert calculated_value is None
     else:
-        assert (
-            calculated_value == expected_value
-        ), "Got={}, Expected={}, Params={}".format(
+        assert calculated_value == expected_value, "Got={}, Expected={}, Params={}".format(
             calculated_value, expected_value, args
         )
 
@@ -840,12 +830,8 @@ def test_empty_tools():
     reason="Skipping this test temporarily because it relies on a function being called that I am removing."
 )
 def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
+    with patch.object(litellm.utils, "openai_token_counter", new=MagicMock()) as mock_client:
+        token_counter(model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}])
 
         mock_client.assert_called()
 
@@ -974,9 +960,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("command-r-v1")
 
         # Verify the attempt to load Cohere tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "Xenova/c4ai-command-r-v01-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("Xenova/c4ai-command-r-v01-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -1009,9 +993,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("llama-2-7b")
 
         # Verify the attempt to load Llama-2 tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "hf-internal-testing/llama-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("hf-internal-testing/llama-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -1138,9 +1120,7 @@ def test_token_counter_with_anthropic_tool_use():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + "I'll check" text + "get_weather" name + input dict
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for message with tool_use, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
 
 
 def test_token_counter_with_anthropic_tool_result():
@@ -1179,9 +1159,7 @@ def test_token_counter_with_anthropic_tool_result():
 
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
-    assert (
-        tokens > 25
-    ), f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
 
 
 def test_token_counter_with_nested_tool_result():
@@ -1215,9 +1193,7 @@ def test_token_counter_with_nested_tool_result():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count both nested text blocks
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for nested tool_result, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
 
 
 def test_token_counter_tool_use_and_result_combined():
@@ -1280,9 +1256,7 @@ def test_token_counter_tool_use_and_result_combined():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count all text, tool names, inputs, and results
-    assert (
-        tokens > 60
-    ), f"Expected substantial token count for full tool conversation, got {tokens}"
+    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
 
 
 def test_token_counter_with_image_url():
@@ -1333,12 +1307,8 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    tokens_str = token_counter(
-        model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True
-    )
-    assert (
-        tokens_str > 0
-    ), f"Expected positive token count for string image_url, got {tokens_str}"
+    tokens_str = token_counter(model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True)
+    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
 
     # Test invalid detail value raises error
     messages_invalid = [
@@ -1359,9 +1329,7 @@ def test_token_counter_with_image_url():
     with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
     e = exc_info.value
-    assert "Invalid detail value" in str(
-        e
-    ), f"Expected detail validation error, got: {e}"
+    assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -1401,15 +1369,11 @@ def test_token_counter_with_thinking_content():
         {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
     ]
 
-    tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + thinking text + response text + "Thanks"
     # The thinking text alone is ~30 tokens, plus other content should be > 50 total
-    assert (
-        tokens > 50
-    ), f"Expected substantial token count for message with thinking, got {tokens}"
+    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
 
     # Test that thinking block without 'thinking' field doesn't crash (edge case)
     messages_no_thinking = [
@@ -1426,16 +1390,10 @@ def test_token_counter_with_thinking_content():
         }
     ]
 
-    tokens_no_thinking = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking
-    )
-    assert (
-        tokens_no_thinking > 0
-    ), f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
+    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
     # Should only count "Response" and message overhead
-    assert (
-        tokens_no_thinking < 15
-    ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
 def test_token_counter_with_redacted_thinking_content():
@@ -1455,6 +1413,7 @@ def test_token_counter_with_redacted_thinking_content():
     with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
 
 def test_token_counter_with_tool_reference_block():
     """
@@ -1478,9 +1437,7 @@ def test_token_counter_with_tool_reference_block():
     ]
 
     # Must not raise, and must produce a positive token count.
-    tokens = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
 
     # A tool_reference with no/empty tool_name must also be handled gracefully.
@@ -1490,9 +1447,7 @@ def test_token_counter_with_tool_reference_block():
             "content": [{"type": "tool_reference", "tool_name": ""}],
         }
     ]
-    tokens_empty = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
-    )
+    tokens_empty = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty)
     assert tokens_empty >= 0
 
 
@@ -1504,7 +1459,7 @@ def test_count_content_list_rejects_unknown_type():
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(ValueError, match="Error getting number of tokens from content list: Invalid") as exc_info:
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
@@ -1545,9 +1500,7 @@ def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
         messages=messages,
         use_default_image_token_count=True,
     )
-    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
-        f"Expected the image block to contribute tokens, got {tokens}"
-    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, f"Expected the image block to contribute tokens, got {tokens}"
 
 
 def test_anthropic_image_block_matches_equivalent_image_url():
@@ -1579,12 +1532,8 @@ def test_anthropic_image_block_matches_equivalent_image_url():
         }
     ]
 
-    anthropic_tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
-    )
-    openai_tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
-    )
+    anthropic_tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages)
+    openai_tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages)
     assert anthropic_tokens == openai_tokens
 
 
@@ -1642,9 +1591,7 @@ def test_anthropic_image_block_with_empty_base64_data():
 
     tokens = _count_content_list(
         count_function=len,
-        content_list=[
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
-        ],
+        content_list=[{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}],
         use_default_image_token_count=False,
         default_token_count=None,
     )
@@ -1756,7 +1703,10 @@ def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
     assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
 
     readable: Final = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",))
-    readable_file: Final = {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable}}
+    readable_file: Final = {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable},
+    }
     readable_document: Final = {"type": "document", "title": "report.pdf", "source": _pdf_source(readable)}
     assert _count_user_content([prompt, readable_file]) == _count_user_content([prompt, readable_document])
     assert _count_user_content([prompt, readable_file]) > _count_user_content([prompt, inline_file])
@@ -1770,9 +1720,7 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
 
     named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
-    assert _count_user_content([prompt, named]) == _count_user_content(
-        [prompt, {"type": "text", "text": "report.pdf"}]
-    )
+    assert _count_user_content([prompt, named]) == _count_user_content([prompt, {"type": "text", "text": "report.pdf"}])
 
 
 def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
@@ -1811,12 +1759,7 @@ def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> 
 def _pdf_stream(content: bytes, dictionary: bytes = b"") -> bytes:
     dictionary_entries: Final = b" " + dictionary if dictionary else b""
     return (
-        b"<< /Length "
-        + str(len(content)).encode()
-        + dictionary_entries
-        + b" >>\nstream\n"
-        + content
-        + b"\nendstream"
+        b"<< /Length " + str(len(content)).encode() + dictionary_entries + b" >>\nstream\n" + content + b"\nendstream"
     )
 
 
@@ -1831,15 +1774,12 @@ def _pdf_data_url_with_xobjects(
         b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
         font_object,
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /Font << /F1 3 0 R >> /XObject "
-        + page_xobjects
-        + b" >> /Contents 5 0 R >>",
+        b"/Resources << /Font << /F1 3 0 R >> /XObject " + page_xobjects + b" >> /Contents 5 0 R >>",
         _pdf_stream(page_content),
         *xobject_objects,
     )
     object_chunks: Final = tuple(
-        f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
-        for index, body in enumerate(object_bodies, start=1)
+        f"{index} 0 obj\n".encode() + body + b"\nendobj\n" for index, body in enumerate(object_bodies, start=1)
     )
     header: Final = b"%PDF-1.4\n"
     offsets: Final = accumulate((len(header), *(len(chunk) for chunk in object_chunks[:-1])))
@@ -1858,11 +1798,7 @@ def _pdf_data_url_with_doubling_forms(depth: int, leaf_content: bytes) -> str:
         _pdf_stream(
             leaf_content if index == depth - 1 else b"/Fm Do\n/Fm Do\n",
             b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject "
-            + (
-                b"<< >>"
-                if index == depth - 1
-                else b"<< /Fm " + str(7 + index).encode() + b" 0 R >>"
-            )
+            + (b"<< >>" if index == depth - 1 else b"<< /Fm " + str(7 + index).encode() + b" 0 R >>")
             + b" >>",
         )
         for index in range(depth)
@@ -1930,8 +1866,7 @@ def _pdf_data_url_with_shared_xobjects(
     first_xobject_object_number: Final = 5 + 2 * page_count
     page_references: Final = b" ".join(f"{number} 0 R".encode() for number in page_object_numbers)
     xobject_references: Final = b" ".join(
-        f"/Fm{index} {first_xobject_object_number + index} 0 R".encode()
-        for index in range(len(xobject_objects))
+        f"/Fm{index} {first_xobject_object_number + index} 0 R".encode() for index in range(len(xobject_objects))
     )
     page_objects: Final = tuple(
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents "
@@ -1941,9 +1876,7 @@ def _pdf_data_url_with_shared_xobjects(
     content_objects: Final = tuple(_pdf_stream(content) for content in page_contents)
     object_bodies: Final = (
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids ["
-        + page_references
-        + f"] /Count {page_count} >>".encode(),
+        b"<< /Type /Pages /Kids [" + page_references + f"] /Count {page_count} >>".encode(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Font << /F1 3 0 R >> /XObject << " + xobject_references + b" >> >>",
         *page_objects,
@@ -1951,8 +1884,7 @@ def _pdf_data_url_with_shared_xobjects(
         *xobject_objects,
     )
     object_chunks: Final = tuple(
-        f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
-        for index, body in enumerate(object_bodies, start=1)
+        f"{index} 0 obj\n".encode() + body + b"\nendobj\n" for index, body in enumerate(object_bodies, start=1)
     )
     header: Final = b"%PDF-1.4\n"
     offsets: Final = accumulate((len(header), *(len(chunk) for chunk in object_chunks[:-1])))
@@ -2047,13 +1979,18 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     first: Final = "Revenue grew eleven percent while churn fell to two percent."
     second: Final = "Headcount is flat and the office lease was renewed for three years."
     base: Final = _count_user_content([prompt])
-    blank_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    blank_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    )
 
     assert blank_page > 0
     assert _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first, second)))}]) == (
-        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}]) + 2 * blank_page
+        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}])
+        + 2 * blank_page
     )
-    one_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    one_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    )
     twelve_pages: Final = (
         _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,) * 12))}]) - base
     )
@@ -2061,7 +1998,9 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     assert twelve_pages == 12 * one_page
 
 
-@pytest.mark.parametrize("fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"])
+@pytest.mark.parametrize(
+    "fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"]
+)
 def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[str, str]):
     """Anthropic rasterizes each PDF page within its image limits (1568 px long edge, 1.15 MP) and bills
     width * height / 750 tokens for it: https://platform.claude.com/docs/en/build-with-claude/pdf-support and
@@ -2306,8 +2245,7 @@ def test_pdf_image_xobject_does_not_trigger_the_content_limit():
     image_data: Final = b"\x00" * (1024 * 1024)
     image: Final = _pdf_stream(
         image_data,
-        b"/Type /XObject /Subtype /Image /Width 1024 /Height 1024 "
-        b"/ColorSpace /DeviceRGB /BitsPerComponent 8",
+        b"/Type /XObject /Subtype /Image /Width 1024 /Height 1024 /ColorSpace /DeviceRGB /BitsPerComponent 8",
     )
     data_url: Final = _pdf_data_url_with_xobjects(
         page_text,
@@ -2591,6 +2529,76 @@ def test_oversized_pdf_text_uses_a_sampled_token_estimate():
     assert expected * 4 // 5 <= priced <= expected * 6 // 5
 
 
+def test_many_tiny_pdf_text_objects_price_within_sample_estimate():
+    repetitions: Final = 200_000
+    text_object: Final = b"BT /F1 12 Tf (x) Tj ET\n"
+    page: Final = _fake_pdf_page(text_object * repetitions)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = repetitions
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_oversized_literal_cut_after_escape_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf "
+    suffix: Final = b" Tj ET"
+    operand_prefix_length: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(text_prefix) - len(suffix)
+    operand: Final = b"(" + b"x" * (operand_prefix_length - 2) + b"\\(" + b"x" * 128 + b")"
+    page: Final = _fake_pdf_page(text_prefix + operand + suffix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = operand.count(b"x")
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_oversized_text_cut_inside_trailing_comment_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf (x) Tj "
+    comment: Final = b"%" + b"comment" * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    page: Final = _fake_pdf_page(text_prefix + comment + b"\nET")
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert priced - blank_price == 1
+
+
+def test_oversized_tj_array_cut_inside_comment_stays_extractable():
+    repetitions: Final = 1_000
+    content: Final = (
+        b"BT /F1 12 Tf ["
+        + b"(x) 0 " * repetitions
+        + b"% comment with ["
+        + b"comment" * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+        + b"\n] TJ ET"
+    )
+    page: Final = _fake_pdf_page(content)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert repetitions * 3 // 4 <= priced - blank_price <= repetitions * 5 // 4
+
+
 def test_oversized_identity_h_pdf_uses_tounicode_for_two_byte_glyphs():
     repetitions: Final = 1_000
     path_operator: Final = b"10 10 m 20 20 l S\n"
@@ -2785,11 +2793,15 @@ def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.
 
 
 def _png_data_url(width: int, height: int) -> str:
-    ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    ihdr = (
+        b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    )
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
 
 
-@pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
+@pytest.mark.parametrize(
+    ("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)]
+)
 def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
     assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
 
@@ -2820,7 +2832,9 @@ def handle(request):
 huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
 """
 
-HUB_TOKENIZER_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+HUB_TOKENIZER_SCRIPT: Final = (
+    HUB_SETUP_SCRIPT
+    + """
 litellm.cohere_models = {"command-r-v1"}
 litellm.anthropic_models = {"claude-2"}
 custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
@@ -2833,11 +2847,15 @@ print(json.dumps({
     "requested": sorted(set(requested)),
 }))
 """
+)
 
-HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+HUB_ROUND_TRIP_SCRIPT: Final = (
+    HUB_SETUP_SCRIPT
+    + """
 tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
 print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
 """
+)
 
 
 def _word_level_tokenizer_json(
@@ -2912,7 +2930,9 @@ def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
 def _threshold_test_messages(turns: int) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
     for index in range(turns):
-        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"}
+        )
         messages.append(
             {
                 "role": "assistant",
@@ -2999,7 +3019,9 @@ _ANTHROPIC_SHAPE_MESSAGES: Final = [
     },
     {
         "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}],
+        "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}
+        ],
     },
     {"role": "assistant", "content": [{"type": "text", "text": "Here is what the file does. " * 20}]},
 ]
