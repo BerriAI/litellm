@@ -1,6 +1,8 @@
 import importlib
 import logging
 import multiprocessing
+import os
+import signal
 import sys
 import threading
 from collections.abc import Callable, Sequence
@@ -71,9 +73,22 @@ def load_app_or_exit(import_path: str) -> Callable[..., object]:
         sys.exit(uvicorn_config.STARTUP_FAILURE)
 
 
+def stop_worker_when_pool_exits(pool_parent: BaseProcess) -> None:
+    pool_parent.join()
+    LOGGER.info("Worker pool process [%s] exited, stopping worker [%s].", pool_parent.pid, os.getpid())
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def load_worker_app(import_path: str) -> Callable[..., object]:
+    pool_parent: Final = multiprocessing.parent_process()
+    if pool_parent is not None:
+        threading.Thread(target=stop_worker_when_pool_exits, args=(pool_parent,), daemon=True).start()
+    return load_app_or_exit(import_path)
+
+
 def pool_config(options: ReloadOptions, workers: int) -> Config:
     return Config(
-        partial(load_app_or_exit, options["app"]),
+        partial(load_worker_app, options["app"]),
         factory=True,
         workers=workers,
         **SERVER_OPTIONS.validate_python(

@@ -315,6 +315,30 @@ def test_the_pool_stops_and_frees_the_port_when_the_reloader_dies(
 
 @REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
+def test_a_killed_pool_parent_takes_its_workers_with_it_so_the_next_save_serves_only_new_workers(
+    tmp_path: Path,
+) -> None:
+    app: Final = tmp_path / "reload_pool_app.py"
+    app.write_text(PID_APP)
+    log: Final = tmp_path / "reload.log"
+    port: Final = _free_port()
+    process: Final = _start_pool(tmp_path, port, log)
+    try:
+        orphans: Final = _next_pool(log, process, port, frozenset())
+        os.kill(psutil.Process(min(orphans)).ppid(), signal.SIGKILL)
+        deadline: Final = time.monotonic() + POOL_TIMEOUT_SECONDS
+        while any(psutil.pid_exists(pid) for pid in orphans):
+            assert time.monotonic() < deadline, log.read_text()
+            time.sleep(0.2)
+        app.write_text(f"{PID_APP}\n")
+        _next_pool(log, process, port, orphans)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+@REQUIRES_UVICORN_STARTUP_FAILURE
+@pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
 def test_ctrl_backslash_frees_the_port_without_waiting_out_the_worker_healthcheck_when_core_dumps_are_slow(
     tmp_path: Path,
 ) -> None:
