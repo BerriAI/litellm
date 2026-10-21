@@ -17,6 +17,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    apply_hierarchical_router_settings,
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
@@ -132,6 +133,15 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        # Apply hierarchical router_settings (Key > Team)
+        await apply_hierarchical_router_settings(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            proxy_config=proxy_config,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
@@ -156,6 +166,7 @@ async def image_generation(
             route_type="aimage_generation",
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         response = await llm_call
 

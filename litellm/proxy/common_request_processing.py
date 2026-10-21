@@ -839,6 +839,49 @@ async def _resolve_per_request_model_group_alias(
     return target
 
 
+async def apply_hierarchical_router_settings(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+    proxy_config: ProxyConfig | None,
+    proxy_logging_obj: ProxyLogging | None = None,
+) -> None:
+    """
+    Apply hierarchical router_settings (Key > Team) to the request data dictionary.
+    Passes settings as per-request overrides (router_settings_override) and resolves
+    any per-request model group alias.
+    """
+    if llm_router is not None and proxy_config is not None and user_api_key_dict is not None:
+        from litellm.proxy.proxy_server import prisma_client
+
+        router_settings: Final = await proxy_config._get_hierarchical_router_settings(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # If router_settings found (from key or team), apply them
+        # Pass settings as per-request overrides instead of creating a new Router
+        # This avoids expensive Router instantiation on each request
+        if router_settings is not None:
+            data["router_settings_override"] = router_settings
+            try:
+                data["_router_weights"] = validate_router_weights(router_settings.get("weights"))
+            except ValidationError:
+                data["_router_weights"] = None
+                verbose_proxy_logger.warning(
+                    "Ignoring invalid saved router weights; update team/key router_settings"
+                )
+            alias_target: Final = await _resolve_per_request_model_group_alias(
+                requested_model=data.get("model"),
+                router_settings=router_settings,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+            if alias_target is not None:
+                data["model"] = alias_target
+
+
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
 _DECODED_JSON: Final = TypeAdapter(object)
 _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -2376,35 +2419,13 @@ class ProxyBaseLLMRequestProcessing:
         # merge and the pre-call hooks, so everything that keys off the model
         # group -- model-level guardrails, per-model budgets and rate limits,
         # the logging object -- sees the group that will actually serve.
-        if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings: Final = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-            # If router_settings found (from key or team), apply them
-            # Pass settings as per-request overrides instead of creating a new Router
-            # This avoids expensive Router instantiation on each request
-            if router_settings is not None:
-                self.data["router_settings_override"] = router_settings
-                try:
-                    self.data["_router_weights"] = validate_router_weights(router_settings.get("weights"))
-                except ValidationError:
-                    self.data["_router_weights"] = None
-                    verbose_proxy_logger.warning(
-                        "Ignoring invalid saved router weights; update team/key router_settings"
-                    )
-                alias_target: Final = await _resolve_per_request_model_group_alias(
-                    requested_model=self.data.get("model"),
-                    router_settings=router_settings,
-                    user_api_key_dict=user_api_key_dict,
-                    llm_router=llm_router,
-                )
-                if alias_target is not None:
-                    self.data["model"] = alias_target
+        await apply_hierarchical_router_settings(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            proxy_config=proxy_config,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         aliased_model: Final = self.data.get("model")
 
