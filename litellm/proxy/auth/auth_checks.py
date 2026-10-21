@@ -4980,11 +4980,11 @@ def _raise_model_access_denied(
     model: str,
     models: Sequence[str],
     object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"],
+    *,
+    cause: str | None = None,
 ) -> NoReturn:
-    internal_message: Final = (
-        f"{object_type} not allowed to access model. This {object_type} can only access models={list(models)}. "
-        f"Tried to access {model}"
-    )
+    detail: Final = f"This {object_type} can only access models={list(models)}." if cause is None else cause
+    internal_message: Final = f"{object_type} not allowed to access model. {detail} Tried to access {model}"
     raise ModelAccessDeniedProxyException(
         message=(
             customer_model_access_denied_client_message(model=model)
@@ -5495,11 +5495,50 @@ async def _models_granted_by_groups_only(
             prisma_client=prisma_client,
             strict_errors=True,
         )
-    except Exception:  # noqa: BLE001  # fail-closed: a group that cannot be loaded must deny, never widen access
-        _raise_model_access_denied(model=str(model), models=(), object_type=object_type)
+    except Exception as e:  # noqa: BLE001  # fail-closed: a group that cannot be loaded must deny, never widen access
+        verbose_proxy_logger.warning(
+            "%s model access denied, access groups could not be loaded. model=%s access_group_ids=%s error=%s",
+            object_type,
+            model,
+            list(access_group_ids),
+            e,
+        )
+        _raise_model_access_denied(
+            model=str(model),
+            models=(),
+            object_type=object_type,
+            cause="Its access groups could not be loaded.",
+        )
     if models_from_groups:
         return tuple(models_from_groups)
     _raise_model_access_denied(model=str(model), models=(), object_type=object_type)
+
+
+async def _can_object_call_model_via_groups_only(
+    model: str | list[str],  # mutable-ok: forwarded unchanged to can_object_call_model
+    access_group_ids: Sequence[str],
+    prisma_client: DatabaseClient | None,
+    llm_router: Router | None,
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+    key_model_aliases: Mapping[str, str] | None,
+    object_type: Literal["key", "team"],
+) -> Literal[True]:
+    granted_models: Final = await _models_granted_by_groups_only(
+        model=model,
+        access_group_ids=access_group_ids,
+        prisma_client=prisma_client,
+        object_type=object_type,
+    )
+    return can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=list(granted_models),
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        key_model_aliases=key_model_aliases,
+        object_type=object_type,
+    )
 
 
 async def can_key_call_model(
@@ -5523,17 +5562,11 @@ async def can_key_call_model(
     """
     key_access_group_ids: Final = valid_token.access_group_ids or []
     if not _configured_key_models(valid_token) and key_access_group_ids:
-        return can_object_call_model(
+        return await _can_object_call_model_via_groups_only(
             model=model,
+            access_group_ids=key_access_group_ids,
+            prisma_client=prisma_client,
             llm_router=llm_router,
-            models=list(
-                await _models_granted_by_groups_only(
-                    model=model,
-                    access_group_ids=key_access_group_ids,
-                    prisma_client=prisma_client,
-                    object_type="key",
-                )
-            ),
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
@@ -5762,17 +5795,11 @@ async def can_team_access_model(
     2. If not allowed natively, falls back to access_group_ids on the team
     """
     if team_object is not None and not team_object.models and team_object.access_group_ids:
-        return can_object_call_model(
+        return await _can_object_call_model_via_groups_only(
             model=model,
+            access_group_ids=team_object.access_group_ids,
+            prisma_client=prisma_client,
             llm_router=llm_router,
-            models=list(
-                await _models_granted_by_groups_only(
-                    model=model,
-                    access_group_ids=team_object.access_group_ids,
-                    prisma_client=prisma_client,
-                    object_type="team",
-                )
-            ),
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id,
             key_model_aliases=key_model_aliases,
