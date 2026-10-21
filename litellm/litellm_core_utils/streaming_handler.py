@@ -10,7 +10,7 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
@@ -59,6 +59,9 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+
+if TYPE_CHECKING:
+    from .litellm_logging import BilledRoundsSpend
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE: Final = "audio"
@@ -259,6 +262,8 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    _earlier_rounds_spend: "BilledRoundsSpend | None" = None
+
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
         return self._hidden_params
@@ -2399,6 +2404,9 @@ class CustomStreamWrapper:
             return
         await asyncio.wait((self._failure_logging,), timeout=timeout)
 
+    def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
+        self._earlier_rounds_spend = earlier
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2425,10 +2433,12 @@ class CustomStreamWrapper:
             if self.model:
                 partial_response.model = self.model
             backfill_missing_cache_usage_fields(usage)
-            self.logging_obj.model_call_details["combined_usage_object"] = usage
-            self.logging_obj.model_call_details["response_cost"] = (
-                self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
-            )
+            partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
+            if self._earlier_rounds_spend is None:
+                self.logging_obj.model_call_details["combined_usage_object"] = usage
+                self.logging_obj.model_call_details["response_cost"] = partial_cost
+                return
+            self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, usage, partial_cost)
         except Exception as recover_error:
             verbose_logger.debug(
                 "could not recover partial usage for interrupted stream: %s",
