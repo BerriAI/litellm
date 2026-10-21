@@ -14723,7 +14723,11 @@ class Router:
 
         object_models: Final = set(getattr(user_api_key_auth, "models", []) or [])
         object_team_models: Final = set(getattr(user_api_key_auth, "team_models", []) or [])
-        allowed_models: Final = object_models | object_team_models
+        allowed_models: Final = (
+            object_models
+            if object_models and "all-team-models" not in object_models
+            else object_models | object_team_models
+        )
         if not allowed_models:
             return healthy_deployments
 

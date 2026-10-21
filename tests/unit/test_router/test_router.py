@@ -10833,6 +10833,124 @@ def test_explicit_model_access_does_not_force_access_group_filtering():
     assert ["AG2"] in deployment_groups
 
 
+def test_key_access_group_narrows_below_team_for_same_public_model():
+    """
+    When the team grants two access groups serving the same public model but the
+    key is restricted to one of them, deployment selection must be constrained to
+    the key's group. The team's broader access must not widen the key's choice of
+    same-named deployments.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "zz-test-same",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["zz-grp-A"]},
+            },
+            {
+                "model_name": "zz-test-same",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["zz-grp-B"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team1",
+        models=["zz-grp-A"],
+        team_models=["zz-grp-A", "zz-grp-B"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="zz-test-same",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team1",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+    )
+
+    assert len(deployments) == 1
+    assert deployments[0].get("model_info", {}).get("access_groups") == ["zz-grp-A"]
+
+    seen = set()
+    for _ in range(20):
+        response = router.completion(
+            model="zz-test-same",
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={"user_api_key_team_id": "team1", "user_api_key_auth": scoped_key},
+        )
+        seen.add(response.choices[0].message.content)
+
+    assert seen == {"response-via-AG1"}
+
+
+def test_key_all_team_models_inherits_team_access_groups():
+    """
+    A key whose models field is the ``all-team-models`` sentinel inherits the
+    team's access groups, so both same-named deployments stay selectable.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "zz-test-same",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["zz-grp-A"]},
+            },
+            {
+                "model_name": "zz-test-same",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["zz-grp-B"]},
+            },
+        ]
+    )
+
+    inherit_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team1",
+        models=["all-team-models"],
+        team_models=["zz-grp-A", "zz-grp-B"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="zz-test-same",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team1",
+                "user_api_key_auth": inherit_key,
+            }
+        },
+    )
+
+    deployment_groups = [
+        d.get("model_info", {}).get("access_groups") for d in deployments
+    ]
+    assert ["zz-grp-A"] in deployment_groups
+    assert ["zz-grp-B"] in deployment_groups
+
+
 def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ):
