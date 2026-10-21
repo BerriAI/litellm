@@ -1358,6 +1358,24 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "spend, for an already-deployed router. Applies to LLM and JEV classification."
         ),
     )
+    classifier_context_include_tool_turns: bool = Field(
+        default=False,
+        description=(
+            "Send the tool calls and tool results that followed the current ask to the classifier as "
+            "the work done on it so far, so an agent loop's continuation turn is classified on what "
+            "its tools turned up rather than on the ask alone: 'What is in TASK.md?' stays SIMPLE "
+            "until the file it reads describes a complex task, and the turns after that classify "
+            "as that task. Takes effect on every request that is classified, which with "
+            "classification_mode='every_request' is every turn of the loop. The block is bounded "
+            "on its own by classifier_context_budget_chars and classifier_context_per_turn_chars, "
+            "newest first, but not by classifier_context_window_size, since one ask can run dozens "
+            "of tool calls; setting the window size to 0 still turns all context off. Tool output "
+            "such as file contents is sent to the classifier model, which may be a different "
+            "deployment or provider than the routed completion model. Off by default because "
+            "enabling it shifts tier decisions, and therefore spend, for an already-deployed "
+            "router. Applies to LLM and JEV classification."
+        ),
+    )
 
     adaptive: bool = Field(
         default=False,

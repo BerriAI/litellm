@@ -983,6 +983,35 @@ def _extract_prior_turns(
     return tuple(reversed(_turns_within_budget(clamped, budget_chars)))
 
 
+def _extract_agent_progress(
+    messages: Sequence[Mapping[str, object]],
+    budget_chars: int,
+    per_turn_chars: int | None,
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
+) -> tuple[tuple[str, str], ...]:
+    """The tool calls and tool results after the current ask, oldest first, as (kind, text).
+
+    An agent loop learns what the ask really involves from its tools, so these are what the classifier
+    needs on a continuation turn. Only what follows the newest human ask counts, since tool traffic
+    before it served an earlier ask. Newest first is what the budget keeps, so the latest result always
+    reaches the classifier.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import tool_exchange_texts
+
+    ask_index: Final = _last_human_ask_index(messages, marker_pairs)
+    if ask_index is None:
+        return ()
+    newest_first: Final = tuple(
+        reversed(tuple(chain.from_iterable(tool_exchange_texts(msg) for msg in islice(messages, ask_index + 1, None))))
+    )
+    clamped: Final = (
+        newest_first
+        if per_turn_chars is None
+        else tuple((kind, _truncate(text, per_turn_chars)) for kind, text in newest_first)
+    )
+    return tuple(reversed(_turns_within_budget(clamped, budget_chars)))
+
+
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
     """Whether a first-turn decision is worth pinning for the rest of the session.
 
@@ -2595,6 +2624,16 @@ class ComplexityRouter(CustomLogger):
             and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
             > 1
         )
+        agent_progress: Final = (
+            _extract_agent_progress(
+                messages,
+                budget_chars=self.config.classifier_context_budget_chars,
+                per_turn_chars=self.config.classifier_context_per_turn_chars,
+                marker_pairs=marker_pairs,
+            )
+            if messages and context_enabled and self.config.classifier_context_include_tool_turns and not encrypted_task
+            else ()
+        )
         return self._build_classifier_user_payload(
             prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
             system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
@@ -2602,6 +2641,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages,
             has_prior_conversation=has_prior_conversation,
             label_roles=include_assistant,
+            agent_progress=agent_progress,
         )
 
     async def _classify_with_llm(
@@ -2901,8 +2941,9 @@ class ComplexityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]] | None = None,
         has_prior_conversation: bool = False,
         label_roles: bool = False,
+        agent_progress: Sequence[tuple[str, str]] = (),
     ) -> str:
-        """Build the classifier's user message: caller constraints, prior turns, depth, current ask.
+        """Build the classifier's user message: caller constraints, prior turns, depth, current ask, agent progress.
 
         Everything here is caller-controlled, which is why none of it is interpolated into the system
         role: that role carries only the operator's rubric, matching how the LLM-as-a-judge guardrail
@@ -2922,6 +2963,10 @@ class ComplexityRouter(CustomLogger):
         Turns are labelled by role only when assistant turns can appear, since otherwise the section
         header already says whose turns these are and labelling them would reword the prompt of every
         deployment that never asked for assistant context.
+
+        The agent's progress sits under the ask as part of what is classified, never among the
+        context-only turns: quoted there, a tool result describing a complex task left the JEV
+        classifier grading the loop's opening "What's in TASK.md?" as SIMPLE.
         """
         caller_prompt_block: Final = (
             ("\nCaller system prompt, quoted as task context:", system_prompt) if system_prompt else ()
@@ -2946,11 +2991,21 @@ class ComplexityRouter(CustomLogger):
             else ()
         )
 
+        agent_progress_block: Final = (
+            (
+                "\nWork the agent has done on this message so far, as tool calls and their results:",
+                *(f"[{i}] {kind}: {text}" for i, (kind, text) in enumerate(agent_progress, start=1)),
+            )
+            if agent_progress
+            else ()
+        )
+
         parts: Final = (
             caller_prompt_block,
             prior_turns_block,
             trajectory_block,
             (f"\nClassify this message:\n{prompt}",),
+            agent_progress_block,
         )
 
         return "\n".join(part for group in parts for part in group)
