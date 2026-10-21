@@ -2252,7 +2252,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         limit: Optional[int] = None,
         after: Optional[str] = None,
-        deployment_ids: Optional[frozenset[str]] = None,
+        model_mapping_keys: Optional[frozenset[str]] = None,
         before: Optional[str] = None,
         **data: Dict,
     ) -> FileListPage:
@@ -2264,8 +2264,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         each page still ordered newest first.
         ``purpose`` is applied after parsing, because the managed file table
         keeps it inside the ``file_object`` blob instead of a column, and
-        ``deployment_ids`` keeps only files with a copy on one of those
-        deployments, read from ``model_mappings``, a JSON column. Rows
+        ``model_mapping_keys`` keeps only files mapped to one of those
+        deployment ids, or model names for storage-backed files, read from
+        ``model_mappings``, a JSON column. Rows
         whose blob will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
@@ -2308,7 +2309,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     openai_code="invalid_value",
                 )
 
-        if deployment_ids is not None and not deployment_ids:
+        if model_mapping_keys is not None and not model_mapping_keys:
             return FileListPage.model_validate(build_list_page([]))
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
@@ -2330,7 +2331,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for row in chunk
                 if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
                 and (purpose is None or parsed_file_object.purpose == purpose)
-                and (deployment_ids is None or not deployment_ids.isdisjoint(row.model_mappings))
+                and (model_mapping_keys is None or not model_mapping_keys.isdisjoint(row.model_mappings))
             )
             if len(chunk) < chunk_size:
                 break
