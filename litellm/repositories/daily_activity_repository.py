@@ -24,6 +24,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_tag_page_sql,
     build_user_page_sql,
 )
 from litellm.repositories.prisma_protocols import TableActions
@@ -43,6 +44,8 @@ from litellm.types.repositories.daily_activity import (
     KeyPage,
     KeySpendRow,
     SpendLogsWindow,
+    TagPage,
+    TagSpendRow,
     UserMetadataRow,
     UserPage,
     UserSpendRow,
@@ -106,6 +109,7 @@ _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
 _GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
+_TAG_SPEND_ADAPTER: Final = TypeAdapter(tuple[TagSpendRow, ...])
 _USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
 _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
@@ -214,6 +218,18 @@ class DailyActivityRepository:
         )
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("api_key") is not None))
         return KeyPage(rows=rows, total_api_keys=total_api_keys)
+
+    async def tag_page(
+        self, scope: DailyActivityScope, *, team_id: str, offset: int, limit: int
+    ) -> TagPage:
+        query: Final = build_tag_page_sql(scope, team_id=team_id, offset=offset, limit=limit)
+        result: Final = await self._query(query)
+        total_tags_value: Final = result[0].get("total_tags") if result else 0
+        total_tags: Final = (
+            _KEY_PAGE_TOTAL_ADAPTER.validate_python(total_tags_value) if total_tags_value is not None else 0
+        )
+        rows: Final = _TAG_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("tag") is not None))
+        return TagPage(rows=rows, total_tags=total_tags)
 
     async def user_page(self, scope: DailyActivityScope, *, offset: int, limit: int) -> UserPage:
         query: Final = build_user_page_sql(scope, offset=offset, limit=limit)
