@@ -220,6 +220,46 @@ async def test_streamlake_completion_uses_openai_compatible_http(
     assert response.usage.total_tokens == 5
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_endpoint_id_call_forwards_tools_and_reasoning_effort_to_streamlake(monkeypatch: pytest.MonkeyPatch) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        }
+    ]
+    response_body: Final[dict[str, object]] = {
+        "id": "chatcmpl-streamlake-tools",
+        "object": "chat.completion",
+        "created": 1710000000,
+        "model": "glm-5.3",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+    }
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        litellm.completion(
+            model="streamlake/ep-test-endpoint",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            api_key="sk-streamlake-test",
+            tools=tools,
+            tool_choice="auto",
+            reasoning_effort="low",
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["tools"] == tools
+    assert sent["tool_choice"] == "auto"
+    assert sent["reasoning_effort"] == "low"
+
+
 def _streamlake_keys(cost_map: dict[str, object]) -> tuple[str, ...]:
     return tuple(key for key in cost_map if key.startswith("streamlake/"))
 
@@ -253,7 +293,7 @@ def test_endpoint_id_call_is_priced_from_the_lowercase_model_streamlake_returns(
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_tool_params_follow_the_function_calling_flag_of_the_lowercase_model_row() -> None:
+def test_named_model_params_follow_the_row_and_fall_back_to_the_provider_default() -> None:
     provider: Final = JSONProviderRegistry.get("streamlake")
     assert provider is not None
     config: Final = create_config_class(provider)()
@@ -261,6 +301,15 @@ def test_tool_params_follow_the_function_calling_flag_of_the_lowercase_model_row
     assert keys
 
     for key in keys:
+        row = litellm.model_cost[key]
         supported = config.get_supported_openai_params(model=key.split("/", 1)[1].lower())
-        supports_function_calling = litellm.get_model_info(model=key).get("supports_function_calling") is True
-        assert ("tools" in supported) is supports_function_calling, key
+        assert ("tools" in supported) is (row.get("supports_function_calling") is not False), key
+        assert ("reasoning_effort" in supported) is (row.get("supports_reasoning") is not False), key
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_streamlake_wildcard_expands_to_every_streamlake_row() -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    expanded: Final = get_known_models_from_wildcard("streamlake/*")
+    assert set(expanded) == set(_streamlake_keys(litellm.model_cost))

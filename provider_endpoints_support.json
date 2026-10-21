@@ -2552,8 +2552,8 @@
       "url": "https://docs.litellm.ai/docs/providers/openai_compatible",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
-        "responses": false,
+        "messages": true,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,

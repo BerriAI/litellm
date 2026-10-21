@@ -257,6 +257,10 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
     "supported_endpoints": ["/v1/chat/completions"]
   }
 }
