@@ -1956,6 +1956,9 @@
     ],
     "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object": [
       "other.provider_wire.vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_streaming_passthrough_request_tags_reach_spend_log": [
+      "other.observability.passthrough.streaming_tags_reach_spend"
     ]
   },
   "browser": {
