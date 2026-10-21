@@ -21,6 +21,7 @@ from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,  # pyright: ignore[reportUnknownVariableType]  # untyped upstream
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -188,24 +189,42 @@ async def test_post_mcp_call_redaction_masks_the_tool_result(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_mcp_keys_in_a_chat_request_body_do_not_mark_it_as_a_tool_call() -> None:
-    guardrail: Final = _make_guardrail_with_response({"action": "NONE"})
-    logging_obj: Final = LiteLLMLoggingObj(
-        model="gpt-4o",
-        messages=[],
-        stream=False,
-        call_type="acompletion",
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        litellm_call_id="call-1",
-        function_id="1",
+@pytest.mark.parametrize("logging_obj", [None, "acompletion"])
+async def test_mcp_keys_in_a_request_body_do_not_mark_model_traffic_as_a_tool_call(logging_obj: str | None) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+    request_data: Final[dict[str, object]] = {"prompt": "draw a cat", "mcp_tool_name": "send_email"}
+    logger: Final = (
+        LiteLLMLoggingObj(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=logging_obj,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="call-1",
+            function_id="1",
+        )
+        if logging_obj
+        else None
     )
 
+    assert guardrail.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.pre_call)
     await guardrail.apply_guardrail(
-        inputs=_inputs(),
-        request_data={"mcp_tool_name": "send_email", "mcp_tool_call_metadata": {"name": "send_email"}},
-        input_type="request",
-        logging_obj=logging_obj,
+        inputs=_inputs(), request_data=request_data, input_type="request", logging_obj=logger
     )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_evaluation_does_not_mark_the_next_model_evaluation_as_a_tool_call() -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "NONE"}, event_hook=["pre_mcp_call", "pre_call"], default_on=True
+    )
+    tool_call: Final[dict[str, object]] = {"mcp_tool_name": "send_email"}
+    assert guardrail.should_run_guardrail(data=tool_call, event_type=GuardrailEventHooks.pre_mcp_call)
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
+
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
 
     assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 

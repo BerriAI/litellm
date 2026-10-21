@@ -28,7 +28,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypesLiteral, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 GUARDRAIL_PATH: Final = "/v1/guardrails/litellm"
 
@@ -46,7 +46,13 @@ SUPPORTED_EVENT_HOOKS: Final = (
     GuardrailEventHooks.post_mcp_call,
 )
 
+MCP_EVENT_HOOKS: Final = frozenset((GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call))
+UNKNOWN_MCP_TOOL_NAME: Final = "unknown"
+
 _EVALUATING_DURING_CALL: Final[ContextVar[bool]] = ContextVar("airia_evaluating_during_call", default=False)
+# Request bodies on several routes are merged into the hook data, so MCP keys in it prove nothing; the event the
+# framework gates on is the only signal a client cannot set
+_PENDING_EVENT: Final[ContextVar[GuardrailEventHooks | None]] = ContextVar("airia_pending_event", default=None)
 
 
 def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) -> bool:
@@ -93,20 +99,13 @@ def _request_route(request_data: Mapping[str, object]) -> str | None:
     return None
 
 
-def _mcp_tool_name(request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj | None") -> str | None:
-    """The MCP tool this evaluation is for, or None for model traffic.
-
-    The logger's call type wins when there is one, because a chat client can put MCP keys in its request body.
-    """
-    logged_call_type: Final[object] = getattr(logging_obj, "call_type", None)
-    if logging_obj is not None and logged_call_type not in MCP_GUARDRAIL_CALL_TYPES:
-        return None
+def _mcp_tool_name(request_data: Mapping[str, object]) -> str:
     pre_call_name: Final = request_data.get("mcp_tool_name")
     if isinstance(pre_call_name, str) and pre_call_name:
         return pre_call_name
     call_metadata: Final = _as_object(request_data.get("mcp_tool_call_metadata"))
     post_call_name: Final = call_metadata.get("name") if call_metadata is not None else None
-    return post_call_name if isinstance(post_call_name, str) and post_call_name else None
+    return post_call_name if isinstance(post_call_name, str) and post_call_name else UNKNOWN_MCP_TOOL_NAME
 
 
 def _as_object(value: object) -> Mapping[str, object] | None:
@@ -158,6 +157,15 @@ class AiriaGuardrail(CustomGuardrail):
         )
         verbose_proxy_logger.info("AiriaGuardrail initialized with gateway: %s", self.api_base)
 
+    def should_run_guardrail(
+        self,
+        data: object,
+        event_type: GuardrailEventHooks,
+    ) -> bool:
+        runs: Final = super().should_run_guardrail(data, event_type)  # pyright: ignore[reportUnknownMemberType]  # the parent annotates data as untyped
+        _ = _PENDING_EVENT.set(event_type if runs else None)
+        return runs
+
     def supports_structured_messages(self) -> bool:
         return False
 
@@ -169,6 +177,8 @@ class AiriaGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
+        is_mcp_tool_evaluation: Final = _PENDING_EVENT.get() in MCP_EVENT_HOOKS
+        _ = _PENDING_EVENT.set(None)
         call_id: Final = (
             logging_obj.litellm_call_id
             if logging_obj
@@ -187,7 +197,7 @@ class AiriaGuardrail(CustomGuardrail):
                     "tool_calls": inputs.get("tool_calls") or (),
                     "model": inputs.get("model"),
                     "litellm_call_id": call_id,
-                    "mcp_tool_name": _mcp_tool_name(request_data, logging_obj),
+                    "mcp_tool_name": _mcp_tool_name(request_data or {}) if is_mcp_tool_evaluation else None,
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
