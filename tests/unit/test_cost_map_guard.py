@@ -67,9 +67,10 @@ def _failures(
     changed_files: tuple[str, ...] = MAP_FILES,
     bot: bool = True,
     evaluation_output_price_sources: Mapping[str, str] = guard.EVALUATION_OUTPUT_PRICE_SOURCES,
+    base: object = BASE,
 ) -> tuple[str, ...]:
     return guard.guard_failures(
-        BASE,
+        base,
         head,
         changed_files,
         bot,
@@ -256,11 +257,27 @@ def test_malformed_pins_are_reported(pins: str, expected: str) -> None:
     assert _failures(_snapshot(BASE_MAP, pins=pins), bot=False) == (expected,)
 
 
+MISSING_PINS: Final = f"{guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls"
+
+
 @pytest.mark.parametrize("bot", [False, True])
-def test_a_missing_pins_file_fails(bot: bool) -> None:
-    assert _failures(_snapshot(BASE_MAP, pins=""), bot=bot) == (
-        f"{guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls",
-    )
+def test_a_pr_that_deletes_the_pins_file_fails(bot: bool) -> None:
+    head: Final = _snapshot(BASE_MAP, pins="")
+    assert _failures(head, bot=bot, base=_snapshot(BASE_MAP, pins=PINS)) == (MISSING_PINS,)
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_branch_cut_before_the_pins_file_existed_skips_the_pin_checks(bot: bool) -> None:
+    lowered: Final = {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}
+    assert _failures(_snapshot(lowered, pins=""), bot=False, base=_snapshot(BASE_MAP, pins="")) == ()
+    assert _failures(_snapshot(BASE_MAP, pins=""), bot=bot, base=_snapshot(BASE_MAP, pins="")) == ()
+
+
+def test_a_pr_that_adds_the_pins_file_gets_its_pins_checked() -> None:
+    head: Final = _snapshot({**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, pins=PINS)
+    changed: Final = (*MAP_FILES, guard.PINS_PATH)
+    failures: Final = _failures(head, changed_files=changed, bot=False, base=_snapshot(BASE_MAP, pins=""))
+    assert [failure for failure in failures if "openrouter/a.supports_vision must stay true" in failure]
 
 
 def test_bot_may_not_touch_the_pins_file() -> None:
@@ -388,25 +405,3 @@ def test_main_reads_the_pins_from_the_head_revision(tmp_path: Path, head_ref: st
     assert result.returncode == 1, result.stdout + result.stderr
     pin_line: Final = f"- {guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: "
     assert [line for line in result.stdout.splitlines() if line.startswith(pin_line)]
-
-
-def test_main_fails_a_pr_that_deletes_the_pins_file(tmp_path: Path) -> None:
-    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
-    base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
-    subprocess.run(("git", "rm", "-q", guard.PINS_PATH), cwd=tmp_path, check=True)
-    head: Final = _git_commit(tmp_path, "delete the pins")
-    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
-    assert result.returncode == 1, result.stdout + result.stderr
-    missing: Final = f"- {guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls"
-    assert missing in result.stdout.splitlines()
-
-
-def test_main_checks_a_pins_only_pr_against_the_head_map(tmp_path: Path) -> None:
-    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
-    base: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, "base")
-    (tmp_path / guard.PINS_PATH).parent.mkdir(exist_ok=True)
-    (tmp_path / guard.PINS_PATH).write_text(PINS)
-    head: Final = _git_commit(tmp_path, "pin a capability the map disagrees with")
-    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "cost map guard failed (human PR, file checks only):" in result.stdout.splitlines()

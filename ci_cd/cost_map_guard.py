@@ -3,7 +3,8 @@
 Every pull request whose diff against its merge base touches one of the two cost map files or the pins file gets the
 file checks: the files parse, the backup copy matches the root file, and every capability pinned in
 ci_cd/cost_map_pins.json (a value verified against a live provider call where the provider's model listing says
-otherwise) still holds in the map, so a pull request that deletes the pins file fails too. A pull request that leaves
+otherwise) still holds in the map, so a pull request that deletes the pins file fails too, while a branch cut before
+the pins file existed skips the pin checks, since merging it keeps the base branch's pins. A pull request that leaves
 all three untouched skips them, since merging it keeps the base branch's copies and its head tree only carries
 whatever state the branch was cut from. Pull requests from the cost map sync bot (branches named
 litellm_cost_map_sync_*) always get the file checks and additionally may only touch the two cost map files and may
@@ -205,7 +206,7 @@ def guard_failures(
         *_file_failures(
             head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
         ),
-        *pin_failures(head.pins, head_map),
+        *(pin_failures(head.pins, head_map) if head.pins or base.pins else ()),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 
