@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from io import BytesIO
 from typing import Dict, Final, List
 
@@ -9,6 +10,7 @@ import pytest
 import litellm
 from litellm.router_utils.batch_utils import (
     InMemoryFile,
+    deployment_provider,
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
     replace_model_in_jsonl,
@@ -352,6 +354,21 @@ def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
         assert is_batch_retrieve_call_type(call_type.value) is False
 
     assert is_batch_retrieve_call_type(None) is False
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        ({"model": "mistral/mistral-ocr-latest", "custom_llm_provider": "azure"}, "azure"),
+        ({"model": "mistral/mistral-ocr-latest"}, "mistral"),
+        ({"model": "gpt-4o"}, None),
+        ({}, None),
+    ],
+)
+def test_deployment_provider_prefers_configured_provider_over_model_prefix(
+    litellm_params: Mapping[str, str], expected: str | None
+) -> None:
+    assert deployment_provider({"model_name": "group", "litellm_params": litellm_params}) == expected
 
 
 @pytest.fixture(autouse=True)
