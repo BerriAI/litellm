@@ -1066,6 +1066,108 @@ async def test_mcp_tool_execution_events_creation():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+    import sys
+    import types
+    from unittest.mock import AsyncMock
+
+    from mcp.types import CallToolResult, TextContent, Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    responses_main: Final = importlib.import_module("litellm.responses.main")
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    server: Final = MCPServer(
+        server_id="responses-auth-strip",
+        name="echo_none",
+        server_name="echo_none",
+        url="http://mcp.example",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        extra_headers=["Authorization", "x-tenant"],
+        allow_all_keys=True,
+    )
+    monkeypatch.setattr(manager, "registry", {server.server_id: server})
+
+    mcp_client: Final = AsyncMock()
+    mcp_client.list_tools.return_value = [MCPTool(name="whoami", inputSchema={"type": "object", "properties": {}})]
+    mcp_client.call_tool.return_value = CallToolResult(
+        content=[TextContent(type="text", text="ok")],
+        isError=False,
+    )
+    monkeypatch.setattr(manager, "create_mcp_client", AsyncMock(return_value=mcp_client))
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        types.SimpleNamespace(
+            general_settings={},
+            master_key="test-master-key",
+            proxy_logging_obj=None,
+            prisma_client=None,
+            user_api_key_cache=None,
+        ),
+    )
+
+    raw_headers: Final = {"authorization": "Bearer sk-" + "1234", "x-tenant": "tenant-a"}
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="hashed-key", token="hashed-key")
+    tools: Final = [
+        {
+            "type": "mcp",
+            "server_label": "echo_none",
+            "server_url": "litellm_proxy/mcp/echo_none",
+            "require_approval": "never",
+        }
+    ]
+
+    monkeypatch.setattr(
+        responses_main,
+        "aresponses",
+        AsyncMock(
+            side_effect=[
+                ResponsesAPIResponse(
+                    id="resp_first",
+                    created_at=0,
+                    output=[
+                        {
+                            "type": "function_call",
+                            "id": "fc_1",
+                            "call_id": "call-1",
+                            "name": "echo_none-whoami",
+                            "arguments": "{}",
+                            "status": "completed",
+                        }
+                    ],
+                ),
+                ResponsesAPIResponse(id="resp_final", created_at=0, output=[]),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler"),
+        "aresponses",
+        AsyncMock(return_value=ResponsesAPIResponse(id="resp_final", created_at=0, output=[])),
+    )
+
+    await responses_main.aresponses_api_with_mcp(
+        input="Call whoami",
+        model="openai/gpt-5",
+        tools=tools,
+        litellm_metadata={"user_api_key_auth": user_api_key_auth},
+        secret_fields={"raw_headers": raw_headers},
+    )
+
+    assert mcp_client.call_tool.await_args is not None
+    assert manager.create_mcp_client.await_args is not None
+    assert manager.create_mcp_client.await_args.kwargs["extra_headers"] == {"x-tenant": "tenant-a"}
+
+
+@pytest.mark.asyncio
 async def test_no_duplicate_mcp_tools_in_streaming_e2e():
     """
     End-to-end test to validate that MCP tools are not duplicated when using streaming.

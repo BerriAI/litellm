@@ -477,6 +477,7 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "asearch",
             "adecisions",
             "asystemone",
+            "aextraction",
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",

@@ -464,33 +464,32 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         return input_items
 
+    @staticmethod
+    def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
+        tool_type: Final = tool_dict.get("type", "")
+        tool_name: Final = tool_dict.get("name", "")
+        # web_search tool
+        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
+            return {"type": "web_search_preview"}
+        # Responses turns strict mode on when `strict` is omitted, silently rewriting
+        # `required` to every property. Anthropic tools are non-strict unless asked.
+        func_tool: Final[dict[str, object]] = {
+            "type": "function",
+            "name": tool_name,
+            "strict": bool(tool_dict.get("strict")),
+        }
+        if "description" in tool_dict:
+            func_tool["description"] = tool_dict["description"]
+        if "input_schema" in tool_dict:
+            func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
+        return func_tool
+
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
     ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        result: Final[list[dict[str, object]]] = []
-        for tool in tools:
-            tool_dict = cast(dict[str, Any], tool)
-            tool_type = tool_dict.get("type", "")
-            tool_name = tool_dict.get("name", "")
-            # web_search tool
-            if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
-                result.append({"type": "web_search_preview"})
-                continue
-            # Responses turns strict mode on when `strict` is omitted, silently rewriting
-            # `required` to every property. Anthropic tools are non-strict unless asked.
-            func_tool: dict[str, object] = {
-                "type": "function",
-                "name": tool_name,
-                "strict": bool(tool_dict.get("strict")),
-            }
-            if "description" in tool_dict:
-                func_tool["description"] = tool_dict["description"]
-            if "input_schema" in tool_dict:
-                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
-            result.append(func_tool)
-        return result
+        return [self._translate_tool_to_responses_api(tool) for tool in tools]
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
