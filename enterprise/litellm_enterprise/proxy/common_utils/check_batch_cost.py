@@ -90,6 +90,10 @@ def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.Li
     return TeamRepository(prisma_client).table
 
 
+def _unique_jobs(jobs: Sequence[ManagedObjectRow]) -> tuple[ManagedObjectRow, ...]:
+    return tuple({job.id: job for job in jobs}.values())
+
+
 def _row_metadata(row: object) -> dict[str, object]:
     metadata: Final = getattr(row, "metadata", None)
     return cast(dict[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
@@ -170,20 +174,37 @@ class CheckBatchCost:
         )
 
     async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[ManagedObjectRow]:
-        arrivals_first: Final = self._poll_arrivals
-        first: Final = await self._find_job_page(where, arrivals=arrivals_first, take=MAX_OBJECTS_PER_POLL_CYCLE)
-        rest: Final = await self._find_job_page(
-            where, arrivals=not arrivals_first, take=MAX_OBJECTS_PER_POLL_CYCLE - len(first)
+        lead_arrivals: Final = self._poll_arrivals
+        self._poll_arrivals = not lead_arrivals
+        lead_share: Final = MAX_OBJECTS_PER_POLL_CYCLE - MAX_OBJECTS_PER_POLL_CYCLE // 2
+        lead: Final = await self._find_job_page(where, arrivals=lead_arrivals, take=lead_share)
+        trail: Final = await self._find_job_page(
+            where, arrivals=not lead_arrivals, take=MAX_OBJECTS_PER_POLL_CYCLE - len(lead)
         )
-        self._poll_arrivals = not (arrivals_first and len(first) == MAX_OBJECTS_PER_POLL_CYCLE)
-        first_ids: Final = frozenset(job.id for job in first)
-        return (*first, *(job for job in rest if job.id not in first_ids))
+        spill: Final = (
+            await self._find_job_page(
+                where, arrivals=lead_arrivals, take=MAX_OBJECTS_PER_POLL_CYCLE - len(lead) - len(trail)
+            )
+            if len(lead) == lead_share
+            else ()
+        )
+        return _unique_jobs((*lead, *trail, *spill))
 
     async def _find_job_page(
         self, where: Mapping[str, object], *, arrivals: bool, take: int
     ) -> Sequence[ManagedObjectRow]:
         if take == 0:
             return ()
+        resumed_mid_lane: Final = (self._arrival_cursor if arrivals else self._poll_cursor) is not None
+        page: Final = await self._find_job_page_from_cursor(where, arrivals=arrivals, take=take)
+        if len(page) == take or not resumed_mid_lane:
+            return page
+        wrapped: Final = await self._find_job_page_from_cursor(where, arrivals=arrivals, take=take - len(page))
+        return _unique_jobs((*page, *wrapped))
+
+    async def _find_job_page_from_cursor(
+        self, where: Mapping[str, object], *, arrivals: bool, take: int
+    ) -> Sequence[ManagedObjectRow]:
         cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
         if cursor is None:
             if arrivals:
@@ -226,7 +247,10 @@ class CheckBatchCost:
 
     async def _expire_if_stale(self, job: ManagedObjectRow) -> None:
         cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES or job.created_at >= cutoff:
+        if job.created_at >= cutoff:
+            return
+        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES:
+            await self._retire_job(job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created")
             return
         try:
             expired: Final = await _managed_object_table(self.prisma_client).update_many(
@@ -352,6 +376,16 @@ class CheckBatchCost:
         from litellm.exceptions import NotFoundError
 
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
+
+    @staticmethod
+    def _is_lasting_provider_failure(error: Exception) -> bool:
+        import openai
+
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        if not isinstance(error, (BaseLLMException, openai.APIStatusError)):
+            return False
+        return not litellm.should_retry(error.status_code)
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
@@ -1174,7 +1208,7 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
-                else:
+                elif self._is_lasting_provider_failure(e):
                     await self._expire_if_stale(job)
                 continue
 
@@ -1203,6 +1237,8 @@ class CheckBatchCost:
                         f"(job {job.id}): {tracking_err}"
                     )
                     self._record_error(prom_logger, "cost_tracking_error")
+                    if self._is_lasting_provider_failure(tracking_err):
+                        await self._expire_if_stale(job)
                     continue
                 if tracked is None:
                     continue
@@ -1236,6 +1272,7 @@ class CheckBatchCost:
                         f"CheckBatchCost: batch {batch_id} is completed but its output file id "
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
+                    await self._expire_if_stale(job)
                     continue
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
             else:

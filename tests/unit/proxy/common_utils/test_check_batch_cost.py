@@ -19,10 +19,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from fastapi import HTTPException
 
+import litellm
 from litellm.constants import MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
@@ -235,7 +237,7 @@ class TestCheckBatchCost:
         fallback_where = calls[1][1]["where"]
         assert "batch_processed" not in fallback_where
         assert "stale_expired" in fallback_where["status"]["not_in"]
-        assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
+        assert calls[2][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
         # Column absence is now cached — next call should go straight to fallback
         assert check_batch_cost_instance._has_batch_processed_column is False
         assert check_batch_cost_instance.batch_processed_support_confirmed is False
@@ -1185,6 +1187,7 @@ class TestCheckBatchCost:
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
         ).decode()
         mock_job.created_by = "user-1"
+        mock_job.created_at = datetime.now(timezone.utc)
 
         assert check_batch_cost_instance._has_batch_processed_column is True
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
@@ -2935,10 +2938,10 @@ class TestPollPageStarvation:
             for name, age in ages.items()
         )
 
-    async def _cycles_on_a_two_row_page(self, monkeypatch, ages: dict[str, timedelta], cycles: int):
+    async def _poll_cycles(self, monkeypatch, ages: dict[str, timedelta], cycles: int, page_size: int = 2):
         from litellm_enterprise.proxy.common_utils import check_batch_cost
 
-        monkeypatch.setattr(check_batch_cost, "MAX_OBJECTS_PER_POLL_CYCLE", 2)
+        monkeypatch.setattr(check_batch_cost, "MAX_OBJECTS_PER_POLL_CYCLE", page_size)
         prisma: Final = self._prisma([])
         prisma.db.litellm_managedobjecttable = _FakeManagedObjectPages(self._unbilled_rows(ages))
         llm_router: Final = MagicMock()
@@ -2953,25 +2956,52 @@ class TestPollPageStarvation:
         return [await _batches_polled_in_one_cycle() for _ in range(cycles)]
 
     @pytest.mark.asyncio
-    async def test_an_old_batch_is_polled_every_other_cycle_while_new_batches_fill_the_page(self, monkeypatch):
+    async def test_an_old_batch_is_polled_every_cycle_while_new_batches_fill_the_page(self, monkeypatch):
         new_batches: Final = {f"new{n}": timedelta(hours=5 - n) for n in range(1, 5)}
-        polled: Final = await self._cycles_on_a_two_row_page(
+        polled: Final = await self._poll_cycles(
             monkeypatch, {"old": timedelta(days=3), **new_batches}, cycles=8
         )
 
-        assert all("batch_old" in pair[0] | pair[1] for pair in zip(polled, polled[1:]))
+        assert all("batch_old" in cycle for cycle in polled)
         assert all(f"batch_{name}" in frozenset().union(*polled[:4]) for name in new_batches)
 
     @pytest.mark.asyncio
-    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out_after_boot(self, monkeypatch):
-        polled: Final = await self._cycles_on_a_two_row_page(
+    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out(self, monkeypatch):
+        polled: Final = await self._poll_cycles(
             monkeypatch,
             {"old1": timedelta(days=3, hours=1), "old2": timedelta(days=3), "new": timedelta(hours=1)},
             cycles=6,
         )
 
-        assert all("batch_new" in cycle for cycle in polled[1:])
-        assert frozenset({"batch_old1", "batch_old2"}) <= frozenset().union(*polled[1:])
+        assert all("batch_new" in cycle for cycle in polled)
+        assert frozenset({"batch_old1", "batch_old2"}) <= frozenset().union(*polled[:2])
+
+    @pytest.mark.asyncio
+    async def test_old_and_new_batches_each_get_half_the_page_when_both_overflow_it(self, monkeypatch):
+        ages: Final = {
+            **{f"old{n}": timedelta(days=3, hours=n) for n in range(3)},
+            **{f"new{n}": timedelta(hours=n + 1) for n in range(3)},
+        }
+        polled: Final = await self._poll_cycles(monkeypatch, ages, cycles=6)
+
+        assert [sorted(batch_id[len("batch_") : -1] for batch_id in cycle) for cycle in polled] == [["new", "old"]] * 6
+        assert frozenset().union(*polled) == frozenset(f"batch_{name}" for name in ages)
+
+    @pytest.mark.asyncio
+    async def test_old_and_new_batches_take_turns_on_a_one_row_page(self, monkeypatch):
+        polled: Final = await self._poll_cycles(
+            monkeypatch, {"old": timedelta(days=3), "new": timedelta(hours=1)}, cycles=4, page_size=1
+        )
+
+        assert polled == [frozenset({"batch_old"}), frozenset({"batch_new"})] * 2
+
+    @pytest.mark.asyncio
+    async def test_new_batches_fill_the_page_when_no_old_batch_needs_polling(self, monkeypatch):
+        polled: Final = await self._poll_cycles(
+            monkeypatch, {f"new{n}": timedelta(hours=n + 1) for n in range(3)}, cycles=4
+        )
+
+        assert [len(cycle) for cycle in polled] == [2] * 4
 
     @pytest.mark.asyncio
     async def test_a_failed_expiry_write_leaves_the_rest_of_the_page_polled(self):
@@ -4504,28 +4534,51 @@ def _provider_batch(status: str) -> LiteLLMBatch:
 
 
 @pytest.mark.asyncio
-async def test_an_unbilled_batch_past_the_staleness_cutoff_no_longer_blocks_deleting_its_files() -> None:
+async def test_an_unbilled_batch_past_the_staleness_cutoff_no_longer_blocks_deleting_its_input_file() -> None:
     row: Final = _FakeManagedObjectRow()
     row.status = "completed"
     row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
     prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
 
-    await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+    await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, "file-input-1")
 
     assert row.batch_processed is False
 
 
 @pytest.mark.asyncio
-async def test_an_unbilled_batch_inside_the_staleness_cutoff_still_blocks_deleting_its_files() -> None:
+@pytest.mark.parametrize(
+    ("age", "file_field", "file_id"),
+    (
+        (_INSIDE_THE_STALENESS_CUTOFF, "input_file_id", "file-input-1"),
+        (_PAST_THE_STALENESS_CUTOFF, "output_file_id", _CLAIM_OUTPUT_FILE_ID),
+        (_PAST_THE_STALENESS_CUTOFF, "error_file_id", "file-error-1"),
+    ),
+    ids=("input_inside_the_cutoff", "output_past_the_cutoff", "error_past_the_cutoff"),
+)
+async def test_an_unbilled_batch_still_blocks_deleting_a_file_its_cost_may_need(
+    age: timedelta, file_field: str, file_id: str
+) -> None:
     row: Final = _FakeManagedObjectRow()
     row.status = "completed"
-    row.created_at = datetime.now(timezone.utc) - _INSIDE_THE_STALENESS_CUTOFF
+    row.created_at = datetime.now(timezone.utc) - age
+    row.file_object = json.dumps({"id": "batch-456", "status": "completed", file_field: file_id})
     prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
 
     with pytest.raises(HTTPException) as refused:
-        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, file_id)
 
     assert refused.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_stale_expired_batch_no_longer_blocks_deleting_its_output_file() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.status = "stale_expired"
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+
+    await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+
+    assert row.status == "stale_expired"
 
 
 @pytest.mark.asyncio
@@ -4559,6 +4612,20 @@ async def test_a_batch_past_the_staleness_cutoff_that_the_provider_finished_is_s
             "in_progress",
             _CLAIM_UNIFIED_BATCH_ID,
             RuntimeError("timed out"),
+            "in_progress",
+        ),
+        (
+            _PAST_THE_STALENESS_CUTOFF,
+            "in_progress",
+            _CLAIM_UNIFIED_BATCH_ID,
+            litellm.InternalServerError(message="upstream error", llm_provider="openai", model="gpt-4"),
+            "in_progress",
+        ),
+        (
+            _PAST_THE_STALENESS_CUTOFF,
+            "in_progress",
+            _CLAIM_UNIFIED_BATCH_ID,
+            litellm.AuthenticationError(message="invalid api key", llm_provider="openai", model="gpt-4"),
             "stale_expired",
         ),
         (_PAST_THE_STALENESS_CUTOFF, "in_progress", "batch-raw-1", [_provider_batch("in_progress")], "stale_expired"),
@@ -4571,7 +4638,15 @@ async def test_a_batch_past_the_staleness_cutoff_that_the_provider_finished_is_s
         ),
         (_PAST_THE_STALENESS_CUTOFF, "completed", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "completed"),
     ),
-    ids=("still_running", "retrieve_failed", "unroutable", "inside_the_cutoff", "finished_but_unbilled"),
+    ids=(
+        "still_running",
+        "retrieve_timed_out",
+        "provider_5xx",
+        "key_rejected",
+        "unroutable",
+        "inside_the_cutoff",
+        "finished_but_unbilled",
+    ),
 )
 async def test_a_batch_the_poller_cannot_settle_expires_only_once_past_the_staleness_cutoff(
     age: timedelta, db_status: str, unified_object_id: str, retrieve: object, expected_status: str
@@ -4589,6 +4664,64 @@ async def test_a_batch_the_poller_cannot_settle_expires_only_once_past_the_stale
 
     assert row.status == expected_status
     assert row.batch_processed is False
+
+
+async def _a_vertex_job_that_no_longer_exists(*, model: str, batch_id: str, litellm_metadata: object) -> LiteLLMBatch:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    raise VertexAIError(
+        status_code=404,
+        message='Error: 404 {"error":{"code":404,"message":"The BatchPredictionJob does not exist.","status":"NOT_FOUND"}}',
+    )
+
+
+async def _a_finished_batch_whose_output_never_appeared(
+    *, model: str, batch_id: str, litellm_metadata: object
+) -> LiteLLMBatch:
+    return _provider_batch("completed")
+
+
+async def _an_output_file_the_key_cannot_read() -> None:
+    raise litellm.PermissionDeniedError(
+        message="forbidden",
+        llm_provider="openai",
+        model="gpt-4",
+        response=httpx.Response(403, request=httpx.Request("GET", "https://api.openai.com/v1/files")),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("age", "retired"), ((_PAST_THE_STALENESS_CUTOFF, True), (_INSIDE_THE_STALENESS_CUTOFF, False)))
+@pytest.mark.parametrize(
+    ("retrieve", "during_fetch"),
+    (
+        (_a_vertex_job_that_no_longer_exists, None),
+        (_a_finished_batch_whose_output_never_appeared, None),
+        (None, _an_output_file_the_key_cannot_read),
+    ),
+    ids=("batch_gone_without_its_id", "output_never_appeared", "output_unreadable"),
+)
+async def test_a_finished_batch_the_poller_cannot_bill_frees_its_files_once_past_the_staleness_cutoff(
+    age: timedelta, retired: bool, retrieve: object, during_fetch: object
+) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = datetime.now(timezone.utc) - age
+    row.status = "completed"
+    router: Final = TestMultiPodBatchCostClaim._router()
+    if retrieve is not None:
+        router.aretrieve_batch.side_effect = retrieve
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    with TestMultiPodBatchCostClaim._billing_patches([], during_fetch=during_fetch):
+        await poller.check_batch_cost()
+
+    assert (row.status, row.batch_processed) == ("completed", retired)
+    if retired:
+        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+    else:
+        with pytest.raises(HTTPException):
+            await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
 
 
 @pytest.mark.asyncio
