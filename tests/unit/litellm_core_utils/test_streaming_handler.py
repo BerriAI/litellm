@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import datetime
 import json
 import queue
@@ -2763,24 +2762,55 @@ class _StuckProvider:
             self.closed.set()
 
 
-@pytest.mark.asyncio
-async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
-    """https://github.com/BerriAI/litellm/issues/19428 and https://github.com/BerriAI/litellm/issues/13786"""
-    provider: Final = _StuckProvider()
-    failures: Final = asyncio.Queue()
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: Final = queue.SimpleQueue[str]()
 
-    async def _record_failure(exception: Exception, traceback_exception: str, **kwargs: object) -> None:
-        failures.put_nowait(exception)
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
 
-    logging_obj: Final = MagicMock()
-    logging_obj.completion_start_time = None
-    logging_obj.dispatch_failure_handlers = _record_failure
-    wrapper: Final = CustomStreamWrapper(
-        completion_stream=provider.async_stream(),
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
+
+
+def _stuck_stream_wrapper(
+    provider_stream: Iterator[ModelResponseStream] | AsyncIterator[ModelResponseStream],
+    call_type: Literal["completion", "acompletion"],
+    recorder: _FailureRecorder,
+) -> CustomStreamWrapper:
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id=f"stuck-stream-{call_type}",
+        function_id=f"stuck-stream-{call_type}",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="test-model",
+        optional_params={},
+        litellm_params=get_litellm_params(custom_llm_provider="openai", acompletion=call_type == "acompletion"),
+    )
+    return CustomStreamWrapper(
+        completion_stream=provider_stream,
         model="test-model",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
     )
+
+
+@pytest.mark.asyncio
+async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
+    """https://github.com/BerriAI/litellm/issues/19428 and https://github.com/BerriAI/litellm/issues/13786"""
+    provider: Final = _StuckProvider()
+    recorder: Final = _FailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.async_stream(), "acompletion", recorder)
 
     with pytest.raises(Exception, match="repeating the same chunk"):
         async for _ in wrapper:
@@ -2788,41 +2818,34 @@ async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_lo
     assert provider.closed.is_set()
     chunks_sent_at_failure: Final = provider.chunks_sent
 
-    with contextlib.suppress(Exception):
+    with pytest.raises(StopAsyncIteration):
         await wrapper.__anext__()
-    await asyncio.sleep(0)
+    await wrapper.wait_for_failure_logging(timeout=5)
 
     assert provider.chunks_sent == chunks_sent_at_failure
-    assert failures.qsize() == 1
+    assert "repeating the same chunk" in recorder.failures.get_nowait()
+    assert recorder.failures.empty()
 
 
 def test_sync_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
     """Sync counterpart of the async test above"""
     provider: Final = _StuckProvider()
-    failures: Final = queue.SimpleQueue()
-    logging_obj: Final = MagicMock()
-    logging_obj.completion_start_time = None
-    logging_obj.failure_handler = lambda exception, traceback_exception: failures.put(exception)
-    wrapper: Final = CustomStreamWrapper(
-        completion_stream=provider.sync_stream(),
-        model="test-model",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai",
-    )
+    recorder: Final = _FailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.sync_stream(), "completion", recorder)
 
     with pytest.raises(Exception, match="repeating the same chunk"):
         for _ in wrapper:
             pass
     assert provider.closed.is_set()
     chunks_sent_at_failure: Final = provider.chunks_sent
-    assert "repeating the same chunk" in str(failures.get(timeout=5))
+    assert "repeating the same chunk" in recorder.failures.get(timeout=5)
 
-    with contextlib.suppress(Exception):
+    with pytest.raises(StopIteration):
         next(wrapper)
 
     assert provider.chunks_sent == chunks_sent_at_failure
     with pytest.raises(queue.Empty):
-        failures.get(timeout=0.5)
+        recorder.failures.get(timeout=0.5)
 
 
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
