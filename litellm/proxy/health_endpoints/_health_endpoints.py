@@ -40,11 +40,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    can_key_call_resolved_model,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
-from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -252,6 +252,7 @@ def get_callback_identifier(callback):
 
 router: Final = APIRouter()
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_LIST: Final = TypeAdapter(tuple[object, ...])
 services = (
     Literal[
         "slack_budget_alerts",
@@ -1056,42 +1057,52 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_accessible_model_names(
-    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
-) -> frozenset[str] | None:
-    """Model names the caller may health-check, or None when the key is unrestricted."""
+def _key_models_unrestricted(user_api_key_dict: UserAPIKeyAuth) -> bool:
     granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
-    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
-        return None
-    if llm_router is None:
-        return frozenset(granted_models)
-    return frozenset(
-        get_key_models(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
+    return not granted_models or SpecialModelNames.all_proxy_models.value in granted_models
+
+
+def _names_caller_may_request(deployment: object, team_id: str | None) -> frozenset[str]:
+    match deployment:
+        case {
+            "model_name": str(name),
+            "model_info": {"team_id": str(owner_team_id), "team_public_model_name": str(public_name)},
+        } if owner_team_id == team_id:
+            return frozenset((name, public_name))
+        case {"model_name": str(name)}:
+            return frozenset((name,))
+        case _:
+            return frozenset()
+
+
+async def _key_may_call_model(model_name: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> bool:
+    try:
+        await can_key_call_resolved_model(
+            model=model_name, llm_model_list=None, valid_token=user_api_key_dict, llm_router=llm_router
         )
+    except ProxyException:
+        return False
+    return True
+
+
+async def _model_names_key_may_call(
+    llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> frozenset[str]:
+    requested_names: Final = frozenset[str]().union(
+        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
+    )
+    return frozenset(
+        [name for name in requested_names if await _key_may_call_model(name, user_api_key_dict, llm_router)]
     )
 
 
 def _caller_may_probe_deployment(
-    deployment: Mapping[str, object],
-    allowed_models: frozenset[str] | None,
-    llm_router: Router | None,
-    team_id: str | None,
-    caller_is_admin: bool,
+    deployment: Mapping[str, object], callable_names: frozenset[str], team_id: str | None, caller_is_admin: bool
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
     if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
-    if allowed_models is None:
-        return True
-    if llm_router is None:
-        return deployment.get("model_name") in allowed_models
-    model: Final = dict(deployment)
-    return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
-    )
+    return not callable_names.isdisjoint(_names_caller_may_request(deployment, team_id))
 
 
 def _resolve_targeted_model_ids(
@@ -1315,13 +1326,19 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
-        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
+        restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
+        callable_names: Final = (
+            await _model_names_key_may_call(
+                _DEPLOYMENT_LIST.validate_python(llm_model_list), user_api_key_dict, llm_router
+            )
+            if restrict_to_allowed_models
+            else frozenset[str]()
+        )
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
+            or _caller_may_probe_deployment(m, callable_names, user_api_key_dict.team_id, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:

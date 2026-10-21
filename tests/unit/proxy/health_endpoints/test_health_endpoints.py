@@ -4259,14 +4259,20 @@ _PROVIDER_PREFIXED_MODEL_LIST = [
         "litellm_params": {"model": "openai/gpt-5.4-mini"},
         "model_info": {"id": "id-mini"},
     },
+    {
+        "model_name": "claude-haiku-5-5",
+        "litellm_params": {"model": "anthropic/claude-haiku-5-5"},
+        "model_info": {"id": "id-haiku"},
+    },
 ]
 _PROVIDER_PREFIXED_CACHED_RESULTS = {
     "healthy_endpoints": [
         {"model": "openai/gpt-5.4-nano", "model_id": "id-prefixed-nano"},
         {"model": "openai/gpt-5.4-mini", "model_id": "id-mini"},
+        {"model": "anthropic/claude-haiku-5-5", "model_id": "id-haiku"},
     ],
     "unhealthy_endpoints": [],
-    "healthy_count": 2,
+    "healthy_count": 3,
     "unhealthy_count": 0,
 }
 _PROVIDER_WILDCARD_KEY = UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/*"])
@@ -4278,7 +4284,7 @@ _RESTRICTED_TEAM_KEY = UserAPIKeyAuth(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_ids"),
-    [(_PROVIDER_WILDCARD_KEY, {"id-prefixed-nano"}), (_RESTRICTED_TEAM_KEY, {"id-mini"})],
+    [(_PROVIDER_WILDCARD_KEY, {"id-prefixed-nano", "id-mini"}), (_RESTRICTED_TEAM_KEY, {"id-mini"})],
 )
 async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(caller, expected_ids):
     probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
@@ -4289,7 +4295,7 @@ async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_ids"),
-    [(_PROVIDER_WILDCARD_KEY, ["id-prefixed-nano"]), (_RESTRICTED_TEAM_KEY, ["id-mini"])],
+    [(_PROVIDER_WILDCARD_KEY, ["id-prefixed-nano", "id-mini"]), (_RESTRICTED_TEAM_KEY, ["id-mini"])],
 )
 async def test_health_endpoint_returns_the_deployments_auth_lets_the_key_request_on_background_cache_path(
     caller, expected_ids
