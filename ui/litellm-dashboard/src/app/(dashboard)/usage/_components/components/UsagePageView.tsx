@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -218,6 +219,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     data: aggregatedRaw,
     loading: aggregatedLoading,
     failed: aggregatedFailed,
+    errorMessage: aggregatedError,
+    reload: reloadAggregated,
   } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
     enabled: dailyActivityRequest !== null,
@@ -415,12 +418,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         </div>
       </header>
       {aggregatedFailed && (
-        <Alert variant="error" className="mb-3">
-          <AlertDescription className="text-inherit">
-            Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
-            again.
-          </AlertDescription>
-        </Alert>
+        <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}
       <div>
         <div>
