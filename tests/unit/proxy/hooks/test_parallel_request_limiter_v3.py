@@ -3,6 +3,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import contextvars
 import logging
 import sys
 import time
@@ -54,6 +55,7 @@ from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -4204,6 +4206,175 @@ async def test_completed_responses_post_call_releases_parallel_slot() -> None:
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=parallel_key)
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() -> None:
+    api_key: Final = hash_token("sk-mcp-auto-execute")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = "mcp-auto-execute-owner"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    def mcp_tool_call() -> dict[str, object]:
+        return {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tool: add"}],
+            "mcp_server_name": "math",
+        }
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def pre_call_from_another_request(
+        data: dict[str, object], call_type: str
+    ) -> None:
+        await contextvars.Context().run(asyncio.create_task, pre_call(data, call_type))
+
+    await pre_call(
+        {"model": "gpt-4o-mini", "input": "add 2 and 3", "litellm_call_id": owner_call_id},
+        CallTypes.aresponses.value,
+    )
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    assert await in_flight() == 1
+
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request(
+            mcp_tool_call(), CallTypes.call_mcp_tool.value
+        )
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": owner_call_id},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await in_flight() == 0
+    await pre_call_from_another_request(
+        {"model": "gpt-4o-mini", "input": "next request"},
+        CallTypes.aresponses.value,
+    )
+    assert await in_flight() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "in_flight_after_first_round_logs"),
+    [(False, 1), (True, 0)],
+    ids=["non_stream_round_logged_late_keeps_slot", "stream_logged_at_its_end_releases_slot"],
+)
+async def test_first_round_logged_after_tool_call_reuse_releases_only_at_request_end(
+    stream: bool, in_flight_after_first_round_logs: int
+) -> None:
+    reused_at: Final = datetime(2026, 1, 5, 12, 0, 0)
+    api_key: Final = hash_token(f"sk-mcp-late-round-log-{stream}")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=lambda: reused_at,
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = f"mcp-late-round-log-{stream}"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def round_logged(ended_at: datetime) -> None:
+        await handler.async_log_success_event(
+            kwargs={"litellm_call_id": owner_call_id, "stream": stream},
+            response_obj=None,
+            start_time=None,
+            end_time=ended_at,
+        )
+
+    await pre_call(
+        {
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": "add 2 and 3"}],
+            "litellm_call_id": owner_call_id,
+        },
+        CallTypes.anthropic_messages.value,
+    )
+    await pre_call(
+        {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+        CallTypes.call_mcp_tool.value,
+    )
+
+    await round_logged(reused_at - timedelta(seconds=1))
+    assert await in_flight() == in_flight_after_first_round_logs
+
+    await round_logged(reused_at + timedelta(seconds=1))
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_headers() -> None:
+    api_key: Final = hash_token("sk-mcp-reuse-headers")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    data: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "input": "add 2 and 3",
+        "litellm_call_id": "mcp-reuse-headers-owner",
+    }
+    for request_data, call_type in (
+        (data, CallTypes.aresponses.value),
+        (
+            {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+            CallTypes.call_mcp_tool.value,
+        ),
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=request_data,
+            call_type=call_type,
+        )
+    response: Final = ModelResponse(
+        id="mcp-reuse-headers",
+        object="chat.completion",
+        created=0,
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+    response._hidden_params = {}
+
+    await handler.async_post_call_success_hook(
+        data=data, user_api_key_dict=user_api_key_dict, response=response
+    )
+
+    headers: Final = response._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-api_key-limit-max_parallel_requests"] == 2
+    assert headers["x-ratelimit-api_key-remaining-max_parallel_requests"] == 1
 
 
 @pytest.mark.asyncio
