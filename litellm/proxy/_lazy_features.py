@@ -275,7 +275,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
-        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone"),
+        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
     ),
     LazyFeature(
         name="claude_code_marketplace",
