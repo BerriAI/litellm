@@ -882,39 +882,6 @@ def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
     Router._combine_responses_fallback_usage(other, partial)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
-    assert len(out) == 3
-    assert out[0]["role"] == "user"
-    assert out[0]["content"][0]["text"] == "Hello world"
-    assert out[1]["role"] == "assistant"
-    assert out[1]["content"][0]["text"] == "partial assistant text"
-    assert out[2]["role"] == "user"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_list_preserves_items():
-    existing: List[Any] = [
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "msg1"}],
-        }
-    ]
-    out = Router._build_responses_continuation_input(existing, "partial")
-    assert len(out) == 3
-    assert out[0]["content"][0]["text"] == "msg1"
-    assert out[1]["role"] == "assistant"
-    assert out[2]["role"] == "user"
-    assert existing == out[:1]
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_none():
-    out = Router._build_responses_continuation_input(None, "partial")
-    assert len(out) == 2
-    assert out[0]["role"] == "assistant"
-    assert out[1]["role"] == "user"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_passthrough():
     """
@@ -1363,6 +1330,70 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
     assert continuation[-1]["role"] == "user"
 
 
+def _sse(*events: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+    )
+
+
+def _openai_stream_cut_after(partial: str) -> httpx.Response:
+    return _sse(
+        *(
+            ({
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
+            },)
+            if partial else ()
+        ),
+        {
+            "type": "error", "sequence_number": 1,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
+
+
+def _anthropic_stream(text: str) -> httpx.Response:
+    return _sse(
+        {"type": "message_start", "message": {
+            "id": "msg_fallback", "type": "message", "role": "assistant",
+            "model": "claude-fallback", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+        }},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    )
+
+
+def _primary_with_fallback(fallback_model: str) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": fallback_model, "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+
+
+def _streamed_text(events: tuple[Any, ...]) -> str:
+    return "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+
+
+@pytest.fixture
+def claude_with_prefill() -> str:
+    model: Final = "anthropic/claude-prefill-capable-test-model"
+    litellm.register_model(
+        {model: {"litellm_provider": "anthropic", "mode": "chat", "supports_assistant_prefill": True}},
+        persist_across_reloads=False,
+    )
+    litellm.get_model_info.cache_clear()
+    return model
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("partial", ["", "1, 2, "])
 async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
@@ -1370,28 +1401,8 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     prompt: Final = "Print the integers 1 through 5, separated by commas."
-
-    def sse(*events: Mapping[str, object]) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
-        )
-
     primary: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=sse(
-            *(
-                ({
-                    "type": "response.output_text.delta", "sequence_number": 0,
-                    "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
-                },)
-                if partial else ()
-            ),
-            {
-                "type": "error", "sequence_number": 1,
-                "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
-            },
-        )
+        return_value=_openai_stream_cut_after(partial)
     )
 
     def no_prefill_provider(request: httpx.Request) -> httpx.Response:
@@ -1403,35 +1414,14 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
                     "type": "invalid_request_error", "message": "The conversation must end with a user message",
                 }},
             )
-        return sse(
-            {"type": "message_start", "message": {
-                "id": "msg_fallback", "type": "message", "role": "assistant",
-                "model": "claude-opus-5-5", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
-            }},
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            {"type": "content_block_delta", "index": 0, "delta": {
-                "type": "text_delta", "text": "3, 4, 5" if partial else "1, 2, 3, 4, 5",
-            }},
-            {"type": "content_block_stop", "index": 0},
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
-            {"type": "message_stop"},
-        )
+        return _anthropic_stream("3, 4, 5" if partial else "1, 2, 3, 4, 5")
 
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=no_prefill_provider)
-    router: Final = Router(
-        model_list=[
-            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
-            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
-        ],
-        fallbacks=[{"primary": ["fallback"]}],
-        num_retries=0,
-    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
     try:
         stream: Final = await router.aresponses(model="primary", input=prompt, stream=True, max_output_tokens=100)
         events: Final = tuple([event async for event in stream])
-        assert "".join(
-            event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-        ) == "1, 2, 3, 4, 5"
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
         assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
         assert primary.call_count == fallback.call_count == 1
         messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
@@ -1441,6 +1431,96 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
             assert messages[-2] == {"role": "assistant", "content": [{"type": "text", "text": partial}]}
         else:
             assert len(messages) == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_a_claude_that_takes_prefill_from_its_own_partial(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Print the integers 1 through 5.", stream=True, max_output_tokens=100
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert [message["role"] for message in messages] == ["user", "assistant"]
+        assert messages[-1]["content"][0]["text"].startswith("1, 2,")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_takes_prefill", [True, False], ids=["prefill", "request_to_continue"])
+async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cannot_decrypt(
+    fallback_takes_prefill: bool,
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input=[
+                {"role": "user", "content": "Print the integers 1 through 5."},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "primary-only-ciphertext"},
+            ],
+            stream=True,
+            max_output_tokens=100,
+        )
+        _ = [event async for event in stream]
+        assert fallback.call_count == 1
+        assert "primary-only-ciphertext" not in fallback.calls.last.request.content.decode()
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        {"text": {"format": {"type": "json_schema", "name": "numbers", "strict": True, "schema": {"type": "object"}}}},
+        {"text": {"format": {"type": "json_object"}}},
+        {"tool_choice": "required", "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]},
+    ],
+    ids=["json_schema", "json_object", "required_tool"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_constrained_output_was_streamed(
+    constraint: dict[str, object],
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after('{"numbers": [1, 2, ')
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3]}")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Numbers 1 to 3 as JSON.", stream=True, max_output_tokens=100, **constraint
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
     finally:
         router.discard()
 
