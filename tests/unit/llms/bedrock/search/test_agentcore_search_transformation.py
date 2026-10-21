@@ -7,6 +7,7 @@ the sharded CI (coverage collection runs against this tree).
 """
 
 import json
+from typing import Final
 import os
 
 import pytest
@@ -628,10 +629,11 @@ class TestAgentCoreSearchEdgeCases:
         assert "boom" in str(err)
 
     def test_search_cost_lookup_is_mapped(self, monkeypatch):
-        """Assert against the map in this checkout: the remote cost map litellm loads by
-        default only carries providers already released."""
         from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
         from litellm.search.cost_calculator import search_provider_cost_per_query
 
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
-        assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)
+        price_per_query: Final = litellm.model_cost["agentcore/search"]["input_cost_per_query"]
+        assert search_provider_cost_per_query(
+            model="agentcore/search", custom_llm_provider="agentcore", number_of_queries=3
+        ) == (3 * price_per_query, 0.0)
