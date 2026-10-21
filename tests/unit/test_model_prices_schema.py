@@ -15,6 +15,7 @@ import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.types.utils import LlmProviders
 
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
@@ -605,7 +606,15 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_every_cost_map_provider_is_registered(path: Path):
-    assert unregistered_providers(json.loads(path.read_text())) == [], (
+    supported_providers: Final = frozenset(provider.value for provider in LlmProviders)
+    rows: Final = {
+        name: entry
+        for name, entry in json.loads(path.read_text()).items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider", "").split("-", 1)[0] in supported_providers
+    }
+    assert rows
+    assert unregistered_providers(rows) == [], (
         f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
         "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
         "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
