@@ -502,6 +502,45 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
     assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
 
 
+async def test_v1_model_info_allowed_names_expand_access_group_only_to_callers_deployments():
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+    teamless_key: Final = UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None, team_models=[])
+    team_b_key: Final = UserAPIKeyAuth(api_key="sk-team-b", models=["bedrock-group"], team_id="team-b", team_models=[])
+
+    async def allowed_names(key: UserAPIKeyAuth) -> frozenset[str] | None:
+        return await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
+            user_api_key_dict=key,
+            llm_router=router,
+            prisma_client=None,
+            user_api_key_cache=None,
+            proxy_logging_obj=None,
+        )
+
+    assert await allowed_names(teamless_key) == {"bedrock-nova"}
+    assert await allowed_names(team_b_key) == {"bedrock-nova", "model_name_team-b_1111"}
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------
