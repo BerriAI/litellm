@@ -2633,8 +2633,7 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _Hugg
     backend: Final = _huggingface_tokenizer_backend()
     key: Final = _huggingface_tokenizer_failure_key(kind, backend)
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        with _HUGGINGFACE_TOKENIZER_LOAD_FAILURES_LOCK:
-            cached_failure: Final = _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.get_cache(key)
+        cached_failure: Final = _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.get_cache(key)
         if isinstance(cached_failure, _HuggingFaceTokenizerLoadFailure):
             return cached_failure
         tokenizer: Final = _load_huggingface_tokenizer_recording_failure(kind, backend, key)
@@ -2681,8 +2680,7 @@ def _load_huggingface_tokenizer_recording_failure(
         if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
         failure: Final = _HuggingFaceTokenizerLoadFailure(reason=str(error))
-        with _HUGGINGFACE_TOKENIZER_LOAD_FAILURES_LOCK:
-            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.set_cache(key, failure, ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.set_cache(key, failure, ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
         return failure
 
 
@@ -8309,7 +8307,6 @@ class _HuggingFaceTokenizerLoadFailureCache(Protocol):
     def flush_cache(self) -> None: ...
 
 
-_HUGGINGFACE_TOKENIZER_LOAD_FAILURES_LOCK: Final = threading.Lock()
 _HUGGINGFACE_TOKENIZER_LOAD_FAILURES: Final[_HuggingFaceTokenizerLoadFailureCache] = (
     cast(  # cast-ok: cache methods are untyped
         _HuggingFaceTokenizerLoadFailureCache,

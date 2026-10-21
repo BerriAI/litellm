@@ -227,7 +227,10 @@ class InMemoryCache(BaseCache):
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
-            original_cached_response: Final = self.cache_dict[key]
+            try:
+                original_cached_response: Final = self.cache_dict[key]
+            except KeyError:
+                return None
             try:
                 cached_response = json.loads(original_cached_response)
             except Exception:

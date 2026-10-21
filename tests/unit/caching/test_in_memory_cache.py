@@ -49,6 +49,25 @@ async def test_async_increment_delegates_to_locked_sync_path():
     assert cache.get_cache("counter") == 5
 
 
+class _AnotherReaderExpiresTheEntryFirstCache(InMemoryCache):
+    other_reader_started = False
+    other_reader_result: object = "not run"
+
+    def evict_element_if_expired(self, key: str) -> bool:
+        if not self.other_reader_started:
+            self.other_reader_started = True
+            self.other_reader_result = self.get_cache(key)
+        return super().evict_element_if_expired(key)
+
+
+def test_get_cache_reads_an_entry_another_reader_just_expired_as_a_miss() -> None:
+    cache: Final = _AnotherReaderExpiresTheEntryFirstCache()
+    cache.set_cache("tokenizer_failure", "HF unavailable", ttl=-1)
+
+    assert cache.get_cache("tokenizer_failure") is None
+    assert cache.other_reader_result is None
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 

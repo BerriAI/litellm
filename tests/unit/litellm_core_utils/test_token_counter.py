@@ -940,17 +940,12 @@ def test_token_counter():
 
 import unittest
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.utils import (
     _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
-    _HuggingFaceTokenizerLoadFailure,
-    _huggingface_tokenizer_backend,
-    _huggingface_tokenizer_failure_key,
     _load_huggingface_tokenizer,
     _select_tokenizer_helper,
     claude_json_str,
     encoding,
-    huggingface_tokenizer_kind,
 )
 
 # Clear the cache at module load to ensure clean state
@@ -1191,52 +1186,6 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
         tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
 
     assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
-
-
-class _ExpiryRaceCache(InMemoryCache):
-    def __init__(self) -> None:
-        super().__init__(max_size_in_memory=16)
-        self.both_readers_inside: Final = threading.Barrier(2, timeout=0.5)
-        self.first_reader_evicted: Final = threading.Event()
-
-    def evict_element_if_expired(self, key: str) -> bool:
-        try:
-            arrival: Final = self.both_readers_inside.wait()
-        except threading.BrokenBarrierError:
-            return super().evict_element_if_expired(key)
-        if arrival == 0:
-            evicted: Final = super().evict_element_if_expired(key)
-            self.first_reader_evicted.set()
-            return evicted
-        self.first_reader_evicted.wait(timeout=1)
-        return super().evict_element_if_expired(key)
-
-
-def test_concurrent_counts_when_a_remembered_failure_expires_both_retry_the_tokenizer():
-    _load_huggingface_tokenizer.cache_clear()
-    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-    kind: Final = huggingface_tokenizer_kind(model)
-    assert kind is not None
-    failures: Final = _ExpiryRaceCache()
-    failures.set_cache(
-        _huggingface_tokenizer_failure_key(kind, _huggingface_tokenizer_backend()),
-        _HuggingFaceTokenizerLoadFailure(reason="HF unavailable"),
-        ttl=-1,
-    )
-
-    def tokenizer_type(_: int) -> str:
-        return _select_tokenizer_helper(model)["type"]
-
-    try:
-        with (
-            patch("litellm.utils._HUGGINGFACE_TOKENIZER_LOAD_FAILURES", failures),
-            patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer),
-            ThreadPoolExecutor(max_workers=2) as pool,
-        ):
-            types: Final = tuple(pool.map(tokenizer_type, range(2)))
-        assert types == ("huggingface_tokenizer",) * 2
-    finally:
-        _load_huggingface_tokenizer.cache_clear()
 
 
 def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplog: pytest.LogCaptureFixture):
