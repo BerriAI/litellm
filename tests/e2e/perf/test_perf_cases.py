@@ -150,6 +150,7 @@ def test_perf_case(
         telemetry_before=telemetry_before,
         telemetry_after=telemetry_after,
         peak_connections=connections.peak,
+        ramp=case.traffic.ramp,
     )
     rows, exceeded_limits = evaluate(case, observation)
     stall_rows: Final = _event_loop_rows(case, traffic_started_at) if case.event_loop is not None else ()
