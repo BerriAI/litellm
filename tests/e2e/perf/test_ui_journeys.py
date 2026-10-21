@@ -11,14 +11,14 @@ from types import FrameType
 from typing import Final
 
 import pytest
-from playwright.sync_api import Page
 from e2e_config import MASTER_KEY, UI_BASE_URL, UI_PASSWORD, UI_USERNAME
 from e2e_http import send_text_external, without_retries
+from playwright.sync_api import Page
 from setup.ui_journeys import (
-    assert_within_ceiling,
     Dashboard,
     Journey,
     Sample,
+    assert_within_ceiling,
     dashboard_page,
     database_failures,
     error_code,
@@ -111,6 +111,7 @@ def test_ui_journey_latency(journey_name: str, ui_fixture: UiFixture, request: p
             item: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
             assert isinstance(item, pytest.Item)
             item.user_properties.extend(ui_junit_properties(samples))
+            item.user_properties.extend(ui_fixture.volume)
         after: Final = settled_counter(lambda: _metrics(transport), evidence)
         item.user_properties.extend(
             (

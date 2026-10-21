@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tupl
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
+    row_metadata,
 )
 
 import litellm
@@ -88,11 +89,6 @@ def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.L
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return TeamRepository(prisma_client).table
-
-
-def _row_metadata(row: object) -> dict[str, object]:
-    metadata: Final = getattr(row, "metadata", None)
-    return cast(dict[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
 
 
 class CheckBatchCost:
@@ -852,20 +848,26 @@ class CheckBatchCost:
             )
             return None
 
-        try:
-            await logging_obj.async_success_handler(
-                result=response,
-                batch_cost=batch_result.cost,
-                batch_usage=batch_result.usage,
-                batch_models=batch_result.models,
-                batch_successful_requests=batch_result.successful_requests,
-                batch_failed_requests=batch_result.failed_requests,
-                batch_prompt_cost=batch_result.prompt_cost,
-                batch_completion_cost=batch_result.completion_cost,
-            )
-        except Exception:
-            await self._release_job_claim(job, original_status, original_file_object)
-            raise
+        from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+        with track_batch_accounting(logging_obj.litellm_call_id) as accounting:
+            try:
+                await logging_obj.async_success_handler(
+                    result=response,
+                    batch_cost=batch_result.cost,
+                    batch_usage=batch_result.usage,
+                    batch_models=batch_result.models,
+                    batch_successful_requests=batch_result.successful_requests,
+                    batch_failed_requests=batch_result.failed_requests,
+                    batch_prompt_cost=batch_result.prompt_cost,
+                    batch_completion_cost=batch_result.completion_cost,
+                )
+            finally:
+                if accounting.retryable_failure:
+                    await self._release_job_claim(job, original_status, original_file_object)
+
+        if accounting.retryable_failure:
+            return None
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:
@@ -1057,7 +1059,9 @@ class CheckBatchCost:
         if (has_key_row and key_row is None) or (team_id and team_row is None):
             return True
         settings: Final = get_dynamic_logging_metadata(
-            UserAPIKeyAuth(metadata=_row_metadata(key_row), team_metadata=_row_metadata(team_row), team_id=team_id),
+            UserAPIKeyAuth(
+                metadata=dict(row_metadata(key_row)), team_metadata=dict(row_metadata(team_row)), team_id=team_id
+            ),
             proxy_config,
         )
         callback_vars: Final = (settings.callback_vars if settings is not None else None) or {}
@@ -1186,7 +1190,7 @@ class CheckBatchCost:
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
-                        f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
+                        f"(job {job.id}): {tracking_err}"
                     )
                     self._record_error(prom_logger, "cost_tracking_error")
                     continue
