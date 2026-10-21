@@ -1769,6 +1769,20 @@ def _allowlist(object_permission_id: str, vector_stores: list[str] | None) -> Li
             id="key-vector-store-ids-other-store",
         ),
         pytest.param(["vs_allowed"], None, _vector_store_ids_request("vs_allowed"), None, id="key-vector-store-ids"),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {**_vector_store_ids_request("vs_other_team"), "vector_store_ids": ["vs_other_team", {"id": "vs_allowed"}]},
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-vector-store-ids-with-a-non-string-entry",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {**_vector_store_ids_request("vs_other_team"), "vector_store_ids": [{"id": "vs_other_team"}, ["vs_other_team"]]},
+            None,
+            id="non-string-vector-store-ids-name-no-store",
+        ),
     ],
 )
 @pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])

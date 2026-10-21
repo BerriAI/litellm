@@ -66,7 +66,7 @@ def _tools_vector_store_ids(tools: object) -> tuple[str, ...]:
 
 def requested_vector_store_ids(non_default_params: Mapping[str, object], tools: object = None) -> list[str]:
     vector_store_ids_param: Final = non_default_params.get("vector_store_ids")
-    named_ids: Final = vector_store_ids_param if isinstance(vector_store_ids_param, list) else []
+    named_ids: Final = _named_store_ids(vector_store_ids_param) if isinstance(vector_store_ids_param, list) else ()
     return list(dict.fromkeys(chain(named_ids, _tools_vector_store_ids(tools))))
 
 
