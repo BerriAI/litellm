@@ -2,13 +2,16 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-from collections.abc import AsyncIterator, Iterator
+import types
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -54,14 +57,14 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 
 def validate_dict(
-    data: dict, model: type
+    data: Mapping[str, object], model: type[BaseModel]
 ) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 def _fold_message_cache_control(
-    message: dict[str, object],
-) -> dict[str, object]:
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
     """Move a message-level cache_control marker onto the content block.
 
     litellm's cache_control_injection_points hook attaches cache_control to the
@@ -140,7 +143,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -183,12 +186,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":
@@ -261,7 +264,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
+        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
         return api_base_
 
     def _build_prompt_module(

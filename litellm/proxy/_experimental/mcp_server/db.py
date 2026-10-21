@@ -534,6 +534,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
             value=client_private_key,
             new_encryption_key=encryption_key,
         )
+    id_jag_resource_client_secret: Final = credentials.get("id_jag_resource_client_secret")
+    if id_jag_resource_client_secret is not None:
+        credentials["id_jag_resource_client_secret"] = encrypt_value_helper(  # rebind-ok: encrypt before persist
+            value=id_jag_resource_client_secret,
+            new_encryption_key=encryption_key,
+        )
     # AWS SigV4 credential fields
     aws_access_key_id: Final = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
@@ -820,6 +826,7 @@ def decrypt_credentials(
         "client_id",
         "client_secret",
         "client_private_key",
+        "id_jag_resource_client_secret",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
@@ -1487,6 +1494,26 @@ async def upsert_mcp_server_oauth_client_credentials(
     )
 
 
+async def create_mcp_server_oauth_client_credentials_if_absent(
+    prisma_client: PrismaClient, server_id: str, credentials: MCPCredentials
+) -> bool:
+    """Insert a server's DCR client into the server-scoped store only when no row exists yet, so two
+    first registrations racing each other cannot overwrite one another. Returns False when another
+    writer already holds the row, in which case the caller adopts that client."""
+    from prisma.errors import UniqueViolationError  # noqa: PLC0415  # prisma client is generated at build time
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
+
+    encrypted: Final = encrypt_credentials(credentials=MCPCredentials(**credentials), encryption_key=get_salt_key())
+    try:
+        await _oauth_client_table_actions(prisma_client).create(
+            data={"server_id": server_id, "credentials": safe_dumps(encrypted)}
+        )
+    except UniqueViolationError:
+        return False
+    return True
+
+
 def _reencrypt_mcp_credentials_blob(
     credentials: "str | Mapping[str, object] | None", new_master_key: str
 ) -> str | None:
@@ -1790,7 +1817,7 @@ async def store_user_oauth_credential(
         payload["refresh_token"] = refresh_token
     if expires_at:
         payload["expires_at"] = expires_at
-    if scopes:
+    if scopes is not None:
         payload["scopes"] = scopes
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
@@ -2123,9 +2150,7 @@ async def refresh_user_oauth_token(
     new_refresh_token: Final[str | None] = body.get("refresh_token") or refresh_token
 
     raw_scope: Final = body.get("scope")
-    scopes: list[str] | None = (raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None) or cred.get(
-        "scopes"
-    )
+    scopes: Final = raw_scope.split() if isinstance(raw_scope, str) else cred.get("scopes")
 
     await store_user_oauth_credential(
         prisma_client=prisma_client,

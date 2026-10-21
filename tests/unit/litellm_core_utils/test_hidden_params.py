@@ -1,12 +1,14 @@
 from typing import Final
 
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
     get_hidden_params_storage,
     get_or_create_hidden_params,
+    served_from_cache,
     set_hidden_param,
     set_hidden_params,
 )
@@ -58,6 +60,42 @@ def test_get_hidden_params_storage_preserves_supported_storage_identity() -> Non
 
     assert get_hidden_params_storage(dict_response) is dict_storage
     assert get_hidden_params_storage(model_response) is model_storage
+
+
+_UPSTREAM_CHUNK_FIELDS: Final = {
+    "id": "chunk",
+    "choices": [],
+    "created": 1,
+    "model": "m",
+    "object": "chat.completion.chunk",
+}
+
+
+def _chunk_with_assigned_hidden_params(hidden_params: dict[str, object]) -> ChatCompletionChunk:
+    chunk: Final = ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS)
+    setattr(chunk, HIDDEN_PARAMS_ATTR, hidden_params)
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "build_chunk",
+    [
+        _chunk_with_assigned_hidden_params,
+        lambda hidden_params: ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS, _hidden_params=hidden_params),
+        lambda hidden_params: ChatCompletionChunk.model_construct(
+            **_UPSTREAM_CHUNK_FIELDS, _hidden_params=hidden_params
+        ),
+    ],
+    ids=["assigned", "constructor_extra", "model_construct_extra"],
+)
+def test_get_hidden_params_storage_reads_upstream_chunk_hidden_params(build_chunk) -> None:
+    hidden_params: Final[dict[str, object]] = {"is_finished": True}
+
+    assert get_hidden_params_storage(build_chunk(hidden_params)) is hidden_params
+
+
+def test_get_hidden_params_storage_is_none_for_upstream_chunk_without_hidden_params() -> None:
+    assert get_hidden_params_storage(ChatCompletionChunk(**_UPSTREAM_CHUNK_FIELDS)) is None
 
 
 def test_get_or_create_hidden_params_sets_empty_dict_on_plain_object() -> None:
@@ -250,3 +288,24 @@ def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> 
 
     assert response.hidden_params is replacement
     assert response._hidden_params is replacement
+
+
+@pytest.mark.parametrize(
+    "hidden_params, expected",
+    [
+        ({"cache_hit": True}, True),
+        ({"cache_hit": None}, False),
+        ({"cache_hit": False}, False),
+        ({"cache_hit": "True"}, False),
+        ({}, False),
+    ],
+)
+def test_served_from_cache_is_true_only_for_a_response_the_cache_stamped(
+    hidden_params: dict[str, object], expected: bool
+) -> None:
+    model_response: Final = ModelResponse()
+    set_hidden_params(model_response, dict(hidden_params))
+
+    assert served_from_cache(model_response) is expected
+    assert served_from_cache({HIDDEN_PARAMS_ATTR: dict(hidden_params)}) is expected
+    assert served_from_cache(object()) is False

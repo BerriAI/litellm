@@ -20,7 +20,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast
 
 import httpx
 from fastapi import HTTPException
@@ -117,6 +117,7 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS: Final = (
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES: Final = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
+_DECODED_JSON: Final = TypeAdapter(object)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -255,6 +256,14 @@ def _is_responses_api_route(request_route: str | None) -> bool:
         return False
     call_types: Final = get_call_types_for_route(request_route)
     return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -577,6 +586,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,
@@ -784,7 +796,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # logic becomes shared across providers.
 
     #### CALL HOOKS - proxy only ####
-    def _load_credentials(self, bearer_token: str | None = None):
+    def _load_credentials(self, api_key: str | None = None):
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -808,7 +820,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         credentials: Final[Credentials | None] = (
             None
-            if bearer_token is not None
+            if bedrock_bearer_token(api_key) is not None
             else self.get_credentials(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -1005,9 +1017,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         start_time: "datetime",
         allow_chunking: bool,
     ) -> BedrockGuardrailResponse:
-        credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
-        )
+        credentials, aws_region_name = await run_aws_signing(self._load_credentials, api_key=api_key)
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
         try:
@@ -1229,7 +1239,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     or attempt >= _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES
                 ):
                     raise
-                await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
+                await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (1 << attempt))
         raise HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
 
     async def _post_apply_guardrail_content(
@@ -1948,9 +1958,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
-        credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
-        )
+        credentials, aws_region_name = await run_aws_signing(self._load_credentials, api_key=api_key)
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
         prepared_request: Final = await run_aws_signing(
@@ -2158,11 +2166,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             try:
                 raw: Final = getattr(response, "content", None)
                 if isinstance(raw, (bytes, bytearray)):
-                    payload = json.loads(raw.decode("utf-8"))
+                    payload = _DECODED_JSON.validate_python(json.loads(raw.decode("utf-8")))
                 else:
                     text: Final = getattr(response, "text", None)
                     if isinstance(text, str):
-                        payload = json.loads(text)
+                        payload = _DECODED_JSON.validate_python(json.loads(text))
             except Exception:
                 # Can't parse -> assume no explicit Exception marker
                 return False
@@ -2207,7 +2215,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         status_code: Final = response.status_code
         message: Final = "Bedrock guardrail request failed"
         try:
-            body: Final = response.json()
+            body: Final = _json_body(response)
         except Exception:
             text: Final = getattr(response, "text", None) or ""
             if isinstance(text, str) and text.strip():
@@ -3049,7 +3057,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             #########################################################################
             if raw_sse:
                 for sse_chunk in (
-                    anthropic_sse_chunks_from_response(assembled_model_response)
+                    anthropic_sse_chunks_from_response(assembled_model_response, all_chunks)
                     if model_response_text(assembled_model_response) != pre_guardrail_text
                     else all_chunks
                 ):
