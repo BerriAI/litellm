@@ -41,7 +41,11 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.internal_call_metadata import requests_background, without_budget_reservation
+from litellm.litellm_core_utils.internal_call_metadata import (
+    is_background_response,
+    requests_background,
+    without_budget_reservation,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -975,6 +979,7 @@ class BaseResponsesAPIStreamingIterator:
         if (
             not generated_text
             or requests_background(self.request_data)
+            or is_background_response(self._created_response)
             or self.logging_obj.model_call_details.get("combined_usage_object") is not None
         ):
             return
