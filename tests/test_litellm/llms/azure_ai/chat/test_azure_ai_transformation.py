@@ -157,7 +157,7 @@ def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
 
     optional_params = litellm.utils.get_optional_params(
-        model="gpt-5.1-chat-latest",
+        model="gpt-5.1",
         custom_llm_provider="azure_ai",
         temperature=0.2,
         top_p=0.9,

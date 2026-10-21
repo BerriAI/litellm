@@ -166,7 +166,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
             image_tokens=20,
         ),
     )
-    mr = ModelResponse(usage=usage, model="gemini-2.0-flash-001")
+    mr = ModelResponse(usage=usage, model="gemini-2.5-flash")
 
     result = response_cost_calculator(
         response_object=mr,
@@ -178,7 +178,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
         base_model=None,
     )
 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost["gemini-2.5-flash"]
 
     # Step 1: Test a model where input_cost_per_image_token is not set.
     # In this case the calculation should use input_cost_per_token as fallback.
@@ -203,7 +203,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
     monkeypatch.setattr(
         litellm,
         "model_cost",
-        {"gemini-2.0-flash-001": temp_model_info_object},
+        {"gemini-2.5-flash": temp_model_info_object},
     )
 
     # Invalidate caches after modifying litellm.model_cost

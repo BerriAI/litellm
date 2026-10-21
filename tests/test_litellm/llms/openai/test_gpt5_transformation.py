@@ -248,11 +248,11 @@ def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
         assert params["reasoning_effort"] == effort
 
 
-def test_gpt5_1_codex_max_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "xhigh"},
         optional_params={},
-        model="gpt-5.1-codex-max",
+        model="gpt-5.2",
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"

@@ -5417,9 +5417,14 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    cost_map = dict(litellm.get_model_cost_map(url=""))
+    cost_map["jp.anthropic.claude-opus-4-7"] = {
+        k: v
+        for k, v in cost_map["jp.anthropic.claude-opus-4-7"].items()
+        if k != "cache_creation_input_token_cost_above_1hr"
+    }
+    litellm.model_cost = cost_map
     try:
-        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
         assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [
