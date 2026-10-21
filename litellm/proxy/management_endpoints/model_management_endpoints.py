@@ -1081,6 +1081,8 @@ _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS: Final = frozenset(
         "member_auto_router",
         "team_id",
         "team_public_model_name",
+        "direct_access",
+        "access_via_team_ids",
         COST_MAP_LOOKUP_KEY,
         *PTU_MODEL_INFO_FIELDS,
     }
@@ -1090,28 +1092,42 @@ _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS: Final = frozenset(
 def legacy_update_model_info_changes(
     db_model: Deployment,
     incoming_model_info: ModelInfo,
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
 ) -> Mapping[str, object]:
     """The ``model_info`` fields ``POST /model/update`` persists from its request.
 
-    Only fields the caller sent count, so ``ModelInfo`` defaults never overwrite stored
-    values. Server-owned, team, PTU and pricing fields keep their dedicated write paths,
-    and values echoed from a ``/model/info`` response stay display-only.
+    Only fields the caller sent with a value count, so ``ModelInfo`` defaults and the blank
+    strings typed clients send for unset fields never overwrite stored values. Server-owned,
+    display-only, team, PTU and pricing fields keep their dedicated write paths, and values
+    echoed from a ``/model/info`` response (the old or new base model's cost map entry, or
+    limits discovered from the upstream) stay display-only. An echoed value that differs from
+    the stored override resets that override (``None``), the way ``update_db_model`` does.
     """
+    incoming: Final = incoming_model_info.model_dump(exclude_none=True)
+    stored: Final = db_model.model_info.model_dump(exclude_none=True)
     sent: Final = {
         k: v
         for k, v in incoming_model_info.model_dump(exclude_unset=True, exclude_none=True).items()
-        if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS
+        if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""
     }
     echoed: Final = frozenset(
-        echoed_cost_map_fields(
-            incoming_model_info.model_dump(exclude_none=True),
-            _cost_map_entry(db_model, sent),
-            _loaded_catalog_entry(incoming_model_info.model_dump(exclude_none=True), loaded_catalog),
+        (
+            *echoed_cost_map_fields(
+                incoming,
+                _cost_map_entry(db_model, sent),
+                _cost_map_entry(db_model, stored),
+                _loaded_catalog_entry(incoming, loaded_catalog),
+            ),
+            *(k for k, v in sent.items() if discovered_model_info.get(k) == v),
         )
     )
+    kept: Final = without_server_derived_pricing(sent)
     return MappingProxyType(
-        {k: getattr(incoming_model_info, k) for k in without_server_derived_pricing(sent) if k not in echoed}
+        {
+            **{k: getattr(incoming_model_info, k) for k in kept if k not in echoed},
+            **{k: None for k, v in kept.items() if k in echoed and stored.get(k) not in (None, v)},
+        }
     )
 
 
@@ -3021,7 +3037,13 @@ async def update_model(
             )
             model_info_changes: Final = MappingProxyType(
                 {
-                    **legacy_update_model_info_changes(deployment, _model_info),
+                    **legacy_update_model_info_changes(
+                        deployment,
+                        _model_info,
+                        llm_router.get_discovered_model_info(_model_id)
+                        if llm_router is not None
+                        else MappingProxyType({}),
+                    ),
                     **({"member_auto_router": member_marker} if member_marker is not None else {}),
                 }
             )
