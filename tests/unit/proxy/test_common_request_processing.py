@@ -98,6 +98,14 @@ def test_attach_guardrail_information_copies_recorded_entries_onto_model_respons
     assert "guardrail_information" not in response.model_dump()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [{"code": None}, {}, {"code": "not-a-status"}])
+async def test_parse_event_data_for_error_defaults_invalid_code_to_internal_error(error):
+    event = f"data: {json.dumps({'error': error})}\n\n"
+
+    assert await _parse_event_data_for_error(event) == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
 def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
     response = litellm.ModelResponse()
 

@@ -910,8 +910,8 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
-                elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
+                verbose_proxy_logger.warning("Error has missing or invalid HTTP status code: %s", error_code_raw)
+                return status.HTTP_500_INTERNAL_SERVER_ERROR
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
