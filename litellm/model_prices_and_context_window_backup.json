@@ -67107,6 +67107,7 @@
         "source": "https://docs.zerogpu.ai/docs/model-catalog",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -67122,6 +67123,7 @@
         "source": "https://docs.zerogpu.ai/docs/model-catalog",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -67183,6 +67185,7 @@
         "output_cost_per_token": 6e-07,
         "source": "https://docs.zerogpu.ai/docs/model-catalog",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -67221,6 +67224,7 @@
         "output_cost_per_token": 4.5e-07,
         "source": "https://docs.zerogpu.ai/docs/model-catalog",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },

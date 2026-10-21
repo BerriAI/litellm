@@ -153,7 +153,7 @@ def test_trim_messages_fits_zerogpu_history_into_the_model_context_window(model:
 
 @pytest.mark.parametrize(
     ("model", "forwards_tools", "forwards_reasoning_effort"),
-    [("gpt-5.6-luna", True, True), ("gpt-oss-120b", True, False), ("LFM2.5-1.2B-Instruct", False, False)],
+    [("gpt-5.6-luna", True, True), ("gpt-oss-120b", True, True), ("LFM2.5-1.2B-Instruct", False, False)],
 )
 def test_tools_and_reasoning_effort_reach_zerogpu_only_for_models_that_support_them(
     model: str, forwards_tools: bool, forwards_reasoning_effort: bool
