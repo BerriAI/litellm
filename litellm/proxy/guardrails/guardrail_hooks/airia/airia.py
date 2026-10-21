@@ -1,8 +1,10 @@
 import os
 import uuid
 from collections.abc import Mapping
+from contextvars import ContextVar
 from typing import (
     Any,  # noqa: TID251  # the only type CustomGuardrail.__init__ accepts for its open-ended kwargs
+    ClassVar,
     Final,
     Literal,
 )
@@ -22,9 +24,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # the factory's params are untyped upstream
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 GUARDRAIL_PATH: Final = "/v1/guardrails/litellm"
 
@@ -34,7 +38,15 @@ ACTION_INTERVENED: Final = "GUARDRAIL_INTERVENED"
 
 DEFAULT_BLOCKED_MESSAGE: Final = "Blocked by your organization's content policy."
 
-SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+SUPPORTED_EVENT_HOOKS: Final = (
+    GuardrailEventHooks.pre_call,
+    GuardrailEventHooks.during_call,
+    GuardrailEventHooks.post_call,
+    GuardrailEventHooks.pre_mcp_call,
+    GuardrailEventHooks.post_mcp_call,
+)
+
+_EVALUATING_DURING_CALL: Final[ContextVar[bool]] = ContextVar("airia_evaluating_during_call", default=False)
 
 
 def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) -> bool:
@@ -88,7 +100,9 @@ def _as_object(value: object) -> Mapping[str, object] | None:
 
 
 class AiriaGuardrail(CustomGuardrail):
-    """Evaluates prompts and responses against your Airia guardrail policy."""
+    """Evaluates prompts, responses and MCP tool calls against your Airia guardrail policy."""
+
+    use_native_during_call_hook: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -189,6 +203,10 @@ class AiriaGuardrail(CustomGuardrail):
             )
 
         if action == ACTION_INTERVENED:
+            # during_call runs alongside the model call, so the prompt has already been sent and a
+            # rewrite of it would reach nothing but the logs
+            if _EVALUATING_DURING_CALL.get():
+                raise self._blocked()
             if input_type == "response" and _stream_cannot_carry_a_rewrite(request_data):
                 raise self._blocked()
             return self._rewritten(body, inputs)
@@ -197,6 +215,21 @@ class AiriaGuardrail(CustomGuardrail):
             raise self._blocked()
 
         return inputs
+
+    async def async_moderation_hook(
+        self,
+        data: dict[str, object],  # mutable-ok: the unified hook reads guardrail_to_apply out of the request
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        token: Final = _EVALUATING_DURING_CALL.set(True)
+        try:
+            data["guardrail_to_apply"] = self  # rebind-ok: the unified hook's only way to receive the guardrail
+            await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+                data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+            )
+        finally:
+            _EVALUATING_DURING_CALL.reset(token)
 
     def _rewritten(
         self,
