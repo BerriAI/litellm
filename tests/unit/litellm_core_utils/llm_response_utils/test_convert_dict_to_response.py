@@ -2873,6 +2873,28 @@ class TestConvertToModelResponseObjectCompletion:
         assert message.reasoning_content == "2+2=4"
         assert "reasoning_content" not in (message.provider_specific_fields or {})
 
+    def test_reasoning_not_mirrored_into_provider_specific_fields(self):
+        response_object = {
+            "id": "chatcmpl-6",
+            "model": "openrouter/deepseek/deepseek-r1",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "The answer is 4.", "role": "assistant", "reasoning": "2+2=4"},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        message = result.choices[0].message
+        assert message.reasoning_content == "2+2=4"
+        assert "reasoning" not in (message.provider_specific_fields or {})
+
     def test_response_none_raises(self):
         with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
