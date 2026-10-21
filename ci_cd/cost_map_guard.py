@@ -1,8 +1,11 @@
 """Guard the cost map on pull requests.
 
-Every pull request gets the file checks: the three cost map files parse, the backup copy matches the root file,
-and the JSON schema is in sync and validates the map. Pull requests from the cost map sync bot (branches named
-litellm_cost_map_sync_*) additionally may only touch those three files and may only add or update models.
+Every pull request whose diff against its merge base touches one of the two cost map files gets the file
+checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
+skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
+branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
+get the file checks and additionally may only touch those two files or the legacy schema
+path and may only add or update models.
 """
 
 from __future__ import annotations
@@ -11,17 +14,18 @@ import argparse
 import json
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
-
-from generate_model_prices_schema import SPECIAL_ROOT_KEYS, build_schema, render, validation_errors
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
-GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH, SCHEMA_PATH)
+LEGACY_SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
+GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
+SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
+EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
 CostMap = dict[str, object]
 
@@ -30,7 +34,6 @@ CostMap = dict[str, object]
 class Snapshot:
     cost_map: str
     backup: str
-    schema: str
 
 
 def _parse_object(text: str, path: str) -> CostMap | str:
@@ -41,36 +44,47 @@ def _parse_object(text: str, path: str) -> CostMap | str:
     return parsed if isinstance(parsed, dict) else f"{path} must be a JSON object at the root"
 
 
-def _rendered_schema(cost_map: CostMap) -> str:
-    try:
-        return render(build_schema(cost_map))
-    except SystemExit as error:
-        return str(error)
+def _evaluation_output_price_failure(
+    key: str, entry: object, evaluation_output_price_sources: Mapping[str, str]
+) -> str | None:
+    if not isinstance(entry, dict) or entry.get("mode") not in ("evaluation", "decisions"):
+        return None
+    output_cost: Final = entry.get("output_cost_per_token")
+    if (
+        not isinstance(output_cost, (int, float))
+        or isinstance(output_cost, bool)
+        or output_cost <= 0
+        or key in evaluation_output_price_sources
+    ):
+        return None
+    return (
+        f"{key}: mode evaluation and decisions rows bill input only; output_cost_per_token must be 0 unless the vendor "
+        "prices output tokens for this model (add the source to EVALUATION_OUTPUT_PRICE_SOURCES)"
+    )
 
 
-def _file_failures(head: Snapshot, head_map: CostMap) -> tuple[str, ...]:
-    schema_text: Final = _rendered_schema(head_map)
-    if not schema_text.startswith("{"):
-        return (schema_text,)
+def _file_failures(
+    head: Snapshot,
+    head_map: CostMap,
+    *,
+    evaluation_output_price_sources: Mapping[str, str] = EVALUATION_OUTPUT_PRICE_SOURCES,
+) -> tuple[str, ...]:
     backup_failure: Final = (
         ()
         if head.backup == head.cost_map
         else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
     )
-    schema_failure: Final = (
-        ()
-        if head.schema == schema_text
-        else (
-            f"{SCHEMA_PATH} is out of sync with {COST_MAP_PATH}; "
-            "run `python ci_cd/generate_model_prices_schema.py` and commit the result",
-        )
-    )
     return (
         *backup_failure,
-        *schema_failure,
         *(
-            f"{COST_MAP_PATH} does not validate against its schema: {error}"
-            for error in validation_errors(head_map, json.loads(schema_text))[:20]
+            failure
+            for key, entry in head_map.items()
+            if (
+                failure := _evaluation_output_price_failure(
+                    key, entry, evaluation_output_price_sources
+                )
+            )
+            is not None
         ),
     )
 
@@ -96,7 +110,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(
             f"bot PRs may only change the cost map files, not {path}"
             for path in changed_files
-            if path not in GUARDED_PATHS
+            if path not in GUARDED_PATHS and path != LEGACY_SCHEMA_PATH
         ),
         *(f"bot PRs may not remove models: {key}" for key in base_map if key not in head_map),
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),
@@ -108,20 +122,49 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
     )
 
 
-def guard_failures(base: Snapshot, head: Snapshot, changed_files: Sequence[str], bot: bool) -> tuple[str, ...]:
+def touches_cost_map(changed_files: Sequence[str]) -> bool:
+    return any(path in GUARDED_PATHS for path in changed_files)
+
+
+def contract_for(bot: bool, changed_files: Sequence[str]) -> str:
+    if bot:
+        return "bot contract enforced"
+    return "human PR, file checks only" if touches_cost_map(changed_files) else "human PR, cost map untouched"
+
+
+def guard_failures(
+    base: Snapshot,
+    head: Snapshot,
+    changed_files: Sequence[str],
+    bot: bool,
+    *,
+    evaluation_output_price_sources: Mapping[str, str] = EVALUATION_OUTPUT_PRICE_SOURCES,
+) -> tuple[str, ...]:
+    if not bot and not touches_cost_map(changed_files):
+        return ()
     head_map: Final = _parse_object(head.cost_map, COST_MAP_PATH)
     if isinstance(head_map, str):
         return (head_map,)
-    return (*_file_failures(head, head_map), *(_bot_failures(base, head_map, changed_files) if bot else ()))
+    return (
+        *_file_failures(
+            head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
+        ),
+        *(_bot_failures(base, head_map, changed_files) if bot else ()),
+    )
 
 
-def _git(*args: str) -> str:
+def _git(*args: str) -> str | None:
     result: Final = subprocess.run(("git", *args), check=False, capture_output=True, text=True)
-    return result.stdout if result.returncode == 0 else ""
+    return result.stdout if result.returncode == 0 else None
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") for path in GUARDED_PATHS))
+    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS))
+
+
+def changed_files(base: str, head: str) -> tuple[str, ...] | None:
+    diff: Final = _git("diff", "--name-only", "--no-renames", base, head)
+    return None if diff is None else tuple(diff.splitlines())
 
 
 def main(argv: Sequence[str]) -> int:
@@ -131,9 +174,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--head-ref", required=True, help="head branch name of the pull request")
     args: Final = parser.parse_args(argv)
     bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIX)
-    changed_files: Final = tuple(_git("diff", "--name-only", args.base, args.head).splitlines())
-    failures: Final = guard_failures(snapshot(args.base), snapshot(args.head), changed_files, bot)
-    contract: Final = "bot contract enforced" if bot else "human PR, file checks only"
+    changed: Final = changed_files(args.base, args.head)
+    if changed is None:
+        print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
+        return 1
+    failures: Final = guard_failures(snapshot(args.base), snapshot(args.head), changed, bot)
+    contract: Final = contract_for(bot, changed)
     if failures:
         print(f"cost map guard failed ({contract}):")
         print("\n".join(f"- {failure}" for failure in failures))

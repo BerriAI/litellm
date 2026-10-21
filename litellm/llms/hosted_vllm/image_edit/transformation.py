@@ -8,7 +8,7 @@ PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_f
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseImageEditConfig contract
-        return [  # mutable-ok: BaseImageEditConfig returns list
+        return [
             param
             for param in super().get_supported_openai_params(model)
             if param not in PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT
@@ -23,7 +23,7 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: BaseImageEditConfig contract
         resolved_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
-        return {**headers, "Authorization": f"Bearer {resolved_key}"}  # mutable-ok: httpx headers are a dict
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
     def get_complete_url(
         self,

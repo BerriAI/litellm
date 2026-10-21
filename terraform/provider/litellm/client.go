@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,20 @@ type Client struct {
 	APIKey             string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
+}
+
+type apiError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("API request failed with status code %d: %s", e.StatusCode, e.Body)
+}
+
+func isNotFound(err error) bool {
+	var apiErr *apiError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
@@ -57,6 +72,9 @@ func (c *Client) CreateKey(key *Key) (*Key, error) {
 
 func (c *Client) GetKey(keyID string) (*Key, error) {
 	resp, err := c.sendRequest("GET", fmt.Sprintf("/key/info?key=%s", keyID), nil)
+	if isNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,9 +87,66 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 				info["key"] = k
 			}
 		}
+		hoistKeyFieldsStoredInMetadata(info)
 		return c.parseKeyResponse(info)
 	}
 
+	return c.parseKeyResponse(resp)
+}
+
+var keyFieldsStoredInMetadata = []string{
+	"model_rpm_limit",
+	"model_tpm_limit",
+	"guardrails",
+	"tags",
+	"enforced_params",
+	"allowed_passthrough_routes",
+	"rpm_limit_type",
+	"tpm_limit_type",
+	"prompts",
+}
+
+func hoistKeyFieldsStoredInMetadata(info map[string]interface{}) {
+	metadata, ok := info["metadata"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for _, field := range keyFieldsStoredInMetadata {
+		if existing, present := info[field]; present && existing != nil {
+			continue
+		}
+		if v, present := metadata[field]; present {
+			info[field] = v
+		}
+	}
+}
+
+// RestoreKeyRoutes re-applies a declared allowed_routes to a freshly
+// generated key, whose key_type preset replaced the declared list.
+// /key/update validates permissions and model_max_budget as non-null and
+// keeps the stored value for every field absent from the body, so this
+// carries exactly the routes plus those two required objects. Their values
+// must be the ones just stored for the key: sending empty objects would
+// clear configured or server-defaulted restrictions, and sending the whole
+// create payload would rewrite fields the config never declared (such as
+// team-inherited model rate limits).
+func (c *Client) RestoreKeyRoutes(keyID string, routes []string, permissions, modelMaxBudget map[string]interface{}) (*Key, error) {
+	if permissions == nil {
+		permissions = map[string]interface{}{}
+	}
+	if modelMaxBudget == nil {
+		modelMaxBudget = map[string]interface{}{}
+	}
+	updateData := map[string]interface{}{
+		"key":              keyID,
+		"allowed_routes":   routes,
+		"permissions":      permissions,
+		"model_max_budget": modelMaxBudget,
+	}
+	resp, err := c.sendRequest("POST", "/key/update", updateData)
+	if err != nil {
+		return nil, err
+	}
 	return c.parseKeyResponse(resp)
 }
 
@@ -102,6 +177,9 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// send it when set.
 	if key.BudgetDuration != "" {
 		updateData["budget_duration"] = key.BudgetDuration
+	}
+	if key.Duration != "" {
+		updateData["duration"] = key.Duration
 	}
 
 	// Only add pointer fields if they are explicitly set
@@ -192,6 +270,10 @@ func (c *Client) parseKeyResponse(resp map[string]interface{}) (*Key, error) {
 		case "token_id":
 			if s, ok := v.(string); ok {
 				createdKey.TokenID = s
+			}
+		case "key_type":
+			if s, ok := v.(string); ok {
+				createdKey.KeyType = s
 			}
 		case "models":
 			if models, ok := v.([]interface{}); ok {
@@ -373,8 +455,8 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	log.Printf("Response status: %d", resp.StatusCode)
 	log.Printf("Response body: %s", c.redactSensitiveData(string(bodyBytes)))
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status code %d: %s", resp.StatusCode, string(bodyBytes))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &apiError{StatusCode: resp.StatusCode, Body: string(bodyBytes)}
 	}
 
 	var result map[string]interface{}

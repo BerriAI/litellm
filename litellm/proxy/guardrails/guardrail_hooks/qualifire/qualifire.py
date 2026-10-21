@@ -378,12 +378,13 @@ class QualifireGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=payload,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -418,6 +419,9 @@ class QualifireGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(

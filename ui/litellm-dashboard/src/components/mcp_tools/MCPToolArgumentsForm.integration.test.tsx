@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "./MCPToolArgumentsForm";
@@ -10,7 +10,7 @@ const toolWith = (schema: InputSchema | string): MCPTool =>
 
 const renderForm = (schema: InputSchema | string) => {
   const ref = React.createRef<MCPToolArgumentsFormRef>();
-  render(<MCPToolArgumentsForm ref={ref} tool={toolWith(schema)} />);
+  renderWithProviders(<MCPToolArgumentsForm ref={ref} tool={toolWith(schema)} />);
   return ref;
 };
 
@@ -101,7 +101,7 @@ describe("MCPToolArgumentsForm", () => {
 
   it("resets dotted defaults and positional values when the selected tool changes", async () => {
     const ref = React.createRef<MCPToolArgumentsFormRef>();
-    const { rerender } = render(
+    const { rerender } = renderWithProviders(
       <MCPToolArgumentsForm
         ref={ref}
         tool={toolWith({
@@ -289,4 +289,24 @@ describe("MCPToolArgumentsForm", () => {
     expect(screen.getByText("No parameters required for this tool.")).toBeInTheDocument();
     await expect(submit(ref)).resolves.toEqual({});
   });
+});
+
+it("should distinguish an unset enum from empty string and retain explicit false", async () => {
+  const user = userEvent.setup();
+  const ref = renderForm({
+    type: "object",
+    properties: {
+      mode: { type: "string", enum: ["", "fast"], default: "fast" },
+      active: { type: "boolean", default: true },
+    },
+  });
+  await user.click(screen.getByRole("combobox", { name: "mode" }));
+  await user.click(await screen.findByRole("option", { name: "Select mode" }));
+  await user.click(screen.getByRole("combobox", { name: "active" }));
+  await user.click(await screen.findByRole("option", { name: "False" }));
+  await expect(submit(ref)).resolves.toEqual({ active: false });
+  await user.click(screen.getByRole("combobox", { name: "mode" }));
+  await user.click(await screen.findByRole("option", { name: "Empty string" }));
+  expect(screen.getByRole("combobox", { name: "mode" })).toHaveTextContent("Empty string");
+  await expect(submit(ref)).resolves.toEqual({ mode: "", active: false });
 });

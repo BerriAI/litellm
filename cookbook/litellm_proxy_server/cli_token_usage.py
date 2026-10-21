@@ -3,7 +3,7 @@
 Example: Using CLI token with LiteLLM SDK
 
 This example shows how to use the CLI authentication token
-in your Python scripts after running `litellm-proxy login`.
+in your Python scripts after running `lite login`.
 """
 
 from textwrap import indent
@@ -22,7 +22,7 @@ def main():
     api_key = litellm.get_litellm_gateway_api_key()
 
     if not api_key:
-        print("❌ No CLI token found. Please run 'litellm-proxy login' first.")
+        print("❌ No CLI token found. Please run 'lite login' first.")
         return
 
     print("✅ Found CLI token.")
@@ -58,6 +58,6 @@ if __name__ == "__main__":
     main()
 
     print("\n💡 Tips:")
-    print("1. Run 'litellm-proxy login' to authenticate first")
+    print("1. Run 'lite login' to authenticate first")
     print("2. Replace 'https://your-proxy.com' with your actual proxy URL")
     print("3. The token is stored in your OS keychain, or in ~/.litellm/token.json when there is none")

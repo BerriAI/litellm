@@ -1,13 +1,13 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Building2, SearchX } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
 import { DataTable } from "@/components/shared/DataTable";
 import { Organization } from "@/components/networking";
 
 import { getOrganizationsTableColumns } from "./OrganizationsTableColumns";
+import { useOrganizationsTableState } from "./useOrganizationsTableState";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -18,8 +18,6 @@ interface OrganizationsTableProps {
   onEditClick: (organizationId: string) => void;
   onDeleteClick: (organizationId: string) => void;
 }
-
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 function EmptyState({ searchActive }: { searchActive: boolean }) {
   const Icon = searchActive ? SearchX : Building2;
@@ -49,7 +47,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   onEditClick,
   onDeleteClick,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useOrganizationsTableState();
 
   const columns = useMemo(() => {
     const deps = { userRole, onOrganizationClick, onEditClick, onDeleteClick };
@@ -60,11 +58,13 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     <DataTable
       data={organizations}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(organization, index) => organization.organization_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading organizations…"
       noDataMessage={<EmptyState searchActive={searchActive} />}

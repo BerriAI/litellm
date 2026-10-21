@@ -5,11 +5,12 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_param
 
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ChatCompletionUserMessage, HttpxBinaryResponseContent
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, Usage
 
 
 def _completion_response_cost(model_response: "ModelResponse") -> float | None:
@@ -18,6 +19,13 @@ def _completion_response_cost(model_response: "ModelResponse") -> float | None:
         return None
     response_cost: Final = hidden_params.get("response_cost")
     return response_cost if isinstance(response_cost, float) else None
+
+
+def _completion_usage(model_response: "ModelResponse") -> "Usage | None":
+    from litellm.types.utils import Usage
+
+    usage: Final = getattr(model_response, "usage", None)
+    return usage if isinstance(usage, Usage) else None
 
 
 GEMINI_TTS_CHAT_AUDIO_FORMAT: Final = "pcm16"
@@ -179,4 +187,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         )
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
+        binary_response.usage = _completion_usage(model_response)
+        cached_hidden_params: Final = get_hidden_params(model_response) if served_from_cache(model_response) else None
+        if cached_hidden_params is not None:
+            set_hidden_param(binary_response, "cache_hit", True)
+            set_hidden_param(binary_response, "cache_key", cached_hidden_params.get("cache_key"))
         return binary_response

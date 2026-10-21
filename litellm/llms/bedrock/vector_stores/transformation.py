@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -14,6 +15,7 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
+    BedrockKBUserContext,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -242,9 +244,28 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
+        user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)
+        if user_context is not None:
+            request_body["userContext"] = user_context
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
+
+    @staticmethod
+    def _user_context(
+        extra_body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+    ) -> BedrockKBUserContext | None:
+        sources: Final = tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
+        found: Final = next(
+            (
+                source[key]
+                for source in sources
+                for key in ("userContext", "user_context")
+                if source.get(key) is not None
+            ),
+            None,
+        )
+        return None if found is None else cast(BedrockKBUserContext, found)
 
     def sign_request(
         self,
