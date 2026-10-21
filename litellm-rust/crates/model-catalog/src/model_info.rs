@@ -306,8 +306,14 @@ pub struct ModelInfo {
     /// Free-form notes about the entry (e.g. pricing derivation).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BTreeMap<String, Value>>,
-    /// Primary API surface / task type of the model.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Primary API surface / task type of the model. A mode this build does not know reads as
+    /// absent, so one new entry upstream cannot fail the whole map; strict validation still
+    /// rejects it.
+    #[serde(
+        default,
+        deserialize_with = "known_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub mode: Option<Mode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr_cost_per_credit: Option<f64>,
@@ -610,6 +616,13 @@ pub struct ModelInfo {
 }
 
 /// A count the map may write as a whole float (`4096.0`), as Python reads any JSON number.
+fn known_mode<'de, D>(deserializer: D) -> Result<Option<Mode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?.and_then(|mode| Mode::deserialize(mode).ok()))
+}
+
 fn whole_number<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,

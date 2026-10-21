@@ -12,6 +12,7 @@ pub enum Mode {
     Decisions,
     Embedding,
     Evaluation,
+    Extraction,
     Guardrail,
     ImageEdit,
     ImageGeneration,
