@@ -2,11 +2,14 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 
 import litellm
 from litellm.caching import RedisCache
+from litellm.caching.caching import Cache
+from litellm.proxy.caching_routes import _extract_cache_params
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -51,7 +54,7 @@ def mock_redis_failure(mocker):
 
 def test_cache_ping_success(mock_redis_success):
     """Test successful cache ping with regular response"""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     data = response.json()
@@ -72,7 +75,7 @@ def test_cache_ping_with_complex_objects(mock_redis_success, mocker):
     mock_redis_success.cache.complex_attr = ComplexObject()
     mock_redis_success.cache.datetime_attr = mocker.MagicMock()
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     # Verify response is JSON serializable
@@ -93,7 +96,7 @@ def test_cache_ping_with_circular_reference(mock_redis_success):
     circular_dict["self"] = circular_dict
     mock_redis_success.cache.circular_ref = circular_dict
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     # Verify response is still JSON serializable
@@ -103,7 +106,7 @@ def test_cache_ping_with_circular_reference(mock_redis_success):
 
 def test_cache_ping_failure(mock_redis_failure):
     """Test cache ping failure with expected error fields"""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 503
 
     data = response.json()
@@ -125,7 +128,7 @@ def test_cache_ping_failure(mock_redis_failure):
 
 def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
     """CWE-209: Stack trace and exception text must not appear in the HTTP 503 response body."""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 503
 
     data = response.json()
@@ -162,7 +165,7 @@ def test_cache_ping_no_cache_initialized():
 
     try:
         response = client.get(
-            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
         )
         assert response.status_code == 503
 
@@ -190,7 +193,7 @@ def test_cache_ping_no_cache_does_not_expose_internals():
 
     try:
         response = client.get(
-            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
         )
         assert response.status_code == 503
 
@@ -225,7 +228,7 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
     # Add a field on the underlying `cache` object that SHOULD appear
     mock_redis_success.cache.redis_kwargs = {"host": "localhost", "port": 6379}
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert (
         response.status_code == 200
     ), f"Unexpected status code: {response.status_code}"
@@ -253,7 +256,7 @@ def test_cache_ping_with_redis_version_float(mock_redis_success):
     # Set redis_version as a float
     mock_redis_success.cache.redis_version = 7.2
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     data = response.json()
@@ -325,7 +328,7 @@ def test_cache_redis_info_no_cache():
     litellm.cache = None
 
     response = client.get(
-        "/cache/redis/info", headers={"Authorization": "Bearer sk-1234"}
+        "/cache/redis/info", headers={"Authorization": "Bearer sk-9876"}
     )
     assert response.status_code == 503
 
@@ -334,3 +337,63 @@ def test_cache_redis_info_no_cache():
 
     # Restore original cache
     litellm.cache = original_cache
+
+
+def _use_redis_backed_cache(monkeypatch, backend_attributes):
+    cache = Cache(type="redis", host="localhost", port=6379, password="hello")
+    vars(cache.cache).update(backend_attributes)
+    monkeypatch.setattr(litellm, "cache", cache)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", "redis.internal"),
+        ("port", 6379),
+        ("port", "6379"),
+        ("namespace", "team-a"),
+        ("redis_version", 7.2),
+        ("redis_version", 7),
+        ("redis_version", "7.2.4"),
+    ],
+)
+def test_extract_cache_params_keeps_each_backend_value_and_its_type(monkeypatch, field, value):
+    _use_redis_backed_cache(monkeypatch, {field: value})
+
+    params = _extract_cache_params()
+
+    assert sorted(params) == ["host", "namespace", "port", "redis_kwargs", "redis_version"]
+    assert repr(params[field]) == repr(value)
+
+
+def test_extract_cache_params_reads_connection_settings_and_masks_the_password(monkeypatch):
+    _use_redis_backed_cache(monkeypatch, {})
+
+    redis_kwargs = _extract_cache_params()["redis_kwargs"]
+
+    assert redis_kwargs["host"] == "localhost"
+    assert repr(redis_kwargs["port"]) == "6379"
+    assert "hello" not in json.dumps(redis_kwargs)
+
+
+def test_extract_cache_params_reports_every_malformed_backend_field(monkeypatch):
+    _use_redis_backed_cache(monkeypatch, {"host": 7, "namespace": 5, "redis_version": ["7"]})
+
+    with pytest.raises(ValidationError) as exc_info:
+        _extract_cache_params()
+
+    assert exc_info.value.title == "HealthCheckCacheParams"
+    assert sorted({error["loc"][0] for error in exc_info.value.errors()}) == ["host", "namespace", "redis_version"]
+
+
+def test_extract_cache_params_is_empty_when_no_cache_is_configured(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", None)
+
+    assert _extract_cache_params() == {}
+
+
+@pytest.mark.parametrize("attribute_name", [1, None, (1, 2), b"host"])
+def test_extract_cache_params_is_empty_when_a_backend_attribute_name_is_not_a_string(monkeypatch, attribute_name):
+    _use_redis_backed_cache(monkeypatch, {attribute_name: "redis.internal"})
+
+    assert _extract_cache_params() == {}, attribute_name

@@ -48,6 +48,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     fake_tool.name = "list_pets"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = fake_server.server_id
 
     pre_call = AsyncMock(return_value={})
     handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
@@ -55,7 +56,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     with (
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=fake_server,
         ),
         patch.object(
@@ -134,6 +135,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_tool.name = "delete_pet"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = fake_server.server_id
 
     pre_call = AsyncMock(
         side_effect=HTTPException(status_code=403, detail="not allowed")
@@ -143,7 +145,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     with (
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=fake_server,
         ),
         patch.object(
@@ -205,10 +207,10 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
 
     # `_get_mcp_server_from_tool_name` returns None — no server context.
     with (
-        patch.object(mcp_operations, "_resolve_openapi_tool_auth", new=resolve_auth),
+        patch.object(mcp_operations, "resolve_openapi_tool_auth", new=resolve_auth),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=None,
         ),
         patch.object(
@@ -256,7 +258,7 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     reads. Kills the mutant that deletes the resolve_openapi_upstream_auth call in server.py."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        _request_resolved_auth_headers,
+        request_resolved_auth_headers,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
         StaticHeaderAuth,
@@ -284,16 +286,17 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     fake_tool.name = "get_values"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = oauth_server.server_id
     captured: dict = {}
 
     async def handle_local(_name, _arguments, _wire_compat):
-        captured["resolved"] = _request_resolved_auth_headers.get()
+        captured["resolved"] = request_resolved_auth_headers.get()
         return CallToolResult(content=[], is_error=False)
 
     with (
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -329,7 +332,7 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
         )
 
     assert captured["resolved"] == {"Authorization": "Bearer stored-user-token"}
-    assert _request_resolved_auth_headers.get() is None
+    assert request_resolved_auth_headers.get() is None
 
 
 
@@ -602,7 +605,7 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
     """
     from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        _request_auth_header,
+        request_auth_header,
     )
 
     server = _spec_path_server()
@@ -615,11 +618,11 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
         return None, kwargs["forwarded_headers"]
 
     async def capture_local(_name, _arguments, _wire_compat):
-        captured["injected"] = _request_auth_header.get()
+        captured["injected"] = request_auth_header.get()
         return CallToolResult(content=[], is_error=False)
 
     async def capture_openapi_handler(_server, _name, _arguments, _wire_compat):
-        captured["injected"] = _request_auth_header.get()
+        captured["injected"] = request_auth_header.get()
         return CallToolResult(content=[], is_error=False)
 
     manager = mcp_operations.global_mcp_server_manager
@@ -632,8 +635,9 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
             fake_tool.name = "list_reports"
             fake_tool.description = "test tool"
             fake_tool.input_schema = {"type": "object"}
+            fake_tool.server_id = server.server_id
             with (
-                patch.object(manager, "_get_mcp_server_from_tool_name", return_value=server),
+                patch.object(manager, "get_mcp_server_from_tool_name", return_value=server),
                 patch.object(mcp_operations.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
                 patch(
                     "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
@@ -667,7 +671,7 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
 
     assert captured["resolver_credential"] == {"Authorization": OPENAPI_PER_SERVER_TOKEN}
     assert captured["injected"] == OPENAPI_PER_SERVER_TOKEN
-    assert _request_auth_header.get() is None
+    assert request_auth_header.get() is None
 
 
 @pytest.mark.parametrize("failure", ["auth", "other"])
@@ -705,6 +709,7 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
     fake_tool.name = "list_reports"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = None
     fake_tool.handler = raising_handler
     server = MCPServer(
         server_id="srv-openapi",
@@ -718,7 +723,7 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
     user = UserAPIKeyAuth(api_key="sk-user", user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
     with (
-        patch.object(mcp_operations.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server),
         patch.object(mcp_operations.global_mcp_server_manager, "pre_call_tool_check", new=AsyncMock(return_value={})),
         patch.object(mcp_operations.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
         patch.object(
@@ -793,16 +798,16 @@ def test_the_openapi_arm_installs_the_guard_when_a_credential_rides_a_custom_slo
     hook alone passes even if this arm never installs it.
     """
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        _request_resolved_auth_headers,
+        request_resolved_auth_headers,
         _upstream_client,
     )
 
-    token = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    token = request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
     try:
         client = _upstream_client()
         assert client.client.event_hooks["request"], "custom slot must install a redirect guard"
     finally:
-        _request_resolved_auth_headers.reset(token)
+        request_resolved_auth_headers.reset(token)
 
 
 def test_the_guarded_client_is_reused_rather_than_built_per_call():
@@ -811,15 +816,15 @@ def test_the_guarded_client_is_reused_rather_than_built_per_call():
     have to come from the shared cache.
     """
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        _request_resolved_auth_headers,
+        request_resolved_auth_headers,
         _upstream_client,
     )
 
-    token = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    token = request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
     try:
         assert _upstream_client() is _upstream_client()
     finally:
-        _request_resolved_auth_headers.reset(token)
+        request_resolved_auth_headers.reset(token)
 
 
 @pytest.mark.asyncio
@@ -831,11 +836,11 @@ async def test_the_shared_guard_reads_the_url_from_the_request_context():
 
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _drop_credential_across_origin,
-        _request_resolved_auth_headers,
+        request_resolved_auth_headers,
         _request_upstream_url,
     )
 
-    creds = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    creds = request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
     url = _request_upstream_url.set("https://api.example.com/v1/things")
     try:
         same = httpx.Request("POST", "https://api.example.com/v1/other", headers={"esb-oauth": "Bearer m"})
@@ -847,7 +852,7 @@ async def test_the_shared_guard_reads_the_url_from_the_request_context():
         assert "esb-oauth" not in foreign.headers
     finally:
         _request_upstream_url.reset(url)
-        _request_resolved_auth_headers.reset(creds)
+        request_resolved_auth_headers.reset(creds)
 
 
 @pytest.mark.parametrize("resolved", [{"Authorization": "Bearer minted"}, {}, None])
@@ -855,16 +860,16 @@ def test_the_openapi_arm_keeps_the_shared_client_when_no_guard_is_needed(resolve
     # Authorization is already stripped across origins by the HTTP client, so taking the guarded
     # path for it would give up the shared connection pool for nothing.
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        _request_resolved_auth_headers,
+        request_resolved_auth_headers,
         _upstream_client,
     )
 
-    token = _request_resolved_auth_headers.set(resolved)
+    token = request_resolved_auth_headers.set(resolved)
     try:
         client = _upstream_client()
         assert not client.client.event_hooks.get("request")
     finally:
-        _request_resolved_auth_headers.reset(token)
+        request_resolved_auth_headers.reset(token)
 
 
 @pytest.mark.asyncio

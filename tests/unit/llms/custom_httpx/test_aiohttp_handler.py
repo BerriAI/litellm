@@ -288,16 +288,14 @@ class TestBaseLLMAIOHTTPHandler:
         mock_session_from_transport = Mock()
 
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
-        mock_transport._get_valid_client_session = Mock(
-            return_value=mock_session_from_transport
-        )
+        mock_transport.get_valid_client_session = Mock(return_value=mock_session_from_transport)
 
         handler = BaseLLMAIOHTTPHandler(transport=mock_transport)
 
         result = handler._create_client_session_with_transport()
 
         # Should use transport's session creation method
-        mock_transport._get_valid_client_session.assert_called_once()
+        mock_transport.get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport
 
         # Should not call aiohttp.ClientSession directly
@@ -433,21 +431,17 @@ class TestBaseLLMAIOHTTPHandler:
 
     def test_transport_priority_hierarchy(self):
         """Test that session creation follows the right priority: transport > connector > default"""
-        # Test with transport having _get_valid_client_session
+        # Test with transport having get_valid_client_session
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
         mock_session_from_transport = Mock()
-        mock_transport._get_valid_client_session = Mock(
-            return_value=mock_session_from_transport
-        )
+        mock_transport.get_valid_client_session = Mock(return_value=mock_session_from_transport)
 
         mock_connector = Mock(spec=aiohttp.BaseConnector)
 
-        handler = BaseLLMAIOHTTPHandler(
-            transport=mock_transport, connector=mock_connector
-        )
+        handler = BaseLLMAIOHTTPHandler(transport=mock_transport, connector=mock_connector)
 
         result = handler._create_client_session_with_transport()
 
         # Should use transport, not connector
-        mock_transport._get_valid_client_session.assert_called_once()
+        mock_transport.get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport

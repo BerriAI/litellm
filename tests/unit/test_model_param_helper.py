@@ -3,8 +3,8 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
 def test_cached_relevant_logging_args_matches_dynamic():
     """Verify the cached frozenset matches the dynamically computed set."""
-    cached = ModelParamHelper._relevant_logging_args
-    dynamic = ModelParamHelper._get_relevant_args_to_use_for_logging()
+    cached = ModelParamHelper.relevant_logging_args
+    dynamic = ModelParamHelper.get_relevant_args_to_use_for_logging()
     assert cached == dynamic
     assert isinstance(cached, frozenset)
 
@@ -40,7 +40,7 @@ def test_get_all_llm_api_params_includes_responses_api():
     otherwise Cache.get_cache_key() silently drops them and two requests
     that differ only in (e.g.) `instructions` collide on the same key.
     """
-    all_params = ModelParamHelper._get_all_llm_api_params()
+    all_params = ModelParamHelper.get_all_llm_api_params()
     responses_only_params = {
         "instructions",
         "previous_response_id",

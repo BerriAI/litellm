@@ -12,7 +12,7 @@ from litellm.router_utils.auto_router_model_naming import (
     capability_limit_violation,
     classify_strategy_router_model,
     count_capability_routers,
-    gated_capability_of,
+    gated_capabilities_of,
 )
 from litellm.router_utils.auto_router_tuning_baseline import (
     is_mutable_tuned_candidate,
@@ -91,8 +91,8 @@ def auto_router_availability(
 ) -> AutoRouterAvailabilityResponse:
     existing_params: Final = None if existing is None else existing.get("litellm_params")
     candidate_params: Final = candidate.get("litellm_params")
-    owned: Final = gated_capability_of(existing_params) if isinstance(existing_params, Mapping) else None
-    claimed: Final = gated_capability_of(candidate_params) if isinstance(candidate_params, Mapping) else None
+    owned: Final = gated_capabilities_of(existing_params) if isinstance(existing_params, Mapping) else ()
+    claimed: Final = gated_capabilities_of(candidate_params) if isinstance(candidate_params, Mapping) else ()
     counts: Final = tuple(
         (capability, count_capability_routers(others, capability=capability))
         for capability in GATED_AUTO_ROUTER_CAPABILITIES
@@ -103,15 +103,16 @@ def auto_router_availability(
             key=capability.key,
             limit=limit,
             remaining=None if limit is None else max(0, limit - held),
-            used_by_this_router=owned is capability,
+            used_by_this_router=capability in owned,
         )
         for capability, held in counts
     )
-    capability_error: Final = next(
+    denied_capability: Final = next(
         (
-            capability_limit_violation(capability=capability, held=held + 1, limit=limit)
+            capability
             for capability, held in counts
-            if capability is claimed
+            if capability in claimed
+            and capability_limit_violation(capability=capability, held=held + 1, limit=limit) is not None
         ),
         None,
     )
@@ -140,8 +141,8 @@ def auto_router_availability(
             ),
         ),
         error=(
-            f"{capability_labels[claimed.key]} has no available allowance. Choose another option or free an existing allowance."
-            if capability_error is not None and claimed is not None
+            f"{capability_labels[denied_capability.key]} has no available allowance. Choose another option or free an existing allowance."
+            if denied_capability is not None
             else "These scoring rules need an available Rule-based tuning allowance. Check the weights, thresholds, keywords, and custom dimensions in Advanced settings. Model choices do not use this allowance."
             if tuning_error is not None
             else None

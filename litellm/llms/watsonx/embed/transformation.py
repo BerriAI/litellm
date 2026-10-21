@@ -3,10 +3,11 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
 from collections.abc import Iterable, Mapping
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -16,10 +17,24 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import IBMWatsonXMixin, _get_api_params
+from ..common_utils import IBMWatsonXMixin, get_api_params
 
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _TOKEN_COUNT: Final = TypeAdapter(int)
+
+
+class _WatsonXEmbeddingBody(TypedDict, total=False):
+    model_id: ReadOnly[str | None]
+    results: ReadOnly[object]
+    input_token_count: ReadOnly[object]
+
+
+class _WatsonXEmbeddingHTTPResponse(Protocol):
+    def json(self) -> _WatsonXEmbeddingBody: ...
+
+
+def _embedding_body(response: _WatsonXEmbeddingHTTPResponse) -> _WatsonXEmbeddingBody:
+    return response.json()
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
@@ -42,7 +57,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
@@ -97,7 +112,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         logging_obj.post_call(
             original_response=raw_response.text,
         )
-        json_resp: Final = raw_response.json()
+        json_resp: Final = _embedding_body(raw_response)
         if model_response is None:
             model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
         results: Final = _JSON_OBJECTS.validate_python(json_resp.get("results", []))

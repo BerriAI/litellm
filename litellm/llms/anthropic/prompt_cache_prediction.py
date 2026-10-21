@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
@@ -13,20 +15,33 @@ import httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
+from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    is_anthropic_oauth_key,
+    strip_provider_specific_fields_from_anthropic_messages,
+)
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils, prepare_native_messages
+from litellm.router_utils.baseline_request import (
+    BASELINE_PARAMETERS,
+    capture_baseline_parameters,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.router import LiteLLM_Params
+from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
 
 
@@ -325,7 +340,7 @@ def _entry_fingerprint(fingerprint: str, ttl_seconds: int) -> str:
 
 def parse_cache_plan(body: Mapping[str, JsonValue]) -> PromptCachePlan | UnsupportedCachePlan:
     try:
-        request: Final = _PlanRequest.model_validate(body)
+        request: Final = _PlanRequest.model_validate(dict(body))
         positions: Final = _positions(body)
     except ValidationError:
         return UnsupportedCachePlan("unsupported_prompt_shape")
@@ -618,13 +633,56 @@ def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredicti
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
 
 
+def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:
+    parameters: Final = capture_baseline_parameters(request)
+    if parameters is None:
+        return None
+    source: Final = {**parameters, "messages": request.get("messages"), "stream": request.get("stream", False)}
+    try:
+        owned: Final = _JSON_OBJECT.validate_python(source)
+        context: Final = {**{k: v for k, v in request.items() if k not in ("metadata", "litellm_metadata")}, **owned}
+        resolved_model: Final = litellm.get_llm_provider(model=model, custom_llm_provider="anthropic")[0]
+        messages, system = prepare_native_messages(
+            _MESSAGES.validate_python(owned.get("messages")),
+            _SYSTEM.validate_python(owned.get("system")),
+            context,
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            tools=_MESSAGES.validate_python(owned.get("tools") or []),
+        )
+        options: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            {**owned, "system": system},
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            drop_params=owned.get("drop_params") is True,
+        )
+        filtered: Final = reduce(
+            delete_nested_value,
+            TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
+            dict(options),
+        )
+        body: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=resolved_model,
+            messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+            anthropic_messages_optional_request_params=filtered,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        return MappingProxyType(_JSON_OBJECT.validate_python(body))
+    except Exception:  # noqa: BLE001  # an unsupported hypothetical request is unavailable, never an inference failure
+        return None
+
+
 def _resolve_prediction_target(
     params: LiteLLM_Params,
     *,
     allow_configured_endpoint: bool,
 ) -> NativePredictionTarget | UnsupportedPredictionTarget:
     configured_options: Final = frozenset(params.model_dump(exclude_defaults=True, exclude_none=True))
-    if configured_options - _DEPLOYMENT_OPTIONS:
+    allowed: Final = (
+        _DEPLOYMENT_OPTIONS | frozenset(BASELINE_PARAMETERS) if allow_configured_endpoint else _DEPLOYMENT_OPTIONS
+    )
+    if configured_options - allowed:
         return UnsupportedPredictionTarget("unsupported_deployment_configuration")
     api_base: Final = AnthropicModelInfo.get_api_base(params.api_base)
     if not allow_configured_endpoint and api_base not in (
@@ -715,3 +773,50 @@ def parse_observed_cache(
         cached_tokens=cache_tokens,
         cache_creation_tokens=usage.cache_creation_tokens,
     )
+
+
+_RETENTION_SECONDS: Final = 86_400
+
+
+class CacheObservation(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cached_tokens: int = Field(gt=0)
+    observed_at: float = Field(ge=0, allow_inf_nan=False)
+    expires_at: float = Field(ge=0, allow_inf_nan=False)
+
+
+_CACHE_ENTRY: Final[TypeAdapter[CacheObservation | str | None]] = TypeAdapter(CacheObservation | str | None)
+
+
+def _cache_key(scope: str, fingerprint: str) -> str:
+    return f"prompt-cache-observation:{scope}:{fingerprint}"
+
+
+async def lookup(
+    cache: DualCache, scope: str, prefix: PromptPrefix, now: float | None = None
+) -> CacheObservation | None:
+    checked_at: Final = time.time() if now is None else now
+    exact: Final = await _read_exact(cache, scope, prefix.fingerprint)
+    if exact is not None and exact.expires_at > checked_at:
+        return exact
+    older: Final = await asyncio.gather(
+        *(_read_exact(cache, scope, fingerprint) for fingerprint in prefix.fingerprints[1:])
+    )
+    observations: Final = tuple(observation for observation in (exact, *older) if observation is not None)
+    return next(
+        (observation for observation in observations if observation.expires_at > checked_at),
+        next(iter(observations), None),
+    )
+
+
+async def _read_exact(cache: DualCache, scope: str, fingerprint: str) -> CacheObservation | None:
+    try:
+        value: Final = _CACHE_ENTRY.validate_python(await cache.async_get_cache(_cache_key(scope, fingerprint), ttl=1))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # validate the legacy cache's untyped result at the I/O boundary
+        if value is None:
+            return None
+        observation: Final = CacheObservation.model_validate_json(value) if isinstance(value, str) else value
+    except ValidationError:
+        return None
+    return observation if observation.fingerprint == fingerprint else None

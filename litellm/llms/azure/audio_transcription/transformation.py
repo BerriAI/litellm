@@ -142,7 +142,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text: Final = self._extract_text(payload)
         response: Final = TranscriptionResponse(text=text)
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

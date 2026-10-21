@@ -39,8 +39,9 @@ from pydantic import ConfigDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
+from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 from litellm.types.llms.base import LiteLLMBaseModel
 
 __all__ = (
@@ -168,7 +169,7 @@ def _string_or_none(value: object) -> str | None:
 def _serialize_datetime(value: object) -> str | None:
     """A datetime the way the SDK's ``EventSerializer`` sends one: a JSON string, naive values read as local time."""
     if isinstance(value, datetime):
-        return safe_dumps(value.astimezone().isoformat())
+        return serialize_langfuse_datetime(value)
     return _serialize(value)
 
 
@@ -793,7 +794,7 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
     return LangfuseSpanExporter(
-        handler=_get_httpx_client(),
+        handler=get_httpx_client(),
         endpoint=f"{base_url.rstrip('/')}/{export_path.lstrip('/')}",
         headers=MappingProxyType(
             {

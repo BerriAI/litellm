@@ -895,6 +895,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     plan_mode_min_tier: "COMPLEX",
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
+    local_heuristic: "heuristic",
     heuristic_v2_success_threshold: 0.89,
     heuristic_first_max_tier: "SIMPLE",
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
@@ -968,6 +969,8 @@ describe("managed keys survive an untouched open-and-save", () => {
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
+    expect(hydrated.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
+    expect(saved.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))

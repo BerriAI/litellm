@@ -76,6 +76,13 @@ class ClarifaiConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def transform_request(self, model, messages, optional_params, litellm_params, headers):
         model = self.get_base_model(model) or model
         return super().transform_request(model, messages, optional_params, litellm_params, headers)

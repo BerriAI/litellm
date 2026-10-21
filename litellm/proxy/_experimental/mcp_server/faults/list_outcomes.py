@@ -10,25 +10,39 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
+import email.utils
+import random
+import re
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timezone
+from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
+from urllib.request import parse_http_list, parse_keqv_list
 
+import anyio
 import httpx
 import httpx2
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+)
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.llms.base import LiteLLMBaseModel
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
     "forbidden",
+    "rate_limited",
     "timeout",
     "unreachable",
     "upstream_error",
@@ -63,6 +77,8 @@ domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-re
 class AggregateToolListing(NamedTuple):
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
+    next_cursor: str | None = None
+    ttl_ms: int = 0
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:
@@ -92,6 +108,29 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
         if response.status_code in (401, 403):
             return response.status_code, response.headers.get("www-authenticate")
     return None
+
+
+def upstream_insufficient_scope(exc: BaseException) -> str | None:
+    auth: Final = upstream_auth_challenge(exc)
+    if auth is None or auth[0] != 403 or not auth[1]:
+        return None
+    scheme, _, parameters = auth[1].partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    fields: Final = parse_http_list(parameters)
+    if any("=" not in field or not field.split("=", 1)[1] for field in fields):
+        return None
+    keys: Final = tuple(field.split("=", 1)[0].strip().lower() for field in fields)
+    if len(set(keys)) != len(keys) or any(re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", key) is None for key in keys):
+        return None
+    parsed: Final = TypeAdapter(dict[str, str]).validate_python(parse_keqv_list(fields))
+    values: Final = {key: value for key, value in zip(keys, parsed.values())}
+    if values.get("error") != "insufficient_scope":
+        return None
+    scope: Final = values.get("scope", "")
+    if scope and re.fullmatch(r"[!#-\[\]-~]+(?: [!#-\[\]-~]+)*", scope) is None:
+        return None
+    return scope
 
 
 def raise_classified_list_failure(
@@ -124,6 +163,8 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     if isinstance(exc, MCPUpstreamAuthError):
         tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
         return ServerListFault(tag=tag, status_code=exc.status_code)
+    if isinstance(exc, ProxyRateLimitError):
+        return ServerListFault(tag="rate_limited", status_code=429)
     if isinstance(exc, TimeoutError):
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
@@ -145,13 +186,120 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     return ServerListFault(tag="internal")
 
 
+class UpstreamRateLimit(NamedTuple):
+    retry_after_seconds: float | None
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    stripped: Final = value.strip()
+    if re.fullmatch(r"\d+", stripped):
+        return float(stripped)
+    try:
+        parsed: Final = email.utils.parsedate_to_datetime(stripped)
+    except (TypeError, ValueError):
+        return None
+    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (aware - datetime.now(timezone.utc)).total_seconds())
+
+
+def upstream_rate_limit(exc: BaseException) -> UpstreamRateLimit | None:
+    """The upstream 429 signal for the tools/list retry loop: an auth challenge wins over rate
+    limiting so a 401/403 anywhere in the tree keeps its own channel, then the first 429 response
+    in deliberate order carries its Retry-After hint. Anything else is not retryable here."""
+    if upstream_auth_challenge(exc) is not None:
+        return None
+    for response in _iter_upstream_responses(exc):
+        if response.status_code == 429:
+            return UpstreamRateLimit(_parse_retry_after(response.headers.get("retry-after")))
+    return None
+
+
+def rate_limit_retry_delay(
+    attempt: int,
+    retry_after_seconds: float | None,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: float,
+) -> float:
+    if retry_after_seconds is not None:
+        return min(retry_after_seconds, max_delay)
+    return min(max_delay, base_delay * 2**attempt * (1 + jitter))
+
+
+T: Final = TypeVar("T")
+
+
+async def retry_upstream_rate_limit(
+    fetch: Callable[[], Awaitable[T]],
+    server_name: str,
+    *,
+    max_retries: int = MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+    base_delay: float = MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    max_delay: float = MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    jitter: Callable[[], float] = random.random,
+    deadline_seconds: float | None = None,
+    clock: Callable[[], float] = anyio.current_time,
+) -> T:
+    attempts: Final = max(0, max_retries)
+    deadline: Final = None if deadline_seconds is None else clock() + deadline_seconds
+    last_rate_limit: BaseException | None = None  # rebind-ok: each 429 replaces the cause a retry deadline re-raises
+    for attempt in range(attempts + 1):
+        try:
+            if attempt > 0 and deadline is not None:
+                try:
+                    with anyio.fail_after(max(0.0, deadline - clock())):
+                        return await fetch()
+                except TimeoutError as timeout:
+                    if last_rate_limit is None:
+                        raise
+                    raise last_rate_limit from timeout
+            return await fetch()
+        except Exception as exc:
+            limit = upstream_rate_limit(exc)
+            if limit is not None:
+                last_rate_limit = exc
+            if limit is None or attempt == attempts:
+                raise
+            delay = rate_limit_retry_delay(
+                attempt,
+                limit.retry_after_seconds,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter=jitter(),
+            )
+            if deadline is not None and clock() + delay >= deadline:
+                raise
+            verbose_logger.warning(
+                "MCP server %s answered 429 to tools/list; retry %d/%d in %.2fs",
+                server_name,
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            await sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def listing_failed_outright(outcomes: Mapping[str, ServerOutcome]) -> bool:
+    """True only when every server in scope contributed a non-auth fault: an auth outcome means a
+    caller can fix the listing by authenticating, so the aggregate stays a 200 with outcomes."""
+    return bool(outcomes) and all(
+        isinstance(outcome, ServerListFault) and outcome.tag not in ("auth_required", "forbidden")
+        for outcome in outcomes.values()
+    )
+
+
 def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     """The client-visible form of one outcome, for the tools/list result ``_meta`` and the REST
     response: category plus status code only, never upstream prose or URLs."""
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
-        case "auth_required" | "forbidden" | "timeout" | "unreachable" | "upstream_error" | "internal":
+        case "auth_required" | "forbidden" | "rate_limited" | "timeout" | "unreachable" | "upstream_error" | "internal":
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
@@ -169,6 +317,8 @@ def list_fault_http_status(fault: ServerListFault) -> int:
             return fault.status_code or 401
         case "forbidden":
             return 403
+        case "rate_limited":
+            return 429
         case "timeout":
             return 504
         case "unreachable" | "upstream_error":

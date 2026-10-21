@@ -71,6 +71,13 @@ class AmazonTitanImageGenerationConfig:
         return False
 
     @classmethod
+    def is_titan_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_titan_model(model)
+
+    @classmethod
     def get_supported_openai_params(cls, model: str | None = None) -> list:
         return ["size", "n", "quality"]
 
