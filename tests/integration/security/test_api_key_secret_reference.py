@@ -841,7 +841,7 @@ def test_google_reference_fails_closed_when_the_metadata_server_fails(rig: _Rig)
     marker: Final = _marker()
     response: Final = _chat(rig.owned.gateway, "wif-google-unavailable", marker)
     reached: Final = _carrying(rig.provider.requests(), marker)
-    assert (response.status_code, reached) == (401, ()), (response.text, _bearers(reached))
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
     assert "oidc/google secret reference could not be resolved" in response.text, response.text
     assert _UNAVAILABLE_AUDIENCE.removeprefix("https://") not in response.text, response.text
     assert _UNAVAILABLE_AUDIENCE in _asked_audiences(rig)
