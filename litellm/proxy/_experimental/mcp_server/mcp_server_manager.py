@@ -4225,6 +4225,7 @@ class MCPServerManager:
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
         protocol_version_override: MCPUpstreamProtocol | None = None,
+        for_tool_listing: bool = False,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -4377,6 +4378,7 @@ class MCPServerManager:
                         sampling_callback=sampling_cb,
                         elicitation_callback=elicitation_cb,
                     ),
+                    for_tool_listing=for_tool_listing,
                 )
 
             # Create SigV4 auth if configured
@@ -4421,6 +4423,7 @@ class MCPServerManager:
                     sampling_callback=sampling_cb,
                     elicitation_callback=elicitation_cb,
                 ),
+                for_tool_listing=for_tool_listing,
             )
 
     async def _get_tools_from_server(
@@ -4529,6 +4532,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                for_tool_listing=True,
             )
 
             ## HANDLE OPENAPI TOOLS
