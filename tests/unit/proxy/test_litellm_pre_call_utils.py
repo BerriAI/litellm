@@ -36,6 +36,8 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.caching.caching import Cache
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -1179,6 +1181,52 @@ async def test_add_litellm_data_to_request_keeps_the_request_max_fallbacks_cap()
     )
 
     assert updated["max_fallbacks"] == 0
+
+
+_FORGED_CACHE_KEY_FIELDS: Final = {
+    "cache_key": "ns:victim-hash",
+    "preset_cache_key": "ns:victim-hash",
+    "litellm_params": {
+        "preset_cache_key": "ns:victim-hash",
+        "metadata": {"user_api_key_team_id": "victim-team", "user_api_key_hash": "victim-key"},
+    },
+}
+
+
+async def _add_data_with_forged_cache_key(monkeypatch: pytest.MonkeyPatch, cache_scope: str) -> dict:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope=cache_scope))
+    return await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            **copy.deepcopy(_FORGED_CACHE_KEY_FIELDS),
+        },
+        request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", team_id="caller-team"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_scope", ["team", "key"])
+async def test_scoped_cache_ignores_caller_supplied_cache_keys(monkeypatch: pytest.MonkeyPatch, cache_scope: str):
+    updated: Final = await _add_data_with_forged_cache_key(monkeypatch, cache_scope)
+
+    assert "cache_key" not in updated
+    assert "preset_cache_key" not in updated
+    assert "preset_cache_key" not in updated["litellm_params"]
+    assert "user_api_key_team_id" not in updated["litellm_params"]["metadata"]
+    assert "user_api_key_hash" not in updated["litellm_params"]["metadata"]
+    assert updated["metadata"]["user_api_key_team_id"] == "caller-team"
+
+
+@pytest.mark.asyncio
+async def test_global_cache_scope_keeps_caller_supplied_cache_key(monkeypatch: pytest.MonkeyPatch):
+    updated: Final = await _add_data_with_forged_cache_key(monkeypatch, "global")
+
+    assert updated["cache_key"] == "ns:victim-hash"
 
 
 @pytest.mark.asyncio

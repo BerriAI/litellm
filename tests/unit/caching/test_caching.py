@@ -274,6 +274,87 @@ def test_exact_cache_key_still_includes_prompt():
     assert key_a != key_b
 
 
+_TEAM_A_KEY_1: Final = {"user_api_key_hash": "hash-1", "user_api_key_team_id": "team-a"}
+_TEAM_A_KEY_2: Final = {"user_api_key_hash": "hash-2", "user_api_key_team_id": "team-a"}
+_TEAM_B_KEY_3: Final = {"user_api_key_hash": "hash-3", "user_api_key_team_id": "team-b"}
+_NO_TEAM_KEY_4: Final = {"user_api_key_hash": "hash-4"}
+_NO_TEAM_KEY_5: Final = {"user_api_key_hash": "hash-5"}
+
+
+def _scoped_keys(cache_scope: str | None, *identities: dict[str, str]) -> list[str]:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, **({} if cache_scope is None else {"cache_scope": cache_scope}))
+    messages: Final = [{"role": "user", "content": "What color is the sky?"}]
+    return [cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata=dict(i)) for i in identities]
+
+
+@pytest.mark.parametrize(
+    ("cache_scope", "same_team_shares", "other_team_shares", "teamless_keys_share"),
+    [
+        (None, True, True, True),
+        ("global", True, True, True),
+        ("team", True, False, False),
+        ("key", False, False, False),
+    ],
+)
+def test_cache_scope_controls_who_shares_an_exact_cache_hit(
+    cache_scope, same_team_shares, other_team_shares, teamless_keys_share
+):
+    key_1, key_2, key_3, key_4, key_5 = _scoped_keys(
+        cache_scope, _TEAM_A_KEY_1, _TEAM_A_KEY_2, _TEAM_B_KEY_3, _NO_TEAM_KEY_4, _NO_TEAM_KEY_5
+    )
+    assert (key_1 == key_2) is same_team_shares
+    assert (key_1 == key_3) is other_team_shares
+    assert (key_4 == key_5) is teamless_keys_share
+
+
+@pytest.mark.parametrize("cache_scope", ["team", "key"])
+def test_cache_scope_is_stable_for_the_same_caller(cache_scope):
+    first, again = _scoped_keys(cache_scope, _TEAM_A_KEY_1, _TEAM_A_KEY_1)
+    assert first == again
+
+
+def test_cache_scope_reads_identity_from_litellm_metadata_and_litellm_params():
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, cache_scope="team")
+    messages: Final = [{"role": "user", "content": "hi"}]
+    from_metadata: Final = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata=dict(_TEAM_A_KEY_1))
+    from_litellm_metadata: Final = cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, litellm_metadata=dict(_TEAM_A_KEY_1)
+    )
+    from_litellm_params: Final = cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, litellm_params={"metadata": dict(_TEAM_A_KEY_1)}
+    )
+    other_team: Final = cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, litellm_metadata=dict(_TEAM_B_KEY_3)
+    )
+    assert from_metadata == from_litellm_metadata == from_litellm_params
+    assert from_metadata != other_team
+
+
+def test_cache_scope_rejects_unknown_value():
+    with pytest.raises(ValueError, match="'org' is not a valid CacheScope"):
+        Cache(type=LiteLLMCacheType.LOCAL, cache_scope="org")
+
+
+@pytest.mark.asyncio
+async def test_team_cache_scope_isolates_acompletion_hits_between_teams(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope="team"))
+    messages: Final = [{"role": "user", "content": f"team scope {uuid.uuid4().hex}"}]
+
+    async def call(identity: dict[str, str], mock_response: str):
+        return await acompletion(
+            model="gpt-4o-mini", messages=messages, metadata=dict(identity), mock_response=mock_response
+        )
+
+    team_a_first: Final = await call(_TEAM_A_KEY_1, "a1")
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    team_a_other_key: Final = await call(_TEAM_A_KEY_2, "a2")
+    team_b: Final = await call(_TEAM_B_KEY_3, "b")
+
+    assert team_a_other_key.id == team_a_first.id
+    assert team_b.id != team_a_first.id
+    assert team_b.choices[0].message.content == "b"
+
+
 @pytest.mark.parametrize(
     "anthropic_param",
     [

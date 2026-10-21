@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -73,6 +74,12 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
+def _is_str_keyed_mapping(
+    value: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: request kwargs and their metadata dicts are str-keyed
+    return isinstance(value, Mapping)
+
+
 def _is_conversation_item(item: object) -> bool:
     if isinstance(item, BaseModel):
         return True
@@ -142,6 +149,7 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        cache_scope: str = CacheScope.GLOBAL.value,
         max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
@@ -172,6 +180,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
+            cache_scope (str, optional): Who can share a cache hit. "global" shares hits between every caller. "team" isolates hits per team, and keys without a team per key. "key" isolates hits per key. On the proxy, a non-global scope also ignores caller-supplied `cache_key` / `preset_cache_key`. Defaults to "global".
             max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # Disk Cache Args
@@ -323,6 +332,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.cache_scope: str = CacheScope(cache_scope).value
         self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
@@ -365,16 +375,30 @@ class Cache:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
-    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
-        metadata_sources: Final[tuple[dict, ...]] = tuple(
-            source.get(key) or {} for source in (kwargs, litellm_params) for key in ("metadata", "litellm_metadata")
+    @staticmethod
+    def _auth_metadata_value(kwargs: Mapping[str, object], field: str) -> object | None:
+        litellm_params: Final = kwargs.get("litellm_params")
+        containers: Final[tuple[Mapping[str, object], ...]] = (
+            (kwargs, litellm_params) if _is_str_keyed_mapping(litellm_params) else (kwargs,)
         )
+        candidates: Final = (container.get(key) for container in containers for key in ("metadata", "litellm_metadata"))
+        metadata_sources: Final = tuple(source for source in candidates if _is_str_keyed_mapping(source))
+        return next((source[field] for source in metadata_sources if source.get(field) is not None), None)
+
+    def _get_semantic_cache_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
         scope_values: Final = (
-            (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
-            for field in self._semantic_cache_scope_fields()
+            (field, self._auth_metadata_value(kwargs, field)) for field in self._semantic_cache_scope_fields()
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
+
+    def _get_cache_scope_material(self, kwargs: Mapping[str, object]) -> str:
+        if self.cache_scope == CacheScope.GLOBAL:
+            return ""
+        team_id: Final = self._auth_metadata_value(kwargs, "user_api_key_team_id")
+        if self.cache_scope == CacheScope.TEAM and team_id is not None:
+            return f"cache_scope_team: {team_id}"
+        key_hash: Final = self._auth_metadata_value(kwargs, "user_api_key_hash")
+        return "" if key_hash is None else f"cache_scope_key: {key_hash}"
 
     def get_cache_key(self, **kwargs: object) -> str:
         """
@@ -419,7 +443,8 @@ class Cache:
         reasoning_summary_material: Final = (
             "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
         )
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
+        cache_scope_material: Final = self._get_cache_scope_material(kwargs)
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + cache_scope_material + reasoning_summary_material)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",

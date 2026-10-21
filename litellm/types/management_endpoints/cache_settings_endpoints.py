@@ -200,6 +200,19 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         ui_field_name="Semantic Cache Scope",
         redis_type="semantic",
     ),
+    CacheSettingsField(
+        field_name="cache_scope",
+        field_type="String",
+        field_value=None,
+        field_description=(
+            "Who can share a cache hit. 'global' shares hits between every caller. 'team' isolates hits per team,"
+            " and keys without a team per key. 'key' isolates hits per key."
+        ),
+        field_default="global",
+        options=["global", "team", "key"],
+        ui_field_name="Cache Scope",
+        redis_type=None,
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
