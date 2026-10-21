@@ -1301,7 +1301,22 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
       expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "user")).toHaveLength(1);
-      expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Failed to load spend data");
+      expect(alert).toHaveTextContent("Aggregated endpoint not available");
+      expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    });
+
+    it("re-issues the aggregated call when Retry is clicked", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const alert = await screen.findByRole("alert");
+      const callsBefore = mockUserDailyActivityAggregatedCall.mock.calls.length;
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall.mock.calls.length).toBe(callsBefore + 1));
     });
   });
 
