@@ -38,7 +38,7 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, resolve_api_key_secret_reference
+from litellm.utils import ProviderConfigManager, get_base_model_from_metadata, resolve_api_key_secret_reference
 
 from ..litellm_core_utils.core_helpers import normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
@@ -462,6 +462,11 @@ def _with_upstream_transcription_model(request_data: Mapping[str, object], model
     }
 
 
+def _deployment_base_model(kwargs: Mapping[str, object], custom_llm_provider: str) -> str | None:
+    base_model: Final = get_base_model_from_metadata(model_call_details={"litellm_params": kwargs})
+    return None if base_model is None else base_model.removeprefix(f"{custom_llm_provider}/")
+
+
 @wrapper_client
 async def acreate_realtime_transcription_session(
     model: str | None = None,
@@ -534,7 +539,7 @@ async def acreate_realtime_transcription_session(
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
-        model=model_name,
+        model=_deployment_base_model(kwargs, custom_llm_provider) or model_name,
         extra_headers=resolved_extra_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
@@ -905,15 +910,10 @@ async def _arealtime(
                 GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token),
             )
         )
-        configured_base_model: Final = (as_str_mapping(litellm_params_dict) or {}).get("base_model")
         realtime_protocol: Final = azure_realtime_protocol_for_client(
             configured_realtime_protocol,
             model=model,
-            base_model=(
-                configured_base_model.removeprefix(f"{_custom_llm_provider}/")
-                if isinstance(configured_base_model, str)
-                else None
-            ),
+            base_model=_deployment_base_model(kwargs, _custom_llm_provider),
             query_params=query_params,
             realtime_mode=realtime_mode,
             websocket=websocket,

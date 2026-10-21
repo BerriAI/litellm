@@ -1091,12 +1091,77 @@ async def test_arealtime_azure_bridges_a_beta_client_to_ga_when_the_deployment_b
 
     assert await _azure_session_created_seen_by_a_beta_client(base_model_kwargs) == (
         "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment",
-        {
-            "type": "session.created",
-            "event_id": "event_1",
-            "session": {"id": "sess_1", "model": "my-realtime-deployment", "modalities": ["text"], "voice": "marin"},
-        },
+        _GA_SESSION_CREATED_BRIDGED_TO_BETA,
     )
+
+
+_GA_SESSION_CREATED_BRIDGED_TO_BETA: Final = {
+    "type": "session.created",
+    "event_id": "event_1",
+    "session": {"id": "sess_1", "model": "my-realtime-deployment", "modalities": ["text"], "voice": "marin"},
+}
+
+_ROUTER_REQUEST_SHAPES: Final = (
+    pytest.param({}, id="sdk-router-call"),
+    pytest.param({"metadata": {"user_api_key_hash": "hashed-key"}}, id="proxy-request-metadata"),
+)
+
+
+def _router_with_an_azure_deployment_aliasing(deployment_model: str, base_model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-alias",
+                "litellm_params": {
+                    "model": deployment_model,
+                    "api_base": "https://my-endpoint.openai.azure.com",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"base_model": base_model},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _ROUTER_REQUEST_SHAPES)
+async def test_router_realtime_bridges_a_beta_client_to_ga_when_model_info_base_model_is_ga_only(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
+    router: Final = _router_with_an_azure_deployment_aliasing(
+        "azure/my-realtime-deployment", "azure/gpt-realtime-2.1-mini"
+    )
+    client: Final = _BetaClientThatStaysConnected()
+    connect: Final = _ConnectToABackendThatSendsOneFrame(_GA_SESSION_CREATED)
+
+    with patch("websockets.connect", connect):
+        await router._arealtime(model="team-alias", websocket=client, **request_kwargs)
+
+    assert (connect.url, json.loads(client.sent[0])) == (
+        "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment",
+        _GA_SESSION_CREATED_BRIDGED_TO_BETA,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _ROUTER_REQUEST_SHAPES)
+async def test_router_transcription_session_uses_the_ga_route_when_model_info_base_model_is_ga_only(
+    local_model_cost_map, request_kwargs: Mapping[str, object]
+) -> None:
+    router: Final = _router_with_an_azure_deployment_aliasing(
+        "azure/my-whisper-deployment", "azure/gpt-realtime-whisper"
+    )
+    gateway: Final = _GatewayThatRecordsTheUrl()
+
+    await router.acreate_realtime_transcription_session(
+        model="team-alias",
+        transcription_session={"input_audio_format": "pcm16"},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        **request_kwargs,
+    )
+
+    assert gateway.url == "https://my-endpoint.openai.azure.com/openai/v1/realtime/transcription_sessions"
 
 
 async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: str | None):
