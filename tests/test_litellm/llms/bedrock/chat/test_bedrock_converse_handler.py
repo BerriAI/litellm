@@ -1,5 +1,3 @@
-import litellm
-
 """Tests for `BedrockConverseLLM.completion`.
 
 AWS credential resolution is stubbed so nothing reaches STS.
@@ -18,6 +16,7 @@ import pytest
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
+import litellm
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration

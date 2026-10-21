@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import queue
-import re
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -33,7 +32,6 @@ from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
-from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
@@ -61,19 +59,12 @@ from litellm.utils import (
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
-    add_custom_logger_callback_to_specific_event,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
-    check_valid_key,
     client,
-    filter_out_litellm_params,
-    get_applied_guardrails,
-    get_llm_provider,
     get_non_default_completion_params,
-    get_optional_params_embeddings,
     get_optional_params_image_gen,
-    get_potential_model_names,
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
@@ -586,6 +577,7 @@ def test_all_model_configs():
 
 
 def test_cohere_embedding_optional_params():
+    from litellm import get_optional_params_embeddings
 
     optional_params = get_optional_params_embeddings(
         model="embed-v4.0",
@@ -1607,6 +1599,7 @@ class TestProxyFunctionCalling:
         # For now, we expect False (current behavior), but document the limitation
         assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
+
     def test_litellm_utils_supports_function_calling_import(self):
         """Test that supports_function_calling can be imported from litellm.utils."""
         try:
@@ -1625,6 +1618,7 @@ class TestProxyFunctionCalling:
             assert callable(litellm.supports_function_calling)
         except Exception as e:
             pytest.fail(f"Failed to access litellm.supports_function_calling: {e}")
+
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
