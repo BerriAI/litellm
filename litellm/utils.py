@@ -29,6 +29,7 @@ import textwrap
 import threading
 import time
 import traceback
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -2386,12 +2387,12 @@ def _select_custom_tokenizer_helper(
     return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
-def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
+def _select_tokenizer_helper(model: str, *, count_route: bool = False) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
 
     try:
-        result: Final = _return_huggingface_tokenizer(model)
+        result: Final = _return_huggingface_tokenizer(model, count_route=count_route)
         if result is not None:
             return result
     except Exception as e:
@@ -2413,7 +2414,15 @@ def uses_anthropic_tokenizer(model: str) -> bool:
     return model in litellm.anthropic_models and "claude-3" not in model
 
 
-HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "llama2", "llama3"]
+HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek", "llama2", "llama3"]
+
+_DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
+    r"deepseek[-_.](?:chat[-_.])?v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)(?::free)?$", re.IGNORECASE
+)
+
+_BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(
+    {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
+)
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -2429,14 +2438,27 @@ def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
     return None
 
 
-def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
-    kind: Final = huggingface_tokenizer_kind(model)
+def _return_huggingface_tokenizer(model: str, *, count_route: bool = False) -> SelectTokenizerResponse | None:
+    kind: Final = (
+        "deepseek" if count_route and _DEEPSEEK_TOKENIZER_MODEL.search(model) else huggingface_tokenizer_kind(model)
+    )
     if kind is None:
         return None
-    return {
-        "type": "huggingface_tokenizer",
-        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
-    }
+    return _huggingface_tokenizer(kind)
+
+
+def _huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> SelectTokenizerResponse:
+    with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
+        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}  # mutable-ok: SelectTokenizerResponse shape
+
+
+def select_count_route_tokenizer(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None = None
+) -> SelectTokenizerResponse:
+    if custom_tokenizer is None and _DEEPSEEK_TOKENIZER_MODEL.search(model):
+        return _select_tokenizer_helper(model=model, count_route=True)
+    return _select_tokenizer(model=model, custom_tokenizer=custom_tokenizer)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2447,6 +2469,12 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
             return tokenizer_dispatch.anthropic()
+        case "deepseek":
+            return tokenizer_dispatch.from_str(
+                resources.files("litellm.litellm_core_utils.tokenizers")
+                .joinpath("deepseek_tokenizer.json")
+                .read_text(encoding="utf-8")
+            )
         case "llama2":
             return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
@@ -2543,6 +2571,7 @@ def token_counter(
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
+    chat_template_tools: bool = False,
 ) -> int:
     """
     The same as `litellm.litellm_core_utils.token_counter`.
@@ -2569,6 +2598,7 @@ def token_counter(
         tool_choice,
         use_default_image_token_count,
         default_token_count,
+        chat_template_tools,
     )
 
 
