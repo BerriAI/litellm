@@ -833,6 +833,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -959,6 +971,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1131,6 +1144,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "guardrail_cost_per_unit": {
                     "type": "object",
                     "additionalProperties": {"type": "number"},
+                },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
                 },
                 "search_context_cost_per_query": {
                     "type": "object",
@@ -8187,12 +8210,17 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif (
-            v["litellm_provider"] == "sagemaker"
-            or v["litellm_provider"] == "bedrock_converse"
+        elif v["litellm_provider"] in (
+            "sagemaker",
+            "bedrock_converse",
+            "coralbricks",
+            "inferenceapis",
+            "microsoft_365_copilot",
+            "openinfer",
+            "scaledown",
         ):
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])
