@@ -331,12 +331,17 @@ def filter_team_based_models(
 
 
 def _model_group_of(deployment: Mapping[str, object]) -> tuple[object, object]:
-    """A team deployment's model group is its team and public name; any other deployment's is its `model_name`."""
+    """A team deployment's model group is its team and public name, with no name for a team deployment created
+    before public names; any other deployment's is its `model_name`."""
     model_info: Final = _OBJECT_MAPPING_ADAPTER.validate_python(deployment.get("model_info") or {})
+    team_id: Final = model_info.get("team_id")
     public_name: Final = model_info.get("team_public_model_name")
     if isinstance(public_name, str) and public_name:
-        return model_info.get("team_id"), public_name
-    return None, deployment["model_name"]
+        return team_id, public_name
+    model_name: Final = deployment["model_name"]
+    if isinstance(team_id, str) and isinstance(model_name, str) and model_name.startswith(f"model_name_{team_id}_"):
+        return team_id, None
+    return None, model_name
 
 
 class RawModelGroupCollisionError(BadRequestError):
@@ -344,8 +349,14 @@ class RawModelGroupCollisionError(BadRequestError):
 
 
 def refuse_litellm_model_spanning_model_groups(model: str, deployments: Sequence[Mapping[str, object]]) -> None:
-    """Raise a 400 when the deployments matched by a raw `litellm_params.model` belong to more than one model group."""
-    if len(frozenset(_model_group_of(deployment) for deployment in deployments)) < 2:
+    """Raise a 400 when the deployments matched by a raw `litellm_params.model` belong to more than one model group.
+
+    A team with a matching deployment created before public names counts as one model group.
+    """
+    groups: Final = frozenset(_model_group_of(deployment) for deployment in deployments)
+    unnamed_teams: Final = frozenset(team for team, name in groups if team is not None and name is None)
+    counted: Final = frozenset((team, None) if team in unnamed_teams else (team, name) for team, name in groups)
+    if len(counted) < 2:
         return
     raise RawModelGroupCollisionError(
         message=f"LiteLLM Router: model={model} is the litellm_params.model of more than one model group. "

@@ -528,11 +528,14 @@ def test_collision_check_applies_to_an_alias_that_points_at_a_shared_litellm_mod
         assert {_pick_sync(router, "alias", False) for _ in range(60)} == {"chain-a-1", "chain-a-2", "chain-b-1"}
 
 
-def _team_deployment(deployment_id: str, team_id: str) -> dict[str, object]:
+def _team_deployment(deployment_id: str, team_id: str, public_name: str | None = "team-model") -> dict[str, object]:
+    model_info: Final[dict[str, str]] = {"id": deployment_id, "team_id": team_id}
+    if public_name is not None:
+        model_info["team_public_model_name"] = public_name
     return {
         "model_name": f"model_name_{team_id}_{deployment_id}",
         "litellm_params": {"model": _SHARED_LITELLM_MODEL, "api_key": "test-key"},
-        "model_info": {"id": deployment_id, "team_id": team_id, "team_public_model_name": "team-model"},
+        "model_info": model_info,
     }
 
 
@@ -560,6 +563,30 @@ def _pick_for_team(router: Router, team_id: str, specific_deployment: bool) -> s
         return deployment["model_info"]["id"]  # pyright: ignore[reportUnknownVariableType]  # the router returns an untyped deployment dict
 
     return asyncio.run(pick())
+
+
+@pytest.mark.parametrize("specific_deployment", (True, False))
+@pytest.mark.parametrize(
+    "public_names",
+    (
+        pytest.param((None, None), id="both-created-before-public-names"),
+        pytest.param((None, "team-model"), id="one-created-before-public-names"),
+    ),
+)
+def test_collision_check_serves_a_team_model_created_before_public_names(
+    public_names: tuple[str | None, str | None], specific_deployment: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _team_deployment("team-1-a", "team-1", public_names[0]),
+            _team_deployment("team-1-b", "team-1", public_names[1]),
+        ],
+        enable_cross_model_group_collision_check=True,
+    )
+
+    picked: Final = {_pick_for_team(router, "team-1", specific_deployment) for _ in range(40)}
+
+    assert picked == {"team-1-a", "team-1-b"}
 
 
 @pytest.mark.parametrize("specific_deployment", (True, False))

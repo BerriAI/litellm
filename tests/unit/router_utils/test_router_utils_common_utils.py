@@ -968,8 +968,12 @@ def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_d
     assert "supports_max_reasoning_effort" not in router.get_model_list()[0]["litellm_params"]
 
 
-def _group_member(model_name: str, team: tuple[str, str] | None = None) -> DeploymentTypedDict:
-    model_info: Final[dict[str, str]] = {} if team is None else {"team_id": team[0], "team_public_model_name": team[1]}
+def _group_member(model_name: str, team: tuple[str, str | None] | None = None) -> DeploymentTypedDict:
+    model_info: Final[dict[str, str]] = {}
+    if team is not None:
+        model_info["team_id"] = team[0]
+        if team[1] is not None:
+            model_info["team_public_model_name"] = team[1]
     return {"model_name": model_name, "litellm_params": {"model": "openai/shared-backend"}, "model_info": model_info}
 
 
@@ -1000,6 +1004,36 @@ def _group_member(model_name: str, team: tuple[str, str] | None = None) -> Deplo
             (_group_member("model_name_t1_a", ("t1", "gpt-team")), _group_member("gpt-team")),
             True,
             id="team-model-and-proxy-group",
+        ),
+        pytest.param(
+            (_group_member("model_name_t1_a", ("t1", None)), _group_member("model_name_t1_b", ("t1", None))),
+            False,
+            id="team-model-created-before-public-names",
+        ),
+        pytest.param(
+            (_group_member("model_name_t1_a", ("t1", None)), _group_member("model_name_t1_b", ("t1", "gpt-team"))),
+            False,
+            id="team-deployments-from-before-and-after-public-names",
+        ),
+        pytest.param(
+            (_group_member("model_name_t1_a", ("t1", None)), _group_member("model_name_t2_a", ("t2", None))),
+            True,
+            id="two-teams-created-before-public-names",
+        ),
+        pytest.param(
+            (_group_member("model_name_t1_a", ("t1", None)), _group_member("chain-a")),
+            True,
+            id="team-model-created-before-public-names-and-proxy-group",
+        ),
+        pytest.param(
+            (_group_member("gpt-team", ("t1", None)), _group_member("chain-a")),
+            True,
+            id="team-deployment-named-like-a-proxy-group",
+        ),
+        pytest.param(
+            (_group_member("gpt-team", ("t1", None)), _group_member("gpt-team")),
+            False,
+            id="team-deployment-in-a-proxy-group",
         ),
     ),
 )

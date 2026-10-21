@@ -36,6 +36,7 @@ DEPLOYMENTS: Final = (
 CHAIN_A: Final = frozenset({"collision-a-1", "collision-a-2"})
 TEAM_MODEL: Final = "openai/integration-team-raw-model"
 TEAM_DEPLOYMENTS: Final = frozenset({"collision-team-1", "collision-team-2"})
+TEAM_BEFORE_PUBLIC_NAMES: Final = "collision-team-before-public-names"
 ALIAS: Final = "collision-alias"
 POOLED_CALLS: Final = 48
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -106,14 +107,26 @@ def _deployment(wire: Wire, group: str, identity: str, model: str) -> dict[str, 
     }
 
 
+def _team_deployment_from_before_public_names(wire: Wire, identity: str, model: str) -> dict[str, JsonValue]:
+    return {
+        "model_name": f"model_name_{TEAM_BEFORE_PUBLIC_NAMES}_{identity}",
+        "litellm_params": {"model": model, "api_base": f"{wire.url}/{identity}/v1", "api_key": "synthetic-key"},
+        "model_info": {"id": identity, "team_id": TEAM_BEFORE_PUBLIC_NAMES},
+    }
+
+
 def _config(
     wire: Wire,
     directory: Path,
     router_settings: dict[str, JsonValue],
     extra_deployments: tuple[tuple[str, str, str], ...] = (),
+    team_deployments: tuple[dict[str, JsonValue], ...] = (),
 ) -> Path:
     config: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    config["model_list"] = [_deployment(wire, *deployment) for deployment in (*DEPLOYMENTS, *extra_deployments)]
+    config["model_list"] = [
+        *(_deployment(wire, *deployment) for deployment in (*DEPLOYMENTS, *extra_deployments)),
+        *team_deployments,
+    ]
     config["router_settings"] = {**JSON_OBJECT.validate_python(config["router_settings"]), **router_settings}
     path: Final = directory / "raw-model-group-collision.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -154,6 +167,24 @@ def guarded_without_specific_deployment(peer: Wire, tmp_path_factory: pytest.Tem
             **CATCH_ALL_FALLBACK,
         },
         (("collision-wild/*", "collision-wild-1", "openai/*"),),
+    )
+    with gateway_from_environment() as base, owned_proxy(base, directory, {}, config=path) as proxy:
+        yield proxy
+
+
+@pytest.fixture(scope="module")
+def guarded_with_team_models_from_before_public_names(
+    peer: Wire, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("raw-model-collision-before-public-names")
+    path: Final = _config(
+        peer,
+        directory,
+        {"enable_cross_model_group_collision_check": True},
+        team_deployments=(
+            *(_team_deployment_from_before_public_names(peer, identity, TEAM_MODEL) for identity in TEAM_DEPLOYMENTS),
+            _team_deployment_from_before_public_names(peer, "collision-team-solo-1", SOLO_MODEL),
+        ),
     )
     with gateway_from_environment() as base, owned_proxy(base, directory, {}, config=path) as proxy:
         yield proxy
@@ -467,6 +498,44 @@ def test_a_team_model_on_a_raw_model_string_a_proxy_group_also_uses_is_refused_f
         peer.drain()
         refused: Final = guarded.request("POST", *_chat(SOLO_MODEL, uuid.uuid4().hex), key=team_key)
         served: Final = guarded.request("POST", *_chat(SOLO_MODEL, uuid.uuid4().hex), key=other_key)
+        received: Final = _served_by(peer.drain())
+
+        assert refused.status_code == 400, refused.text
+        assert SOLO_MODEL in refused.text
+        assert served.status_code == 200, served.text
+        assert received == ("collision-solo-1",)
+
+
+def test_a_team_model_created_before_public_names_counts_as_one_model_group(
+    guarded_with_team_models_from_before_public_names: Gateway, peer: Wire
+) -> None:
+    gateway: Final = guarded_with_team_models_from_before_public_names
+    with gateway.scenario() as scenario:
+        scenario.team(team_id=TEAM_BEFORE_PUBLIC_NAMES)
+        _team_deployment(scenario, peer, TEAM_BEFORE_PUBLIC_NAMES, "collision-team-model", "collision-team-3")
+        key: Final = scenario.key(team_id=TEAM_BEFORE_PUBLIC_NAMES)
+        peer.drain()
+        responses: Final = tuple(
+            gateway.request("POST", *_chat(TEAM_MODEL, uuid.uuid4().hex), key=key) for _ in range(12)
+        )
+        served: Final = _served_by(peer.drain())
+
+        assert [response.status_code for response in responses] == [200] * 12, [r.text for r in responses]
+        assert len(served) == 12
+        assert set(served) <= {*TEAM_DEPLOYMENTS, "collision-team-3"}
+
+
+def test_a_team_model_created_before_public_names_on_a_proxy_groups_raw_model_string_is_refused(
+    guarded_with_team_models_from_before_public_names: Gateway, peer: Wire
+) -> None:
+    gateway: Final = guarded_with_team_models_from_before_public_names
+    with gateway.scenario() as scenario:
+        scenario.team(team_id=TEAM_BEFORE_PUBLIC_NAMES)
+        team_key: Final = scenario.key(team_id=TEAM_BEFORE_PUBLIC_NAMES)
+        other_key: Final = scenario.key()
+        peer.drain()
+        refused: Final = gateway.request("POST", *_chat(SOLO_MODEL, uuid.uuid4().hex), key=team_key)
+        served: Final = gateway.request("POST", *_chat(SOLO_MODEL, uuid.uuid4().hex), key=other_key)
         received: Final = _served_by(peer.drain())
 
         assert refused.status_code == 400, refused.text
