@@ -7435,10 +7435,7 @@ async def _run_vertex_live_gated_passthrough(client_frames, valid_token):
                 vertex_location="global",
                 llm_router=llm_router,
             ),
-            client_frame_gate=_build_vertex_live_client_frame_gate(
-                llm_model_list=llm_router.get_model_list(),
-                llm_router=llm_router,
-            ),
+            client_frame_gate=_build_vertex_live_client_frame_gate(llm_router=llm_router),
         )
 
     return websocket, upstream_ws
@@ -7541,6 +7538,32 @@ async def test_vertex_live_setup_frame_with_an_escaped_key_is_still_gated():
     """Large audio frames skip the parse on a substring test, so a JSON-escaped key must not slip past it"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [{"type": "websocket.receive", "text": '{"\\u0073etup": {"model": "totally-unlisted-model-abc"}}'}],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame_kind", ["text", "bytes"])
+@pytest.mark.parametrize(
+    "lenient_setup",
+    [
+        '{"setup": {"model": "totally-unlisted-model-abc",},}',
+        "{'setup': {'model': 'totally-unlisted-model-abc'}}",
+        '{setup: {model: "totally-unlisted-model-abc"}}',
+    ],
+)
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused(lenient_setup, frame_kind):
+    """Vertex reads trailing commas, single quotes and bare keys, which strict JSON refuses to parse"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            {
+                "type": "websocket.receive",
+                frame_kind: lenient_setup if frame_kind == "text" else lenient_setup.encode(),
+            }
+        ],
         UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
     )
 
@@ -7663,10 +7686,7 @@ async def test_vertex_live_setup_frame_resolves_an_access_group_grant_in_every_a
             },
         ]
     )
-    gate = _build_vertex_live_client_frame_gate(
-        llm_model_list=llm_router.get_model_list(),
-        llm_router=llm_router,
-    )
+    gate = _build_vertex_live_client_frame_gate(llm_router=llm_router)
 
     frame = json.dumps({"setup": {"model": addressing.format(model=VERTEX_LIVE_GROUP)}})
     denial = await gate(frame, UserAPIKeyAuth(token="hashed", models=["live-team"]))
