@@ -271,6 +271,10 @@ class _ProviderHTTPException(Protocol):
 
 
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES: Final = (
+    "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable",
+    "Missing credentials. Please pass an `api_key`",
+)
 
 
 def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
@@ -439,10 +443,7 @@ def _map_openai_exception(
             litellm_debug_info=extra_information,
             body=getattr(original_exception, "body", None),
         )
-    elif (
-        "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
-        in error_str
-    ):
+    elif any(marker in error_str for marker in _OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES):
         raise AuthenticationError(
             message=f"AuthenticationError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,

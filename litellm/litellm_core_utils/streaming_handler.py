@@ -1056,7 +1056,12 @@ class CustomStreamWrapper:
         """
         Copy a specific attribute from source delta to target delta.
         """
-        setattr(target_delta, attribute_name, getattr(source_delta, attribute_name))
+        value: Final = stored_attribute(source_delta, attribute_name)
+        setattr(
+            target_delta,
+            attribute_name,
+            value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value,
+        )
 
     def _has_any_special_delta_attributes(self, delta: object) -> bool:
         """

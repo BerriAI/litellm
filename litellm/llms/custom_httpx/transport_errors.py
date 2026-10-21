@@ -1,6 +1,9 @@
 import sys
 from collections.abc import Iterator
 from enum import Enum
+from functools import partial
+from itertools import accumulate, takewhile
+from operator import is_not
 from typing import Final, TypeAlias
 
 import httpx
@@ -42,13 +45,15 @@ def transport_error_classes(kind: TransportErrorKind) -> tuple[type[BaseExceptio
     return tuple(error_class for error_class, error_kind in _transport_errors() if error_kind is kind)
 
 
-def _explicit_causes(error: BaseException | None, depth: int) -> Iterator[BaseException]:
-    if error is None or depth == 0:
-        return
-    yield error
-    yield from _explicit_causes(error.__cause__, depth - 1)
+def _next_cause(error: BaseException | None, _depth: int) -> BaseException | None:
+    return None if error is None else error.__cause__
+
+
+def _explicit_causes(error: BaseException) -> Iterator[BaseException | None]:
+    causes: Final = accumulate(range(1, _MAX_CAUSE_DEPTH), _next_cause, initial=error)
+    return takewhile(partial(is_not, None), causes)
 
 
 def chained_transport_error_kind(error: BaseException) -> TransportErrorKind | None:
-    kinds: Final = (transport_error_kind(cause) for cause in _explicit_causes(error, _MAX_CAUSE_DEPTH))
+    kinds: Final = (transport_error_kind(cause) for cause in _explicit_causes(error))
     return next((kind for kind in kinds if kind is not None), None)

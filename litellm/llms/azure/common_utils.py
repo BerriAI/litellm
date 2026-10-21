@@ -8,6 +8,7 @@ from contextlib import closing
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -326,13 +327,26 @@ def get_azure_ad_token_from_oidc(
     return azure_ad_token_access_token
 
 
+_DEPLOYMENT_OPERATION_PATH: Final = re.compile(
+    r"(?P<deployment>.*/openai/deployments/[^/]+)"
+    r"/(?:chat/completions|completions|embeddings|audio/(?:transcriptions|translations|speech)|images/(?:generations|edits))/?"
+)
+
+
+def _azure_deployment_base_url(deployment_url: str) -> str:
+    parts: Final = urlsplit(deployment_url)
+    operation_path: Final = _DEPLOYMENT_OPERATION_PATH.fullmatch(parts.path)
+    deployment_path: Final = parts.path if operation_path is None else operation_path["deployment"]
+    return urlunsplit(parts._replace(path=deployment_path, query="", fragment=""))
+
+
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
-    if azure_endpoint is not None:
+    if isinstance(azure_endpoint, str):
         # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
         if "/openai/deployments" in azure_endpoint:
             # this is base_url, not an azure_endpoint
-            azure_client_params["base_url"] = azure_endpoint
+            azure_client_params["base_url"] = _azure_deployment_base_url(azure_endpoint)
             azure_client_params.pop("azure_endpoint")
 
     return azure_client_params

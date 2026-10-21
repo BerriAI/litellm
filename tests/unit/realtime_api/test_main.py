@@ -1081,7 +1081,9 @@ async def test_voice_transcript_blocked_by_guardrail():
 
 
 @pytest.fixture
-def federated_deployment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, str]:
+def federated_deployment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, openai_token_exchange_via_httpx: None
+) -> dict[str, str]:
     token_file: Final = tmp_path / "subject_token.jwt"
     token_file.write_text("subject-token")
     for name in (

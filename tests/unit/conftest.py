@@ -2,8 +2,10 @@ import asyncio
 import base64
 import importlib
 import os
+import sys
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -425,6 +427,32 @@ FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
 def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in FAKE_PROVIDER_CREDENTIALS.items():
         monkeypatch.setenv(name, value)
+
+
+@pytest.fixture
+def openai_token_exchange_via_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
+    workload_module: Final = sys.modules.get("openai.auth._workload")
+    native_client_factory: Final = getattr(workload_module, "DefaultHttpx2Client", None)
+    if native_client_factory is None:
+        return
+    import httpx2
+
+    def send_through_httpx(request: httpx2.Request) -> httpx2.Response:
+        with httpx.Client(trust_env=False) as client:
+            try:
+                response: Final = client.send(
+                    httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
+                )
+            except httpx.TransportError as error:
+                native_error: Final = getattr(httpx2, type(error).__name__, httpx2.TransportError)
+                raise native_error(str(error), request=request) from error
+        return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+    monkeypatch.setattr(
+        workload_module,
+        "DefaultHttpx2Client",
+        partial(native_client_factory, transport=httpx2.MockTransport(send_through_httpx), trust_env=False),
+    )
 
 
 @pytest.fixture

@@ -72,7 +72,7 @@ def _failure_details(original: Exception) -> _FailureDetails:
     upstream: Final = _FailureDetails.model_validate(body)
     return _FailureDetails(
         message=upstream.message or mapped.message,
-        code=upstream.code if upstream.code is not None else mapped.code,
+        code=upstream.code if "code" in body and body["code"] is not None else mapped.code,
         type=upstream.type or mapped.type,
         status_code=mapped.status_code,
     )

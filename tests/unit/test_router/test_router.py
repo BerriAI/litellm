@@ -26971,7 +26971,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         ]
     )
 
-    openai_client = openai.OpenAI(api_key="")
+    openai_client = openai.OpenAI(api_key="sk-fake")
 
     cooldown_time = 30
 

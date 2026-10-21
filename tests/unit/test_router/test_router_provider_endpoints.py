@@ -95,11 +95,16 @@ def _ratelimit_headers(response: ModelResponse | CustomStreamWrapper) -> dict[st
 
 
 def _openai_router_client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key="sk-fake")
+    return AsyncOpenAI(api_key="sk-fake", http_client=httpx.AsyncClient())
 
 
 def _azure_router_client() -> AsyncAzureOpenAI:
-    return AsyncAzureOpenAI(api_key="sk-fake", azure_endpoint="https://azure.test", api_version="2025-02-01-preview")
+    return AsyncAzureOpenAI(
+        api_key="sk-fake",
+        azure_endpoint="https://azure.test",
+        api_version="2025-02-01-preview",
+        http_client=httpx.AsyncClient(),
+    )
 
 
 @pytest.mark.asyncio

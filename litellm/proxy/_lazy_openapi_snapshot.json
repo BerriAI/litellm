@@ -22556,8 +22556,15 @@
               "title": "Queries"
             },
             "query": {
-              "title": "Query",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
             },
             "sources": {
               "anyOf": [
@@ -22580,7 +22587,6 @@
             }
           },
           "required": [
-            "query",
             "type"
           ],
           "title": "ActionSearch",
@@ -22642,6 +22648,98 @@
             "type"
           ],
           "title": "ActionWait",
+          "type": "object"
+        },
+        "AdditionalTools": {
+          "additionalProperties": true,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "role": {
+              "enum": [
+                "unknown",
+                "user",
+                "assistant",
+                "system",
+                "critic",
+                "discriminator",
+                "developer",
+                "tool"
+              ],
+              "title": "Role",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FunctionTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FileSearchTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ComputerTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ComputerUsePreviewTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WebSearchTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Mcp"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CodeInterpreter"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ProgrammaticToolCalling"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ImageGeneration"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LocalShell"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FunctionShellTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CustomTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NamespaceTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ToolSearchTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WebSearchPreviewTool"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ApplyPatchTool"
+                  }
+                ]
+              },
+              "title": "Tools",
+              "type": "array"
+            },
+            "type": {
+              "const": "additional_tools",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "tools",
+            "type"
+          ],
+          "title": "AdditionalTools",
           "type": "object"
         },
         "AnnotationContainerFileCitation": {
@@ -22782,6 +22880,24 @@
           "additionalProperties": true,
           "description": "Allows the assistant to create, delete, or update files using unified diffs.",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
             "type": {
               "const": "apply_patch",
               "title": "Type",
@@ -22899,6 +23015,41 @@
           "title": "CachedTokensDetails",
           "type": "object"
         },
+        "CallerDirect": {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "direct",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CallerDirect",
+          "type": "object"
+        },
+        "CallerProgram": {
+          "additionalProperties": true,
+          "properties": {
+            "caller_id": {
+              "title": "Caller Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "program",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "caller_id",
+            "type"
+          ],
+          "title": "CallerProgram",
+          "type": "object"
+        },
         "Click": {
           "additionalProperties": true,
           "description": "A click action.",
@@ -22955,6 +23106,24 @@
           "additionalProperties": true,
           "description": "A tool that runs Python code to help generate a response to a prompt.",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
             "container": {
               "anyOf": [
                 {
@@ -23132,7 +23301,7 @@
         },
         "ComputerTool": {
           "additionalProperties": true,
-          "description": "A tool that controls a virtual computer.\n\nLearn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).",
+          "description": "A tool that controls a virtual computer.\n\nLearn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).",
           "properties": {
             "type": {
               "const": "computer",
@@ -23148,7 +23317,7 @@
         },
         "ComputerUsePreviewTool": {
           "additionalProperties": true,
-          "description": "A tool that controls a virtual computer.\n\nLearn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).",
+          "description": "A tool that controls a virtual computer.\n\nLearn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).",
           "properties": {
             "display_height": {
               "title": "Display Height",
@@ -23384,8 +23553,37 @@
         },
         "CustomTool": {
           "additionalProperties": true,
-          "description": "A custom tool that processes input using a specified format.\n\nLearn more about   [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)",
+          "description": "A custom tool that processes input using a specified format.\n\nLearn more about   [custom tools](https://developers.openai.com/api/docs/guides/function-calling#custom-tools)",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "defer_loading": {
               "anyOf": [
                 {
@@ -23665,7 +23863,7 @@
         },
         "FileSearchTool": {
           "additionalProperties": true,
-          "description": "A tool that searches for relevant content from uploaded files.\n\nLearn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).",
+          "description": "A tool that searches for relevant content from uploaded files.\n\nLearn more about the [file search tool](https://developers.openai.com/api/docs/guides/tools-file-search).",
           "properties": {
             "filters": {
               "anyOf": [
@@ -23748,6 +23946,24 @@
           "additionalProperties": true,
           "description": "A tool that allows the model to execute shell commands.",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
             "environment": {
               "anyOf": [
                 {
@@ -23779,8 +23995,37 @@
         },
         "FunctionTool": {
           "additionalProperties": true,
-          "description": "Defines a function in your own code the model can choose to call.\n\nLearn more about [function calling](https://platform.openai.com/docs/guides/function-calling).",
+          "description": "Defines a function in your own code the model can choose to call.\n\nLearn more about [function calling](https://developers.openai.com/api/docs/guides/function-calling).",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "defer_loading": {
               "anyOf": [
                 {
@@ -23806,6 +24051,18 @@
             "name": {
               "title": "Name",
               "type": "string"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Schema"
             },
             "parameters": {
               "anyOf": [
@@ -23996,6 +24253,31 @@
           "title": "Grammar",
           "type": "object"
         },
+        "HTTPError": {
+          "additionalProperties": true,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "integer"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "const": "http_error",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "type"
+          ],
+          "title": "HTTPError",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -24079,7 +24361,14 @@
                   "enum": [
                     "gpt-image-1",
                     "gpt-image-1-mini",
-                    "gpt-image-1.5"
+                    "gpt-image-2",
+                    "gpt-image-2-2026-04-21",
+                    "gpt-image-2.5-sunburst",
+                    "gpt-image-2.5-sunburst-2026-09-08",
+                    "gpt-image-2.5-flare",
+                    "gpt-image-2.5-flare-2026-09-08",
+                    "gpt-image-1.5",
+                    "chatgpt-image-latest"
                   ],
                   "type": "string"
                 },
@@ -24149,6 +24438,8 @@
                     "low",
                     "medium",
                     "high",
+                    "xhigh",
+                    "max",
                     "auto"
                   ],
                   "type": "string"
@@ -24161,6 +24452,9 @@
             },
             "size": {
               "anyOf": [
+                {
+                  "type": "string"
+                },
                 {
                   "enum": [
                     "1024x1024",
@@ -24192,9 +24486,86 @@
           "additionalProperties": true,
           "description": "An image generation request made by the model.",
           "properties": {
+            "action": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "generate",
+                    "edit",
+                    "auto"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            },
+            "background": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "opaque",
+                    "auto"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Background"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ImageGenerationCallError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "title": "Id",
               "type": "string"
+            },
+            "output_format": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "png",
+                    "webp",
+                    "jpeg"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Format"
+            },
+            "quality": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    "auto"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Quality"
             },
             "result": {
               "anyOf": [
@@ -24206,6 +24577,36 @@
                 }
               ],
               "title": "Result"
+            },
+            "revised_prompt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revised Prompt"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "1024x1024",
+                    "1024x1536",
+                    "1536x1024"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Size"
             },
             "status": {
               "enum": [
@@ -24229,6 +24630,86 @@
             "type"
           ],
           "title": "ImageGenerationCall",
+          "type": "object"
+        },
+        "ImageGenerationCallError": {
+          "additionalProperties": true,
+          "description": "Details of a moderation failure, when available.",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "moderation_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ImageGenerationCallErrorModerationDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "param": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Param"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "ImageGenerationCallError",
+          "type": "object"
+        },
+        "ImageGenerationCallErrorModerationDetails": {
+          "additionalProperties": true,
+          "description": "Public details for a `moderation_blocked` error, when available.",
+          "properties": {
+            "categories": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Categories",
+              "type": "array"
+            },
+            "moderation_stage": {
+              "enum": [
+                "input",
+                "output",
+                "unknown"
+              ],
+              "title": "Moderation Stage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "categories",
+            "moderation_stage"
+          ],
+          "title": "ImageGenerationCallErrorModerationDetails",
           "type": "object"
         },
         "ImageGenerationInputImageMask": {
@@ -24270,7 +24751,9 @@
                 {
                   "enum": [
                     "max_output_tokens",
-                    "content_filter"
+                    "max_messages",
+                    "content_filter",
+                    "steered"
                   ],
                   "type": "string"
                 },
@@ -24712,8 +25195,26 @@
         },
         "Mcp": {
           "additionalProperties": true,
-          "description": "Give the model access to additional tools via remote Model Context Protocol\n(MCP) servers. [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).",
+          "description": "Give the model access to additional tools via remote Model Context Protocol\n(MCP) servers. [Learn more about MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).",
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
             "allowed_tools": {
               "anyOf": [
                 {
@@ -24831,6 +25332,17 @@
                 }
               ],
               "title": "Server Url"
+            },
+            "tunnel_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tunnel Id"
             },
             "type": {
               "const": "mcp",
@@ -24978,7 +25490,13 @@
             "error": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/McpProtocolError"
+                },
+                {
+                  "$ref": "#/components/schemas/McpToolExecutionError"
+                },
+                {
+                  "$ref": "#/components/schemas/HTTPError"
                 },
                 {
                   "type": "null"
@@ -25127,6 +25645,31 @@
           "title": "McpListToolsTool",
           "type": "object"
         },
+        "McpProtocolError": {
+          "additionalProperties": true,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "integer"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "const": "mcp_protocol_error",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "type"
+          ],
+          "title": "McpProtocolError",
+          "type": "object"
+        },
         "McpRequireApprovalMcpToolApprovalFilter": {
           "additionalProperties": true,
           "description": "Specify which of the MCP server's tools require approval.\n\nCan be\n`always`, `never`, or a filter object associated with tools\nthat require approval.",
@@ -25219,6 +25762,25 @@
             }
           },
           "title": "McpRequireApprovalMcpToolApprovalFilterNever",
+          "type": "object"
+        },
+        "McpToolExecutionError": {
+          "additionalProperties": true,
+          "properties": {
+            "content": {
+              "title": "Content"
+            },
+            "type": {
+              "const": "mcp_tool_execution_error",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "McpToolExecutionError",
           "type": "object"
         },
         "Move": {
@@ -25908,6 +26470,111 @@
           "title": "PendingSafetyCheck",
           "type": "object"
         },
+        "Program": {
+          "additionalProperties": true,
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "fingerprint": {
+              "title": "Fingerprint",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "program",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "call_id",
+            "code",
+            "fingerprint",
+            "type"
+          ],
+          "title": "Program",
+          "type": "object"
+        },
+        "ProgramOutput": {
+          "additionalProperties": true,
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "result": {
+              "title": "Result",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "program_output",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "call_id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ProgramOutput",
+          "type": "object"
+        },
+        "ProgrammaticToolCalling": {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "programmatic_tool_calling",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ProgrammaticToolCalling",
+          "type": "object"
+        },
+        "PromptCacheBreakpoint": {
+          "additionalProperties": true,
+          "description": "Marks the exact end of a reusable prompt prefix.\n\nThe breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.",
+          "properties": {
+            "mode": {
+              "const": "explicit",
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "PromptCacheBreakpoint",
+          "type": "object"
+        },
         "RankingOptions": {
           "additionalProperties": true,
           "description": "Ranking options for search.",
@@ -26029,6 +26696,34 @@
           "title": "RealtimeTranscriptionSessionResponse",
           "type": "object"
         },
+        "Reasoning": {
+          "additionalProperties": true,
+          "description": "The reasoning configuration applied by this update.",
+          "properties": {
+            "effort": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Effort"
+            }
+          },
+          "title": "Reasoning",
+          "type": "object"
+        },
         "ResponseAPIUsage": {
           "additionalProperties": true,
           "properties": {
@@ -26092,6 +26787,20 @@
               "title": "Call Id",
               "type": "string"
             },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
+            },
             "created_by": {
               "anyOf": [
                 {
@@ -26152,6 +26861,20 @@
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "created_by": {
               "anyOf": [
@@ -26274,7 +26997,7 @@
         },
         "ResponseCompactionItem": {
           "additionalProperties": true,
-          "description": "A compaction item generated by the [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).",
+          "description": "A compaction item generated by the [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).",
           "properties": {
             "created_by": {
               "anyOf": [
@@ -26311,7 +27034,7 @@
         },
         "ResponseComputerToolCall": {
           "additionalProperties": true,
-          "description": "A tool call to a computer use tool.\n\nSee the\n[computer use guide](https://platform.openai.com/docs/guides/tools-computer-use) for more information.",
+          "description": "A tool call to a computer use tool.\n\nSee the\n[computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use) for more information.",
           "properties": {
             "action": {
               "anyOf": [
@@ -26533,6 +27256,37 @@
           "title": "ResponseComputerToolCallOutputScreenshot",
           "type": "object"
         },
+        "ResponseConfigurationUpdateItem": {
+          "additionalProperties": true,
+          "description": "A configuration update that applies to subsequent responses until it is\nreplaced by another configuration update.",
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "reasoning": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Reasoning"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "configuration_update",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ResponseConfigurationUpdateItem",
+          "type": "object"
+        },
         "ResponseContainerReference": {
           "additionalProperties": true,
           "description": "Represents a container created with /v1/containers.",
@@ -26558,9 +27312,34 @@
           "additionalProperties": true,
           "description": "A call to a custom tool created by the model.",
           "properties": {
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "id": {
               "anyOf": [
@@ -26611,9 +27390,34 @@
           "additionalProperties": true,
           "description": "A call to a custom tool created by the model.",
           "properties": {
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "created_by": {
               "anyOf": [
@@ -26683,6 +27487,20 @@
               "title": "Call Id",
               "type": "string"
             },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
+            },
             "created_by": {
               "anyOf": [
                 {
@@ -26749,7 +27567,7 @@
         },
         "ResponseFileSearchToolCall": {
           "additionalProperties": true,
-          "description": "The results of a file search tool call.\n\nSee the\n[file search guide](https://platform.openai.com/docs/guides/tools-file-search) for more information.",
+          "description": "The results of a file search tool call.\n\nSee the\n[file search guide](https://developers.openai.com/api/docs/guides/tools-file-search) for more information.",
           "properties": {
             "id": {
               "title": "Id",
@@ -26836,7 +27654,7 @@
         },
         "ResponseFormatTextJSONSchemaConfigParam": {
           "additionalProperties": true,
-          "description": "JSON Schema response format.\n\nUsed to generate structured JSON responses.\nLearn more about [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).",
+          "description": "JSON Schema response format.\n\nUsed to generate structured JSON responses.\nLearn more about [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).",
           "properties": {
             "description": {
               "title": "Description",
@@ -26886,6 +27704,20 @@
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "created_by": {
               "anyOf": [
@@ -26949,6 +27781,20 @@
               "title": "Call Id",
               "type": "string"
             },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
+            },
             "created_by": {
               "anyOf": [
                 {
@@ -27009,15 +27855,40 @@
         },
         "ResponseFunctionToolCall": {
           "additionalProperties": true,
-          "description": "A tool call to run a function.\n\nSee the\n[function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.",
+          "description": "A tool call to run a function.\n\nSee the\n[function calling guide](https://developers.openai.com/api/docs/guides/function-calling) for more information.",
           "properties": {
             "arguments": {
               "title": "Arguments",
               "type": "string"
             },
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "id": {
               "anyOf": [
@@ -27078,15 +27949,40 @@
         },
         "ResponseFunctionToolCallItem": {
           "additionalProperties": true,
-          "description": "A tool call to run a function.\n\nSee the\n[function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.",
+          "description": "A tool call to run a function.\n\nSee the\n[function calling guide](https://developers.openai.com/api/docs/guides/function-calling) for more information.",
           "properties": {
             "arguments": {
               "title": "Arguments",
               "type": "string"
             },
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "call_id": {
               "title": "Call Id",
               "type": "string"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "created_by": {
               "anyOf": [
@@ -27148,8 +28044,29 @@
           "additionalProperties": true,
           "properties": {
             "call_id": {
-              "title": "Call Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "caller": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CallerDirect"
+                },
+                {
+                  "$ref": "#/components/schemas/CallerProgram"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Caller"
             },
             "created_by": {
               "anyOf": [
@@ -27165,6 +28082,28 @@
             "id": {
               "title": "Id",
               "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
             },
             "output": {
               "anyOf": [
@@ -27207,7 +28146,6 @@
           },
           "required": [
             "id",
-            "call_id",
             "output",
             "status",
             "type"
@@ -27217,7 +28155,7 @@
         },
         "ResponseFunctionWebSearch": {
           "additionalProperties": true,
-          "description": "The results of a web search tool call.\n\nSee the\n[web search guide](https://platform.openai.com/docs/guides/tools-web-search) for more information.",
+          "description": "The results of a web search tool call.\n\nSee the\n[web search guide](https://developers.openai.com/api/docs/guides/tools-web-search) for more information.",
           "properties": {
             "action": {
               "anyOf": [
@@ -27242,7 +28180,8 @@
                 "in_progress",
                 "searching",
                 "completed",
-                "failed"
+                "failed",
+                "incomplete"
               ],
               "title": "Status",
               "type": "string"
@@ -27270,8 +28209,9 @@
               "anyOf": [
                 {
                   "enum": [
-                    "high",
-                    "low"
+                    "auto",
+                    "low",
+                    "high"
                   ],
                   "type": "string"
                 },
@@ -27325,6 +28265,16 @@
               ],
               "title": "Filename"
             },
+            "prompt_cache_breakpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PromptCacheBreakpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "const": "input_file",
               "title": "Type",
@@ -27339,7 +28289,7 @@
         },
         "ResponseInputImage": {
           "additionalProperties": true,
-          "description": "An image input to the model.\n\nLearn about [image inputs](https://platform.openai.com/docs/guides/vision).",
+          "description": "An image input to the model.\n\nLearn about [image inputs](https://developers.openai.com/api/docs/guides/images-vision).",
           "properties": {
             "detail": {
               "enum": [
@@ -27372,6 +28322,16 @@
                 }
               ],
               "title": "Image Url"
+            },
+            "prompt_cache_breakpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PromptCacheBreakpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "const": "input_image",
@@ -27454,6 +28414,16 @@
           "additionalProperties": true,
           "description": "A text input to the model.",
           "properties": {
+            "prompt_cache_breakpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PromptCacheBreakpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "title": "Text",
               "type": "string"
@@ -27509,7 +28479,19 @@
                     "$ref": "#/components/schemas/ResponseToolSearchOutputItem"
                   },
                   {
+                    "$ref": "#/components/schemas/AdditionalTools"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResponseConfigurationUpdateItem"
+                  },
+                  {
                     "$ref": "#/components/schemas/ResponseReasoningItem"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Program"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ProgramOutput"
                   },
                   {
                     "$ref": "#/components/schemas/ResponseCompactionItem"
@@ -27751,7 +28733,7 @@
         },
         "ResponseReasoningItem": {
           "additionalProperties": true,
-          "description": "A description of the chain of thought used by a reasoning model while generating\na response. Be sure to include these items in your `input` to the Responses API\nfor subsequent turns of a conversation if you are manually\n[managing context](https://platform.openai.com/docs/guides/conversation-state).",
+          "description": "A description of the chain of thought used by a reasoning model while generating\na response. Be sure to include these items in your `input` to the Responses API\nfor subsequent turns of a conversation if you are manually\n[managing context](https://developers.openai.com/api/docs/guides/conversation-state).",
           "properties": {
             "content": {
               "anyOf": [
@@ -27821,7 +28803,7 @@
         },
         "ResponseTextConfigParam": {
           "additionalProperties": true,
-          "description": "Configuration options for a text response from the model.\n\nCan be plain\ntext or structured JSON data. Learn more:\n- [Text inputs and outputs](https://platform.openai.com/docs/guides/text)\n- [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)",
+          "description": "Configuration options for a text response from the model.\n\nCan be plain\ntext or structured JSON data. Learn more:\n- [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)\n- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)",
           "properties": {
             "format": {
               "anyOf": [
@@ -27993,6 +28975,9 @@
                     "$ref": "#/components/schemas/CodeInterpreter"
                   },
                   {
+                    "$ref": "#/components/schemas/ProgrammaticToolCalling"
+                  },
+                  {
                     "$ref": "#/components/schemas/ImageGeneration"
                   },
                   {
@@ -28156,10 +29141,19 @@
                         "$ref": "#/components/schemas/ResponseReasoningItem"
                       },
                       {
+                        "$ref": "#/components/schemas/Program"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ProgramOutput"
+                      },
+                      {
                         "$ref": "#/components/schemas/ResponseToolSearchCall"
                       },
                       {
                         "$ref": "#/components/schemas/ResponseToolSearchOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/AdditionalTools"
                       },
                       {
                         "$ref": "#/components/schemas/ResponseCompactionItem"
@@ -28356,6 +29350,9 @@
                   "$ref": "#/components/schemas/ToolChoiceCustomParam"
                 },
                 {
+                  "$ref": "#/components/schemas/ToolChoiceSpecificProgrammaticToolCallingParam"
+                },
+                {
                   "$ref": "#/components/schemas/ToolChoiceApplyPatchParam"
                 },
                 {
@@ -28392,6 +29389,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CodeInterpreter"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ProgrammaticToolCalling"
                       },
                       {
                         "$ref": "#/components/schemas/ImageGeneration"
@@ -28845,9 +29845,24 @@
           "title": "ToolChoiceShellParam",
           "type": "object"
         },
+        "ToolChoiceSpecificProgrammaticToolCallingParam": {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "programmatic_tool_calling",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ToolChoiceSpecificProgrammaticToolCallingParam",
+          "type": "object"
+        },
         "ToolChoiceTypesParam": {
           "additionalProperties": true,
-          "description": "Indicates that the model should use a built-in tool to generate a response.\n[Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).",
+          "description": "Indicates that the model should use a built-in tool to generate a response.\n[Learn more about built-in tools](https://developers.openai.com/api/docs/guides/tools).",
           "properties": {
             "type": {
               "enum": [
@@ -28873,6 +29888,35 @@
         "ToolFunction": {
           "additionalProperties": true,
           "properties": {
+            "allowed_callers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "direct",
+                      "programmatic"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Callers"
+            },
+            "async": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Async"
+            },
             "defer_loading": {
               "anyOf": [
                 {
@@ -28898,6 +29942,18 @@
             "name": {
               "title": "Name",
               "type": "string"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Schema"
             },
             "parameters": {
               "anyOf": [
@@ -29062,7 +30118,7 @@
         },
         "WebSearchPreviewTool": {
           "additionalProperties": true,
-          "description": "This tool searches the web for relevant results to use in a response.\n\nLearn more about the [web search tool](https://platform.openai.com/docs/guides/tools-web-search).",
+          "description": "This tool searches the web for relevant results to use in a response.\n\nLearn more about the [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).",
           "properties": {
             "search_content_types": {
               "anyOf": [
@@ -29125,8 +30181,19 @@
         },
         "WebSearchTool": {
           "additionalProperties": true,
-          "description": "Search the Internet for sources related to the prompt.\n\nLearn more about the\n[web search tool](https://platform.openai.com/docs/guides/tools-web-search).",
+          "description": "Search the Internet for sources related to the prompt.\n\nLearn more about the\n[web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).",
           "properties": {
+            "external_web_access": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "External Web Access"
+            },
             "filters": {
               "anyOf": [
                 {
@@ -29180,7 +30247,7 @@
         },
         "openai__types__responses__web_search_preview_tool__UserLocation": {
           "additionalProperties": true,
-          "description": "The user's location.",
+          "description": "The approximate location of the user.\n\nIf omitted or null, defaults to the United States. To avoid this fallback, pass `{\"type\": \"approximate\"}` without location fields. To localize results, provide the relevant location fields.",
           "properties": {
             "city": {
               "anyOf": [
@@ -29240,7 +30307,7 @@
         },
         "openai__types__responses__web_search_tool__UserLocation": {
           "additionalProperties": true,
-          "description": "The approximate location of the user.",
+          "description": "The approximate location of the user.\n\nIf omitted or null, defaults to the\nUnited States. To avoid this fallback, pass `{\"type\": \"approximate\"}` without\nlocation fields. To localize results, provide the relevant location fields.",
           "properties": {
             "city": {
               "anyOf": [
@@ -47554,6 +48621,9 @@
             "input_audio": {
               "$ref": "#/components/schemas/InputAudio"
             },
+            "prompt_cache_breakpoint": {
+              "$ref": "#/components/schemas/PromptCacheBreakpoint"
+            },
             "type": {
               "const": "input_audio",
               "title": "Type",
@@ -48937,6 +50007,21 @@
             "valid"
           ],
           "title": "PolicyValidationResponse",
+          "type": "object"
+        },
+        "PromptCacheBreakpoint": {
+          "description": "Marks the exact end of a reusable prompt prefix.\n\nThe breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.",
+          "properties": {
+            "mode": {
+              "const": "explicit",
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "PromptCacheBreakpoint",
           "type": "object"
         },
         "SuggestTemplatesRequest": {

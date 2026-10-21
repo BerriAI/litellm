@@ -22,6 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
+import httpx2
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
@@ -3398,7 +3399,7 @@ async def openai_websocket_proxy_route(
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     try:
         openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
-    except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
+    except (openai.OpenAIError, httpx.HTTPError, httpx2.HTTPError, LiteLLMOpenAIError):
         verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
         await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
         return

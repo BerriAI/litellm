@@ -2235,10 +2235,8 @@ def test_completion_perplexity_exception_on_openai_client(monkeypatch):
             model="perplexity/mistral-7b-instruct",
             messages=[{"role": "user", "content": "hello"}],
         )
-    assert (
-        "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
-        in str(exc_info.value)
-    )
+    assert "PERPLEXITY_API_KEY" in str(exc_info.value)
+    assert "OPENAI_API_KEY" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

@@ -160,6 +160,11 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
             "/openai/deployments/gpt-4.1-mini/chat/completions",
             id="full-deployment-url",
         ),
+        pytest.param(
+            "https://example-resource.services.ai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions",
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            id="full-deployment-url-without-query",
+        ),
     ],
 )
 def test_azure_ai_completion_routes_flexible_api_base(
