@@ -17,6 +17,7 @@ silently swallowed the ImportError in `hooks/__init__.py`, leaving
 import importlib
 import logging
 import sys
+from typing import Final
 
 import pytest
 
@@ -69,7 +70,7 @@ def test_managed_hooks_register_from_litellm_enterprise_without_the_repo_only_en
     monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
     monkeypatch.delattr(litellm.proxy, "hooks")
 
-    wheel_install_hooks = importlib.import_module("litellm.proxy.hooks")
+    wheel_install_hooks: Final = importlib.import_module("litellm.proxy.hooks")
 
     assert wheel_install_hooks.get_proxy_hook("managed_files") is PROXY_LiteLLMManagedFiles
     assert wheel_install_hooks.get_proxy_hook("managed_vector_stores") is PROXY_LiteLLMManagedVectorStores
@@ -85,7 +86,7 @@ def test_proxy_hooks_still_import_and_warn_when_litellm_enterprise_cannot_load(
     verbose_proxy_logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
-            hooks_without_enterprise = importlib.import_module("litellm.proxy.hooks")
+            hooks_without_enterprise: Final = importlib.import_module("litellm.proxy.hooks")
     finally:
         verbose_proxy_logger.removeHandler(caplog.handler)
 
