@@ -9,14 +9,14 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
 
@@ -53,6 +53,13 @@ class LangFlowConfig(BaseConfig):
         api_base = api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
         api_key = api_key or get_secret_str("LANGFLOW_API_KEY")
         return api_base, api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return ["stream"]
@@ -101,9 +108,8 @@ class LangFlowConfig(BaseConfig):
                 "api_base is required for LangFlow. Set it via LANGFLOW_API_BASE env var or api_base parameter."
             )
 
-        api_base = api_base.rstrip("/")
         flow_id: Final = quote(self._get_flow_id(model, optional_params), safe="")
-        return f"{api_base}/api/v1/run/{flow_id}"
+        return join_api_base(api_base, f"api/v1/run/{flow_id}")
 
     def _get_last_user_message(self, messages: list[AllMessageValues]) -> str:
         """Extract the text of the last user message to use as input_value."""
@@ -160,7 +166,7 @@ class LangFlowConfig(BaseConfig):
 
         input_value: Final = self._get_last_user_message(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "input_value": input_value,
             "input_type": optional_params.get("input_type", "chat"),
             "output_type": optional_params.get("output_type", "chat"),
@@ -225,7 +231,7 @@ class LangFlowConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

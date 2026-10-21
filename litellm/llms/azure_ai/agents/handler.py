@@ -29,7 +29,8 @@ import httpx
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
@@ -129,28 +130,29 @@ class AzureAIAgentsHandler:
     # See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     # -------------------------------------------------------------------------
     def _build_thread_url(self, api_base: str, api_version: str) -> str:
-        return f"{api_base}/threads?api-version={api_version}"
+        return f"{join_api_base(api_base, 'threads')}?api-version={api_version}"
 
     def _build_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
-        return f"{api_base}/threads/{encoded_thread_id}/messages?api-version={api_version}"
+        return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
     def _build_runs_url(self, api_base: str, thread_id: str, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
-        return f"{api_base}/threads/{encoded_thread_id}/runs?api-version={api_version}"
+        return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/runs')}?api-version={api_version}"
 
     def _build_run_status_url(self, api_base: str, thread_id: str, run_id: str, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
-        return f"{api_base}/threads/{encoded_thread_id}/runs/{encoded_run_id}?api-version={api_version}"
+        run_status_route: Final = f"threads/{encoded_thread_id}/runs/{encoded_run_id}"
+        return f"{join_api_base(api_base, run_status_route)}?api-version={api_version}"
 
     def _build_list_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
-        return f"{api_base}/threads/{encoded_thread_id}/messages?api-version={api_version}"
+        return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
     def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
         """URL for the create-thread-and-run endpoint (supports streaming)."""
-        return f"{api_base}/threads/runs?api-version={api_version}"
+        return f"{join_api_base(api_base, 'threads/runs')}?api-version={api_version}"
 
     # -------------------------------------------------------------------------
     # Response Helpers
@@ -231,9 +233,7 @@ class AzureAIAgentsHandler:
         model_response.model = model
 
         # Store thread_id for conversation continuity
-        if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-            model_response._hidden_params = {}
-        model_response._hidden_params["thread_id"] = thread_id
+        set_hidden_param(model_response, "thread_id", thread_id)
 
         # Estimate token usage
         try:
@@ -280,10 +280,8 @@ class AzureAIAgentsHandler:
             headers["Authorization"] = f"Bearer {api_key}"
 
         api_version: Final = optional_params.get("api_version", self.config.DEFAULT_API_VERSION)
-        agent_id: Final = self.config._get_agent_id(model, optional_params)
+        agent_id: Final = self.config.get_agent_id(model, optional_params)
         thread_id: Final = optional_params.get("thread_id")
-        api_base = api_base.rstrip("/")
-
         verbose_logger.debug("Azure AI Agents completion - api_base: %s, agent_id: %s", api_base, agent_id)
 
         return headers, api_version, agent_id, thread_id, api_base
@@ -314,10 +312,10 @@ class AzureAIAgentsHandler:
         headers: dict | None = None,
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
         if client is None:
-            client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
         (
             headers,
@@ -660,7 +658,7 @@ class AzureAIAgentsHandler:
                         ],
                     )
                     if thread_id:
-                        final_chunk._hidden_params = {"thread_id": thread_id}
+                        final_chunk.hidden_params = {"thread_id": thread_id}
                     yield final_chunk
                     return
 
@@ -706,7 +704,7 @@ class AzureAIAgentsHandler:
                                     ],
                                 )
                                 if thread_id:
-                                    chunk._hidden_params = {"thread_id": thread_id}
+                                    chunk.hidden_params = {"thread_id": thread_id}
                                 yield chunk
 
 

@@ -8,6 +8,7 @@ from httpx._types import RequestFiles
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.videos.transformation import veo_video_count_from_parameters
 from litellm.secret_managers.main import get_secret_str
@@ -26,6 +27,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -240,7 +242,7 @@ class GeminiVideoConfig(BaseVideoConfig):
             return api_base.rstrip("/")
 
         model_name: Final = model.replace("gemini/", "")
-        url: Final = f"{api_base.rstrip('/')}/v1beta/models/{model_name}:predictLongRunning"
+        url: Final = join_api_base(api_base, f"v1beta/models/{model_name}:predictLongRunning")
 
         return url
 
@@ -376,7 +378,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         GET https://generativelanguage.googleapis.com/v1beta/{operation_name}
         """
         operation_name: Final = extract_original_video_id(video_id)
-        url: Final = f"{api_base.rstrip('/')}/v1beta/{operation_name}"
+        url: Final = join_api_base(api_base, f"v1beta/{operation_name}")
         params: Final[dict[str, object]] = {}
 
         return url, params
@@ -386,6 +388,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the Veo operation status response.
@@ -449,7 +452,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         """
         operation_name: Final = extract_original_video_id(video_id)
 
-        status_url: Final = f"{api_base.rstrip('/')}/v1beta/{operation_name}"
+        status_url: Final = join_api_base(api_base, f"v1beta/{operation_name}")
         client: Final = litellm.module_level_client
         status_response: Final = client.get(url=status_url, headers=headers)
         status_response.raise_for_status()
@@ -476,6 +479,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the Veo video content download response.

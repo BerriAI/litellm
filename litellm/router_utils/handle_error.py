@@ -1,9 +1,11 @@
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
 from litellm.router_utils.cooldown_handlers import (
-    _async_get_cooldown_deployments_with_debug_info,
+    async_get_cooldown_deployments_with_debug_info,
+    get_cooldown_deployment_info,
 )
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterRateLimitError
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span | Any
+    Span = _Span
 else:
     LitellmRouter = Any
     Span = Any
@@ -69,7 +71,10 @@ async def send_llm_exception_alert(
 
 
 async def async_raise_no_deployment_exception(
-    litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Span | None
+    litellm_router_instance: LitellmRouter,
+    model: str,
+    parent_otel_span: Span | None,
+    route_model_ids: Collection[str] | None = None,
 ):
     """
     Raises a RouterRateLimitError if no deployment is found for the given model.
@@ -79,7 +84,7 @@ async def async_raise_no_deployment_exception(
     _cooldown_time: Final = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
-    _cooldown_list: Final = await _async_get_cooldown_deployments_with_debug_info(
+    _cooldown_list: Final = await async_get_cooldown_deployments_with_debug_info(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
     )
@@ -94,4 +99,9 @@ async def async_raise_no_deployment_exception(
         enable_pre_call_checks=litellm_router_instance.enable_pre_call_checks,
         cooldown_list=cooldown_list_ids,
         model_ids=model_ids,
+        cooldown_deployments=(
+            None
+            if route_model_ids is None
+            else get_cooldown_deployment_info(litellm_router_instance, route_model_ids, cooldown_list_ids)
+        ),
     )

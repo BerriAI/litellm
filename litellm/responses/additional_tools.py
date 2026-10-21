@@ -2,19 +2,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
 
-class _InputItemType(BaseModel):
+class _InputItemType(LiteLLMBaseModel):
     type: str = ""
 
 
-class _AdditionalToolsItem(BaseModel):
+class _AdditionalToolsItem(LiteLLMBaseModel):
     tools: tuple[dict[str, object], ...] = ()
 
 
@@ -37,12 +38,7 @@ def _tools_of_item(item: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
         parsed: Final = _AdditionalToolsItem.model_validate(item)
     except ValidationError:
         return ()
-    return tuple(
-        cast(
-            "ALL_RESPONSES_API_TOOL_PARAMS", tool
-        )  # cast-ok: nested tools carry the same raw tool JSON as top-level tools
-        for tool in parsed.tools
-    )
+    return tuple(cast("ALL_RESPONSES_API_TOOL_PARAMS", tool) for tool in parsed.tools)
 
 
 def hoist_additional_tools(
