@@ -143,7 +143,7 @@ _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 _PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
-_PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403, 404})
+_PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403})
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -1130,8 +1130,8 @@ def token_expired(token_data: Mapping[str, object]) -> bool:
 def _proxy_rejects_key(token_data: Mapping[str, object]) -> bool:
     key: Final = token_data.get("key")
     base_url: Final = token_data.get("base_url")
-    if not isinstance(key, str) or not isinstance(base_url, str):
-        return False
+    if not isinstance(key, str) or not isinstance(base_url, str) or not base_url:
+        return True
     try:
         response: Final = requests.get(
             f"{base_url}/v1/models",

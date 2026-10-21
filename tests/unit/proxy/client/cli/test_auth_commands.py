@@ -1,6 +1,5 @@
 import json
 import os
-import socket
 import stat
 import time
 from pathlib import Path
@@ -1077,7 +1076,7 @@ class TestPrintTokenCommand:
             (200, 0, "sk-stale-key\n", ""),
             (401, 1, "", "Token expired. Run 'lite login' again.\n"),
             (403, 1, "", "Token expired. Run 'lite login' again.\n"),
-            (404, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (404, 0, "sk-stale-key\n", ""),
             (500, 0, "sk-stale-key\n", ""),
             (requests.ConnectionError("proxy unreachable"), 0, "sk-stale-key\n", ""),
         ],
@@ -1107,22 +1106,38 @@ class TestPrintTokenCommand:
         assert result.stderr == expected_stderr
         assert len(responses.calls) == 1
 
+    @responses.activate
     def test_proxy_check_waits_only_a_few_seconds_for_a_silent_proxy(self):
-        with socket.create_server(("127.0.0.1", 0)) as silent_proxy, patch(
+        _register_models_answer("sk-stale-key", requests.ReadTimeout("proxy sent nothing"))
+
+        with patch(
             "litellm.proxy.client.cli.commands.auth.load_cli_token",
             return_value=CliTokenRecord(
-                base_url=f"http://127.0.0.1:{silent_proxy.getsockname()[1]}",
+                base_url=STALE_TOKEN_BASE_URL,
                 key="sk-stale-key",
                 timestamp=STALE_TOKEN_TIMESTAMP,
             ),
         ):
-            started: Final = time.monotonic()
             result: Final = self.runner.invoke(print_token, obj={})
-            elapsed: Final = time.monotonic() - started
 
+        timeout: Final = responses.calls[0].request.req_kwargs["timeout"]
         assert result.exit_code == 0
         assert result.stdout == "sk-stale-key\n"
-        assert elapsed < 5
+        assert isinstance(timeout, int | float)
+        assert 0 < timeout <= 5
+
+    @responses.activate
+    def test_key_without_a_recorded_proxy_still_expires_after_the_client_window(self):
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(key="sk-old-format", timestamp=STALE_TOKEN_TIMESTAMP),
+        ):
+            result: Final = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert len(responses.calls) == 0
 
 
 class TestPrintTokenWithConfigFile:
