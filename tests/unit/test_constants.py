@@ -1,20 +1,21 @@
-import ast, asyncio, os
+import ast
+import asyncio
+import importlib
 import inspect
 import json
+import os
+import sys
 from unittest import mock
+from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-
-import importlib
-
 import litellm
-from litellm import constants, get_llm_provider, MorphChatConfig
+from litellm import MorphChatConfig, constants, get_llm_provider
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import patch
 
 
 def _build_constant_env_var_map() -> dict[str, str]:
@@ -265,3 +266,30 @@ def test_morph_custom_llm_provider():
     """Test that morph models are correctly identified."""
     config = MorphChatConfig()
     assert config.custom_llm_provider == "morph"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        (None, 64 * 1024 * 1024),
+        ("", 64 * 1024 * 1024),
+        ("invalid", 64 * 1024 * 1024),
+        ("0", 64 * 1024 * 1024),
+        ("-1", 64 * 1024 * 1024),
+        ("1", 1),
+        ("200000", 200000),
+        (str(sys.maxsize), sys.maxsize),
+        (str(sys.maxsize + 1), 64 * 1024 * 1024),
+    ),
+)
+def test_mcp_sse_event_limit_uses_positive_override_or_default(raw: str | None, expected: int) -> None:
+    try:
+        with pytest.MonkeyPatch.context() as environment:
+            if raw is None:
+                environment.delenv("LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", raising=False)
+            else:
+                environment.setenv("LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", raw)
+            importlib.reload(constants)
+            assert constants.MCP_MAX_SSE_EVENT_SIZE_BYTES == expected
+    finally:
+        importlib.reload(constants)

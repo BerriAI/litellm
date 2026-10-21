@@ -1,13 +1,15 @@
-import asyncio, importlib, re
+import asyncio
 import base64
-import copy
 import contextlib
 import contextvars
+import copy
+import importlib
 import io
 import json
 import logging
 import os
 import queue
+import re
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -38,7 +40,6 @@ from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.humanloop import HumanloopLogger
-from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.duration_parser import (
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
+from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -77,28 +79,28 @@ from litellm.types.utils import (
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    add_custom_logger_callback_to_specific_event,
-    check_valid_key,
     CustomStreamWrapper,
-    filter_out_litellm_params,
-    get_applied_guardrails,
-    get_llm_provider,
-    get_optional_params_embeddings,
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
-    get_potential_model_names,
+    _invalidate_model_cost_lowercase_map,
     _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
+    add_custom_logger_callback_to_specific_event,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
+    check_valid_key,
     client,
+    filter_out_litellm_params,
+    get_applied_guardrails,
+    get_llm_provider,
     get_non_default_completion_params,
+    get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_potential_model_names,
     get_prompt_cache_min_tokens,
     get_supported_openai_params,
     get_token_count,
@@ -106,8 +108,8 @@ from litellm.utils import (
     is_cached_message,
     is_prompt_caching_valid_prompt,
     trim_messages,
-    validate_environment,
     validate_chat_completion_tool_choice,
+    validate_environment,
 )
 
 
@@ -849,10 +851,19 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -923,6 +934,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_request": {"type": "number"},
                 "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
@@ -959,6 +971,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1039,9 +1052,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
                 "token_count_framing": {"type": "integer"},
                 "token_count_model": {
                     "type": "object",
@@ -1049,6 +1059,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "required": ["model"],
                 },
                 "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -1145,6 +1159,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -1163,6 +1187,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
                 "off_peak_pricing": {
                     "type": "object",
@@ -1603,10 +1628,10 @@ def test_vertex_params_not_stripped_for_vertex_family(model, custom_llm_provider
         assert optional_params["vertex_location"] == "us-central1"
 
 
-from litellm.utils import supports_function_calling
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from litellm import acompletion, completion
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import supports_function_calling
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 class TestProxyFunctionCalling:
@@ -8021,8 +8046,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
-    import httpx
     import ssl
+
+    import httpx
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Set force_ipv4 to True
@@ -8174,6 +8201,10 @@ def test_models_by_provider():
         if "_" in v["litellm_provider"] and "-" in v["litellm_provider"]:
             continue
         elif k == "sample_spec":
+            continue
+        elif v["litellm_provider"] in (
+            "coralbricks", "inferenceapis", "microsoft_365_copilot", "openinfer", "scaledown"
+        ):
             continue
         elif (
             v["litellm_provider"] == "sagemaker"
@@ -8338,9 +8369,10 @@ def test_token_counter_with_image_url_with_detail_high():
 
     PROD TEST this is importat - Can impact latency very badly
     """
-    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
-    from litellm._logging import verbose_logger
     import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
     verbose_logger.setLevel(logging.DEBUG)
 
@@ -8383,8 +8415,8 @@ def test_logprobs_type():
 
 
 def test_get_valid_models_openai_proxy(monkeypatch):
-    from litellm.utils import get_valid_models
     import litellm
+    from litellm.utils import get_valid_models
 
     litellm.turn_on_debug()
 
@@ -8563,10 +8595,10 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_wrapper_kwargs_passthrough():
-    from litellm.utils import client
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
+    from litellm.utils import client
 
     mock_original = AsyncMock()
 
@@ -9246,6 +9278,7 @@ def test_delta_tool_calls_sequential_indices():
     defaulting all tool calls to index=0.
     """
     import json
+
     from litellm.types.utils import Delta
 
     tool_calls_without_indices = [

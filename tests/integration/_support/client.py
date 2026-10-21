@@ -267,3 +267,25 @@ def team_admin_permissions(gateway: Gateway, fields: Sequence[str]) -> Iterator[
         yield
     finally:
         _set_team_admin_permissions(gateway, [str(field) for field in original] if isinstance(original, list) else ())
+
+
+def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
+    """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        converged: Final = eventually(read, satisfied, seconds=max(deadline - time.monotonic(), 0.0))
+        misses: Final = _misses_within(read, satisfied, holding)
+        if not misses:
+            return converged
+        assert time.monotonic() < deadline, f"State did not hold: {misses[0]!r}"
+        time.sleep(0.1)
+
+
+def _misses_within(read: Callable[[], T], satisfied: Callable[[T], bool], holding: float) -> tuple[T, ...]:
+    until: Final = time.monotonic() + holding
+    while time.monotonic() < until:
+        time.sleep(0.1)
+        observed: Final = read()
+        if not satisfied(observed):
+            return (observed,)
+    return ()

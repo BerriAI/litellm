@@ -229,6 +229,7 @@ class CompletionDispatchContext:
     model: str
     model_response: ModelResponse
     optional_params: dict
+    optional_params_for_model_info: Callable[[Mapping[str, object] | None], dict[str, object]]
     organization: str | None
     provider_config: BaseConfig | None
     request_params: Mapping[str, object]
