@@ -1,3 +1,4 @@
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import asyncio
 import base64
 import copy

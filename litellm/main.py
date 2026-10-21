@@ -1,3 +1,4 @@
+from pydantic import TypeAdapter
 # LiteLLM main module: public completion, embedding, streaming, and moderation entrypoints.
 #
 # +-----------------------------------------------+
