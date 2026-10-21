@@ -565,6 +565,7 @@ def _diagnostics(observation: Observation) -> list[str]:
     return [
         "  diagnostics (not limits):",
         f"    bodies off reply {observation.bodies_off_reply()}",
+        f"    mock routes {_mock_routes(observation)}",
         f"    guardrail calls per request {len(observation.guardrail_calls) / count:.3f}",
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",
@@ -573,6 +574,12 @@ def _diagnostics(observation: Observation) -> list[str]:
         f"    redis commands per request {_fmt(observation.per_request(_commands(observation.redis_before), _commands(observation.redis_after)))}",
         f"    redis connected clients {_clients(observation.redis_before)} -> {_clients(observation.redis_after)}",
     ]
+
+
+def _mock_routes(observation: Observation) -> str:
+    """Which provider route each request landed on, so a direct-vs-bridge case shows its split."""
+    counts: Final = Counter(f"{seen.provider}/{seen.route}" for seen in observation.mock_requests)
+    return ", ".join(f"{route} {count}" for route, count in sorted(counts.items())) or "n/a"
 
 
 def _datastore_lines(observation: Observation) -> list[str]:
