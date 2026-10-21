@@ -71,6 +71,7 @@ from litellm.constants import (
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
@@ -2597,19 +2598,14 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
     try:
         result: Final = _return_huggingface_tokenizer(model)
-        if result is not None:
+        if result is not None and not isinstance(result, _HuggingFaceTokenizerLoadFailure):
             return result
     except Exception as e:
         from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
 
         if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
-        verbose_logger.warning(
-            "Falling back to tiktoken for %s; token counts may be approximate. "
-            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
-            json.dumps(redact_secrets(model)),
-            json.dumps(redact_secrets(str(e))),
-        )
+        _warn_huggingface_tokenizer_fallback(model, str(e))
 
     # default - tiktoken
     return _return_openai_tokenizer(model)
@@ -2649,13 +2645,39 @@ def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
     return None
 
 
-def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
+@dataclass(frozen=True, slots=True)
+class _HuggingFaceTokenizerLoadFailure:
+    reason: str
+
+
+def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
+    verbose_logger.warning(
+        "Falling back to tiktoken for %s; token counts may be approximate. "
+        "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
+        json.dumps(redact_secrets(model)),
+        json.dumps(redact_secrets(reason)),
+    )
+
+
+def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
+    backend: Final = _huggingface_tokenizer_backend()
+    key: Final = _huggingface_tokenizer_failure_key(kind, backend)
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+        cached_failure: Final = _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.get_cache(key)
+        if isinstance(cached_failure, _HuggingFaceTokenizerLoadFailure):
+            return cached_failure
+        tokenizer: Final = _load_huggingface_tokenizer_recording_failure(kind, backend, key)
+    if isinstance(tokenizer, _HuggingFaceTokenizerLoadFailure):
+        _warn_huggingface_tokenizer_fallback(model, tokenizer.reason)
+        return tokenizer
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
+def _huggingface_tokenizer_failure_key(kind: HuggingFaceTokenizerKind, backend: Decision) -> str:
+    return f"{kind}:{backend.name}"
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2678,6 +2700,21 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
         case _:
             assert_never(kind)
+
+
+def _load_huggingface_tokenizer_recording_failure(
+    kind: HuggingFaceTokenizerKind, backend: Decision, key: str
+) -> HuggingFace | _HuggingFaceTokenizerLoadFailure:
+    try:
+        return _load_huggingface_tokenizer(kind, backend)
+    except Exception as error:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
+        failure: Final = _HuggingFaceTokenizerLoadFailure(reason=str(error))
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.set_cache(key, failure, ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
+        return failure
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -8293,6 +8330,26 @@ def trim_messages(
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class _HuggingFaceTokenizerLoadFailureCache(Protocol):
+    def get_cache(self, key: str) -> object | None: ...
+
+    def set_cache(self, key: str, value: object, ttl: float | None = None) -> None: ...
+
+    def flush_cache(self) -> None: ...
+
+
+_HUGGINGFACE_TOKENIZER_LOAD_FAILURES: Final[_HuggingFaceTokenizerLoadFailureCache] = (
+    cast(  # cast-ok: cache methods are untyped
+        _HuggingFaceTokenizerLoadFailureCache,
+        InMemoryCache(
+            max_size_in_memory=16,
+            default_ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
+            clock=lambda: time.monotonic(),
+        ),
+    )
+)
 
 
 class AvailableModelsCache(InMemoryCache):
