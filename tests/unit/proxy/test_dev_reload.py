@@ -48,6 +48,9 @@ async def app(scope, receive, send):
     await send({"type": "http.response.start", "status": 200, "headers": []})
     await send({"type": "http.response.body", "body": str(os.getpid()).encode()})
 """
+REQUIRES_UVICORN_STARTUP_FAILURE: Final = pytest.mark.skipif(
+    not multi_worker_reload_supported(), reason="uvicorn<0.50.0 has no startup failure exit code"
+)
 CORE_DUMP_SECONDS: Final = 3
 SLOW_CORE_DUMP_ON_QUIT: Final = f"""
 import os
@@ -93,6 +96,7 @@ def _options(app: str) -> ReloadOptions:
     }
 
 
+@REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.parametrize(
     ("module", "source"),
     (
@@ -112,6 +116,7 @@ def test_a_broken_app_exits_the_worker_as_a_startup_failure(
     assert exit_info.value.code == uvicorn_config.STARTUP_FAILURE
 
 
+@REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.parametrize(
     ("module", "source"),
     (
@@ -240,9 +245,7 @@ def _next_pool(log: Path, process: subprocess.Popen[bytes], port: int, previous:
     return pool
 
 
-@pytest.mark.skipif(
-    not multi_worker_reload_supported(), reason="uvicorn<0.50.0 cannot stop a worker pool on a startup failure"
-)
+@REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.timeout(5 * POOL_TIMEOUT_SECONDS)
 def test_a_save_replaces_every_worker_and_a_broken_save_stops_the_pool_until_the_next_good_one(
     tmp_path: Path,
@@ -269,9 +272,7 @@ def test_a_save_replaces_every_worker_and_a_broken_save_stops_the_pool_until_the
         process.wait()
 
 
-@pytest.mark.skipif(
-    not multi_worker_reload_supported(), reason="uvicorn<0.50.0 cannot stop a worker pool on a startup failure"
-)
+@REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
 @pytest.mark.parametrize(
     "kill_reloader",
@@ -304,9 +305,7 @@ def test_the_pool_stops_and_frees_the_port_when_the_reloader_dies(
         process.wait()
 
 
-@pytest.mark.skipif(
-    not multi_worker_reload_supported(), reason="uvicorn<0.50.0 cannot stop a worker pool on a startup failure"
-)
+@REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
 def test_ctrl_backslash_frees_the_port_without_waiting_out_the_worker_healthcheck_when_core_dumps_are_slow(
     tmp_path: Path,
