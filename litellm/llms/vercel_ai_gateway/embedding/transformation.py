@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,6 +29,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_RESPONSE_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
@@ -122,7 +126,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # Vercel AI Gateway returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
+        response_json: Final = _RESPONSE_OBJECT.validate_python(raw_response.json())
 
         return convert_to_model_response_object(
             response_object=response_json,

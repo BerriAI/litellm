@@ -33,9 +33,13 @@ azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _AzureAdTokenJson(TypedDict, total=False):
     access_token: ReadOnly[str]
-    expires_in: ReadOnly[int]
+    expires_in: ReadOnly[int | float]
+
+
+_AZURE_AD_TOKEN_JSON: Final = TypeAdapter(_AzureAdTokenJson)
 
 
 class _AzureV1ClientParams(TypedDict, total=False, extra_items=object):
@@ -308,7 +312,7 @@ def get_azure_ad_token_from_oidc(
             message=req_token.text,
         )
 
-    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
+    azure_ad_token_json: Final = _AZURE_AD_TOKEN_JSON.validate_python(req_token.json())
     azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
     azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
 

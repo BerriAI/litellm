@@ -14,7 +14,7 @@ from re import Pattern
 from typing import Any, Final
 
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
@@ -34,6 +34,17 @@ class _PatternsFile(TypedDict):
 
 
 _PATTERNS_FILE: Final = TypeAdapter(_PatternsFile)
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CategoryFile(TypedDict):
+    category_name: ReadOnly[str]
+    display_name: ReadOnly[NotRequired[str | None]]
+    description: ReadOnly[NotRequired[str]]
+    default_action: ReadOnly[NotRequired[str]]
+
+
+_CATEGORY_FILE: Final = TypeAdapter(_CategoryFile)
 
 
 def _load_patterns_from_json() -> _PatternsFile:
@@ -162,12 +173,12 @@ def _category_entry(categories_dir: str, filename: str) -> dict[str, str] | None
             return None
         if not category_data or "category_name" not in category_data:
             return None
+        category: Final = _CATEGORY_FILE.validate_python(category_data)
         return {
-            "name": category_data["category_name"],
-            "display_name": category_data.get("display_name")
-            or category_data["category_name"].replace("_", " ").title(),
-            "description": category_data.get("description", ""),
-            "default_action": category_data.get("default_action", "BLOCK"),
+            "name": category["category_name"],
+            "display_name": category.get("display_name") or category["category_name"].replace("_", " ").title(),
+            "description": category.get("description", ""),
+            "default_action": category.get("default_action", "BLOCK"),
         }
     if filename.endswith(".json"):
         category_name: Final = os.path.splitext(filename)[0]

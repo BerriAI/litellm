@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -29,6 +30,7 @@ JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
 RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 _RESPONSES_API_CALL_TYPES: Final = RESPONSES_API_CALL_TYPES
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -89,7 +91,7 @@ class AzureGuardrailBase:
             json=request_body,
             timeout=self.timeout,
         )
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(response.json())
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 

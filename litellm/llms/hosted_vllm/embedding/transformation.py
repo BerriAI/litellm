@@ -10,6 +10,7 @@ Docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -18,6 +19,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -125,7 +128,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # VLLM returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         return convert_to_model_response_object(
             response_object=response_json,

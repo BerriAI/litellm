@@ -1,6 +1,19 @@
-from typing import Any, Final
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from .http_client import HTTPClient
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ReadinessResponse(TypedDict):
+    """The readiness fields this client reads; every other key is kept as returned."""
+
+    litellm_version: NotRequired[ReadOnly[str | None]]
+
+
+_READINESS_RESPONSE: Final = TypeAdapter(_ReadinessResponse)
 
 
 class HealthManagementClient:
@@ -19,7 +32,7 @@ class HealthManagementClient:
         """
         self._http = HTTPClient(base_url=base_url, api_key=api_key, timeout=timeout)
 
-    def get_readiness(self) -> dict[str, Any]:
+    def get_readiness(self) -> _ReadinessResponse:
         """
         Check the readiness of the LiteLLM proxy server.
 
@@ -30,7 +43,7 @@ class HealthManagementClient:
             requests.exceptions.RequestException: If the request fails
             ValueError: If the response is not valid JSON
         """
-        return self._http.request("GET", "/health/readiness")
+        return _READINESS_RESPONSE.validate_python(self._http.request("GET", "/health/readiness"))
 
     def get_server_version(self) -> str | None:
         """

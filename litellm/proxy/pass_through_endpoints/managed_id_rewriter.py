@@ -948,6 +948,9 @@ def is_passthrough_list_route(provider: str, method: str, route: str) -> bool:
     return (provider, canonical) in _LIST_ROUTE_TABLE
 
 
+_JSON_VALUE_ADAPTER: Final = TypeAdapter[JsonValue](JsonValue)
+
+
 def _parse_file_object(file_object: JsonValue) -> JsonValue:
     """Prisma may return ``Json`` columns as either a parsed dict or the raw
     JSON string (depending on driver / row source). Mirror the handling used
@@ -956,7 +959,7 @@ def _parse_file_object(file_object: JsonValue) -> JsonValue:
     """
     if isinstance(file_object, str):
         try:
-            return json.loads(file_object)
+            return _JSON_VALUE_ADAPTER.validate_python(json.loads(file_object))
         except (TypeError, ValueError):
             return None
     return file_object

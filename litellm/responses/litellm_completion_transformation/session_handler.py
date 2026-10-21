@@ -3,6 +3,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import ConfigDict, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
@@ -41,6 +43,10 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
+
+_PROXY_SERVER_REQUEST: Final = TypeAdapter[dict[str, object] | None](
+    dict[str, object] | None, config=ConfigDict(strict=True)
+)
 
 _MCP_TOOL_CALL_TYPES: Final = frozenset((CallTypes.list_mcp_tools.value, CallTypes.call_mcp_tool.value))
 
@@ -219,7 +225,7 @@ class ResponsesSessionHandler:
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
         else:
-            proxy_server_request_dict = json.loads(proxy_server_request)
+            proxy_server_request_dict = _PROXY_SERVER_REQUEST.validate_python(json.loads(proxy_server_request))
 
         ############################################################
         # Check if user has setup cold storage for session handling

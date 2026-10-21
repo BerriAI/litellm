@@ -15,7 +15,7 @@ from typing import Final
 import httpx
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from pydantic import Field
+from pydantic import ConfigDict, Field, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_logger
@@ -117,6 +117,11 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
+_AGENTOPS_JWT_RESPONSE: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+
+
 def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
     # Own a short-lived client rather than ``_get_httpx_client()``: that returns
     # a process-wide cached ``HTTPHandler`` whose connection pool is shared by
@@ -130,7 +135,7 @@ def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
         )
         if response.status_code != 200:
             raise RuntimeError(f"Failed to fetch AgentOps token: {response.text}")
-        return response.json()
+        return _AGENTOPS_JWT_RESPONSE.validate_python(response.json())
 
 
 register_exporter_factory(_AGENTOPS_EXPORTER_KIND, _build_agentops_exporter)

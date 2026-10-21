@@ -4,9 +4,19 @@ import os
 import traceback
 from typing import Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PromptLayerTrackResponse(TypedDict):
+    success: NotRequired[ReadOnly[object]]
+    request_id: NotRequired[ReadOnly[object]]
+
+
+_PROMPT_LAYER_TRACK_RESPONSE: Final = TypeAdapter(_PromptLayerTrackResponse)
 
 
 class PromptLayerLogger:
@@ -61,8 +71,8 @@ class PromptLayerLogger:
                 },
             )
 
-            response_json: Final = request_response.json()
-            if not request_response.json().get("success", False):
+            response_json: Final = _PROMPT_LAYER_TRACK_RESPONSE.validate_python(request_response.json())
+            if not response_json.get("success", False):
                 raise Exception("Promptlayer did not successfully log the response!")
 
             print_verbose(f"Prompt Layer Logging: success - final response object: {request_response.text}")

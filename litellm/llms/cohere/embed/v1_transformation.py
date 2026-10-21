@@ -6,6 +6,7 @@ from collections.abc import Sized
 from typing import Final, Protocol
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15,6 +16,8 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
+
+_COHERE_EMBEDDING_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _SupportsEncode(Protocol):
@@ -115,7 +118,7 @@ class CohereEmbeddingConfig:
         encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
-        response_json: Final = response.json()
+        response_json: Final = _COHERE_EMBEDDING_RESPONSE.validate_python(response.json())
         ## LOGGING
         logging_obj.post_call(
             input=input,

@@ -7,10 +7,12 @@ post_call (model output) checkpoints with optional correction/blocking.
 import datetime
 import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
-from typing_extensions import ReadOnly, TypedDict, Unpack
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -32,6 +34,15 @@ if TYPE_CHECKING:
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE: Final = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE: Final = "block"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CheckpointResponse(TypedDict):
+    action_type: NotRequired[ReadOnly[str | None]]
+    modified_data: NotRequired[ReadOnly[object]]
+
+
+_CHECKPOINT_RESPONSE: Final = TypeAdapter(_CheckpointResponse)
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -178,7 +189,7 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-    ) -> dict[str, Any]:
+    ) -> _CheckpointResponse:
         """Call the Ovalix Tracker checkpoint API and return the JSON response."""
         application_id: Final = self._application_id
         if not application_id or not checkpoint_id:
@@ -196,7 +207,7 @@ class OvalixGuardrail(CustomGuardrail):
         }
         response: Final = await self._async_handler.post(url, headers=headers, json=payload, timeout=self.timeout)
         response.raise_for_status()
-        return response.json()
+        return _CHECKPOINT_RESPONSE.validate_python(response.json())
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -283,7 +294,7 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _get_trackers_corrected_message(self, resp: dict) -> str | None:
+    def _get_trackers_corrected_message(self, resp: Mapping[str, object]) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
         modified: Final = resp.get("modified_data")
         if isinstance(modified, dict) and "content" in modified:

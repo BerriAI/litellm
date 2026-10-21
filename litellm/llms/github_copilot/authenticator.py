@@ -2,7 +2,7 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -40,9 +40,27 @@ class _AccessTokenPoll(TypedDict):
     error: ReadOnly[NotRequired[object]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _APIKeyInfo(TypedDict):
+    token: ReadOnly[NotRequired[str]]
+
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
+_API_KEY_INFO: Final = TypeAdapter(_APIKeyInfo)
+
+
+class _MissingAPIKeyTokenError(Exception):
+    pass
+
+
+def _validated_api_key_info(response: httpx.Response) -> _APIKeyInfo:
+    response_json: Final = _API_KEY_INFO.validate_python(response.json())
+    if "token" in response_json:
+        return response_json
+    verbose_logger.warning("API key response missing token: %s", response_json)
+    raise _MissingAPIKeyTokenError
 
 
 def github_api_headers(
@@ -194,7 +212,7 @@ class Authenticator:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
 
-    def _refresh_api_key(self) -> dict[str, Any]:
+    def _refresh_api_key(self) -> _APIKeyInfo:
         """
         Refresh the API key using the access token.
 
@@ -215,14 +233,11 @@ class Authenticator:
                 response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
-                response_json = response.json()
-
-                if "token" in response_json:
-                    return response_json
-                else:
-                    verbose_logger.warning("API key response missing token: %s", response_json)
+                return _validated_api_key_info(response)
             except httpx.HTTPStatusError as e:
                 verbose_logger.error("HTTP error refreshing API key (attempt %s/%s): %s", attempt + 1, max_retries, e)
+            except _MissingAPIKeyTokenError:
+                continue
             except Exception as e:
                 verbose_logger.error("Unexpected error refreshing API key: %s", e)
 

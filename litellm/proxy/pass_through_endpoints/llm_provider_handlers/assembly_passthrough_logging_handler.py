@@ -7,6 +7,7 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
@@ -23,6 +24,8 @@ from litellm.types.passthrough_endpoints.assembly_ai import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
+
+_ASSEMBLY_TRANSCRIPT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class AssemblyAITranscriptResponse(TypedDict, total=False):
@@ -201,7 +204,7 @@ class AssemblyAIPassthroughLoggingHandler:
             response: Final = httpx.get(url, headers=headers)
             response.raise_for_status()
 
-            return response.json()
+            return _ASSEMBLY_TRANSCRIPT.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI transcript: %s", e)
             return None

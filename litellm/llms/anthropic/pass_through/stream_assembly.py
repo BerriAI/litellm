@@ -4,6 +4,9 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
@@ -19,6 +22,29 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
 )
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FastPathContentBlock(TypedDict):
+    type: ReadOnly[NotRequired[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FastPathDelta(TypedDict):
+    type: ReadOnly[NotRequired[object]]
+    text: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FastPathEvent(TypedDict):
+    type: ReadOnly[NotRequired[object]]
+    index: ReadOnly[NotRequired[int | None]]
+    content_block: ReadOnly[NotRequired[_FastPathContentBlock | None]]
+    delta: ReadOnly[NotRequired[_FastPathDelta | None]]
+
+
+_FAST_PATH_EVENT: Final = TypeAdapter(_FastPathEvent)
+_SSE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -119,7 +145,7 @@ def collapse_pure_text_chunks(
             if ev:
                 normalized.append(ev)
 
-    text_block_indexes: Final[set] = set()
+    text_block_indexes: Final[set[int | None]] = set()
     out: Final[list[str]] = []
     pending_text: list[str] = []
     pending_index: int | None = None
@@ -155,7 +181,7 @@ def collapse_pure_text_chunks(
 
         json_str = ev[idx + len("data:") :].strip()
         try:
-            data = json.loads(json_str)
+            data = _FAST_PATH_EVENT.validate_python(json.loads(json_str))
         except (json.JSONDecodeError, ValueError):
             return None
 
@@ -276,7 +302,7 @@ def extract_sse_data(event_str: str) -> dict | None:
             if not payload or payload == "[DONE]":
                 return None
             try:
-                return json.loads(payload)
+                return _SSE_DATA.validate_python(json.loads(payload))
             except (ValueError, TypeError):
                 return None
     return None

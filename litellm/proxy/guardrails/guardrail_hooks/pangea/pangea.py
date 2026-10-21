@@ -1,8 +1,12 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -28,6 +32,24 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PangeaGuardResult(TypedDict):
+    blocked: NotRequired[ReadOnly[object]]
+    detectors: NotRequired[ReadOnly[object]]
+    transformed: NotRequired[ReadOnly[object]]
+    output: NotRequired[ReadOnly[Mapping[str, Any]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PangeaGuardResponse(TypedDict):
+    result: NotRequired[ReadOnly[_PangeaGuardResult]]
+
+
+_PANGEA_GUARD_RESPONSE: Final = TypeAdapter(_PangeaGuardResponse)
+_NO_GUARD_RESULT: Final[_PangeaGuardResult] = {}
+_NO_OUTPUT: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 class PangeaGuardrailMissingSecrets(Exception):
@@ -100,7 +122,7 @@ class PangeaHandler(CustomGuardrail):
             self.api_base,
         )
 
-    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> dict:
+    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> _PangeaGuardResponse:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -136,9 +158,9 @@ class PangeaHandler(CustomGuardrail):
         )
         response.raise_for_status()
 
-        result: Final = response.json()
+        result: Final = _PANGEA_GUARD_RESPONSE.validate_python(response.json())
 
-        if result.get("result", {}).get("blocked"):
+        if result.get("result", _NO_GUARD_RESULT).get("blocked"):
             verbose_proxy_logger.warning("Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, result)
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -148,7 +170,9 @@ class PangeaHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, result.get("result", {}).get("detectors")
+            "Pangea Guardrail (%s): Request passed. Response: %s",
+            hook_name,
+            result.get("result", _NO_GUARD_RESULT).get("detectors"),
         )
 
         return result
@@ -179,10 +203,10 @@ class PangeaHandler(CustomGuardrail):
         ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
-        if not ai_guard_response.get("result", {}).get("transformed"):
+        if not ai_guard_response.get("result", _NO_GUARD_RESULT).get("transformed"):
             return
 
-        output: Final = ai_guard_response.get("result", {}).get("output", {})
+        output: Final = ai_guard_response.get("result", _NO_GUARD_RESULT).get("output", _NO_OUTPUT)
         if call_type == "text_completion" or call_type == "atext_completion":
             data = transformer.update_original_body(output["messages"])
         else:
@@ -265,10 +289,10 @@ class PangeaHandler(CustomGuardrail):
         ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
-        if not ai_guard_response.get("result", {}).get("transformed"):
+        if not ai_guard_response.get("result", _NO_GUARD_RESULT).get("transformed"):
             return
 
-        output: Final = ai_guard_response.get("result", {}).get("output", {})
+        output: Final = ai_guard_response.get("result", _NO_GUARD_RESULT).get("output", _NO_OUTPUT)
         response.choices = output["choices"]
         return response
 

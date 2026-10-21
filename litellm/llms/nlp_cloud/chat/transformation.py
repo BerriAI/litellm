@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -21,6 +23,21 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _NLPCloudGeneration(TypedDict):
+    generated_text: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _NLPCloudTokenCounts(TypedDict):
+    nb_input_tokens: ReadOnly[int]
+    nb_generated_tokens: ReadOnly[int]
+
+
+_NLP_CLOUD_GENERATION: Final = TypeAdapter(_NLPCloudGeneration)
+_NLP_CLOUD_TOKEN_COUNTS: Final = TypeAdapter(_NLPCloudTokenCounts)
 
 
 class NLPCloudConfig(BaseConfig):
@@ -199,8 +216,9 @@ class NLPCloudConfig(BaseConfig):
             )
         else:
             try:
-                if len(completion_response["generated_text"]) > 0:
-                    model_response.choices[0].message.content = completion_response["generated_text"]
+                generated_text: Final = _NLP_CLOUD_GENERATION.validate_python(completion_response)["generated_text"]
+                if len(generated_text) > 0:
+                    model_response.choices[0].message.content = generated_text
             except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),
@@ -208,8 +226,9 @@ class NLPCloudConfig(BaseConfig):
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens: Final = completion_response["nb_input_tokens"]
-        completion_tokens: Final = completion_response["nb_generated_tokens"]
+        token_counts: Final = _NLP_CLOUD_TOKEN_COUNTS.validate_python(completion_response)
+        prompt_tokens: Final = token_counts["nb_input_tokens"]
+        completion_tokens: Final = token_counts["nb_generated_tokens"]
 
         model_response.created = int(time.time())
         model_response.model = model

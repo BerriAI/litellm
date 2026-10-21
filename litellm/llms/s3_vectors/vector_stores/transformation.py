@@ -2,6 +2,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -25,6 +27,27 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _S3VectorMetadata(TypedDict, total=False):
+    source_text: ReadOnly[str]
+    chunk_index: ReadOnly[object]
+    filename: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _S3VectorMatch(TypedDict, total=False):
+    metadata: ReadOnly[_S3VectorMetadata | None]
+    distance: ReadOnly[int | float | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _S3VectorQueryResponse(TypedDict, total=False):
+    vectors: ReadOnly[Sequence[_S3VectorMatch] | None]
+
+
+_S3_VECTOR_QUERY_RESPONSE: Final = TypeAdapter(_S3VectorQueryResponse)
 
 _DEFAULT_QUERY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _DEFAULT_TOP_K: Final = 5
@@ -210,7 +233,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = response.json()
+            response_data: Final = _S3_VECTOR_QUERY_RESPONSE.validate_python(response.json())
             results: Final[list[VectorStoreSearchResult]] = []
 
             for item in response_data.get("vectors", []) or []:
@@ -235,7 +258,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
                         content=[VectorStoreResultContent(text=source_text, type="text")],
                         file_id=file_id,
                         filename=filename,
-                        attributes=metadata,
+                        attributes=dict(metadata),
                     )
                 )
 

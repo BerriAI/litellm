@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -214,6 +216,19 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         if entry.get("supports_nova_canvas_image_edit") is True:
             return True
     return False
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _NovaCanvasPayload(TypedDict):
+    """The keys of a Nova Canvas image edit response that the transform reads."""
+
+    images: ReadOnly[NotRequired[list[str] | None]]
+    errors: ReadOnly[NotRequired[object]]
+    message: ReadOnly[NotRequired[object]]
+    error: ReadOnly[NotRequired[object]]
+
+
+_NOVA_CANVAS_PAYLOAD: Final = TypeAdapter(_NovaCanvasPayload)
 
 
 class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
@@ -416,18 +431,19 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        images: Final[list[str]] = response_data.get("images") or []
+        payload: Final = _NOVA_CANVAS_PAYLOAD.validate_python(response_data)
+        images: Final[list[str]] = payload.get("images") or []
 
-        if "errors" in response_data and not images:
+        if "errors" in payload and not images:
             raise self.get_error_class(
-                error_message=f"Nova Canvas image edit error: {response_data['errors']}",
+                error_message=f"Nova Canvas image edit error: {payload['errors']}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Nova Canvas InvokeModel success body uses "images" and optional "error" (AWS docs);
         # it does not use Stability-style "finish_reasons".
-        error_msg = response_data.get("message") or response_data.get("error")
+        error_msg = payload.get("message") or payload.get("error")
         if error_msg and not images:
             if not isinstance(error_msg, str):
                 error_msg = str(error_msg)

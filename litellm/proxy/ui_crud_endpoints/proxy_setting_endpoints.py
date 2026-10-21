@@ -63,6 +63,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 router: Final = APIRouter()
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 JsonSchemaItems: Final = TypedDict(
@@ -1334,7 +1335,9 @@ async def update_sso_settings(
         if env_var_entry is not None:
             if env_var_entry.param_value is not None:
                 if isinstance(env_var_entry.param_value, str):
-                    environment_variables: Mapping[str, object] = json.loads(env_var_entry.param_value)
+                    environment_variables: Mapping[str, object] = _JSON_OBJECT.validate_python(
+                        json.loads(env_var_entry.param_value)
+                    )
                 else:
                     environment_variables = dict(env_var_entry.param_value)
             else:

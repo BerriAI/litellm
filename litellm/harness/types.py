@@ -7,9 +7,10 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.harness.errors import StateIncompatible
 
@@ -176,6 +177,18 @@ class Capabilities:
     permission_modes: frozenset[str]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _StatePayload(TypedDict):
+    harness: ReadOnly[str]
+    version: ReadOnly[int | float | str]
+    workdir: ReadOnly[str]
+    native_session_id: NotRequired[ReadOnly[str | None]]
+    model: NotRequired[ReadOnly[str | None]]
+
+
+_STATE_PAYLOAD: Final = TypeAdapter(_StatePayload)
+
+
 @dataclass(frozen=True)
 class State:
     """Resume state for a detached or stopped session. Contains no credentials."""
@@ -200,7 +213,7 @@ class State:
     @classmethod
     def loads(cls, data: bytes) -> State:
         try:
-            raw = json.loads(data.decode("utf-8"))
+            raw: Final = _STATE_PAYLOAD.validate_python(json.loads(data.decode("utf-8")))
             harness = Harness(raw["harness"])
             version = int(raw["version"])
         except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:

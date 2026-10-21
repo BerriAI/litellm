@@ -3,6 +3,7 @@ from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
 from openai import OpenAI
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -18,6 +19,8 @@ from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
 
 from .cohere_transformation import AzureAICohereConfig
+
+_EMBEDDING_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _foundry_models_route_base(api_base: str | None) -> str | None:
@@ -94,7 +97,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        embedding_response: Final = response.json()
+        embedding_response: Final = _EMBEDDING_RESPONSE.validate_python(response.json())
         embedding_headers: Final = dict(response.headers)
         returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,
@@ -137,7 +140,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        embedding_response: Final = response.json()
+        embedding_response: Final = _EMBEDDING_RESPONSE.validate_python(response.json())
         embedding_headers: Final = dict(response.headers)
         returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,

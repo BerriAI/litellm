@@ -14,6 +14,8 @@ import sys
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -31,6 +33,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
 GUARDRAIL_NAME: Final = "aporia"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AporiaValidateResponse(TypedDict):
+    action: NotRequired[ReadOnly[str | None]]
+
+
+_APORIA_VALIDATE_RESPONSE: Final = TypeAdapter(_AporiaValidateResponse)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -128,8 +138,8 @@ class AporiaGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
-            _json_response: Final = response.json()
-            action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
+            _json_response: Final = _APORIA_VALIDATE_RESPONSE.validate_python(response.json())
+            action: Final = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
             if action == "block":
                 raise HTTPException(
                     status_code=400,

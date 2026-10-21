@@ -22,6 +22,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -82,6 +83,7 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
         "InvalidRequest",
     }
 )
+_S3_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
 _RETRYABLE_STATUSES: Final = frozenset({403, 429, 500, 503})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
@@ -1040,7 +1042,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 return None
 
             # Parse JSON response
-            return response.json()
+            return _S3_JSON_OBJECT.validate_python(response.json())
 
         except Exception as e:
             verbose_logger.exception("Error downloading from S3: %s", e)

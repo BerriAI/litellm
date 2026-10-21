@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
@@ -77,6 +78,20 @@ else:
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_RESPONSE_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ModelEntry(TypedDict):
+    id: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ModelsPage(TypedDict):
+    data: ReadOnly[Sequence[_ModelEntry]]
+
+
+_MODELS_PAGE: Final = TypeAdapter(_ModelsPage)
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -757,7 +772,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final[dict[str, object]] = raw_response.json()
+            completion_response: Final = _RESPONSE_OBJECT.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise OpenAIError(
@@ -865,7 +880,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-        return [model["id"] for model in response.json()["data"]]
+        models_page: Final = _MODELS_PAGE.validate_python(response.json())
+        return [model["id"] for model in models_page["data"]]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

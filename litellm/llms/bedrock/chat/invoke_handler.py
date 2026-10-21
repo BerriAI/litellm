@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -178,6 +178,7 @@ class AmazonCohereChatConfig:
 
 
 _REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_STREAM_EVENT_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
@@ -852,7 +853,7 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
+                    _data = _STREAM_EVENT_JSON.validate_python(json.loads(message))
                     yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
@@ -876,7 +877,7 @@ class AWSEventStreamDecoder:
             for event in event_stream_buffer:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
-                    _data = json.loads(message)
+                    _data = _STREAM_EVENT_JSON.validate_python(json.loads(message))
                     yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
