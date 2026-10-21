@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm import completion, acompletion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.snowflake.chat.transformation import SnowflakeConfig, SnowflakeStreamingHandler
 from litellm.types.utils import ModelResponse
 
@@ -477,6 +478,35 @@ class TestSnowflakeCortexClaudeFixes:
                 "type": "document",
                 "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
             }
+        ]
+
+    def test_messages_api_pdf_reaches_cortex_claude_as_a_document_block(self):
+        translated = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": "What is the codeword?"},
+                    ],
+                }
+            ],
+            model="snowflake/claude-sonnet-4-6",
+        )
+
+        body = self._transform(translated)
+
+        assert body["messages"][0]["content"] == [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": "What is the codeword?"},
         ]
 
     def test_multipart_tool_result_preserves_text_and_converts_image(self):

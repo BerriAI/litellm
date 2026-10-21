@@ -512,6 +512,20 @@ class TestTransformMessages:
         assert result[0]["content"] == "look"
         assert "file-456" in result[0]["attachments"]
 
+    def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(self):
+        pdf_data_url = "data:application/pdf;base64,JVBERi0xLjQK"
+        content = [
+            {"type": "text", "text": "summarize"},
+            {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+        ]
+        with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
+            result = self.config._transform_messages([
+                {"role": "user", "content": content}
+            ])
+        upload.assert_called_once_with(pdf_data_url)
+        assert result[0]["content"] == "summarize"
+        assert result[0]["attachments"] == ["file-789"]
+
 
 class TestTransformRequest:
     def setup_method(self):

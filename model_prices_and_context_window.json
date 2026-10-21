@@ -4088,6 +4088,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_pdf_input": false,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -12232,7 +12233,8 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_pdf_input": false
     },
     "azure_ai/FLUX-1.1-pro": {
         "litellm_provider": "azure_ai",
@@ -12298,6 +12300,7 @@
         "output_cost_per_token": 1.85e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12313,6 +12316,7 @@
         "output_cost_per_token": 3.828e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12329,6 +12333,7 @@
         "output_cost_per_token": 3.52e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12345,6 +12350,7 @@
         "output_cost_per_token": 4.84e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12360,6 +12366,7 @@
         "output_cost_per_token": 4.84e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12375,6 +12382,7 @@
         "output_cost_per_token": 7.26e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12396,6 +12404,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12419,6 +12428,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12442,6 +12452,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12465,6 +12476,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12493,6 +12505,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12510,6 +12523,7 @@
         "output_cost_per_token": 1.32e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12532,6 +12546,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12552,6 +12567,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -12574,6 +12590,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12643,6 +12660,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12657,6 +12675,7 @@
         "output_cost_per_token": 7.1e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
@@ -12669,6 +12688,7 @@
         "output_cost_per_token": 1e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12682,6 +12702,7 @@
         "output_cost_per_token": 7.8e-07,
         "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12695,6 +12716,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.7e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
@@ -12707,6 +12729,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.54e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
@@ -12719,6 +12742,7 @@
         "mode": "chat",
         "output_cost_per_token": 6.8e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12732,6 +12756,7 @@
         "mode": "chat",
         "output_cost_per_token": 6.8e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12745,6 +12770,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12758,6 +12784,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12771,6 +12798,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12784,6 +12812,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12797,6 +12826,7 @@
         "mode": "chat",
         "output_cost_per_token": 6.4e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12810,6 +12840,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12823,6 +12854,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12836,6 +12868,7 @@
         "output_cost_per_token": 5e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12848,7 +12881,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_pdf_input": false
     },
     "azure_ai/Phi-4-multimodal-instruct": {
         "input_cost_per_audio_token": 4e-06,
@@ -12862,6 +12896,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_vision": true
     },
     "azure_ai/Phi-4-mini-reasoning": {
@@ -12873,7 +12908,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_pdf_input": false
     },
     "azure_ai/Phi-4-reasoning": {
         "input_cost_per_token": 1.25e-07,
@@ -12885,6 +12921,7 @@
         "output_cost_per_token": 5e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
@@ -12927,6 +12964,7 @@
         "output_cost_per_token": 1e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/doc-intelligence/prebuilt-read": {
@@ -12966,6 +13004,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -13026,6 +13065,7 @@
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -13041,6 +13081,7 @@
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -13055,6 +13096,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/deepseek-v4-pro": {
@@ -13068,6 +13110,7 @@
         "output_cost_per_token": 3.48e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "cache_read_input_token_cost": 1.45e-07,
@@ -13084,6 +13127,7 @@
         "output_cost_per_token": 5.1e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "cache_read_input_token_cost": 2.8e-08,
@@ -13101,6 +13145,7 @@
         "output_cost_per_token": 1.32e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -13134,6 +13179,7 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
@@ -13152,6 +13198,7 @@
         "output_cost_per_token_above_200k_tokens": 5e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -13173,6 +13220,7 @@
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -13192,6 +13240,7 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -13211,6 +13260,7 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -13227,6 +13277,7 @@
         "mode": "chat",
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
@@ -13241,6 +13292,7 @@
         "mode": "chat",
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -13256,6 +13308,7 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
@@ -13269,7 +13322,8 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 0.00971,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false
     },
     "azure_ai/jamba-instruct": {
         "deprecation_date": "2025-03-01",
@@ -13281,6 +13335,7 @@
         "mode": "chat",
         "output_cost_per_token": 7e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/kimi-k2.5": {
@@ -13294,6 +13349,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
@@ -13318,6 +13374,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -13335,6 +13392,7 @@
         "output_cost_per_token": 4e-08,
         "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-large": {
@@ -13348,6 +13406,7 @@
         "output_cost_per_token": 1.2e-05,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-large-2407": {
@@ -13361,6 +13420,7 @@
         "output_cost_per_token": 6e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-large-latest": {
@@ -13373,6 +13433,7 @@
         "output_cost_per_token": 6e-06,
         "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-large-3": {
@@ -13385,6 +13446,7 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -13399,6 +13461,7 @@
         "output_cost_per_token": 2e-06,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-nemo": {
@@ -13411,7 +13474,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_pdf_input": false
     },
     "azure_ai/mistral-small": {
         "deprecation_date": "2025-07-31",
@@ -13424,6 +13488,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "azure_ai/mistral-small-2503": {
@@ -13436,6 +13501,7 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -52232,6 +52298,7 @@
         ],
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -52253,6 +52320,7 @@
         ],
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -53025,6 +53093,7 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -53043,6 +53112,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -53061,6 +53131,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -53253,6 +53324,7 @@
         "output_cost_per_token": 3.6e-07,
         "output_cost_per_token_batches": 1.8e-07,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_pdf_input": false,
         "supports_reasoning": true
     },
     "vertex_ai/openai/gpt-oss-20b-maas": {
@@ -53265,6 +53337,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "cache_read_input_token_cost": 7e-09,
         "input_cost_per_token_batches": 3.5e-08,
@@ -53403,6 +53476,7 @@
             "us-south1"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
@@ -53422,6 +53496,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
@@ -53438,6 +53513,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": {
@@ -53454,6 +53530,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/veo-3.1-generate-preview": {
@@ -67560,6 +67637,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -67575,6 +67653,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -67618,6 +67697,7 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -67633,6 +67713,7 @@
         "output_cost_per_token": 3.1e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -67648,6 +67729,7 @@
         "output_cost_per_token": 5.5e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -67663,6 +67745,7 @@
         "output_cost_per_token": 6.25e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -67680,6 +67763,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -67696,6 +67780,7 @@
         "output_cost_per_token": 3.2e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -67715,6 +67800,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_pdf_input": false,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -67724,7 +67810,8 @@
         "output_cost_per_token": 5.4e-06,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/deepseek-v3-0324": {
         "deprecation_date": "2026-07-13",
@@ -67732,7 +67819,8 @@
         "output_cost_per_token": 4.56e-06,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/deepseek-v3.1": {
         "deprecation_date": "2026-07-13",
@@ -67740,7 +67828,8 @@
         "output_cost_per_token": 4.94e-06,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/grok-3": {
         "deprecation_date": "2026-05-01",
@@ -67748,7 +67837,8 @@
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/grok-3-mini": {
         "deprecation_date": "2026-05-01",
@@ -67756,7 +67846,8 @@
         "output_cost_per_token": 1.27e-06,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/grok-4-fast-non-reasoning": {
         "deprecation_date": "2026-05-01",
@@ -67764,7 +67855,8 @@
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "azure_ai/grok-4-fast-reasoning": {
         "deprecation_date": "2026-05-01",
@@ -67772,7 +67864,8 @@
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_pdf_input": false
     },
     "bedrock/us-gov-west-1/nvidia.nemotron-nano-3-30b": {
         "input_cost_per_token": 7.2e-08,
@@ -73269,6 +73362,7 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": ["global"],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -73905,6 +73999,7 @@
         "output_cost_per_token": 3.5e-06,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -74966,6 +75061,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -75217,6 +75313,7 @@
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://docs.x.ai/developers/models/grok-4.7",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
