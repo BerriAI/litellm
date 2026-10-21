@@ -26,6 +26,8 @@ from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _API_KEY: Final = "synthetic-routing-bearer"
 _MANTLE_GPT: Final = "bedrock_mantle/openai.gpt-5.6-terra"
 _MANTLE_OSS: Final = "bedrock_mantle/openai.gpt-oss-120b"

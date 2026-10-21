@@ -27,6 +27,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _API_KEY: Final = "synthetic-mantle-bearer"
 _SIGNING_KEY: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
 _GPT56: Final = "openai.gpt-5.6-terra"

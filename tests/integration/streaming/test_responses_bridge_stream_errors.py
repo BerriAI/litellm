@@ -50,7 +50,7 @@ from pydantic import JsonValue
 
 _PRIMARY: Final = "bridged-primary"
 _SPARE: Final = "bridged-spare"
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 
 def assert_failed_once(wire: Wire, call_id: str, model: str, attempts: int = 1) -> tuple[Request, ...]:
@@ -347,6 +347,7 @@ def test_bridged_rate_limit_after_output_is_a_provider_typed_error_frame_behind_
     )
     response, _ = _in_stream_error_status(gateway, stream)
     assert response.status_code == 200, response.text
+    assert response.text.rstrip().endswith("data: [DONE]") and response.text.count("data: [DONE]") == 1, response.text
     frames: Final = data_frames(response.text)
     content: Final = chat_content(frames)
     assert content == "Hello there", response.text

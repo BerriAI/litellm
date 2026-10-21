@@ -1914,7 +1914,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       {apiKey && (
         <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
             <div className="grid grid-cols-1 gap-2 w-full">
               <DialogTitle className="text-lg font-medium text-foreground">Save your Key</DialogTitle>
               {apiKey != null ? (

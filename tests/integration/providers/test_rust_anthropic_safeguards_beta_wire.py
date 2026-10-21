@@ -61,7 +61,7 @@ from integration.providers._anthropic_safeguards_beta_support import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.xdist_group("anthropic_safeguards_beta")
+pytestmark: Final = [pytest.mark.xdist_group("anthropic_safeguards_beta"), pytest.mark.shares_worker_state]
 
 _CELL_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
 _BURST: Final = 24

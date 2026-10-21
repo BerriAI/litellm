@@ -1948,3 +1948,63 @@ def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
     assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+
+
+_CITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+_CITY_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": {"name": "city", "schema": _CITY_SCHEMA}}
+
+
+def _invoke_chat_params(
+    model: str, model_info: Mapping[str, object] | None, non_default_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return AmazonAnthropicClaudeConfig(model_info=model_info).map_openai_params(
+        non_default_params=dict(non_default_params), optional_params={}, model=model, drop_params=False
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_params",
+    [{"thinking": {"type": "adaptive"}}, {"reasoning_effort": "low"}],
+    ids=["adaptive", "reasoning_effort"],
+)
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    local_model_cost_map, model, thinking_params
+):
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_opt_in_native_output(model, optional_params, {})
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "request_params"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"response_format": _CITY_RESPONSE_FORMAT}),
+        (
+            "us.anthropic.claude-opus-4-8",
+            {"supports_bedrock_native_structured_output": False},
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+        (
+            "us.anthropic.claude-sonnet-4-6",
+            None,
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+    ],
+    ids=["no_thinking", "deployment_opt_out", "native_model"],
+)
+def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
+    local_model_cost_map, model, model_info, request_params
+):
+    optional_params: Final = _invoke_chat_params(model, model_info, request_params)
+
+    assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
+        model, optional_params, {"model_info": model_info}
+    )

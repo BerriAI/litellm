@@ -110,7 +110,7 @@ def test_health_check_of_a_model_added_through_the_api_calls_its_upstream_and_re
         assert (
             object_value(gateway.chat(model, key=key, text=f"health {uuid.uuid4().hex}")["usage"])["total_tokens"] == 40
         )
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         health: Final = gateway.request("GET", "/health", params={"model": model})
         assert health.status_code == 200, health.text
         report: Final = health.json()

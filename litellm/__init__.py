@@ -7,6 +7,7 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -62,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -354,6 +354,7 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
+reasoning_effort_rounding: Literal["up", "down"] = "up"
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -550,6 +551,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, ma
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+apply_search_free_tier: bool = False
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
 ] = {}  # Provider-specific or global cost margins. Examples:
@@ -624,6 +626,7 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
 perplexity_models: Set = set()
@@ -742,6 +745,16 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
@@ -842,6 +855,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
@@ -1487,6 +1505,7 @@ from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
 from .systemone.main import *
+from .extraction.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1692,6 +1711,9 @@ if TYPE_CHECKING:
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.cloudflare.extraction.transformation import (
+        CloudflareExtractionConfig as CloudflareExtractionConfig,
     )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
@@ -2368,6 +2390,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "ClaudeCodeOptions",
         "CodexOptions",
         "OpenCodeOptions",
+        "PiOptions",
         "DeepAgentsOptions",
         "ToolLoopOptions",
     }

