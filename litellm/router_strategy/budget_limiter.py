@@ -128,7 +128,9 @@ class RouterBudgetLimiting(CustomLogger):
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
-        asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        self._sync_task: asyncio.Task[None] = asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        self._retired = False
+        self._flush_after_retire: asyncio.Task[None] | None = None
         self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
         self.deployment_budget_config: GenericBudgetConfigType | None = None
         self.tag_budget_config: GenericBudgetConfigType | None = None
@@ -139,6 +141,30 @@ class RouterBudgetLimiting(CustomLogger):
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
+
+    def retire(self) -> None:
+        self._sync_task.cancel()
+        self._retired = True
+        self._schedule_flush_after_retire()
+
+    def _schedule_flush_after_retire(self) -> None:
+        if self._flush_after_retire is not None and not self._flush_after_retire.done():
+            return
+        if not self._has_unwritten_increments():
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
+
+    def _has_unwritten_increments(self) -> bool:
+        return bool(self.redis_increment_operation_queue) or self._detached_increment_operations is not None
+
+    async def _drain_increments_after_retire(self) -> None:
+        while self._has_unwritten_increments():
+            if not await self._push_in_memory_increments_to_redis():
+                await asyncio.sleep(DEFAULT_REDIS_SYNC_INTERVAL)
 
     @with_service_target("router_budgets")
     async def async_filter_deployments(
@@ -427,6 +453,8 @@ class RouterBudgetLimiting(CustomLogger):
             if self.dual_cache.redis_cache is None:
                 return
             self.redis_increment_operation_queue.append(increment_op)
+            if self._retired:
+                self._schedule_flush_after_retire()
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
         return self._redis_increment_queue_lock

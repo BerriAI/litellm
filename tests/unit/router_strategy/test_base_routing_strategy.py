@@ -1,15 +1,20 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, Final, List, Optional, Set, Union
 
 import pytest
 
 
 import asyncio
+import threading
 from unittest.mock import MagicMock, patch
+
+from fakeredis import TcpFakeServer
 
 
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, RedisPipelineIncrementOperation
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
@@ -162,3 +167,24 @@ async def test_push_refused_by_the_open_circuit_breaker_is_not_logged_as_an_erro
 
     assert caplog.records == []
     assert base_strategy.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_an_increment_counted_after_retire_still_reaches_redis():
+    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    redis_cache: Final = RedisCache(host="127.0.0.1", port=server.server_address[1])
+    strategy: Final = BaseRoutingStrategy(
+        dual_cache=DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()),
+        should_batch_redis_writes=True,
+        default_sync_interval=60,
+    )
+    try:
+        strategy.retire()
+        await strategy._increment_value_in_current_window("counted-after-retire", 3, 60)
+        await asyncio.sleep(0.2)
+
+        assert float(await redis_cache.async_get_cache("counted-after-retire")) == 3
+    finally:
+        server.shutdown()
+        server.server_close()

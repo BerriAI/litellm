@@ -596,6 +596,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prometheusLogger, \
         slack_app
     custom_pricing: bool = False
+    replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
@@ -650,11 +651,11 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
-        dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
+        dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
@@ -728,15 +729,17 @@ class Logging(LiteLLMLoggingBaseClass):
         self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
-        self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
+        self.dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = dynamic_input_callbacks
         self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_success_callbacks
         )
         self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
-        self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
-        self.dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_failure_callbacks
+        )
+        self.dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_failure_callbacks
         )
 
@@ -853,10 +856,32 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_async_failure_callbacks, callback
         )
 
+    def replace_global_callback(self, callback: CustomLogger) -> None:
+        self.add_dynamic_callback(callback)
+        self.replaced_global_callback_keys = self.replaced_global_callback_keys | {
+            litellm.logging_callback_manager.get_custom_logger_key(callback)
+        }
+
+    def add_dynamic_function_callbacks(
+        self,
+        *,
+        async_success: Callable[..., object],
+        failure: Callable[..., object],
+        async_failure: Callable[..., object],
+    ) -> None:
+        self.dynamic_async_success_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_success_callbacks, async_success
+        )
+        self.dynamic_failure_callbacks = self._with_dynamic_callback(self.dynamic_failure_callbacks, failure)
+        self.dynamic_async_failure_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_failure_callbacks, async_failure
+        )
+
     @staticmethod
     def _with_dynamic_callback(
-        callbacks: Sequence[str | Callable | CustomLogger] | None, callback: CustomLogger
-    ) -> list[str | Callable | CustomLogger]:
+        callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
+        callback: Callable[..., object] | CustomLogger,
+    ) -> list[str | Callable[..., object] | CustomLogger]:
         existing: Final = tuple(callbacks or ())
         return [*existing, *(() if callback in existing else (callback,))]
 
@@ -893,9 +918,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _process_dynamic_callback_list(
         self,
-        callback_list: list[str | Callable | CustomLogger] | None,
+        callback_list: list[str | Callable[..., object] | CustomLogger] | None,
         dynamic_callbacks_type: Literal["input", "success", "failure", "async_success", "async_failure"],
-    ) -> list[str | Callable | CustomLogger] | None:
+    ) -> list[str | Callable[..., object] | CustomLogger] | None:
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
 
@@ -907,7 +932,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if callback_list is None:
             return None
 
-        processed_list: Final[list[str | Callable | CustomLogger]] = []
+        processed_list: Final[list[str | Callable[..., object] | CustomLogger]] = []
         for callback in callback_list:
             if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
                 for callback_instance in self._resolve_dynamic_callback_string(callback):
@@ -1568,7 +1593,10 @@ class Logging(LiteLLMLoggingBaseClass):
                         "api_call_start_time"
                     ]
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
+            callbacks: Final = (
+                *self._without_replaced_global_callbacks(litellm.input_callback),
+                *(self.dynamic_input_callbacks or ()),
+            )
             for callback in callbacks:
                 try:
                     if callback == "supabase" and supabaseClient is not None:
@@ -1741,7 +1769,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
-            callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
+            callbacks: Final = (
+                *self._without_replaced_global_callbacks(litellm.input_callback),
+                *(self.dynamic_input_callbacks or ()),
+            )
             for callback in callbacks:
                 try:
                     if callback == "sentry" and add_breadcrumb:
@@ -4518,14 +4549,26 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
+    def _without_replaced_global_callbacks(
+        self, global_callbacks: Iterable[str | Callable[..., object] | CustomLogger]
+    ) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        if not self.replaced_global_callback_keys:
+            return tuple(global_callbacks)
+        return tuple(
+            litellm.logging_callback_manager.without_custom_logger_keys(
+                global_callbacks, self.replaced_global_callback_keys
+            )
+        )
+
     def get_combined_callback_list(
         self,
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
         global_callbacks: list[str | Callable[..., object] | CustomLogger],
     ) -> list[str | Callable[..., object] | CustomLogger]:
+        kept_global_callbacks: Final = self._without_replaced_global_callbacks(global_callbacks)
         if dynamic_success_callbacks is None:
-            return list(global_callbacks)
-        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
+            return list(kept_global_callbacks)
+        return list(dict.fromkeys((*dynamic_success_callbacks, *kept_global_callbacks)))
 
     def _remove_internal_litellm_callbacks(self, callbacks: list) -> list:
         """
