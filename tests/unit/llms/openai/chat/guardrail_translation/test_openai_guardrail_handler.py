@@ -7,9 +7,10 @@ with guardrail transformations, including tool calls.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional
 
 import pytest
+import respx
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2365,3 +2366,22 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+@pytest.mark.asyncio
+async def test_headroom_latest_user_rewrite_reaches_chat_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(
+        200, json={"messages": [{"role": "user", "content": "short"}]}
+    )
+    result: Final = await OpenAIChatCompletionsHandler().process_input_messages(
+        {"messages": [{"role": "user", "content": "long " * 100, "name": "reader"}]}, callback
+    )
+    assert route.called
+    assert result["messages"] == [{"role": "user", "content": "short", "name": "reader"}]

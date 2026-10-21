@@ -3075,3 +3075,246 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
     assert guardrail.timeout.read == 60.0
     assert guardrail.timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_configured_latest_turn_compression_preserves_tool_linkage(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = LitellmParams.model_validate({
+        "guardrail": "headroom", "mode": "pre_call", "api_base": FAKE_API_BASE,
+        "compress_latest_turn": True,
+    })
+    callback: Final = initialize_guardrail(params, {"guardrail_name": "compress-latest", "litellm_params": params})
+    messages: Final = [
+        {"role": "user", "content": "Summarize this listing " * 100},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_listing", "type": "function", "function": {"name": "list_files", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_listing", "content": "file.py\n" * 1000, "name": "list_files"},
+    ]
+    compressed: Final = [
+        {"role": "user", "content": "Summarize the listing"},
+        {"role": "tool", "tool_call_id": "call_listing", "content": "1000 Python files"},
+    ]
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={"messages": compressed})
+    try:
+        result: Final = await callback.apply_guardrail(
+            GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+        )
+        assert result["structured_messages"] == [
+            {**messages[0], "content": compressed[0]["content"]}, messages[1],
+            {**messages[2], "content": compressed[1]["content"]},
+        ]
+        assert json.loads(route.calls.last.request.content)["messages"] == [messages[0], messages[2]]
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, callback, require_self=False
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rewritten", [
+    [],
+    [{"role": "assistant", "content": "short"}],
+    [{"role": "user", "content": {"unexpected": "shape"}}],
+    [{"role": "user", "content": ""}],
+    [{"role": "user", "content": " "}],
+    [{"role": "user", "content": "short", "tool_call_id": "wrong"}],
+])
+async def test_latest_turn_unsafe_rewrite_keeps_original_input(
+    rewritten: list[dict[str, object]], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    original: Final = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "long " * 100}])
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={"messages": rewritten, "ccr_hashes": [CCR_HASH]})
+    request_data: Final[dict[str, object]] = {}
+    result: Final = await callback.apply_guardrail(original, request_data, "request")
+    assert route.called
+    assert result is original
+    assert "tools" not in result
+    entries: Final = _recorded_guardrail_entries(request_data)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entries[0]["duration"] >= 0
+    assert entries[0]["end_time"] >= entries[0]["start_time"]
+    assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_latest_turn_preserves_cached_prefix_and_retrieval(
+    enabled: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=enabled)
+    messages: Final = [
+        {"role": "system", "content": "System instruction"},
+        {"role": "user", "content": "Cached data", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "retrieve", "type": "function", "function": {"name": "headroom_retrieve", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "retrieve", "content": "Recovered original"},
+        {"role": "user", "content": "Latest instruction"},
+    ]
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(FAKE_API_BASE + "/v1/compress").respond(
+            200, json={"messages": [{"role": "user", "content": "Short instruction"}]}
+        )
+        result: Final = await callback.apply_guardrail(
+            GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+        )
+        assert route.called is enabled
+        assert result["structured_messages"] == [
+            *messages[:-1], {**messages[-1], "content": "Short instruction"} if enabled else messages[-1],
+        ]
+
+
+@pytest.mark.asyncio
+async def test_latest_turn_retains_single_text_block_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    messages: Final = [{"role": "user", "content": [
+        {"type": "text", "text": "long\n\nparagraph " * 100, "source": "first"},
+    ]}]
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
+        200, json={"messages": [{"role": "user", "content": "short\n\nsummary"}]}
+    )
+    result: Final = await callback.apply_guardrail(
+        GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+    )
+    assert route.called
+    assert result["structured_messages"] == [{"role": "user", "content": [
+        {"type": "text", "text": "short\n\nsummary", "source": "first"},
+    ]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content", [[], ["invalid"], [{"type": "image_url", "image_url": {"url": "https://example.com/image"}}]]
+)
+async def test_latest_turn_does_not_replace_non_text_content(
+    content: list[object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    original: Final = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": content}])
+    result: Final = await callback.apply_guardrail(original, {}, "request")
+    assert not respx_mock.calls
+    assert result is original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["Already short", [
+    {"type": "text", "text": "Already", "source": "first"},
+    {"type": "text", "text": "short", "source": "second"},
+]])
+async def test_latest_turn_unchanged_text_retains_original_metadata(
+    content: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    original: Final = [{"role": "user", "content": content, "name": "reader"}]
+    if isinstance(content, str):
+        respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
+            200, json={"messages": [
+                {"role": "user", "content": "Already short" if isinstance(content, str) else "Already\n\nshort"}
+            ]}
+        )
+    result: Final = await callback.apply_guardrail(
+        GenericGuardrailAPIInputs(structured_messages=original), {}, "request"
+    )
+    assert bool(respx_mock.calls) is isinstance(content, str)
+    assert result["structured_messages"] == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
+    surface: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    part_type: Final = "input_text" if surface == "responses" else "text"
+    history: Final = {"role": "user", "content": [
+        {"type": part_type, "text": "First paragraph\n\nSecond paragraph", **({} if surface == "messages" else {"source": "first"})},
+        {"type": part_type, "text": "Other block", **({} if surface == "messages" else {"source": "second"})},
+    ]}
+    tool_text: Final = "file.py\n" * 1000
+    prefix: Final = [history, {"role": "assistant", "content": "Read the history"}]
+    chat_rows: Final = [*prefix, {"role": "user", "content": "List files"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_files", "type": "function", "function": {"name": "list_files", "arguments": "{}"}},
+        ]}, {"role": "tool", "tool_call_id": "call_files", "content": tool_text},
+    ]
+    native_items: Final = [*prefix, {"role": "user", "content": "List files"},
+        {"type": "function_call", "call_id": "call_files", "name": "list_files", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_files", "output": tool_text},
+    ]
+    anthropic_rows: Final = [*prefix, {"role": "user", "content": "List files"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "call_files", "name": "list_files", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_files", "content": tool_text}]},
+    ]
+    request: Final = {"input": native_items} if surface == "responses" else {
+        "messages": anthropic_rows if surface == "messages" else chat_rows
+    }
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={
+        "messages": [{"role": "user", "content": "List files"},
+                     {"role": "tool", "tool_call_id": "call_files", "content": "file summary"}],
+        "tokens_before": 1000, "tokens_after": 10, "ccr_hashes": [CCR_HASH],
+    })
+    handler: Final = (OpenAIResponsesHandler() if surface == "responses" else
+                     AnthropicMessagesHandler() if surface == "messages" else OpenAIChatCompletionsHandler())
+    result: Final = await handler.process_input_messages({**request, "model": "test-model", "max_tokens": 100}, callback)
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": "List files"},
+        {"role": "tool", "tool_call_id": "call_files", "content": tool_text},
+    ]
+    if surface == "responses":
+        assert result["input"] == [*native_items[:-1], {**native_items[-1], "output": "file summary"}]
+    elif surface == "chat":
+        assert result["messages"] == [*chat_rows[:-1], {**chat_rows[-1], "content": "file summary"}]
+    else:
+        assert result["messages"][0] == history
+        assert result["messages"][-1]["content"] == [
+            {"type": "tool_result", "tool_use_id": "call_files", "content": "file summary"}
+        ]
+    assert extract_compression_saved_tokens({"guardrail_information": _recorded_guardrail_entries(result)}) == 990
+
+    assert has_headroom_retrieve_tool(result.get("tools"))
+
+
+@pytest.mark.asyncio
+async def test_native_scope_mismatch_discards_rewrite_and_retrieval(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
+    original: Final = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "long " * 100}])
+    request: Final = {"input": [
+        {"role": "user", "content": "long " * 100}, {"role": "user", "content": "Additional input"},
+    ]}
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={
+        "messages": [{"role": "user", "content": "short"}],
+        "ccr_hashes": [CCR_HASH], "tokens_before": 1000, "tokens_after": 10,
+    })
+    result: Final = await callback.apply_guardrail(original, request, "request")
+    assert route.called
+    assert result is original
+    assert "tools" not in result
+    entries: Final = _recorded_guardrail_entries(request)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entries[0]["duration"] >= 0
+    assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0

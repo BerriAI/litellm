@@ -222,12 +222,14 @@ def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[in
     return tuple(range(last_breakpoint + 1))
 
 
-def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+def get_protected_indices(
+    messages: Sequence[Mapping[str, object]], *, protect_latest_turn: bool = True
+) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
-    - The last user message
-    - The last assistant message
+    - The last user message when protect_latest_turn is enabled
+    - The last assistant message when protect_latest_turn is enabled
     - Every message up to and including the last one carrying an Anthropic cache_control breakpoint
 
     The last user message is what the model is being asked to act on right now,
@@ -240,7 +242,8 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
     assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
-    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages)))
+    latest_indices: Final = last_user + assistant_indices[-1:] if protect_latest_turn else ()
+    return tuple(dict.fromkeys(system_indices + latest_indices + _cached_prefix_indices(messages)))
 
 
 def _combine_scores(

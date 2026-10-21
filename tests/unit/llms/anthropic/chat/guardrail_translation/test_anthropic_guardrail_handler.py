@@ -10,6 +10,8 @@ from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+import litellm
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -3043,3 +3045,22 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+@pytest.mark.asyncio
+async def test_headroom_latest_multipart_turn_preserves_valid_text_blocks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    messages: Final = [{"role": "user", "content": [
+        {"type": "text", "text": "Context\n\nparagraph " * 100},
+        {"type": "text", "text": "Summarize it"},
+    ]}]
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        {"model": "test-model", "max_tokens": 200, "messages": messages}, callback
+    )
+    assert not respx_mock.calls
+    assert result["messages"] == messages
