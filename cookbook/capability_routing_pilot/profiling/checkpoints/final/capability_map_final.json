@@ -1,0 +1,802 @@
+{
+  "accounting": {
+    "attempt_count": 171,
+    "full_attempt_spend_usd": 62.033954,
+    "graded_count": 171,
+    "infra_count": 0,
+    "successes": 47
+  },
+  "category_coverage": {
+    "algorithms_data": {
+      "profile_count": 0,
+      "status_counts": {
+        "evidenced_below_target": 0,
+        "insufficient_evidence": 0,
+        "no_evidence": 0,
+        "qualified": 0,
+        "unsupported_zero_success": 0
+      }
+    },
+    "feature_implementation": {
+      "profile_count": 3,
+      "status_counts": {
+        "evidenced_below_target": 3,
+        "insufficient_evidence": 0,
+        "no_evidence": 0,
+        "qualified": 0,
+        "unsupported_zero_success": 0
+      }
+    },
+    "repository_debugging": {
+      "profile_count": 3,
+      "status_counts": {
+        "evidenced_below_target": 3,
+        "insufficient_evidence": 0,
+        "no_evidence": 0,
+        "qualified": 0,
+        "unsupported_zero_success": 0
+      }
+    },
+    "shell_build": {
+      "profile_count": 0,
+      "status_counts": {
+        "evidenced_below_target": 0,
+        "insufficient_evidence": 0,
+        "no_evidence": 0,
+        "qualified": 0,
+        "unsupported_zero_success": 0
+      }
+    },
+    "unknown": {
+      "profile_count": 0,
+      "status_counts": {
+        "evidenced_below_target": 0,
+        "insufficient_evidence": 0,
+        "no_evidence": 0,
+        "qualified": 0,
+        "unsupported_zero_success": 0
+      }
+    }
+  },
+  "category_decisions": {
+    "algorithms_data": {
+      "decision": "unsupported_category",
+      "reason": "unsupported_category",
+      "selected_profile": null,
+      "threshold_unmet": false
+    },
+    "feature_implementation": {
+      "decision": "no_qualified_model",
+      "reason": "no_qualified_model",
+      "selected_profile": null,
+      "threshold_unmet": false
+    },
+    "repository_debugging": {
+      "decision": "no_qualified_model",
+      "reason": "no_qualified_model",
+      "selected_profile": null,
+      "threshold_unmet": false
+    },
+    "shell_build": {
+      "decision": "unsupported_category",
+      "reason": "unsupported_category",
+      "selected_profile": null,
+      "threshold_unmet": false
+    },
+    "unknown": {
+      "decision": "unsupported_category",
+      "reason": "unsupported_category",
+      "selected_profile": null,
+      "threshold_unmet": false
+    }
+  },
+  "compiler_final_flag": true,
+  "environment_deficits": [
+    "pyvista__pyvista-432"
+  ],
+  "final": true,
+  "gateway_identity_note": "All three aliases share gateway model-info id 13ef3d99-7edf-4a6b-aab6-f088c8e25964, a gateway mapping snapshot, not model identity. Cohorts are separated by operational alias and returned model name",
+  "infra_deficits": [],
+  "interpretation": "Beta(1,1) credible bound describes the exchangeable public-dev task distribution for this category, not guaranteed per-task success",
+  "min_evidence_note": "necessary not sufficient: 13/13 is the minimum perfect cell clearing 0.80; not a general adequacy claim",
+  "pending_environment_repairs": [],
+  "preflight_failed": [
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1413",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:410e2f40cb23aa1923369affad114b15e9ef2eb5f079997cfa8ebd9dd7d6874a",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1413:latest",
+      "latency_s": 36.985300702999666,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:410e2f40cb23aa1923369affad114b15e9ef2eb5f079997cfa8ebd9dd7d6874a",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1413",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:1e091a2e42b92bec0be650972b22a320489225c4258e5211c07c9f592a9a2460",
+      "upstream_image_id": "sha256:1e091a2e42b92bec0be650972b22a320489225c4258e5211c07c9f592a9a2460"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1439",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:0acd7d5d280d24e1fc4c7b9cea90c665ba89fdefb25c56b74d681ba9d4b707b1",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1439:latest",
+      "latency_s": 45.86221657400165,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:0acd7d5d280d24e1fc4c7b9cea90c665ba89fdefb25c56b74d681ba9d4b707b1",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1439",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:ddb010dc7d015d6cc7c279d3efcdc756b9f4ed90eb254a004dc78e7d57db5517",
+      "upstream_image_id": "sha256:ddb010dc7d015d6cc7c279d3efcdc756b9f4ed90eb254a004dc78e7d57db5517"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4329:latest",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:424ecdb4949d49836f004ccccfaf59c2207d0bdd87d8151ecfa92ba3eaf91eb3",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4329:latest",
+      "latency_s": 59.88555217099929,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-4329",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:424ecdb4949d49836f004ccccfaf59c2207d0bdd87d8151ecfa92ba3eaf91eb3",
+      "upstream_image_id": "sha256:424ecdb4949d49836f004ccccfaf59c2207d0bdd87d8151ecfa92ba3eaf91eb3"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1720",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:c931326698b89fee911ab9e586b2578cb671eb39c880799b07fa05d5ceb59297",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1720:latest",
+      "latency_s": 37.34210575900215,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "sonnet-5",
+        "opus-5",
+        "haiku-4.5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:c931326698b89fee911ab9e586b2578cb671eb39c880799b07fa05d5ceb59297",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1720",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:389d351b51bc10da28fabc12c1afb07053ecb1c7459602f012761b7d1880b337",
+      "upstream_image_id": "sha256:389d351b51bc10da28fabc12c1afb07053ecb1c7459602f012761b7d1880b337"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-995",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:f9b967d3213df7a453959b4bd085cbb1b054262d7c5d39d8d142aa2adb52d444",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-995:latest",
+      "latency_s": 37.53449416300282,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "sonnet-5",
+        "opus-5",
+        "haiku-4.5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:f9b967d3213df7a453959b4bd085cbb1b054262d7c5d39d8d142aa2adb52d444",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-995",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:ee9f71cd4126fb421c95f6ef3d23dd15e732f140e16332065df590d069c6ec39",
+      "upstream_image_id": "sha256:ee9f71cd4126fb421c95f6ef3d23dd15e732f140e16332065df590d069c6ec39"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1334",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:daaf2bfb94a9d94be15642ee0037fa7862ffe8c9a22519615679db63bf5ae2da",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1334:latest",
+      "latency_s": 40.2318156500005,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:daaf2bfb94a9d94be15642ee0037fa7862ffe8c9a22519615679db63bf5ae2da",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1334",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:f66aacddba0d030bdd6618e7dca3827cf9f7a7319af8c6c86faf201f77c2dc7d",
+      "upstream_image_id": "sha256:f66aacddba0d030bdd6618e7dca3827cf9f7a7319af8c6c86faf201f77c2dc7d"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1365",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:2d654e4f952f8aab69fcc67a0f0558b100033da20ff81f58430493af216291ba",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1365:latest",
+      "latency_s": 41.60962831600045,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "sonnet-5",
+        "opus-5",
+        "haiku-4.5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:2d654e4f952f8aab69fcc67a0f0558b100033da20ff81f58430493af216291ba",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1365",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:c47b4a1a8f24f3a50f71fbe5c2be79485957f0dda8524a56bd7875d571008cd2",
+      "upstream_image_id": "sha256:c47b4a1a8f24f3a50f71fbe5c2be79485957f0dda8524a56bd7875d571008cd2"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4414:latest",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:b6a3ebf210abaaa95e87e1ef636c9f0ab6fd9ade72bc9437eafa9347fa1acd92",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4414:latest",
+      "latency_s": 53.46030479900219,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-4414",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:b6a3ebf210abaaa95e87e1ef636c9f0ab6fd9ade72bc9437eafa9347fa1acd92",
+      "upstream_image_id": "sha256:b6a3ebf210abaaa95e87e1ef636c9f0ab6fd9ade72bc9437eafa9347fa1acd92"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1048",
+      "category": "repository_debugging",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:f363adc31fcd0fd2a64502cf50bea26237876de8451c0066ee416aced97ab0fc",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1048:latest",
+      "latency_s": 39.439905870000075,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "sonnet-5",
+        "opus-5",
+        "haiku-4.5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:f363adc31fcd0fd2a64502cf50bea26237876de8451c0066ee416aced97ab0fc",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1048",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:927f68ae738299106c329fb7d41f4dfae89f65093a890f467f871319b75cc61f",
+      "upstream_image_id": "sha256:927f68ae738299106c329fb7d41f4dfae89f65093a890f467f871319b75cc61f"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-3675:latest",
+      "category": "feature_implementation",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:6aea7ac7e7fd73861304d89266e30e2d9d70cf955fb9cb84177f5d001bcd34a7",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-3675:latest",
+      "latency_s": 44.45388161699884,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-3675",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:6aea7ac7e7fd73861304d89266e30e2d9d70cf955fb9cb84177f5d001bcd34a7",
+      "upstream_image_id": "sha256:6aea7ac7e7fd73861304d89266e30e2d9d70cf955fb9cb84177f5d001bcd34a7"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-432:latest",
+      "category": "feature_implementation",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:aeb69732fbbe76f5f308395122531837fd109284759ef8f08aa2f8a42be00d21",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-432:latest",
+      "latency_s": 38.152053487003286,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-432",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:aeb69732fbbe76f5f308395122531837fd109284759ef8f08aa2f8a42be00d21",
+      "upstream_image_id": "sha256:aeb69732fbbe76f5f308395122531837fd109284759ef8f08aa2f8a42be00d21"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1428",
+      "category": "feature_implementation",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:68636bf54706b0f82a31980d5cb719e6056f8129a4d79f3d3a47f67f478f2e49",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1428:latest",
+      "latency_s": 49.36457281099865,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:68636bf54706b0f82a31980d5cb719e6056f8129a4d79f3d3a47f67f478f2e49",
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1428",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:d574741060ac7c9f27621e325353ef203610a8cb3f7d7fe290ffb5fa43e9612e",
+      "upstream_image_id": "sha256:d574741060ac7c9f27621e325353ef203610a8cb3f7d7fe290ffb5fa43e9612e"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4648:latest",
+      "category": "feature_implementation",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:ba323e45c4e076da80413910ffbef577f7ee9183ecece03b38abd683f78da455",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4648:latest",
+      "latency_s": 67.93332233199908,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "sonnet-5",
+        "opus-5",
+        "haiku-4.5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-4648",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:ba323e45c4e076da80413910ffbef577f7ee9183ecece03b38abd683f78da455",
+      "upstream_image_id": "sha256:ba323e45c4e076da80413910ffbef577f7ee9183ecece03b38abd683f78da455"
+    },
+    {
+      "agent_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4311:latest",
+      "category": "feature_implementation",
+      "cost_usd": 0.0,
+      "error_class": "env",
+      "final_image_id": "sha256:b7e495f378ad4dd9bbfe2aa8e49b5a0592dbdb386a5a8eff419a4fc219b4f453",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-4311:latest",
+      "latency_s": 44.1322110139954,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "opus-5",
+        "haiku-4.5",
+        "sonnet-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": null,
+      "record_type": "preflight_failed",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-4311",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:b7e495f378ad4dd9bbfe2aa8e49b5a0592dbdb386a5a8eff419a4fc219b4f453",
+      "upstream_image_id": "sha256:b7e495f378ad4dd9bbfe2aa8e49b5a0592dbdb386a5a8eff419a4fc219b4f453"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pydicom__pydicom-1439-envfix1",
+      "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)",
+      "category": "repository_debugging",
+      "cause": "The gold preflight ran pytest 8.3.5, which no longer calls nose-style setup/teardown; TestNumpy_NoRLEHandler and TestNumpy_RLEHandler define setup(self) to restrict pixel handlers, so both tests saw default handlers and failed",
+      "corrections_file_sha256": "3354b4543cd34bec6136c12fe43eadd209e566971886df5de086732cf85e0719",
+      "cost_usd": 0.0,
+      "dockerfile_sha256": "537a4abfca69b6009fc410550b85e90d103ace6be8e725e0e31e184fcb80c970",
+      "env_correction_sha256": "3354b4543cd34bec6136c12fe43eadd209e566971886df5de086732cf85e0719",
+      "error_class": "env",
+      "evidence": [
+        "pydicom/tests/test_rle_pixel_data.py::TestNumpy_NoRLEHandler::test_pixel_array_raises",
+        "pydicom/tests/test_rle_pixel_data.py::TestNumpy_RLEHandler::test_unsupported_syntax_raises"
+      ],
+      "final_image_id": "sha256:7523d0b5c2cf51e01a7d93089bc7a1dad29ee9baf4a857b45165d304c531228e",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-1439:latest",
+      "latency_s": 44.88570009100658,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:7523d0b5c2cf51e01a7d93089bc7a1dad29ee9baf4a857b45165d304c531228e",
+      "record_type": "preflight_failed",
+      "repair_script_sha256": "5742e7223c9579f24d77080f58ea1140734f82bdd23b6ad9458fe66104e81a59",
+      "status": "preflight_failed",
+      "task_id": "pydicom__pydicom-1439",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:ddb010dc7d015d6cc7c279d3efcdc756b9f4ed90eb254a004dc78e7d57db5517",
+      "upstream_image_id": "sha256:ddb010dc7d015d6cc7c279d3efcdc756b9f4ed90eb254a004dc78e7d57db5517"
+    },
+    {
+      "agent_image_ref": "routing_poc/profiling-overlay:pyvista__pyvista-432-envfix1",
+      "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)",
+      "category": "feature_implementation",
+      "cause": "Gold and noop preflights both failed at collection with ImportError: libXrender.so.1: cannot open shared object file, so no FAIL_TO_PASS test could run; the image lacks the X11 render library VTK loads at import",
+      "corrections_file_sha256": "1e40a104a84776aaef6f86c635543cc32e116333e671a54d256ac5b0655fdbcb",
+      "cost_usd": 0.0,
+      "dockerfile_sha256": "b62d6429e68a1e8f92a8d8c2cdbdedae5d0b43571d4eb724c5e094b5acda2c32",
+      "env_correction_sha256": "1e40a104a84776aaef6f86c635543cc32e116333e671a54d256ac5b0655fdbcb",
+      "error_class": "env",
+      "evidence": [
+        "tests/test_plotting.py::test_invalid_color",
+        "tests/test_plotting.py::test_invalid_font"
+      ],
+      "final_image_id": "sha256:4e818cdda198e7fac1aa95e7a29c9446f398d918b97ce5cc651ea571a141d0e9",
+      "gold_status": "unresolved",
+      "grader_image_ref": "swebench/sweb.eval.x86_64.pyvista_1776_pyvista-432:latest",
+      "latency_s": 38.10395569400134,
+      "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+      "model_order": [
+        "haiku-4.5",
+        "sonnet-5",
+        "opus-5"
+      ],
+      "noop_status": "unresolved",
+      "overlay_image_id": "sha256:4e818cdda198e7fac1aa95e7a29c9446f398d918b97ce5cc651ea571a141d0e9",
+      "record_type": "preflight_failed",
+      "repair_script_sha256": "383df72c71c7117ae9a0b5c7de06b1b798b433587995ddf4f8fdd5188aca7728",
+      "status": "preflight_failed",
+      "task_id": "pyvista__pyvista-432",
+      "tenant_id": "public_dev_poc",
+      "upstream_digest": "sha256:aeb69732fbbe76f5f308395122531837fd109284759ef8f08aa2f8a42be00d21",
+      "upstream_image_id": "sha256:aeb69732fbbe76f5f308395122531837fd109284759ef8f08aa2f8a42be00d21"
+    }
+  ],
+  "preflight_incomplete": [],
+  "profiles": [
+    {
+      "attempt_count": 29,
+      "beta_mean": 0.0967741935483871,
+      "cost_per_graded_task_usd": 0.2329313827586207,
+      "graded_count": 29,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "feature_implementation",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "haiku-4.5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-haiku-4-5-20251001",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.02781554973974965,
+      "mean_latency_s": 179.66291863237925,
+      "min_evidence": 13,
+      "primary_labels": [
+        "feature_implementation"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "haiku-4.5"
+      },
+      "raw_rate": 0.06896551724137931,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 2,
+      "tau": 0.8,
+      "total_spend_usd": 6.7550101
+    },
+    {
+      "attempt_count": 29,
+      "beta_mean": 0.25806451612903225,
+      "cost_per_graded_task_usd": 0.5569036551724138,
+      "graded_count": 29,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "feature_implementation",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "opus-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-opus-5",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.14018509946776775,
+      "mean_latency_s": 165.5237464495169,
+      "min_evidence": 13,
+      "primary_labels": [
+        "feature_implementation"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "opus-5"
+      },
+      "raw_rate": 0.2413793103448276,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 7,
+      "tau": 0.8,
+      "total_spend_usd": 16.150206
+    },
+    {
+      "attempt_count": 29,
+      "beta_mean": 0.3548387096774194,
+      "cost_per_graded_task_usd": 0.3745770931034483,
+      "graded_count": 29,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "feature_implementation",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "sonnet-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-sonnet-5",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.22105944984601347,
+      "mean_latency_s": 165.86940478075798,
+      "min_evidence": 13,
+      "primary_labels": [
+        "feature_implementation"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "sonnet-5"
+      },
+      "raw_rate": 0.3448275862068966,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 10,
+      "tau": 0.8,
+      "total_spend_usd": 10.8627357
+    },
+    {
+      "attempt_count": 28,
+      "beta_mean": 0.26666666666666666,
+      "cost_per_graded_task_usd": 0.18977413214285715,
+      "graded_count": 28,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "repository_debugging",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "haiku-4.5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-haiku-4-5-20251001",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.1453215823182127,
+      "mean_latency_s": 152.14831222699974,
+      "min_evidence": 13,
+      "primary_labels": [
+        "repository_debugging"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "haiku-4.5"
+      },
+      "raw_rate": 0.25,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 7,
+      "tau": 0.8,
+      "total_spend_usd": 5.3136757
+    },
+    {
+      "attempt_count": 28,
+      "beta_mean": 0.3,
+      "cost_per_graded_task_usd": 0.5271966071428571,
+      "graded_count": 28,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "repository_debugging",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "opus-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-opus-5",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.17246481940361086,
+      "mean_latency_s": 177.86307842582195,
+      "min_evidence": 13,
+      "primary_labels": [
+        "repository_debugging"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "opus-5"
+      },
+      "raw_rate": 0.2857142857142857,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 8,
+      "tau": 0.8,
+      "total_spend_usd": 14.761505
+    },
+    {
+      "attempt_count": 28,
+      "beta_mean": 0.4666666666666667,
+      "cost_per_graded_task_usd": 0.29252935357142856,
+      "graded_count": 28,
+      "infra_count": 0,
+      "key": {
+        "budget_version": "budget_1usd_50_600_v1",
+        "category": "repository_debugging",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+        "harness_version": "run_pilot_attempt_v1",
+        "model_alias": "sonnet-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-sonnet-5",
+        "tenant_id": "public_dev_poc"
+      },
+      "lower_5pct": 0.32029626073802414,
+      "mean_latency_s": 171.79238967996415,
+      "min_evidence": 13,
+      "primary_labels": [
+        "repository_debugging"
+      ],
+      "provenance": {
+        "alias_note": "Model aliases can resolve to changing deployments; returned model versions and deployment IDs are isolated",
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "harness_sha256": "b53a6e4c72699588217fef63f48c1e2cecac45c8a77922e1f7bef1a9bebd953d",
+        "manifest_sha256": "15720dee12d40b62780837ed12a403f3951e9c5bb1ed18ec0d5d5d1f4776bff4",
+        "model_alias": "sonnet-5"
+      },
+      "raw_rate": 0.4642857142857143,
+      "secondary_labels": [],
+      "status": "evidenced_below_target",
+      "successes": 13,
+      "tau": 0.8,
+      "total_spend_usd": 8.1908219
+    }
+  ],
+  "quarantined_attempts": [],
+  "repaired_tasks": [
+    "pydicom__pydicom-1048",
+    "pydicom__pydicom-1334",
+    "pydicom__pydicom-1365",
+    "pydicom__pydicom-1413",
+    "pydicom__pydicom-1428",
+    "pydicom__pydicom-1720",
+    "pyvista__pyvista-3675",
+    "pyvista__pyvista-4311",
+    "pyvista__pyvista-4329",
+    "pyvista__pyvista-4414",
+    "pyvista__pyvista-4648"
+  ],
+  "spec_evaluator_deficits": [
+    {
+      "reason": "20 PASS_TO_PASS IDs embed original-machine paths, corrected gold passes 80 with 0 failed",
+      "task_id": "pydicom__pydicom-1439"
+    },
+    {
+      "reason": "44 FAIL_TO_PASS IDs embed original-machine temp paths, gold passes 256/256 but cannot match",
+      "task_id": "pydicom__pydicom-995"
+    }
+  ],
+  "tenant_id": "public_dev_poc",
+  "thresholds": {
+    "min_evidence": 13,
+    "tau": 0.8
+  },
+  "versions": {
+    "budget_version": "budget_1usd_50_600_v1",
+    "harness_config_hash": "32499cdda5a3167b68e297e7282f3b2bac2f4635c3cc1048c4408c9a396e4e43",
+    "harness_version": "run_pilot_attempt_v1",
+    "model_deployments": {
+      "haiku-4.5": [
+        "13ef3d99-7edf-4a6b-aab6-f088c8e25964"
+      ],
+      "opus-5": [
+        "13ef3d99-7edf-4a6b-aab6-f088c8e25964"
+      ],
+      "sonnet-5": [
+        "13ef3d99-7edf-4a6b-aab6-f088c8e25964"
+      ]
+    },
+    "model_versions": {
+      "haiku-4.5": [
+        "litellm_proxy/anthropic/claude-haiku-4-5-20251001"
+      ],
+      "opus-5": [
+        "litellm_proxy/anthropic/claude-opus-5"
+      ],
+      "sonnet-5": [
+        "litellm_proxy/anthropic/claude-sonnet-5"
+      ]
+    },
+    "observed_model_cohorts": [
+      {
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "model_alias": "haiku-4.5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-haiku-4-5-20251001"
+      },
+      {
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "model_alias": "opus-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-opus-5"
+      },
+      {
+        "deployment_id": "13ef3d99-7edf-4a6b-aab6-f088c8e25964",
+        "model_alias": "sonnet-5",
+        "returned_model_version": "litellm_proxy/anthropic/claude-sonnet-5"
+      }
+    ],
+    "version_changes": []
+  }
+}
