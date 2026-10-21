@@ -5,21 +5,13 @@ https://docs.cohere.com/reference/rerank
 """
 
 from collections.abc import Sequence
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import ConfigDict, Field, PrivateAttr, StrictInt
+from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.llms.base import LiteLLMBaseModel
-
-
-class DecisionRerankConfig(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy: Literal["pointwise", "multiple_choice"] = "pointwise"
-    max_concurrency: Annotated[StrictInt, Field(ge=1, le=32)] = 8
-    refusal_policy: Literal["error", "zero"] = "error"
 
 
 class RerankRequest(LiteLLMBaseModel):

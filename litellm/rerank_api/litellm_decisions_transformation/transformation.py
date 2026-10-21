@@ -19,13 +19,16 @@ from litellm.types.decisions import (
     OpenAIPredicateQuestion,
     OpenAIRefusalAnswer,
 )
-from litellm.types.rerank import DecisionRerankConfig, DecisionRerankResponse, RerankResponseResult
+from litellm.types.rerank import DecisionRerankResponse, RerankResponseResult
 
 _RELEVANCE: Final = (
     "Is the passage relevant to the query, meaning it contains information that answers, supports or contradicts it?"
 )
 _UNSUPPORTED: Final = frozenset(
     {
+        "rerank_mode",
+        "decision_rerank",
+        "strategy",
         "rank_fields",
         "max_chunks_per_doc",
         "max_tokens_per_doc",
@@ -44,8 +47,7 @@ class _TextDocument(BaseModel):
 
 class DecisionRerankRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
-    rerank_mode: Literal["decisions"]
-    decision_rerank: DecisionRerankConfig = DecisionRerankConfig()
+    strategy: Literal["pointwise", "multiple_choice"] = Field(exclude=True)
     query: str
     documents: Annotated[tuple[str | _TextDocument, ...], Field(min_length=1)]
     top_n: Annotated[StrictInt | None, Field(ge=1)] = None
@@ -56,11 +58,8 @@ class DecisionRerankRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_choice_request(self) -> "DecisionRerankRequest":
-        if self.decision_rerank.strategy == "multiple_choice":
-            if not 2 <= len(self.documents) <= 255:
-                raise ValueError("multiple_choice requires between 2 and 255 documents")
-            if self.decision_rerank.refusal_policy != "error":
-                raise ValueError("multiple_choice requires refusal_policy='error'")
+        if self.strategy == "multiple_choice" and not 2 <= len(self.documents) <= 255:
+            raise ValueError("multiple_choice requires between 2 and 255 documents")
         return self
 
     def document_text(self, index: int) -> str:
@@ -84,9 +83,7 @@ def _invalid_response(index: int, reason: str, model: str, provider: str) -> lit
     )
 
 
-def _score(
-    outcome: DecisionRerankResult, refusal_policy: Literal["error", "zero"], model: str, provider: str
-) -> float | Exception:
+def _score(outcome: DecisionRerankResult, model: str, provider: str) -> float | Exception:
     if outcome.error is not None:
         return outcome.error
     response: Final = outcome.response
@@ -94,8 +91,6 @@ def _score(
         return _invalid_response(outcome.index, "expected one relevance answer", model, provider)
     answer: Final = response.answers[0]
     if isinstance(answer, OpenAIRefusalAnswer):
-        if refusal_policy == "zero":
-            return 0.0
         return litellm.ContentPolicyViolationError(
             message=f"Decision model refused to score document {outcome.index}",
             model=model,
@@ -104,7 +99,12 @@ def _score(
     if not isinstance(answer, OpenAIPredicateAnswer) or answer.name != "relevance":
         return _invalid_response(outcome.index, "expected the relevance predicate", model, provider)
     if not math.isfinite(answer.probability) or not 0 <= answer.probability <= 1:
-        return _invalid_response(outcome.index, "probability must be finite and between zero and one", model, provider)
+        return _invalid_response(
+            outcome.index,
+            "probability must be finite and between zero and one",
+            model,
+            provider,
+        )
     return answer.probability
 
 
@@ -164,20 +164,30 @@ def _choice_scores(
 
 
 def _scores(
-    outcomes: Sequence[DecisionRerankResult], request: DecisionRerankRequest, model: str, provider: str
+    outcomes: Sequence[DecisionRerankResult],
+    request: DecisionRerankRequest,
+    model: str,
+    provider: str,
 ) -> tuple[float | Exception, ...]:
-    if request.decision_rerank.strategy == "multiple_choice":
+    if request.strategy == "multiple_choice":
         scores: Final = _choice_scores(outcomes[0], request, model, provider) if outcomes else ()
         return (scores,) if isinstance(scores, Exception) else scores
-    return tuple(_score(outcome, request.decision_rerank.refusal_policy, model, provider) for outcome in outcomes)
+    return tuple(_score(outcome, model, provider) for outcome in outcomes)
 
 
 def _ranked_results(
-    outcomes: Sequence[DecisionRerankResult], request: DecisionRerankRequest, scores: Sequence[float | Exception]
+    outcomes: Sequence[DecisionRerankResult],
+    request: DecisionRerankRequest,
+    scores: Sequence[float | Exception],
 ) -> tuple[RerankResponseResult, ...]:
-    if request.decision_rerank.strategy == "multiple_choice":
+    if request.strategy == "multiple_choice":
         return tuple(
-            _result(index, request.document_text(index), score, bool(request.return_documents))
+            _result(
+                index,
+                request.document_text(index),
+                score,
+                bool(request.return_documents),
+            )
             for index, score in enumerate(scores)
             if isinstance(score, float)
         )
@@ -211,7 +221,12 @@ def _response(
 
 class LiteLLMDecisionsRerankConfig:
     @staticmethod
-    def validate_request(params: Mapping[str, object], model: str, provider: str) -> DecisionRerankRequest:
+    def validate_request(
+        params: Mapping[str, object],
+        model: str,
+        provider: str,
+        strategy: Literal["pointwise", "multiple_choice"],
+    ) -> DecisionRerankRequest:
         unsupported: Final = tuple(key for key in _UNSUPPORTED if params.get(key) is not None)
         if unsupported:
             raise litellm.UnsupportedParamsError(
@@ -220,7 +235,7 @@ class LiteLLMDecisionsRerankConfig:
                 llm_provider=provider,
             )
         try:
-            return DecisionRerankRequest.model_validate(params)
+            return DecisionRerankRequest.model_validate({**params, "strategy": strategy})
         except ValidationError as error:
             raise litellm.BadRequestError(
                 message="Invalid decision rerank request: "
@@ -231,7 +246,7 @@ class LiteLLMDecisionsRerankConfig:
 
     @staticmethod
     def transform_rerank_request(request: DecisionRerankRequest, index: int) -> OpenAIDecisionRequestBody:
-        if request.decision_rerank.strategy == "multiple_choice":
+        if request.strategy == "multiple_choice":
             return OpenAIDecisionRequestBody(
                 input=json.dumps(
                     {
@@ -252,13 +267,19 @@ class LiteLLMDecisionsRerankConfig:
                 ),
             )
         return OpenAIDecisionRequestBody(
-            input=json.dumps({"query": request.query, "passage": request.document_text(index)}, ensure_ascii=False),
+            input=json.dumps(
+                {"query": request.query, "passage": request.document_text(index)},
+                ensure_ascii=False,
+            ),
             questions=(OpenAIPredicateQuestion(type="predicate", name="relevance", instructions=_RELEVANCE),),
         )
 
     @staticmethod
     def transform_decisions_response(
-        outcomes: Sequence[DecisionRerankResult], request: DecisionRerankRequest, model: str, provider: str
+        outcomes: Sequence[DecisionRerankResult],
+        request: DecisionRerankRequest,
+        model: str,
+        provider: str,
     ) -> tuple[DecisionRerankResponse, Exception | None]:
         """Retain completed responses for billing even when another result fails validation."""
         scores: Final = _scores(outcomes, request, model, provider)

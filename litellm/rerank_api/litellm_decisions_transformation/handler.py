@@ -2,14 +2,19 @@
 
 import asyncio
 import time
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Final
+from queue import Empty, SimpleQueue
+from threading import Lock
+from typing import Final, Literal
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.decisions.call import DecisionsCall, OpenAIDecisionRequestFields, asend, prepare_call, send
+from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rerank_api.litellm_decisions_transformation.transformation import (
     DecisionRerankRequest,
@@ -20,7 +25,11 @@ from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.rerank import DecisionRerankResponse
 from litellm.types.utils import Usage
 
-_CHILD_OMIT: Final = frozenset({"litellm_logging_obj", "rerank_mode", "decision_rerank", "litellm_call_id"})
+_METADATA: Final = TypeAdapter(Mapping[str, object])
+_DISPATCH_COSTS: Final = TypeAdapter(Mapping[str, tuple[float, ...]])
+
+_CHILD_OMIT: Final = frozenset({"litellm_logging_obj", "litellm_call_id"})
+_MAX_CONCURRENCY: Final = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +37,35 @@ class _DocumentCall:
     index: int
     text: str
     call: DecisionsCall
+
+
+def _dispatch_cost_recorder(
+    kwargs: Mapping[str, object], request: DecisionRerankRequest
+) -> Callable[[int], None] | None:
+    try:
+        reservations: Final = (
+            budget_reservation_from_metadata(_METADATA.validate_python(kwargs.get(name) or {}))
+            for name in ("metadata", "litellm_metadata")
+        )
+        reservation: Final = next((item for item in reservations if item is not None), None)
+        if reservation is None:
+            return None
+        costs: Final = _DISPATCH_COSTS.validate_python(reservation.get("decision_rerank_input_costs") or {}).get(
+            request.strategy, ()
+        )
+    except ValidationError:
+        return None
+    if len(costs) != _call_count(request):
+        return None
+    reservation["input_cost"] = 0.0  # Only dispatched children belong in the cancellation floor.
+    lock: Final = Lock()
+
+    def record(index: int) -> None:
+        with lock:
+            current: Final = reservation.get("input_cost")
+            reservation["input_cost"] = (float(current) if isinstance(current, (float, int)) else 0.0) + costs[index]
+
+    return record
 
 
 def _timeout(model: str, provider: str) -> litellm.Timeout:
@@ -45,37 +83,63 @@ def _call_with_deadline(document: _DocumentCall, deadline: float) -> DecisionsCa
     return replace(document.call, timeout=remaining)
 
 
-def _send(document: _DocumentCall, deadline: float) -> DecisionRerankResult:
+def _send(
+    document: _DocumentCall,
+    deadline: float,
+    record_dispatch: Callable[[int], None] | None,
+) -> DecisionRerankResult:
     call: Final = _call_with_deadline(document, deadline)
     if isinstance(call, litellm.Timeout):
         return DecisionRerankResult(document.index, document.text, error=call)
     try:
+        if record_dispatch is not None:
+            record_dispatch(document.index)
         response: Final = send(call)
         if isinstance(response, OpenAIDecisionResponse):
             return DecisionRerankResult(document.index, document.text, response=response)
         return DecisionRerankResult(
-            document.index, document.text, error=_invalid_response(document, "expected a Decisions response")
+            document.index,
+            document.text,
+            error=_invalid_response(document, "expected a Decisions response"),
         )
     except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
         return DecisionRerankResult(document.index, document.text, error=error)
 
 
-async def _asend(document: _DocumentCall, deadline: float, semaphore: asyncio.Semaphore) -> DecisionRerankResult:
-    async with semaphore:
-        call: Final = _call_with_deadline(document, deadline)
-        if isinstance(call, litellm.Timeout):
-            return DecisionRerankResult(document.index, document.text, error=call)
-        try:
-            response: Final = await asend(call)
-            if isinstance(response, OpenAIDecisionResponse):
-                return DecisionRerankResult(document.index, document.text, response=response)
-            return DecisionRerankResult(
-                document.index,
-                document.text,
-                error=_invalid_response(document, "expected a Decisions response"),
-            )
-        except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
-            return DecisionRerankResult(document.index, document.text, error=error)
+async def _asend(
+    document: _DocumentCall,
+    deadline: float,
+    cancellation_requested: asyncio.Event,
+    record_dispatch: Callable[[int], None] | None,
+) -> DecisionRerankResult:
+    call: Final = _call_with_deadline(document, deadline)
+    if isinstance(call, litellm.Timeout):
+        return DecisionRerankResult(document.index, document.text, error=call)
+    try:
+        if record_dispatch is not None:
+            record_dispatch(document.index)
+        response: Final = await asend(call)
+        if isinstance(response, OpenAIDecisionResponse):
+            return DecisionRerankResult(document.index, document.text, response=response)
+        return DecisionRerankResult(
+            document.index,
+            document.text,
+            error=_invalid_response(document, "expected a Decisions response"),
+        )
+    except asyncio.CancelledError:
+        if cancellation_requested.is_set():
+            raise
+        return DecisionRerankResult(
+            document.index,
+            document.text,
+            error=litellm.APIConnectionError(
+                message="Decision rerank provider request was cancelled",
+                model=document.call.requested_model,
+                llm_provider=document.call.custom_llm_provider,
+            ),
+        )
+    except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
+        return DecisionRerankResult(document.index, document.text, error=error)
 
 
 def _invalid_response(document: _DocumentCall, reason: str) -> litellm.InternalServerError:
@@ -121,60 +185,89 @@ def _finish(
     return response
 
 
+def _call_count(request: DecisionRerankRequest) -> int:
+    return 1 if request.strategy == "multiple_choice" else len(request.documents)
+
+
 def _rerank(
-    documents: tuple[_DocumentCall, ...],
+    prepare: Callable[[int], _DocumentCall],
     request: DecisionRerankRequest,
     logging_obj: Logging,
     model: str,
     provider: str,
+    deadline: float,
+    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResponse:
-    deadline: Final = time.monotonic() + request.timeout
-    executor: Final = ThreadPoolExecutor(max_workers=request.decision_rerank.max_concurrency)
-    futures: Final = tuple(executor.submit(_send, document, deadline) for document in documents)
+    count: Final = _call_count(request)
+    workers: Final = min(count, _MAX_CONCURRENCY)
+    completed: Final[SimpleQueue[DecisionRerankResult]] = SimpleQueue()
+
+    def run(indices: range) -> None:
+        for index in indices:
+            if time.monotonic() >= deadline:
+                return
+            try:
+                completed.put(_send(prepare(index), deadline, record_dispatch))
+            except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
+                completed.put(DecisionRerankResult(index, request.document_text(index), error=error))
+
+    executor: Final = ThreadPoolExecutor(max_workers=workers)
+    futures: Final = tuple(executor.submit(run, range(worker, count, workers)) for worker in range(workers))
     try:
-        _, pending = wait(futures, timeout=max(0.0, deadline - time.monotonic()))
-        outcomes: Final = tuple(future.result() for future in futures if future.done() and not future.cancelled())
-        return _finish(outcomes, request, logging_obj, bool(pending), model, provider)
+        wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+        outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
+        while True:
+            try:
+                outcomes.append(completed.get_nowait())
+            except Empty:
+                break
+        return _finish(outcomes, request, logging_obj, len(outcomes) < count, model, provider)
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
 async def _arerank(
-    documents: tuple[_DocumentCall, ...],
+    prepare: Callable[[int], _DocumentCall],
     request: DecisionRerankRequest,
     logging_obj: Logging,
     model: str,
     provider: str,
+    deadline: float,
+    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResponse:
-    deadline: Final = time.monotonic() + request.timeout
-    semaphore: Final = asyncio.Semaphore(request.decision_rerank.max_concurrency)
-    tasks: Final = tuple(asyncio.create_task(_asend(document, deadline, semaphore)) for document in documents)
+    count: Final = _call_count(request)
+    workers: Final = min(count, _MAX_CONCURRENCY)
+    outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
+    cancellation_requested: Final = asyncio.Event()
+
+    async def run(indices: range) -> None:
+        for index in indices:
+            if time.monotonic() >= deadline:
+                return
+            try:
+                outcomes.append(
+                    await _asend(
+                        prepare(index),
+                        deadline,
+                        cancellation_requested,
+                        record_dispatch,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
+                outcomes.append(DecisionRerankResult(index, request.document_text(index), error=error))
+
+    tasks: Final = tuple(asyncio.create_task(run(range(worker, count, workers))) for worker in range(workers))
     try:
-        _, pending = await asyncio.wait(tasks, timeout=max(0.0, deadline - time.monotonic()))
-        outcomes: Final = tuple(
-            DecisionRerankResult(
-                document.index,
-                document.text,
-                error=litellm.APIConnectionError(
-                    message="Decision rerank provider request was cancelled",
-                    model=model,
-                    llm_provider=provider,
-                ),
-            )
-            if task.cancelled()
-            else task.result()
-            for document, task in zip(documents, tasks, strict=True)
-            if task.done()
-        )
-        return _finish(outcomes, request, logging_obj, bool(pending), model, provider)
+        await asyncio.wait(tasks, timeout=max(0.0, deadline - time.monotonic()))
+        return _finish(outcomes, request, logging_obj, len(outcomes) < count, model, provider)
     except asyncio.CancelledError:
-        outcomes_on_cancel: Final = tuple(task.result() for task in tasks if task.done() and not task.cancelled())
         response_on_cancel, _ = LiteLLMDecisionsRerankConfig.transform_decisions_response(
-            outcomes_on_cancel, request, model, provider
+            outcomes, request, model, provider
         )
         _record_partial(response_on_cancel, logging_obj)
         raise
     finally:
+        cancellation_requested.set()
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -217,10 +310,12 @@ def rerank_with_decisions(
     api_base: str | None,
     logging_obj: Logging,
     is_async: bool,
+    strategy: Literal["pointwise", "multiple_choice"],
     params: Mapping[str, object],
     kwargs: Mapping[str, object],
 ) -> DecisionRerankResponse | Awaitable[DecisionRerankResponse]:
-    request: Final = LiteLLMDecisionsRerankConfig.validate_request(params, model, provider)
+    request: Final = LiteLLMDecisionsRerankConfig.validate_request(params, model, provider, strategy)
+    deadline: Final = time.monotonic() + request.timeout
     logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # Logging accepts legacy provider kwargs
         kwargs=dict(kwargs),
         model=model,
@@ -239,25 +334,36 @@ def rerank_with_decisions(
         api_base=api_base,
         kwargs=kwargs,
     )
-    documents: Final = (
-        (prepare(0),)
-        if request.decision_rerank.strategy == "multiple_choice"
-        else tuple(prepare(index) for index in range(len(request.documents)))
-    )
+    first: Final = prepare(0)
+
+    def prepare_next(index: int) -> _DocumentCall:
+        return first if index == 0 else prepare(index)
+
     logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # Logging accepts the logical rerank request
         input=request.query,
-        api_key=documents[0].call.api_key,
+        api_key=first.call.api_key,
         additional_args={
             "complete_input_dict": {
                 "model": model,
                 **request.model_dump(
-                    mode="json", exclude={"extra_headers", "safety_identifier", "timeout"}, exclude_none=True
+                    mode="json",
+                    exclude={"extra_headers", "safety_identifier", "timeout"},
+                    exclude_none=True,
                 ),
             },
-            "api_base": documents[0].call.api_base,
-            "headers": dict(documents[0].call.headers),
+            "api_base": first.call.api_base,
+            "headers": dict(first.call.headers),
         },
     )
+    record_dispatch: Final = _dispatch_cost_recorder(kwargs, request)
     if is_async:
-        return _arerank(documents, request, logging_obj, model, provider)
-    return _rerank(documents, request, logging_obj, model, provider)
+        return _arerank(
+            prepare_next,
+            request,
+            logging_obj,
+            model,
+            provider,
+            deadline,
+            record_dispatch,
+        )
+    return _rerank(prepare_next, request, logging_obj, model, provider, deadline, record_dispatch)

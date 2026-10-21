@@ -15,7 +15,10 @@ from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
-from litellm.rerank_api.rerank_utils import get_optional_rerank_params
+from litellm.rerank_api.rerank_utils import (
+    get_decision_rerank_strategy,
+    get_optional_rerank_params,
+)
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
@@ -158,9 +161,12 @@ def rerank(
             api_key=optional_params.api_key,
         )
 
-        decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
-        if decision_kwargs.get("rerank_mode") is not None or decision_kwargs.get("decision_rerank") is not None:
-            from litellm.rerank_api.litellm_decisions_transformation.handler import rerank_with_decisions
+        decision_strategy: Final = get_decision_rerank_strategy(model, _custom_llm_provider)
+        if decision_strategy is not None:
+            decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
+            from litellm.rerank_api.litellm_decisions_transformation.handler import (
+                rerank_with_decisions,
+            )
 
             return rerank_with_decisions(
                 model=model,
@@ -169,6 +175,7 @@ def rerank(
                 api_base=dynamic_api_base or optional_params.api_base,
                 logging_obj=litellm_logging_obj,
                 is_async=_is_async,
+                strategy=decision_strategy,
                 params=_DECISION_KWARGS.validate_python(
                     {
                         **decision_kwargs,
@@ -179,9 +186,9 @@ def rerank(
                         "rank_fields": rank_fields,
                         "max_chunks_per_doc": max_chunks_per_doc,
                         "max_tokens_per_doc": max_tokens_per_doc,
-                        "timeout": litellm.request_timeout
-                        if optional_params.timeout is None
-                        else optional_params.timeout,
+                        "timeout": (
+                            litellm.request_timeout if optional_params.timeout is None else optional_params.timeout
+                        ),
                         "extra_headers": decision_kwargs.get("extra_headers") or headers,
                     }
                 ),

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import return_raw_request
 
 MODEL: Final = "typesafe/jevrank-unit-test"
+CHOICE_MODEL: Final = "typesafe/choice-unit-test"
 URL: Final = "https://api.typesafe.ai/v1/systemone"
 RATE: Final = 0.0002
 
@@ -29,6 +31,37 @@ def setup_model(monkeypatch: pytest.MonkeyPatch):
         {
             "litellm_provider": "typesafe",
             "mode": "evaluation",
+            "rerank_strategy": "pointwise",
+            "input_cost_per_token": RATE,
+            "output_cost_per_token": 0,
+        },
+    )
+
+    for name in (
+        CHOICE_MODEL,
+        "perplexity/pplx-unit-test",
+        "perplexity/pplx-decider-v1-27b",
+        "openai/decision-unit-test",
+        "openai/test-decision",
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            name,
+            {
+                "litellm_provider": name.split("/")[0],
+                "mode": "evaluation",
+                "rerank_strategy": "multiple_choice",
+                "input_cost_per_token": RATE,
+                "output_cost_per_token": 0,
+            },
+        )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/typesafe/jev-1.14",
+        {
+            "litellm_provider": "openrouter",
+            "mode": "evaluation",
+            "rerank_strategy": "pointwise",
             "input_cost_per_token": RATE,
             "output_cost_per_token": 0,
         },
@@ -46,15 +79,18 @@ def response(probability=0.8, *, tokens=10):
     )
 
 
-async def rerank(sync, **kwargs):
+async def rerank(sync, *, strategy="pointwise", concurrency=8, **kwargs):
     params = {
-        "model": MODEL,
+        "model": CHOICE_MODEL if strategy == "multiple_choice" else MODEL,
         "api_key": "test-key",
-        "rerank_mode": "decisions",
         "query": "warranty",
         **kwargs,
     }
-    return litellm.rerank(**params) if sync else await litellm.arerank(**params)
+    with patch(
+        "litellm.rerank_api.litellm_decisions_transformation.handler._MAX_CONCURRENCY",
+        concurrency,
+    ):
+        return litellm.rerank(**params) if sync else await litellm.arerank(**params)
 
 
 @pytest.mark.parametrize("sync", [True, False])
@@ -98,10 +134,6 @@ async def test_single_text_document_and_top_n_above_length(sync, respx_mock):
         {"documents": []},
         {"documents": [{"text": "one", "other": "field"}]},
         {"documents": ["one"], "top_n": 0},
-        {"documents": ["one"], "decision_rerank": {"max_concurrency": 0}},
-        {"documents": ["one"], "decision_rerank": {"max_concurrency": True}},
-        {"documents": ["one"], "decision_rerank": {"strategy": "multiple_choice"}},
-        {"documents": ["one"], "decision_rerank": {"refusal_policy": "ignore"}},
         {"documents": ["one"], "timeout": 0},
     ],
 )
@@ -129,8 +161,7 @@ async def test_invalid_upstream_probability_is_an_error(sync, probability, respx
         await rerank(sync, documents=["one"])
 
 
-@pytest.mark.parametrize("policy", ["error", "zero"])
-async def test_explicit_refusal_policy_preserves_other_documents(policy, respx_mock):
+async def test_refusal_fails_the_whole_request(respx_mock):
     def score(request):
         state = json.loads(json.loads(request.content)["state"])
         if state["passage"] == "refused":
@@ -145,25 +176,8 @@ async def test_explicit_refusal_policy_preserves_other_documents(policy, respx_m
         return response()
 
     respx_mock.post(URL).mock(side_effect=score)
-    if policy == "error":
-        with pytest.raises(litellm.ContentPolicyViolationError):
-            await rerank(
-                False,
-                documents=["refused", "allowed"],
-                decision_rerank={"refusal_policy": policy},
-            )
-    else:
-        result = await rerank(
-            False,
-            documents=["refused", "allowed"],
-            decision_rerank={"refusal_policy": policy},
-        )
-        assert result.results == [
-            {"index": 1, "relevance_score": 0.8},
-            {"index": 0, "relevance_score": 0.0},
-        ]
-        assert result.meta["refused_document_indices"] == [0]
-        assert litellm.completion_cost(completion_response=result) == pytest.approx(20 * RATE)
+    with pytest.raises(litellm.ContentPolicyViolationError):
+        await rerank(False, documents=["refused", "allowed"])
 
 
 @pytest.mark.parametrize(
@@ -177,7 +191,7 @@ async def test_explicit_refusal_policy_preserves_other_documents(policy, respx_m
 async def test_outages_are_never_zero_scores(status, exception, respx_mock):
     respx_mock.post(URL).mock(return_value=httpx.Response(status, json={"error": "provider failure"}))
     with pytest.raises(exception):
-        await rerank(False, documents=["one"], decision_rerank={"refusal_policy": "zero"})
+        await rerank(False, documents=["one"])
 
 
 async def test_async_concurrency_and_out_of_order_completion(respx_mock):
@@ -203,7 +217,7 @@ async def test_async_concurrency_and_out_of_order_completion(respx_mock):
         rerank(
             False,
             documents=["first", "second", "third"],
-            decision_rerank={"max_concurrency": 2},
+            concurrency=2,
         )
     )
     await asyncio.wait_for(first_started.wait(), 10)
@@ -231,7 +245,7 @@ async def test_cancellation_cancels_inflight_requests_and_does_not_start_queued_
             cancelled.set()
 
     route = respx_mock.post(URL).mock(side_effect=score)
-    task = asyncio.create_task(rerank(False, documents=["one", "two"], decision_rerank={"max_concurrency": 1}))
+    task = asyncio.create_task(rerank(False, documents=["one", "two"], concurrency=1))
     await asyncio.wait_for(started.wait(), 10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -272,7 +286,7 @@ async def test_success_is_billed_once_and_failed_request_retains_completed_usage
     assert len(logger.events) == 1
     assert logger.events[0]["response_cost"] == pytest.approx(20 * RATE)
     with pytest.raises(litellm.ServiceUnavailableError):
-        await rerank(False, documents=["one", "failed"], decision_rerank={"max_concurrency": 1})
+        await rerank(False, documents=["one", "failed"], concurrency=1)
     await flush_logging()
     assert len(logger.events) == 2
     assert logger.events[1]["response_cost"] == pytest.approx(10 * RATE)
@@ -287,7 +301,6 @@ async def test_custom_token_prices_apply_to_decision_usage(respx_mock):
                 "litellm_params": {
                     "model": MODEL,
                     "api_key": "test-key",
-                    "rerank_mode": "decisions",
                 },
                 "model_info": {
                     "mode": "rerank",
@@ -301,16 +314,7 @@ async def test_custom_token_prices_apply_to_decision_usage(respx_mock):
     assert result.hidden_params["response_cost"] == pytest.approx(20 * 0.004)
 
 
-def test_cache_separates_native_and_decision_rerank_and_refusal_policy():
-    cache = Cache(type="local")
-    common = {"model": MODEL, "query": "query", "documents": ["one"]}
-    native = cache.get_cache_key(**common)
-    strict = cache.get_cache_key(**common, rerank_mode="decisions", decision_rerank={"refusal_policy": "error"})
-    zero = cache.get_cache_key(**common, rerank_mode="decisions", decision_rerank={"refusal_policy": "zero"})
-    assert len({native, strict, zero}) == 3
-
-
-async def test_router_model_alias_keeps_rerank_configuration(respx_mock):
+async def test_router_model_alias_uses_catalog_without_mode_override(respx_mock):
     route = respx_mock.post(URL).mock(return_value=response())
     router = litellm.Router(
         model_list=[
@@ -319,10 +323,7 @@ async def test_router_model_alias_keeps_rerank_configuration(respx_mock):
                 "litellm_params": {
                     "model": MODEL,
                     "api_key": "test-key",
-                    "rerank_mode": "decisions",
-                    "decision_rerank": {"strategy": "pointwise", "max_concurrency": 1},
                 },
-                "model_info": {"mode": "rerank"},
             }
         ]
     )
@@ -364,7 +365,7 @@ async def test_multiple_choice_ranks_one_whole_set_and_bills_once(sync, respx_mo
     result = await rerank(
         sync,
         documents=["first", "second", "third"],
-        decision_rerank={"strategy": "multiple_choice"},
+        strategy="multiple_choice",
         top_n=2,
         return_documents=True,
     )
@@ -392,14 +393,14 @@ async def test_multiple_choice_rejects_malformed_distributions(probabilities, re
         await rerank(
             False,
             documents=["first", "second"],
-            decision_rerank={"strategy": "multiple_choice"},
+            strategy="multiple_choice",
         )
 
 
 @pytest.mark.parametrize(
     "model,url",
     [
-        (MODEL, URL),
+        (CHOICE_MODEL, URL),
         ("perplexity/pplx-unit-test", "https://api.perplexity.ai/v1/decisions"),
         ("openai/decision-unit-test", "https://api.openai.com/v1/decisions"),
     ],
@@ -445,7 +446,7 @@ async def test_multiple_choice_uses_existing_decisions_normalization(model, url,
         False,
         model=model,
         documents=["one", "two"],
-        decision_rerank={"strategy": "multiple_choice"},
+        strategy="multiple_choice",
     )
     native_scores = tuple(item.probability for item in native.answers[0].probabilities)
     assert native_scores == (1, 0)
@@ -462,17 +463,17 @@ async def test_multiple_choice_rejects_excess_mass_at_maximum_candidate_count(
         await rerank(
             False,
             documents=[str(i) for i in range(255)],
-            decision_rerank={"strategy": "multiple_choice"},
+            strategy="multiple_choice",
         )
 
 
-@pytest.mark.parametrize("count,policy", [(1, "error"), (256, "error"), (2, "zero")])
-async def test_multiple_choice_rejects_unsupported_size_or_refusal_policy(count, policy, respx_mock):
+@pytest.mark.parametrize("count", [1, 256])
+async def test_multiple_choice_rejects_unsupported_size(count, respx_mock):
     with pytest.raises(litellm.BadRequestError):
         await rerank(
             False,
             documents=[str(i) for i in range(count)],
-            decision_rerank={"strategy": "multiple_choice", "refusal_policy": policy},
+            strategy="multiple_choice",
         )
     assert not respx_mock.calls
 
@@ -483,7 +484,7 @@ async def test_multiple_choice_refusal_is_an_error(respx_mock):
         await rerank(
             False,
             documents=["one", "two"],
-            decision_rerank={"strategy": "multiple_choice"},
+            strategy="multiple_choice",
         )
 
 
@@ -498,10 +499,7 @@ async def test_perplexity_multiple_choice_router_preset(respx_mock):
                 "litellm_params": {
                     "model": "perplexity/pplx-decider-v1-27b",
                     "api_key": "test-key",
-                    "rerank_mode": "decisions",
-                    "decision_rerank": {"strategy": "multiple_choice"},
                 },
-                "model_info": {"mode": "rerank"},
             }
         ]
     )
@@ -552,7 +550,7 @@ async def test_custom_transport_configuration_and_untrusted_text(strategy, respx
     await rerank(
         False,
         documents=documents,
-        decision_rerank={"strategy": strategy},
+        strategy=strategy,
         api_base="https://custom.example",
         api_key="explicit-key",
         extra_headers={"x-custom": "custom-value"},
@@ -585,7 +583,7 @@ async def test_deadline_bounds_fanout_and_never_starts_queued_requests(sync, res
                 sync,
                 documents=["one", "two", "three"],
                 timeout=0.05,
-                decision_rerank={"max_concurrency": 1},
+                concurrency=1,
             )
         assert time.monotonic() - start < 0.75
         assert len(started) == 1
@@ -639,7 +637,7 @@ async def test_openai_choice_invalid_normalized_scores_rejected(probabilities, r
             False,
             model="openai/test-decision",
             documents=["one", "two"],
-            decision_rerank={"strategy": "multiple_choice"},
+            strategy="multiple_choice",
         )
 
 
@@ -667,7 +665,7 @@ async def test_openai_choice_duplicate_labels_use_native_last_value(respx_mock):
         False,
         model="openai/test-decision",
         documents=["one", "two"],
-        decision_rerank={"strategy": "multiple_choice"},
+        strategy="multiple_choice",
     )
     assert result.results == [
         {"index": 0, "relevance_score": 0.7},
@@ -711,7 +709,7 @@ async def test_invalid_options_never_echo_credentials(respx_mock):
             False,
             api_key="sensitive-test-key",
             documents=["one", "two"],
-            decision_rerank={"strategy": "multiple_choice", "refusal_policy": "zero"},
+            top_n=0,
         )
     assert "sensitive-test-key" not in str(caught.value)
     assert not respx_mock.calls
@@ -743,9 +741,7 @@ def test_raw_request_inspection_never_sends_decision_requests(strategy, respx_mo
     raw = return_raw_request(
         CallTypes.rerank,
         {
-            "model": MODEL,
-            "rerank_mode": "decisions",
-            "decision_rerank": {"strategy": strategy},
+            "model": CHOICE_MODEL if strategy == "multiple_choice" else MODEL,
             "query": "warranty",
             "documents": ["one", "two"],
         },
@@ -768,7 +764,7 @@ async def test_fixed_margin_uses_the_pricing_provider_for_aggregate_and_breakdow
         model_list=[
             {
                 "model_name": "jevrank",
-                "litellm_params": {"model": MODEL, "api_key": "test-key", "rerank_mode": "decisions"},
+                "litellm_params": {"model": MODEL, "api_key": "test-key"},
                 "model_info": {
                     "mode": "rerank",
                     "pricing_provider": "openai",
@@ -847,10 +843,209 @@ async def test_cancelled_child_fails_whole_request_and_bills_completed_usage(res
         await rerank(
             False,
             documents=["completed", "cancelled"],
-            decision_rerank={"max_concurrency": 1},
+            concurrency=1,
         )
     await flush_logging()
     assert len(logger.events) == 1
     assert logger.events[0]["status"] == "failure"
     assert logger.events[0]["prompt_tokens"] == 10
     assert logger.events[0]["response_cost"] == pytest.approx(10 * RATE)
+
+
+@pytest.mark.parametrize("sync", [True, False])
+async def test_request_preparation_is_bounded_and_stops_at_deadline(sync, respx_mock, monkeypatch):
+    import threading
+
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    prepared = []
+    started = []
+    release = threading.Event()
+    original = handler._prepare_document
+
+    def prepare(index, *args, **kwargs):
+        prepared.append(index)
+        return original(index, *args, **kwargs)
+
+    def sync_score(request):
+        started.append(request)
+        release.wait(5)
+        return response()
+
+    async def async_score(request):
+        started.append(request)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(handler, "_prepare_document", prepare)
+    respx_mock.post(URL).mock(side_effect=sync_score if sync else async_score)
+    try:
+        with pytest.raises(litellm.Timeout):
+            await rerank(
+                sync,
+                query="long query " * 1000,
+                documents=[""] * 100,
+                timeout=0.05,
+                concurrency=2,
+            )
+        assert len(prepared) == 2
+        assert len(started) == 2
+    finally:
+        release.set()
+    await asyncio.sleep(0.02)
+    assert len(prepared) == 2
+
+
+@pytest.mark.parametrize("sync", [True, False])
+async def test_preparation_time_counts_toward_request_deadline(sync, respx_mock, monkeypatch):
+    import time
+
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    original = handler._prepare_document
+    prepared = []
+
+    def prepare(index, *args, **kwargs):
+        prepared.append(index)
+        time.sleep(0.03)
+        return original(index, *args, **kwargs)
+
+    monkeypatch.setattr(handler, "_prepare_document", prepare)
+    route = respx_mock.post(URL).mock(return_value=response())
+    with pytest.raises(litellm.Timeout):
+        await rerank(sync, documents=["one", "two"], timeout=0.01)
+    assert prepared == [0]
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("sync", [True, False])
+async def test_late_preparation_failure_preserves_completed_usage(sync, respx_mock, monkeypatch):
+    import threading
+
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    logger = RecordingLogger()
+    logged = threading.Event()
+
+    def record(kwargs, response_obj, start_time, end_time):
+        logger.events.append(kwargs["standard_logging_object"])
+        logged.set()
+
+    if sync:
+        monkeypatch.setattr(logger, "log_failure_event", record)
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    original = handler._prepare_document
+
+    def prepare(index, *args, **kwargs):
+        if index == 1:
+            raise litellm.BadRequestError("preparation failed", model=MODEL, llm_provider="typesafe")
+        return original(index, *args, **kwargs)
+
+    monkeypatch.setattr(handler, "_prepare_document", prepare)
+    route = respx_mock.post(URL).mock(return_value=response())
+    with pytest.raises(litellm.BadRequestError, match="preparation failed"):
+        await rerank(sync, documents=["completed", "invalid"], concurrency=1)
+    if sync:
+        assert await asyncio.to_thread(logged.wait, 5)
+    else:
+        await flush_logging()
+    assert route.call_count == 1
+    assert len(logger.events) == 1
+    assert logger.events[0]["status"] == "failure"
+    assert logger.events[0]["prompt_tokens"] == 10
+    assert logger.events[0]["response_cost"] == pytest.approx(10 * RATE)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async", "router"])
+async def test_gateway_prefix_uses_underlying_catalog_model_without_configuration(mode, respx_mock, monkeypatch):
+    route = respx_mock.post("https://gateway.example/v1/decisions").respond(
+        json={
+            "model": "jevrank-unit-test",
+            "answers": [{"type": "predicate", "name": "relevance", "probability": 0.8}],
+            "usage": {"input_tokens": 10, "output_tokens": 0, "total_tokens": 10},
+        }
+    )
+    params = {
+        "model": f"openai/{MODEL}",
+        "api_base": "https://gateway.example/v1",
+        "api_key": "test-key",
+        "query": "warranty",
+        "documents": ["one", "two"],
+        "return_documents": False,
+    }
+    # Gateway-specific pricing must not hide the underlying catalog's capability.
+    monkeypatch.setitem(
+        litellm.model_cost,
+        params["model"],
+        {
+            "litellm_provider": "openai",
+            "mode": "evaluation",
+            "input_cost_per_token": RATE,
+            "output_cost_per_token": 0,
+        },
+    )
+    if mode == "router":
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gateway-reranker",
+                    "litellm_params": {name: params[name] for name in ("model", "api_base", "api_key")},
+                }
+            ]
+        )
+        result = await router.arerank(
+            model="gateway-reranker",
+            query="warranty",
+            documents=["one", "two"],
+            return_documents=False,
+        )
+    else:
+        result = litellm.rerank(**params) if mode == "sync" else await litellm.arerank(**params)
+    assert result.results == [
+        {"index": 0, "relevance_score": 0.8},
+        {"index": 1, "relevance_score": 0.8},
+    ]
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "parameter,value",
+    [
+        ("rerank_mode", "decisions"),
+        ("decision_rerank", {"strategy": "multiple_choice"}),
+        ("strategy", "multiple_choice"),
+    ],
+)
+async def test_removed_rerank_configuration_is_rejected(parameter, value, respx_mock):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.arerank(
+            model=MODEL,
+            api_key="test-key",
+            query="warranty",
+            documents=["one", "two"],
+            **{parameter: value},
+        )
+    assert not respx_mock.calls
+
+
+def test_catalog_selects_methods_and_leaves_native_rerank_unchanged(monkeypatch):
+    from pathlib import Path
+
+    from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
+
+    catalog = json.loads((Path(__file__).parents[4] / "model_prices_and_context_window.json").read_text())
+    selected = {name: info for name, info in catalog.items() if info.get("rerank_strategy") is not None}
+    assert selected
+    for name, info in selected.items():
+        monkeypatch.setitem(litellm.model_cost, name, info)
+        expected = "pointwise" if info["litellm_provider"] == "typesafe" else "multiple_choice"
+        assert get_decision_rerank_strategy(name) == expected
+        assert get_decision_rerank_strategy(f"openai/{name}") == expected
+    assert get_decision_rerank_strategy("cohere/rerank-v3.5") is None
+    assert get_decision_rerank_strategy("not-a-catalog-model") is None
+
+
+def test_native_rerank_does_not_invoke_model_metadata_lookup(monkeypatch):
+    from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
+
+    with patch.object(litellm, "get_model_info", side_effect=AssertionError("native metadata lookup")):
+        assert get_decision_rerank_strategy("cohere/rerank-v3.5") is None

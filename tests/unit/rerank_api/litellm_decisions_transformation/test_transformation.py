@@ -10,7 +10,7 @@ from litellm.types.decisions import OpenAIDecisionResponse, OpenAIDecisionUsage,
 
 
 def test_invalid_score_keeps_completed_responses_and_usage_for_failure_billing():
-    request: Final = DecisionRerankRequest(rerank_mode="decisions", query="warranty", documents=("relevant", "invalid"))
+    request: Final = DecisionRerankRequest(strategy="pointwise", query="warranty", documents=("relevant", "invalid"))
     responses: Final = tuple(
         OpenAIDecisionResponse(
             model="decision-unit-test",
