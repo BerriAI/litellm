@@ -2185,7 +2185,11 @@ def _router_with_gpt4o_mini(router_general_settings: RouterGeneralSettings | Non
 
 @pytest.mark.parametrize(
     "extra_body",
-    [pytest.param({}, id="plain"), pytest.param({"user_config": None}, id="null-user-config")],
+    [
+        pytest.param({}, id="plain"),
+        pytest.param({"user_config": None}, id="null-user-config"),
+        pytest.param({"router_settings_override": {"num_retries": 3}}, id="key-router-settings"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_raise_if_model_not_routable_raises_for_unknown_model(extra_body):
@@ -2231,6 +2235,50 @@ async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(
             user_model=None,
             route_type=route_type,
         )
+
+
+@pytest.mark.asyncio
+async def test_raise_if_model_not_routable_reports_a_malformed_router_settings_override_like_route_request():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.route_llm_request import raise_if_model_not_routable
+
+    data: Final = {
+        "model": "does-not-exist",
+        "messages": [{"role": "user", "content": "hi"}],
+        "router_settings_override": "not-an-object",
+    }
+
+    with pytest.raises(ProxyException) as from_check:
+        await raise_if_model_not_routable(
+            data=data, llm_router=_router_with_gpt4o_mini(), user_model=None, route_type="acompletion"
+        )
+    with pytest.raises(ProxyException) as from_route:
+        await route_request(dict(data), _router_with_gpt4o_mini(), None, "acompletion")
+
+    assert from_check.value.param == from_route.value.param == "router_settings_override"
+    assert from_check.value.message == from_route.value.message
+    assert data["router_settings_override"] == "not-an-object"
+
+
+@pytest.mark.asyncio
+async def test_raise_if_model_not_routable_leaves_the_router_settings_override_for_route_request():
+    from litellm.proxy.route_llm_request import raise_if_model_not_routable
+
+    data: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "router_settings_override": {"num_retries": 3},
+    }
+
+    await raise_if_model_not_routable(
+        data=data, llm_router=_router_with_gpt4o_mini(), user_model=None, route_type="acompletion"
+    )
+
+    assert data == {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "router_settings_override": {"num_retries": 3},
+    }
 
 
 @pytest.mark.parametrize(
