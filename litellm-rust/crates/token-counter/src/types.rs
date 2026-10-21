@@ -49,8 +49,9 @@ fn present_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Tex
 }
 
 /// Free-form JSON the host counts as text: strings and integers via `str()`,
-/// objects via `json.dumps()`, lists flattened. Objects keep document order so
-/// the dumped text matches Python byte for byte.
+/// objects via `json.dumps()`, lists flattened, base64 `data:` URL payloads
+/// dropped. Objects keep document order so the dumped text matches Python byte
+/// for byte.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum TextValue {
@@ -107,10 +108,11 @@ impl<'de> Visitor<'de> for TextValueVisitor {
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(TextValue::Text(value.to_owned()))
+        Ok(TextValue::Text(without_inline_data(value).to_owned()))
     }
 
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+    fn visit_string<E>(self, mut value: String) -> Result<Self::Value, E> {
+        value.truncate(without_inline_data(&value).len());
         Ok(TextValue::Text(value))
     }
 
@@ -135,6 +137,21 @@ impl<'de> Visitor<'de> for TextValueVisitor {
         }
         Ok(TextValue::Object(entries))
     }
+}
+
+const DATA_URL_PREFIX: &str = "data:";
+const BASE64_MARKER: &str = ";base64,";
+
+/// `value` cut after `;base64,` when it is a base64 `data:` URL. Inline images
+/// and files are priced per image or file, not per character, so their payload
+/// is not counted as text; Python's `_without_inline_data` cuts the same strings.
+fn without_inline_data(value: &str) -> &str {
+    if !value.starts_with(DATA_URL_PREFIX) {
+        return value;
+    }
+    value
+        .find(BASE64_MARKER)
+        .map_or(value, |marker| &value[..marker + BASE64_MARKER.len()])
 }
 
 /// Python counts every string-valued key of a message, so any key beyond these
