@@ -400,6 +400,9 @@ class Cache:
         key_hash: Final = self._auth_metadata_value(kwargs, "user_api_key_hash")
         return "" if key_hash is None else f"cache_scope_key: {key_hash}"
 
+    def lacks_cache_scope_identity(self, kwargs: Mapping[str, object]) -> bool:
+        return self.cache_scope != CacheScope.GLOBAL and self._get_cache_scope_material(kwargs) == ""
+
     def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.

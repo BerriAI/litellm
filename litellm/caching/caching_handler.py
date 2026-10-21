@@ -27,7 +27,7 @@ import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching.caching import Cache, S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -115,6 +115,7 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
         (isinstance(custom_llm_provider, str) and custom_llm_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS)
         or model_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS
         or is_github_copilot_per_user_request(kwargs)
+        or (isinstance(litellm.cache, Cache) and litellm.cache.lacks_cache_scope_identity(kwargs))
     )
 
 

@@ -355,6 +355,67 @@ async def test_team_cache_scope_isolates_acompletion_hits_between_teams(monkeypa
     assert team_b.choices[0].message.content == "b"
 
 
+_NO_IDENTITY: Final = {}
+_TEAMLESS_JWT_CALLER: Final = {"user_api_key_user_id": "jwt-user"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_scope", "identity"),
+    [("team", _NO_IDENTITY), ("key", _NO_IDENTITY), ("team", _TEAMLESS_JWT_CALLER), ("key", _TEAMLESS_JWT_CALLER)],
+)
+async def test_scoped_cache_never_shares_hits_between_callers_without_identity(
+    monkeypatch: pytest.MonkeyPatch, cache_scope: str, identity: dict[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope=cache_scope))
+    messages: Final = [{"role": "user", "content": f"no identity {uuid.uuid4().hex}"}]
+
+    first: Final = await acompletion(model="gpt-4o-mini", messages=messages, metadata=dict(identity), mock_response="1")
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second: Final = await acompletion(
+        model="gpt-4o-mini", messages=messages, metadata=dict(identity), mock_response="2"
+    )
+
+    assert second.id != first.id
+    assert second.choices[0].message.content == "2"
+
+
+@pytest.mark.asyncio
+async def test_scoped_cache_without_identity_does_not_read_a_scoped_callers_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope="team"))
+    messages: Final = [{"role": "user", "content": f"cross read {uuid.uuid4().hex}"}]
+
+    team_a: Final = await acompletion(
+        model="gpt-4o-mini", messages=messages, metadata=dict(_TEAM_A_KEY_1), mock_response="a"
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    anonymous: Final = await acompletion(model="gpt-4o-mini", messages=messages, mock_response="anon")
+
+    assert anonymous.id != team_a.id
+
+
+@pytest.mark.asyncio
+async def test_team_cache_scope_still_serves_cached_embeddings_to_the_same_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope="team"))
+    text: Final = f"embed {uuid.uuid4().hex}"
+
+    await aembedding(model="text-embedding-3-small", input=[text], metadata=dict(_TEAM_A_KEY_1), mock_response=[0.1])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    same_team: Final = await aembedding(
+        model="text-embedding-3-small", input=[text], metadata=dict(_TEAM_A_KEY_2), mock_response=[0.9]
+    )
+    other_team: Final = await aembedding(
+        model="text-embedding-3-small", input=[text], metadata=dict(_TEAM_B_KEY_3), mock_response=[0.5]
+    )
+
+    assert same_team.data[0]["embedding"] == [0.1]
+    assert other_team.data[0]["embedding"] == [0.5]
+
+
 @pytest.mark.parametrize(
     "anthropic_param",
     [
