@@ -8,10 +8,10 @@ the sharded CI (coverage collection runs against this tree).
 
 import json
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -636,7 +636,10 @@ class TestAgentCoreSearchEdgeCases:
         from litellm.search.cost_calculator import search_provider_cost_per_query
 
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
-        assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)
+        assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (
+            litellm.model_cost["agentcore/search"]["input_cost_per_query"],
+            0.0,
+        )
 
 
 def _transform_text(text: str) -> SearchResponse:
