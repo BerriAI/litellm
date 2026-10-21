@@ -1,0 +1,20 @@
+{
+  "name": "sustained 100 rps for 15 minutes, evenly spaced arrivals, smoke's request mix over every model group",
+  "stages": [{"duration_s": 900, "rps": 100}],
+  "arrivals": "constant",
+  "nonstream_max_s": 360,
+  "warmup_s": 60,
+  "max_in_flight": 30000,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
+  "classes": [
+    {"name": "chat", "weight": 1, "endpoint": "chat", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 50000},
+     "ttft_ms": {"dist": "uniform", "min": 200, "max": 800},
+     "duration_s": {"dist": "uniform", "min": 1, "max": 5}},
+    {"name": "messages", "weight": 1, "endpoint": "messages", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 50000},
+     "ttft_ms": {"dist": "uniform", "min": 200, "max": 800},
+     "duration_s": {"dist": "uniform", "min": 1, "max": 5}}
+  ]
+}
