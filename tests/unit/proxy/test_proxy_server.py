@@ -3838,17 +3838,17 @@ async def test_update_config_reports_an_unsupported_router_setting_as_a_request_
 
 
 @pytest.mark.asyncio
-async def test_update_config_reports_a_non_admin_caller_as_a_permission_error():
-    from fastapi import Request
+async def test_get_config_callbacks_reports_an_unreadable_config_as_a_request_error_not_an_auth_error(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import get_config
 
-    from litellm.proxy._types import ConfigYAML, ProxyException
-    from litellm.proxy.proxy_server import update_config
+    unreadable_config = MagicMock()
+    unreadable_config.get_config = AsyncMock(side_effect=ValueError("config row is not valid YAML"))
+    monkeypatch.setattr(proxy_server, "proxy_config", unreadable_config)
 
     with pytest.raises(ProxyException) as exc_info:
-        await update_config(
-            config_info=ConfigYAML(),
-            request=MagicMock(spec=Request),
-            user_api_key_dict=UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.INTERNAL_USER),
-        )
+        await get_config(user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN))
 
-    assert (exc_info.value.code, exc_info.value.type) == ("403", "permission_error")
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert exc_info.value.message == "config row is not valid YAML"

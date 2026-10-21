@@ -7211,21 +7211,7 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        raise proxy_exception_for(e, default_status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 async def _apply_non_admin_alias_scope(
@@ -7367,21 +7353,7 @@ async def key_aliases(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in key_aliases: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:

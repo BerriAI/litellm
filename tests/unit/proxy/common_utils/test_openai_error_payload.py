@@ -1,8 +1,11 @@
 import json
 
+import httpx
+import prisma.errors
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
@@ -211,7 +214,8 @@ def test_a_proxy_error_keeps_the_call_id_it_was_raised_with():
     [
         (400, "invalid_request_error"),
         (404, "invalid_request_error"),
-        (403, "permission_error"),
+        (401, "auth_error"),
+        (403, "auth_error"),
         (422, "invalid_request_error"),
         (500, "internal_server_error"),
     ],
@@ -272,3 +276,29 @@ def test_the_wrapped_error_serializes_as_an_openai_error_object(exc: Exception):
 
     assert body["error"]["param"] is None
     assert body["error"]["type"] == "invalid_request_error"
+
+
+def test_a_provider_credential_failure_keeps_the_auth_label_at_the_status_its_route_answers_with():
+    provider_failure = litellm.AuthenticationError(
+        message="invalid x-api-key", llm_provider="anthropic", model="claude-haiku-5-5"
+    )
+
+    wrapped = proxy_exception_for(provider_failure, default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == ("400", "auth_error")
+
+
+def test_a_database_outage_answers_503_so_callers_retry_instead_of_fixing_their_request():
+    wrapped = proxy_exception_for(
+        prisma.errors.PrismaError("Can't reach database server at `db:5432`"), default_status_code=400
+    )
+
+    assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
+
+
+def test_a_network_failure_outside_the_database_is_not_reported_as_a_database_outage():
+    callback_unreachable = httpx.ConnectError("[Errno 111] Connection refused")
+
+    wrapped = proxy_exception_for(callback_unreachable, default_status_code=500)
+
+    assert (wrapped.code, wrapped.type) == ("500", "internal_server_error")

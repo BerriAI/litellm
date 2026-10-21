@@ -9,7 +9,8 @@ from typing import Final
 from fastapi import HTTPException, status
 
 from litellm.constants import STRINGIFIED_NONE
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
 
@@ -20,6 +21,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
         status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
     }
 )
+
+_AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
 
 def attribute_of(value: object, name: str, default: object = None) -> object:
@@ -67,17 +70,35 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
             return exc
         case HTTPException(status_code=status_code, detail=detail):
             return _openai_shaped_proxy_exception(exc, str(detail), status_code)
+        case _ if _is_database_outage(exc):
+            return ProxyException(
+                message=str(exc),
+                type=ProxyErrorTypes.no_db_connection.value,
+                param=None,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         case _:
             return _openai_shaped_proxy_exception(exc, str(exc), default_status_code)
+
+
+def _is_database_outage(exc: Exception) -> bool:
+    raised_by_prisma: Final = type(exc).__module__.partition(".")[0] == "prisma"
+    return raised_by_prisma and PrismaDBExceptionHandler.is_database_service_unavailable_error(exc)
 
 
 def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
     return ProxyException(
         message=message,
-        type=openai_error_type(exc, status_code),
+        type=_catch_all_error_type(exc, status_code),
         param=openai_error_param(exc),
         code=status_code,
     )
+
+
+def _catch_all_error_type(exc: Exception, status_code: int) -> str:
+    if error_status_code(exc, status_code) in _AUTH_FAILURE_STATUS_CODES:
+        return ProxyErrorTypes.auth_error.value
+    return openai_error_type(exc, status_code)
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers
