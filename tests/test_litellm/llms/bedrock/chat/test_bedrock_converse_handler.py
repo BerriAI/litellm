@@ -1,3 +1,4 @@
+import litellm
 """Tests for `BedrockConverseLLM.completion`.
 
 AWS credential resolution is stubbed so nothing reaches STS.

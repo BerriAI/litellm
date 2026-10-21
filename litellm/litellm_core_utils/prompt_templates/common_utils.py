@@ -2596,3 +2596,15 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+_REGEX_LOOKAROUND_RE: Final = re.compile(r"\(\?<?[=!]")
+
+
+def _uses_regex_lookaround(pattern: str) -> bool:
+    return _REGEX_LOOKAROUND_RE.search(pattern) is not None
+
+
+def _schema_at(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value: Final = container.get(key)
+    return value if isinstance(value, dict) else None
