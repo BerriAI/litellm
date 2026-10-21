@@ -20,9 +20,11 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Subject, meta
 from claude_code._gpt_cells import VERTEX_AI_GPT_NOT_APPLICABLE_REASON
 
 
+@meta(Subject(domain=Domain.LLM_TRANSLATION))
 def test_tool_use_streaming_vertex_ai_gpt(compat_result):
     """Record the static not_applicable outcome for this cell."""
     compat_result.set(

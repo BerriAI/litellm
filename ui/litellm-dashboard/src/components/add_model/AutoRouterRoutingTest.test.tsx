@@ -15,7 +15,8 @@ vi.mock("../networking", () => ({
 
 const CONFIG = {
   tiers: { SIMPLE: ["cheap"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["o3"] },
-  classifier_type: "heuristic",
+  classifier_type: "heuristic_v2",
+  heuristic_v2_success_threshold: 0,
 } as unknown as ComplexityRouterConfigPayload;
 
 const Harness = () => (
@@ -60,6 +61,22 @@ describe("AutoRouterRoutingTest", () => {
     renderWithProviders(<Harness />);
 
     expect(screen.getByTestId("auto-router-routing-test-send")).toBeDisabled();
+  });
+
+  it("blocks previewing an invalid success threshold instead of sending NaN as null", () => {
+    renderWithProviders(
+      <AutoRouterRoutingTest
+        accessToken="token"
+        config={{ ...CONFIG, heuristic_v2_success_threshold: Number.NaN }}
+        defaultModel="mid"
+        routerName="my-router"
+        teamId={undefined}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
+    expect(screen.getByTestId("auto-router-routing-test-send")).toBeDisabled();
+    expect(screen.getByText("Success threshold must be a number between 0 and 1")).toBeVisible();
+    expect(testAutoRouterRouting).not.toHaveBeenCalled();
   });
 
   it("routes the typed prompt through the config being edited and shows where it landed", async () => {

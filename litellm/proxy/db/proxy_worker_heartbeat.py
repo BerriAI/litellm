@@ -13,13 +13,14 @@ still agree.
 from __future__ import annotations
 
 import socket
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 if TYPE_CHECKING:
@@ -57,6 +58,14 @@ class _LiveWorkerCountRow(TypedDict):
 _COUNT_ROWS_ADAPTER: Final = TypeAdapter(tuple[_LiveWorkerCountRow, ...])
 
 
+class _HeartbeatExecute(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> int: ...
+
+
+def _heartbeat_execute(prisma_client: PrismaClient) -> _HeartbeatExecute:
+    return prisma_client.db.execute_raw
+
+
 class ProxyWorkerHeartbeat:
     def __init__(self, prisma_client: PrismaClient, worker_id: str | None = None) -> None:
         self.prisma_client: Final = prisma_client
@@ -65,14 +74,17 @@ class ProxyWorkerHeartbeat:
 
     async def beat(self) -> None:
         try:
-            await self.prisma_client.db.execute_raw(BEAT_SQL, self.worker_id, self.hostname)
-            await self.prisma_client.db.execute_raw(PRUNE_SQL, STALE_ROW_RETENTION_SECONDS)
+            async with db_span("proxy_worker_heartbeat", "LiteLLM_ProxyWorkerHeartbeat"):
+                _ = await _heartbeat_execute(self.prisma_client)(BEAT_SQL, self.worker_id, self.hostname)
+            async with db_span("prune_proxy_worker_heartbeats", "LiteLLM_ProxyWorkerHeartbeat"):
+                _ = await _heartbeat_execute(self.prisma_client)(PRUNE_SQL, STALE_ROW_RETENTION_SECONDS)
         except Exception as beat_err:  # noqa: BLE001  # a missed heartbeat must never take down the worker
             verbose_proxy_logger.debug("Proxy worker heartbeat write failed: %s", beat_err)
 
     async def deregister(self) -> None:
         try:
-            await self.prisma_client.db.execute_raw(DEREGISTER_SQL, self.worker_id)
+            async with db_span("deregister_proxy_worker", "LiteLLM_ProxyWorkerHeartbeat"):
+                _ = await _heartbeat_execute(self.prisma_client)(DEREGISTER_SQL, self.worker_id)
         except Exception as deregister_err:  # noqa: BLE001  # best-effort cleanup; the liveness window ages the row out anyway
             verbose_proxy_logger.debug("Proxy worker heartbeat deregister failed: %s", deregister_err)
 
@@ -86,7 +98,8 @@ async def count_live_proxy_workers(prisma_client: PrismaClient) -> int | None:
     try:
         db: Final = prisma_client.db
         primary_db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
-        rows: Final = await primary_db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
+        async with db_span("count_live_proxy_workers", "LiteLLM_ProxyWorkerHeartbeat"):
+            rows: Final = await primary_db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
         return _COUNT_ROWS_ADAPTER.validate_python(rows)[0]["live_workers"]
     except Exception as count_err:  # noqa: BLE001  # an unknown count must degrade to "warn", never to a 503
         verbose_proxy_logger.debug("Live proxy worker count unavailable: %s", count_err)
