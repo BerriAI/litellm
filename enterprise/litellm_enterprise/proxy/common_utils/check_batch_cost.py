@@ -47,7 +47,7 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
-FAILED_RETRIEVES_BEFORE_EXPIRY: Final = 3
+UNSETTLED_POLLS_BEFORE_EXPIRY: Final = 3
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -121,7 +121,7 @@ class CheckBatchCost:
         self._arrival_cursor: tuple[datetime, str] | None = None
         self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
-        self._failed_retrieves: Mapping[str, int] = MappingProxyType({})
+        self._unsettled_polls: Mapping[str, int] = MappingProxyType({})
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
         self._poll_idle: Final = asyncio.Event()
@@ -255,19 +255,31 @@ class CheckBatchCost:
             return
         await self._expire_unfinished(job)
 
-    async def _expire_unfinished_after_repeated_failures(self, job: ManagedObjectRow) -> None:
-        failures: Final = self._failed_retrieves.get(job.id, 0) + 1
-        if failures < FAILED_RETRIEVES_BEFORE_EXPIRY:
-            self._failed_retrieves = MappingProxyType({**self._failed_retrieves, job.id: failures})
+    async def _expire_after_repeated_unsettled_polls(self, job: ManagedObjectRow) -> None:
+        unsettled: Final = self._unsettled_polls.get(job.id, 0) + 1
+        if unsettled < UNSETTLED_POLLS_BEFORE_EXPIRY:
+            self._unsettled_polls = MappingProxyType({**self._unsettled_polls, job.id: unsettled})
             return
-        self._forget_failed_retrieves(job)
-        await self._expire_unfinished(job)
+        self._forget_unsettled_polls(job)
+        await self._expire_if_stale(job)
 
-    def _forget_failed_retrieves(self, job: ManagedObjectRow) -> None:
-        if job.id in self._failed_retrieves:
-            self._failed_retrieves = MappingProxyType(
-                {job_id: count for job_id, count in self._failed_retrieves.items() if job_id != job.id}
+    def _forget_unsettled_polls(self, job: ManagedObjectRow) -> None:
+        if job.id in self._unsettled_polls:
+            self._unsettled_polls = MappingProxyType(
+                {job_id: count for job_id, count in self._unsettled_polls.items() if job_id != job.id}
             )
+
+    @staticmethod
+    def _is_completed_with_output_id_pending(response: "LiteLLMBatch") -> bool:
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _completed_batch_safe_to_retire,
+        )
+
+        return (
+            response.status in ("completed", "complete")
+            and response.output_file_id is None
+            and not _completed_batch_safe_to_retire(response)
+        )
 
     async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
         try:
@@ -1232,9 +1244,17 @@ class CheckBatchCost:
                     and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES
                     and self._is_lasting_provider_failure(e)
                 ):
-                    await self._expire_unfinished_after_repeated_failures(job)
+                    await self._expire_after_repeated_unsettled_polls(job)
                 continue
-            self._forget_failed_retrieves(job)
+            if self._is_completed_with_output_id_pending(response):
+                verbose_proxy_logger.info(
+                    f"CheckBatchCost: batch {batch_id} is completed but its output file id "
+                    f"has not appeared yet; leaving job {job.id} for the next poll cycle"
+                )
+                if self._is_past_staleness_cutoff(job):
+                    await self._expire_after_repeated_unsettled_polls(job)
+                continue
+            self._forget_unsettled_polls(job)
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if response.status in PROVIDER_TERMINAL_BATCH_STATUSES and response.output_file_id is not None:
@@ -1285,17 +1305,6 @@ class CheckBatchCost:
                 self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=True)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
-                from litellm.proxy.openai_files_endpoints.common_utils import (
-                    _completed_batch_safe_to_retire,
-                )
-
-                if response.status in ("completed", "complete") and not _completed_batch_safe_to_retire(response):
-                    verbose_proxy_logger.info(
-                        f"CheckBatchCost: batch {batch_id} is completed but its output file id "
-                        f"has not appeared yet; leaving job {job.id} for the next poll cycle"
-                    )
-                    await self._expire_if_stale(job)
-                    continue
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
 
         # Record polling run metrics (always, even if nothing was processed)
