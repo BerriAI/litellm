@@ -241,6 +241,7 @@ def test_initialize_guardrail_registers_callback(monkeypatch):
         PrivaiteGuardrail,
         initialize_guardrail,
     )
+    from litellm.types.guardrails import LitellmParams
 
     added = []
     monkeypatch.setattr(
@@ -249,7 +250,8 @@ def test_initialize_guardrail_registers_callback(monkeypatch):
         lambda cb: added.append(cb),
     )
 
-    litellm_params = types.SimpleNamespace(
+    litellm_params = LitellmParams(
+        guardrail="privaite",
         mode="pre_call",
         default_on=False,
         preset="light",
@@ -268,17 +270,17 @@ def test_init_normalizes_params():
     gr = _make_guardrail(preset="bogus", languages="en, fr ,", deanonymize="false")
     assert gr.preset == "onnx"
     assert gr.deanonymize is False
-    assert gr._languages() == ["en", "fr"]
+    assert gr._languages() == ("en", "fr")
 
     # an explicit valid preset and bool are kept; empty languages fall back to
     # the __init__ default of "en,fr".
     gr2 = _make_guardrail(preset="light", languages="", deanonymize=True)
     assert gr2.preset == "light"
     assert gr2.deanonymize is True
-    assert gr2._languages() == ["en", "fr"]
+    assert gr2._languages() == ("en", "fr")
 
     # a non-empty but content-free languages string falls back to ["en"].
-    assert _make_guardrail(languages=", ,")._languages() == ["en"]
+    assert _make_guardrail(languages=", ,")._languages() == ("en",)
 
 
 def test_event_hook_always_includes_pre_and_post():
@@ -808,18 +810,17 @@ def test_block_entities_config_model_field():
 
 
 def test_block_entities_parsed_from_string_and_list():
-    assert _make_guardrail(block_entities="US_SSN, CREDIT_CARD").block_entities == [
-        "US_SSN",
-        "CREDIT_CARD",
-    ]
-    assert _make_guardrail(block_entities=["EMAIL_ADDRESS"]).block_entities == ["EMAIL_ADDRESS"]
-    assert _make_guardrail().block_entities == []
+    assert _make_guardrail(block_entities="US_SSN, CREDIT_CARD").block_entities == ("US_SSN", "CREDIT_CARD")
+    assert _make_guardrail(block_entities=["EMAIL_ADDRESS"]).block_entities == ("EMAIL_ADDRESS",)
+    assert _make_guardrail().block_entities == ()
 
 
 def test_initialize_guardrail_passes_block_entities():
     from litellm.proxy.guardrails.guardrail_hooks.privaite import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
 
-    litellm_params = types.SimpleNamespace(
+    litellm_params = LitellmParams(
+        guardrail="privaite",
         mode="pre_call",
         default_on=False,
         preset="light",
@@ -828,7 +829,7 @@ def test_initialize_guardrail_passes_block_entities():
         block_entities=["US_SSN"],
     )
     callback = initialize_guardrail(litellm_params, {"guardrail_name": "privaite"})
-    assert callback.block_entities == ["US_SSN"]
+    assert callback.block_entities == ("US_SSN",)
 
 
 @pytest.mark.asyncio
