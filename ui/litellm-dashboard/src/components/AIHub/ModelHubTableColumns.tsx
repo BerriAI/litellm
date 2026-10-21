@@ -17,6 +17,8 @@ import { cn } from "@/lib/cva.config";
 import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
+import { ModelCustomTags, type ModelCustomMetadataValue } from "./ModelCustomMetadata";
+
 export interface ModelHubData {
   model_group: string;
   providers: string[];
@@ -33,6 +35,8 @@ export interface ModelHubData {
   supported_openai_params?: string[];
   is_public_model_group: boolean;
   description?: string;
+  custom_tags?: string[] | null;
+  custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
   [key: string]: any;
 }
 
@@ -208,6 +212,20 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
           ))}
         </div>
       );
+    },
+  },
+  {
+    id: "custom_tags",
+    meta: { title: "Tags", skeleton: "chips" },
+    header: "Tags",
+    size: 160,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const tags = row.original.custom_tags ?? [];
+      if (tags.length === 0) {
+        return <span className="text-xs text-muted-foreground">-</span>;
+      }
+      return <ModelCustomTags tags={tags} />;
     },
   },
   {

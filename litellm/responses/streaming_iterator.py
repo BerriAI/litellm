@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -367,6 +368,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _earlier_rounds_spend: BilledRoundsSpend | None = None
 
     def __init__(
         self,
@@ -710,18 +712,22 @@ class BaseResponsesAPIStreamingIterator:
         if usage_obj is None:
             return
         try:
-            self.logging_obj.model_call_details["combined_usage_object"] = (
-                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-            )
+            failed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
         except (TypeError, ValueError) as usage_error:
             verbose_logger.debug(
                 "could not record usage for failed responses stream: %s",
                 usage_error,
             )
             return
-        self.logging_obj.model_call_details["response_cost"] = (
-            self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
-        )
+        failed_cost: Final = self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
+            self.logging_obj.model_call_details["response_cost"] = failed_cost
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
+
+    def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
+        self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return map_stream_error_to_exception(
@@ -996,10 +1002,14 @@ class BaseResponsesAPIStreamingIterator:
             estimate
         )
         served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
-        self.logging_obj.record_assembled_response_for_failure(
-            ModelResponse(
-                model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
-            )
+        assembled: Final = ModelResponse(
+            model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
+        )
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.record_assembled_response_for_failure(assembled)
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(
+            self._earlier_rounds_spend, usage, self.logging_obj.response_cost_calculator(result=assembled) or 0.0
         )
 
     def _handle_failure(self, exception: Exception):

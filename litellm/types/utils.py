@@ -212,6 +212,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    supports_sampling_params: ReadOnly[bool | None]
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
@@ -458,6 +459,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "responses",
             "decisions",
             "evaluation",
+            "extraction",
             "ocr",
             "realtime",
         ]
@@ -518,6 +520,8 @@ class CallTypes(str, Enum):
     adecisions = "adecisions"
     systemone = "systemone"
     asystemone = "asystemone"
+    extraction = "extraction"
+    aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -708,6 +712,8 @@ CallTypesLiteral = Literal[
     "adecisions",
     "systemone",
     "asystemone",
+    "extraction",
+    "aextraction",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -821,6 +827,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/extraction": [CallTypes.aextraction, CallTypes.extraction],
+    "/v1/extraction": [CallTypes.aextraction, CallTypes.extraction],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -4211,7 +4219,7 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "

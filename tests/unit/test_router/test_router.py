@@ -15321,7 +15321,7 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
 
 
 _FLAT_ATTEMPT_RECORD_KEYS = frozenset(
-    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+    {"model_group", "deployment_id", "model", "base_model", "exception_type", "exception_string", "attempted_retries"}
 )
 _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
 
@@ -29794,6 +29794,73 @@ def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch: py
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["only"]
+
+
+@pytest.mark.parametrize(
+    ("deployment_stream_options", "default_stream_options", "request_stream_options", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, None, None, 1),
+        (None, {"include_usage": True}, None, 1),
+        ({"include_usage": True}, None, {"include_usage": True}, 0),
+        (None, None, {"include_usage": True}, 0),
+    ],
+    ids=["deployment-config", "router-default", "request-over-deployment", "request-only"],
+)
+@pytest.mark.asyncio
+async def test_router_configured_stream_usage_keeps_a_choice_on_the_usage_chunk(
+    deployment_stream_options: dict[str, bool] | None,
+    default_stream_options: dict[str, bool] | None,
+    request_stream_options: dict[str, bool] | None,
+    usage_chunk_choice_count: int,
+):
+    deployment_params: Final = {"model": "openai/gpt-5-mini", "api_key": "fake", "mock_response": "hi there"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": (
+                    deployment_params
+                    if deployment_stream_options is None
+                    else {**deployment_params, "stream_options": deployment_stream_options}
+                ),
+            }
+        ],
+        default_litellm_params=None if default_stream_options is None else {"stream_options": default_stream_options},
+    )
+    request_kwargs: Final = {} if request_stream_options is None else {"stream_options": request_stream_options}
+
+    response: Final = await router.acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], stream=True, **request_kwargs
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert getattr(chunks[-1], "usage", None) is not None
+    assert len(chunks[-1].choices) == usage_chunk_choice_count
+    assert all(len(chunk.choices) == 1 for chunk in chunks[:-1])
+
+
+@pytest.mark.parametrize(
+    ("stream_options", "marked_injected"),
+    [({"include_usage": True}, True), (None, False)],
+    ids=["include-usage", "no-stream-options"],
+)
+def test_update_kwargs_with_deployment_reads_stream_options_from_pydantic_litellm_params(
+    stream_options: dict[str, bool] | None, marked_injected: bool
+):
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+    from litellm.types.router import LiteLLM_Params
+
+    kwargs: Final[dict[str, object]] = {"stream": True, "metadata": {}}
+    Router()._update_kwargs_with_deployment(
+        deployment={
+            "model_name": "gpt-5-mini",
+            "litellm_params": LiteLLM_Params(model="openai/gpt-5-mini", api_key="fake-key", stream_options=stream_options),
+            "model_info": {"id": "pydantic-params"},
+        },
+        kwargs=kwargs,
+    )
+
+    assert (kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True) is marked_injected
 
 
 @pytest.mark.asyncio

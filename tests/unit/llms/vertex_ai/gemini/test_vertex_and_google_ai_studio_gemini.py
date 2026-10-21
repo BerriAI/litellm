@@ -1,7 +1,9 @@
 import asyncio, importlib, os, uuid
 import json
+import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping
+import threading
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -13,7 +15,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -21,8 +25,9 @@ from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, Vert
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    _log_gemini_sampling_params_deprecated,
 )
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1889,7 +1894,9 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
         ("get_weather", {"location": "Lima, Peru"})
     ]
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -3732,6 +3739,169 @@ def test_get_optional_params_gemini_3_has_no_default_temperature(
 
     assert "temperature" not in optional_params
     assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
+
+
+_SAMPLING_PARAMS: Final = {"temperature": 0.3, "top_p": 0.9, "top_k": 20}
+
+
+def _gemini_config(config_cls: Literal["vertex", "studio"]) -> VertexGeminiConfig:
+    return VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+
+
+def _gemini_request_body(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+
+    return transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-zeta-9",
+        optional_params=optional_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("param", ["temperature", "top_p"])
+def test_get_optional_params_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Google ignores sampling params on models flagged ``supports_sampling_params: false``, so without
+    drop_params the caller gets the 400 that names the escape hatch instead of a 200 that lied (#47015)"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        get_optional_params(
+            model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, **{param: _SAMPLING_PARAMS[param]}
+        )
+
+    assert excinfo.value.status_code == 400
+    assert param in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_allowed_openai_params_still_forwards_a_sampling_param_the_map_flags_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 400 tells the caller to send allowed_openai_params, so that escape hatch has to work"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        allowed_openai_params=["temperature"],
+    )
+
+    assert optional_params["temperature"] == 0.3
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_is_stripped_from_the_request_body_of_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """top_k is a provider-specific kwarg that skips the shared unsupported-param check, so it is gated
+    where the request body is built"""
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    body: Final = _gemini_request_body(
+        custom_llm_provider, {"top_k": 20, "max_output_tokens": 10}, {"drop_params": True}
+    )
+
+    assert body["generationConfig"] == {"max_output_tokens": 10}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        _gemini_request_body(custom_llm_provider, {"top_k": 20}, {})
+
+    assert excinfo.value.status_code == 400
+    assert "top_k" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("row", [{"supports_sampling_params": True}, {}], ids=["flag_true", "flag_absent"])
+def test_gemini_keeps_forwarding_sampling_params_unless_the_model_map_flags_them_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], row: dict[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit true and a model the map says nothing about both keep today's pass-through, top_k included"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", row)
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, drop_params=True, **_SAMPLING_PARAMS
+    )
+    body: Final = _gemini_request_body(custom_llm_provider, dict(optional_params), {"drop_params": True})
+
+    assert body["generationConfig"] == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("model_key", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9", "gemini/gemini-zeta-9"])
+def test_gemini_sampling_flag_is_read_from_whichever_provider_row_carries_it(
+    model_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, model_key, {"supports_sampling_params": False})
+
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gemini-zeta-9",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_supported_openai_params_omit_sampling_params_when_flagged_off(
+    config_cls: Literal["vertex", "studio"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    supported: Final = set(_gemini_config(config_cls).get_supported_openai_params("gemini-zeta-9"))
+
+    assert not supported & set(_SAMPLING_PARAMS)
+    assert "max_tokens" in supported
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path every SDK and proxy call takes, on both the Vertex and the AI Studio route"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        top_p=0.9,
+        max_tokens=10,
+        drop_params=True,
+    )
+
+    assert "temperature" not in optional_params
+    assert "top_p" not in optional_params
+    assert optional_params["max_output_tokens"] == 10
 
 
 def test_media_resolution_from_detail_parameter():
@@ -6688,6 +6858,155 @@ def test_supported_reasoning_efforts_still_map(model):
             drop_params=False,
         )
         assert "thinkingConfig" in result
+
+
+@pytest.fixture
+def fresh_sampling_deprecation_cache() -> Iterator[None]:
+    _log_gemini_sampling_params_deprecated.cache_clear()
+    yield
+    _log_gemini_sampling_params_deprecated.cache_clear()
+
+
+def _mapped_gemini_3_models() -> tuple[str, ...]:
+    return tuple(sorted(name for name in GetModelCostMap.loaded_model_cost_map() if name.startswith("gemini-3")))
+
+
+def _deprecation_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.2), ("top_p", 0.9), ("top_k", 5)))
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_per_model(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    first, second = _mapped_gemini_3_models()[:2]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = tuple(
+            config.map_openai_params(
+                non_default_params={param: value}, optional_params={}, model=model, drop_params=True
+            )
+            for model in (first, first, first, second)
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert f"({first})" in deprecations[0]
+    assert f"({second})" in deprecations[1]
+    assert all(m[param] == value for m in mapped)
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
+    model: Final = _mapped_gemini_3_models()[0]
+
+    def map_sampling_params() -> None:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+        )
+
+    racing_call: Final = threading.Thread(target=map_sampling_params)
+
+    def start_racing_call_while_first_warning_logs(record: logging.LogRecord) -> bool:
+        if "DeprecationWarning" in record.getMessage() and racing_call.ident is None:
+            racing_call.start()
+            racing_call.join(timeout=0.5)
+        return True
+
+    verbose_logger.addFilter(start_racing_call_while_first_warning_logs)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            map_sampling_params()
+            racing_call.join()
+    finally:
+        verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
+
+    assert len(_deprecation_messages(caplog)) == 1
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unmapped: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(100))
+    mapped: Final = _mapped_gemini_3_models()[0]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in (*unmapped, mapped) * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert all(name not in deprecations[0] for name in unmapped)
+    assert f"({mapped})" in deprecations[1]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_names_models_cataloged_only_under_vertex_ai(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    vertex_only: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name in catalog
+        if name.startswith("vertex_ai/gemini-3")
+        and name.removeprefix("vertex_ai/") not in catalog
+        and f"gemini/{name.removeprefix('vertex_ai/')}" not in catalog
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=vertex_only, drop_params=True
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert f"({vertex_only})" in deprecations[0]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_names_priced_at_runtime_shares_one_notice(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    priced: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(20))
+    for name in priced:
+        monkeypatch.setitem(
+            litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            f"gemini/{name}",
+            {"input_cost_per_token": 1e-7, "output_cost_per_token": 1e-7, "litellm_provider": "gemini"},
+        )
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in priced * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert all(name not in deprecations[0] for name in priced)
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
+def test_gemini_2_5_sampling_params_log_no_deprecation(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model=f"gemini-2.5-flash-{uuid.uuid4().hex}",
+            drop_params=True,
+        )
+
+    assert mapped[param] == value
+    assert not any("DeprecationWarning" in r.getMessage() for r in caplog.records)
 
 
 def _generate_content_body() -> dict:
