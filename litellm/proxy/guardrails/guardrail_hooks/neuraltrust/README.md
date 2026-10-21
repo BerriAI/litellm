@@ -68,7 +68,20 @@ distinguishable from an exhausted monthly quota.
 
 Under `incremental_diff` the reply is held until the end-of-stream evaluate returns, so the first token arrives with the last. TrustGuard re-reads the whole reply on every scan and its redaction spans move as the reply grows, so releasing tokens early would let a later scan try to rewrite text already on the wire. Holding them also means a blocking verdict ends the stream with nothing sent at all.
 
-`incremental_diff` covers OpenAI chat completions streaming; other surfaces fall back to `block_only`.
+### Surface coverage
+
+`incremental_diff` is implemented for OpenAI chat completions streaming only. Every other streamed surface —
+including `/v1/messages` and `/v1/responses` — silently falls back to `block_only`, and the proxy logs a warning
+naming the guardrail when it does.
+
+**What that means on those surfaces:** `block` and `ask` still end the stream, so dangerous content is still
+stopped. What is lost is masking: a `transform` verdict is dropped and the raw model tokens reach the client
+unredacted. Treat `incremental_diff` as a chat-completions feature, and prefer non-streaming requests on
+`/v1/messages` and `/v1/responses` when redaction must be enforced rather than merely attempted.
+
+Extending the diff protocol to those surfaces means implementing the streamed text and tool-call rewrite
+contract in their translation handlers, whose event shapes differ from chat completions. That work belongs in
+the shared streaming layer, not in this guardrail.
 
 Under `incremental_diff`, LiteLLM buffers tool-call deltas until TrustGuard inspects the assembled response. A blocking verdict releases no tool-call arguments or finish signal. Tool calls retain their IDs and order, with transformed arguments written into the buffered deltas before delivery
 
