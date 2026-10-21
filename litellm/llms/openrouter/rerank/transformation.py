@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -201,7 +201,7 @@ class OpenRouterRerankConfig(BaseRerankConfig):
         # OpenRouter errors are OpenAI-shaped: {"error": {"message": "...", "code": ...}}
         try:
             parsed: Final = _JSON_OBJECT.validate_json(error_message)
-        except Exception:
+        except ValidationError:
             return error_message
         error_obj: Final = parsed.get("error")
         if isinstance(error_obj, Mapping):
