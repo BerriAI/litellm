@@ -31,6 +31,7 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..placeholders import build_cleared_tool_result_content
+from .compact import system_to_text
 
 T = TypeVar("T")
 # api.anthropic.com, measured 2026-10-19: text results of 1 to 46 bytes are never cleared or counted toward keep
@@ -195,11 +196,20 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
     return tuple(candidates[:batch_end])
 
 
+def _with_system(
+    messages: list[dict[str, object]], system: str | list[dict[str, object]] | None
+) -> list[dict[str, object]]:
+    """The messages to count: like the API, an ``input_tokens`` trigger counts the system prompt too."""
+    system_text: Final = system_to_text(system)
+    return [{"role": "system", "content": system_text}, *messages] if system_text else messages
+
+
 def _trigger_met(
     trigger: dict[str, object],
     model: str,
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None,
     counted_tool_uses: int,
 ) -> tuple[bool, int | None]:
     """Return (trigger_met, input_tokens if counted for reuse)."""
@@ -215,7 +225,7 @@ def _trigger_met(
         threshold = DEFAULT_INPUT_TOKENS_TRIGGER
     current_tokens: Final = litellm.token_counter(
         model=model,
-        messages=messages,
+        messages=_with_system(messages, system),
         tools=cast(Any, tools),
     )
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
@@ -332,7 +342,7 @@ def apply_clear_tool_uses_20250919(
         for tool_use_id, name in _tool_uses_in_order(blocks)
         if name not in exclude_tools and (tool_use_id not in tiny or _clears_input(name, input_tools))
     )
-    met, counted_tokens = _trigger_met(trigger, model, messages, tools, len(clearable))
+    met, counted_tokens = _trigger_met(trigger, model, messages, tools, system, len(clearable))
     if not met:
         return messages, None
 
@@ -366,9 +376,11 @@ def apply_clear_tool_uses_20250919(
     tokens_before: Final = (
         counted_tokens
         if counted_tokens is not None
-        else litellm.token_counter(model=model, messages=messages, tools=cast(Any, tools))
+        else litellm.token_counter(model=model, messages=_with_system(messages, system), tools=cast(Any, tools))
     )
-    tokens_after: Final = litellm.token_counter(model=model, messages=final_messages, tools=cast(Any, tools))
+    tokens_after: Final = litellm.token_counter(
+        model=model, messages=_with_system(final_messages, system), tools=cast(Any, tools)
+    )
     cleared_input_tokens: Final = max(tokens_before - tokens_after, 0)
 
     return final_messages, {

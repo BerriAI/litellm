@@ -690,6 +690,31 @@ def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value: int, tri
     assert (applied is not None) == triggers
 
 
+@pytest.mark.parametrize(
+    "system",
+    ["Reference notes. " * 400, [{"type": "text", "text": "Reference notes. " * 400}]],
+)
+def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[str, object]]) -> None:
+    """Like the API, the trigger compares the whole prompt: a system prompt can push it over."""
+    messages = _make_history(n_pairs=3)
+    history_tokens: Final = litellm.token_counter(model=MODEL, messages=messages)
+    edit_spec: Final = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "input_tokens", "value": history_tokens + 100},
+        "keep": {"type": "tool_uses", "value": 1},
+    }
+    _, without_system = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=deepcopy(messages), tools=None, system=None, edit_spec=edit_spec
+    )
+    _, with_system = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=deepcopy(messages), tools=None, system=system, edit_spec=edit_spec
+    )
+    assert without_system is None
+    assert with_system is not None
+    assert with_system["cleared_tool_uses"] == 2
+    assert with_system["cleared_input_tokens"] < history_tokens
+
+
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])
 def test_tool_uses_trigger_counts_tiny_results_only_when_their_inputs_are_cleared(
     clear_tool_inputs: bool, triggers: bool

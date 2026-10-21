@@ -320,13 +320,13 @@ def _count_effective_tokens(
         content: Final = compaction_block.get("content") or ""
         if content:
             total += litellm.token_counter(model=model, text=content)
-    system_text: Final = _system_to_text(system)
+    system_text: Final = system_to_text(system)
     if system_text:
         total += litellm.token_counter(model=model, text=system_text)
     return total
 
 
-def _system_to_text(
+def system_to_text(
     system: str | list[dict[str, object]] | None,
 ) -> str:
     """Flatten an Anthropic-style ``system`` value into a single string for
