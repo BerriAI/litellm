@@ -403,6 +403,16 @@ class NeuralTrustGuardrail(CustomGuardrail):
                     status_code=503,
                     detail="TrustGuard entitlements unavailable",
                 ) from exc
+            if status_code == 429:
+                rate_limit_reason: Final = exc.response.headers.get("X-RateLimit-Reason")
+                verbose_proxy_logger.warning(
+                    "TrustGuard rate limit reached; failing closed. reason=%s",
+                    rate_limit_reason or "unspecified",
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="TrustGuard rate limit or quota exceeded",
+                ) from exc
             if status_code in (401, 403):
                 raise HTTPException(
                     status_code=status_code,

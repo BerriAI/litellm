@@ -43,9 +43,17 @@ Unknown verdicts, malformed bodies, and `transform` without a usable payload fai
 
 ## Fail-open vs fail-closed
 
-`unreachable_fallback` applies only to transport failures: connect errors, timeouts, HTTP 502/504.
+`unreachable_fallback` applies only to transport failures: connect errors, timeouts, HTTP 502/504. TrustGuard
+does not emit 502 or 504 itself, so those mean the request never reached a verdict.
 
-HTTP 503 entitlements, 401/403, other 4xx/5xx, and unusable TrustGuard verdicts always fail closed.
+HTTP 503 entitlements, 429 rate limits, 401/403, other 4xx/5xx, and unusable TrustGuard verdicts always fail closed.
+
+503 and 429 stay fail-closed on purpose, unlike `generic_guardrail_api`, which treats 503 as unreachable. A
+TrustGuard 503 means its rate-limit entitlements could not be loaded, so TrustGuard itself declined to evaluate
+rather than evaluate blind; 429 means the plan's burst or monthly quota is exhausted. Both are verdicts about
+whether the traffic can be inspected, not signs that the service is down, so honouring `fail_open` for them would
+pass uninspected traffic the guardrail deliberately refused. 429 logs `X-RateLimit-Reason` so a transient burst is
+distinguishable from an exhausted monthly quota.
 
 `fail_open` means the request bypasses TrustGuard entirely when the endpoint is unreachable. It is off by default.
 

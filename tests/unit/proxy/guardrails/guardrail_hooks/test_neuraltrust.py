@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from httpx import Request, Response
 
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -1001,7 +1002,25 @@ class TestNeuralTrustGuardrail:
                     logging_obj=_logging(),
                 )
         assert exc_info.value.status_code == 503
-        assert "request failed" in str(exc_info.value.detail)
+        assert "rate limit or quota" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_http_429_logs_the_rate_limit_reason(self) -> None:
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        request = Request("POST", "https://trustguard.neuraltrust.ai/v1/evaluate")
+        mock_post = AsyncMock(
+            return_value=Response(429, request=request, headers={"X-RateLimit-Reason": "monthly_quota"})
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+                with pytest.raises(HTTPException):
+                    await guardrail.apply_guardrail(
+                        inputs={"texts": ["hello"]},
+                        request_data={},
+                        input_type="request",
+                        logging_obj=_logging(),
+                    )
+        assert "monthly_quota" in str(mock_warning.call_args)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status_code", [401, 403])
