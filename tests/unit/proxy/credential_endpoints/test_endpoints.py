@@ -1980,10 +1980,16 @@ def test_user_connection_poll_rejects_an_undecryptable_flow_handle(monkeypatch):
 
 def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    monkeypatch.setattr("litellm.proxy.credential_endpoints.endpoints.time.time", lambda: 1000.0)
     with _github_http(
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
-            _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
+            _ACCESS_TOKEN_URL: {
+                "access_token": "gho_1",
+                "refresh_token": "ghr_1",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 15897600,
+            },
             _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
             _GITHUB_USER_URL: {"login": "octo"},
         }
@@ -2008,6 +2014,9 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     )
     assert stored_connection is not None
     assert stored_connection.github_host == "github.com"
+    assert stored_connection.refresh_token == "ghr_1"
+    assert stored_connection.access_token_expires_at == 29800.0
+    assert stored_connection.refresh_token_expires_at == 15898600.0
 
 
 def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatch):
@@ -2482,6 +2491,43 @@ def test_delete_user_connection_evicts_copilot_session(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json() == {"status": "disconnected"}
     assert _SESSION_CACHE.get_cache(session_key) is None
+    table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
+
+
+def test_delete_user_connection_rewrites_tombstone_after_a_racing_cache_set(monkeypatch):
+    from types import SimpleNamespace
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
+    cached_values: Final[dict[str, str]] = {}  # mutable-ok: fake Redis records cache writes
+
+    async def set_cache(key: str, value: str, **kwargs: object) -> None:
+        cached_values[key] = value
+
+    async def get_cache(key: str, **kwargs: object) -> object:
+        return cached_values.get(key)
+
+    redis_cache: Final = SimpleNamespace(
+        async_set_cache=AsyncMock(side_effect=set_cache),
+        async_get_cache=AsyncMock(side_effect=get_cache),
+        async_delete_cache=AsyncMock(),
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=redis_cache))
+    ciphertext: Final = upc._encode(
+        upc.GithubCopilotUserConnectionPayload(access_token="gho_refreshed", github_login="octo")
+    )
+
+    async def set_refresh_between_tombstone_and_delete(*, where: dict[str, str]) -> None:
+        await redis_cache.async_set_cache(upc._cache_key("user-a", "copilot-cred"), ciphertext, ttl=60)
+        table.find_unique.return_value = None
+
+    table.delete_many = AsyncMock(side_effect=set_refresh_between_tombstone_and_delete)
+    response: Final = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "disconnected"}
+    assert cached_values[upc._cache_key("user-a", "copilot-cred")] == upc._NOT_CONNECTED
     table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
 
 

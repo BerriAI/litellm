@@ -731,10 +731,14 @@ async def poll_user_connection(
         except litellm.CallerCredentialAuthenticationError:
             return UserConnectionPollResponse(status="no_copilot_seat")
         github_login: Final = await afetch_github_login(github_token, endpoints)
+        now: Final = time.time()
         connection_payload: Final = GithubCopilotUserConnectionPayload(
             access_token=github_token,
             github_login=github_login,
             github_host=handle.github_host,
+            refresh_token=poll.refresh_token,
+            access_token_expires_at=now + poll.expires_in if poll.expires_in else None,
+            refresh_token_expires_at=(now + poll.refresh_token_expires_in if poll.refresh_token_expires_in else None),
         )
         await upsert_user_provider_credential(
             prisma_client,
@@ -795,6 +799,10 @@ async def delete_user_connection(
                 detail={"error": "could not revoke cached connection, retry"},
             )
         prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
+        if not await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name):
+            verbose_proxy_logger.warning(
+                "delete_user_connection: failed to refresh the cache tombstone after deleting the connection"
+            )
         if prior is not None:
             evict_copilot_user_session(user_id, credential_name, prior.github_host)
         return UserConnectionDeleteResponse(status="disconnected")
