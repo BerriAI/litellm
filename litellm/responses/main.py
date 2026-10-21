@@ -40,8 +40,14 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    with_compaction_items_as_summaries,
+)
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    with_compaction_items_as_params,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
@@ -306,7 +312,7 @@ async def aresponses_api_with_mcp(
         joins_request_trace
         and not stream
         and previous_response_id is None
-        and not _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
+        and not provider_stores_the_conversation(model, custom_llm_provider, kwargs)
     )
 
     listing_trace_id: Final = (
@@ -463,7 +469,7 @@ async def aresponses_api_with_mcp(
                 if tool_results:
                     chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
                         call_params
-                    ) and _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
+                    ) and provider_stores_the_conversation(model, custom_llm_provider, kwargs)
 
                     follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                         response=response,
@@ -687,8 +693,12 @@ def _will_bridge_to_chat_completions(
     )
 
 
-def _provider_stores_the_first_round(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
-    """A bridged first MCP round runs as an internal call, so no spend log holds it for the follow-up to replay."""
+def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether the provider, not a LiteLLM spend log, holds this turn for a `previous_response_id` follow-up.
+
+    A bridged turn is replayed from its spend log, so the bridge needs that row in the DB, and a bridged
+    first MCP round runs as an internal call that writes no spend log at all.
+    """
     api_base: Final = _api_base_kwarg(kwargs)
     return not _will_bridge_to_chat_completions(
         model,
@@ -1665,7 +1675,9 @@ def responses(
         )
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
@@ -2512,7 +2524,9 @@ def compact_responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         # before forwarding to the upstream provider.
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(

@@ -29,6 +29,7 @@ from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import DailyBaselineAttribution
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.router import Router
 else:
     PrismaClient = Any
     ProxyLogging = Any
@@ -120,6 +122,34 @@ def _parsed_request_tags(request_tags: object) -> Iterable[object] | TypeError |
     if isinstance(parsed, (Sequence, Mapping)):
         return parsed
     return TypeError(f"'{type(parsed).__name__}' object is not iterable")
+
+
+def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Router | None") -> bool:
+    """A Responses turn the chat-completions bridge replays from its spend log on the next `previous_response_id`.
+
+    Native Responses providers hold the conversation themselves, so their rows can wait for the batch write.
+    A row with no router deployment behind it is treated as bridged, which keeps today's immediate flush.
+    """
+    if payload.get("call_type") not in RESPONSES_SESSION_CALL_TYPES:
+        return False
+    model_id: Final = payload.get("model_id")
+    deployment: Final = (
+        llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
+    )
+    if deployment is None:
+        return True
+    from litellm.responses.main import provider_stores_the_conversation
+
+    litellm_params: Final = deployment.litellm_params
+    return not provider_stores_the_conversation(
+        litellm_params.model,
+        litellm_params.custom_llm_provider,
+        {
+            "use_chat_completions_api": litellm_params.use_chat_completions_api,
+            "model_info": deployment.model_info.model_dump(),
+            "api_base": litellm_params.api_base,
+        },
+    )
 
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
@@ -281,6 +311,11 @@ def _spend_tables_left_to_send(
         name: (None if name in committed or name in dropped else txns) for name, txns in transactions.items()
     }
     return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
+
+
+def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
+    """An earlier billed retry attempt's own spend row, not a request the caller sent."""
+    return BILLED_RETRY_ATTEMPT_METADATA_KEY in metadata and metadata[BILLED_RETRY_ATTEMPT_METADATA_KEY] is True
 
 
 def _timed_request_duration_ms(
@@ -565,12 +600,13 @@ class DBSpendUpdateWriter:
                 get_request_model_access_groups,
             )
 
+            llm_router: Final = get_llm_router()
             payload: Final = get_logging_payload(
                 kwargs=kwargs,
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
-                llm_router=get_llm_router(),
+                llm_router=llm_router,
             )
             payload["spend"] = response_cost or 0.0
             if isinstance(payload["startTime"], datetime):
@@ -585,7 +621,10 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             if not await self._record_spend_log(
-                payload=payload, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
+                payload=payload,
+                prisma_client=prisma_client,
+                disable_spend_logs=disable_spend_logs,
+                llm_router=llm_router,
             ):
                 return False
 
@@ -649,14 +688,18 @@ class DBSpendUpdateWriter:
             return True
 
     async def _record_spend_log(
-        self, payload: SpendLogsPayload, prisma_client: "PrismaClient | None", disable_spend_logs: bool
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+        disable_spend_logs: bool,
+        llm_router: "Router | None" = None,
     ) -> bool:
         if prisma_client is not None and _is_batch_cost_row(payload):
             return await self._claim_batch_cost_spend_log(
                 payload=payload, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
             )
         if disable_spend_logs is False:
-            await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
+            await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client, llm_router=llm_router)
         return True
 
     async def _claim_batch_cost_spend_log(
@@ -1534,6 +1577,7 @@ class DBSpendUpdateWriter:
         payload: dict | SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
         spend_logs_url: str | None = os.getenv("SPEND_LOGS_URL"),
+        llm_router: "Router | None" = None,
     ) -> PrismaClient | None:
         verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
@@ -1544,7 +1588,7 @@ class DBSpendUpdateWriter:
             from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
             await enqueue_spend_logs(prisma_client, (payload,))
-            if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
+            if _turn_chains_through_the_db(_SPEND_METADATA_ADAPTER.validate_python(payload), llm_router):
                 request_spend_log_flush(prisma_client)
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
@@ -1612,6 +1656,8 @@ class DBSpendUpdateWriter:
             daily_agent_spend_update_queue=self.daily_agent_spend_update_queue,
             window_spend_update_queue=self.window_spend_update_queue,
         )
+
+        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
         # Only commit from redis to db if this pod is the leader
         if await self.pod_lock_manager.acquire_lock(
@@ -2765,11 +2811,12 @@ class DBSpendUpdateWriter:
         if not date:
             return
         metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+        internal_origin: Final = bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         request_error_accumulator.record(
             payload=payload,
             request_status=prisma_client.get_request_status(payload),  # pyright: ignore[reportUnknownMemberType]  # legacy payload union; this caller supplies a typed spend payload
             date=date.split("T")[0],
-            is_internal_call=bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)),  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
+            is_internal_call=internal_origin or _is_billed_retry_attempt(metadata),
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
@@ -2834,6 +2881,7 @@ class DBSpendUpdateWriter:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+            caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
@@ -2868,9 +2916,9 @@ class DBSpendUpdateWriter:
                 # requests the caller made: counting them inflates request-volume
                 # readers, and an auto-router savings figure computed on a shadow
                 # duplicate credits savings for traffic no user sent.
-                api_requests=0 if is_internal_call else 1,
-                successful_requests=1 if not is_internal_call and request_status == "success" else 0,
-                failed_requests=1 if not is_internal_call and request_status != "success" else 0,
+                api_requests=1 if caller_request else 0,
+                successful_requests=1 if caller_request and request_status == "success" else 0,
+                failed_requests=1 if caller_request and request_status != "success" else 0,
                 cache_read_input_tokens=cache_read_input_tokens,
                 cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,

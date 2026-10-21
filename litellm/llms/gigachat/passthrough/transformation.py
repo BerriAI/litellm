@@ -40,7 +40,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         if base_target_url is None:
             raise Exception("GigaChat api base not found")
 
-        complete_url: Final = f"{base_target_url}/{endpoint.lstrip('/')}"
+        complete_url: Final = f"{base_target_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
         return (
             httpx.URL(complete_url),
@@ -193,8 +193,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
-        resolved_api_base: Final = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
-        return resolved_api_base.rstrip("/") if resolved_api_base else None
+        return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
 
     @staticmethod
     def get_api_key(

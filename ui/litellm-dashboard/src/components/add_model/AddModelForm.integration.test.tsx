@@ -465,7 +465,7 @@ describe("AddModelForm", () => {
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
   });
 
-  it("offers the Decisions mode", async () => {
+  it.each(["Decisions - /v1/decisions", "Extraction - /v1/extraction"])("offers the %s mode", async (option) => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
 
@@ -474,7 +474,7 @@ describe("AddModelForm", () => {
     await screen.findByText("Provider");
     await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
 
-    expect(await screen.findByRole("option", { name: "Decisions - /v1/decisions", exact: true })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: option, exact: true })).toBeInTheDocument();
   });
 
   it("shows only the Close button in the connection test dialog footer", async () => {
