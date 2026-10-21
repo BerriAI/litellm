@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, transport_error_classes
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -2551,7 +2552,7 @@ def exception_type(
             ################################################################################
 
             if (
-                isinstance(original_exception, httpx.TimeoutException)
+                isinstance(original_exception, transport_error_classes(TransportErrorKind.TIMEOUT))
                 or "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
