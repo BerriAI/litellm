@@ -98,7 +98,8 @@ def _mcp_tool_name(request_data: Mapping[str, object], logging_obj: "LiteLLMLogg
 
     The logger's call type wins when there is one, because a chat client can put MCP keys in its request body.
     """
-    if logging_obj is not None and logging_obj.call_type not in MCP_GUARDRAIL_CALL_TYPES:
+    logged_call_type: Final[object] = getattr(logging_obj, "call_type", None)
+    if logging_obj is not None and logged_call_type not in MCP_GUARDRAIL_CALL_TYPES:
         return None
     pre_call_name: Final = request_data.get("mcp_tool_name")
     if isinstance(pre_call_name, str) and pre_call_name:
