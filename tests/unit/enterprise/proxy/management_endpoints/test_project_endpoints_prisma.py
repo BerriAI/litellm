@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
@@ -1627,22 +1627,20 @@ def _quota_error(
     rpm: dict[str, int] | None = None,
     tpm: dict[str, int] | None = None,
     setting: object = _CUSTOMER_QUOTA_POLICY,
-    providers_of=_customer_providers_of,
+    providers_of: Callable[[str], frozenset[str]] = _customer_providers_of,
 ) -> str | None:
     from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _raise_on_missing_project_model_quota,
     )
-    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
-        parse_project_model_quota_setting,
-    )
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
-    policy = parse_project_model_quota_setting(setting)
+    policy: Final = parse_model_quota_setting(setting)
     assert policy is not None
-    data = NewProjectRequest(team_id="test-team", models=models, model_rpm_limit=rpm, model_tpm_limit=tpm)
+    data: Final = NewProjectRequest(team_id="test-team", models=models, model_rpm_limit=rpm, model_tpm_limit=tpm)
     try:
         _raise_on_missing_project_model_quota(data, frozenset(), policy, providers_of)
     except HTTPException as e:
-        rejection = e
+        rejection: Final = e
     else:
         return None
     assert rejection.status_code == 400
@@ -1662,6 +1660,27 @@ def test_quota_policy_model_pattern_overrides_its_provider_per_limit():
     assert error is not None
     assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
     assert "model_tpm_limit" not in error
+
+
+@pytest.mark.parametrize(
+    ("model", "rpm", "tpm", "expected_missing"),
+    [
+        ("runway-gen4-turbo", {"runway-gen4-turbo": 0}, None, "runway-gen4-turbo (model_rpm_limit)"),
+        ("jev-latest", None, {"jev-latest": -5}, "jev-latest (model_tpm_limit)"),
+        (
+            "veo-3.1-lite-generate-001",
+            {"veo-3.1-lite-generate-001": 5},
+            {"veo-3.1-lite-generate-001": 0},
+            "veo-3.1-lite-generate-001 (model_tpm_limit)",
+        ),
+    ],
+)
+def test_quota_policy_rejects_a_non_positive_limit_set_on_an_exempt_model(
+    model: str, rpm: dict[str, int] | None, tpm: dict[str, int] | None, expected_missing: str
+):
+    error: Final = _quota_error([model], rpm=rpm, tpm=tpm)
+    assert error is not None
+    assert expected_missing in error
 
 
 def test_quota_policy_error_names_each_model_with_the_limits_it_misses():
@@ -1684,10 +1703,13 @@ def test_quota_policy_error_names_each_model_with_the_limits_it_misses():
         ),
         ({"models": {"runway-*": [], "runway-gen4-turbo": ["rpm"]}}, "runway-gen4-turbo", "(model_rpm_limit)"),
         ({"models": {"veo-*": [], "veo-3.1-lite-*": ["rpm"]}}, "veo-3.1-lite-generate-001", "(model_rpm_limit)"),
+        ({"models": {"gpt-5-mini*": [], "gpt-*-*-*": ["rpm"]}}, "gpt-5-mini-fast", "(model_rpm_limit)"),
     ],
 )
-def test_quota_policy_precedence_is_model_then_pattern_then_provider_then_default(setting, model, expected_missing):
-    error = _quota_error([model], setting=setting)
+def test_quota_policy_precedence_is_model_then_pattern_then_provider_then_default(
+    setting: object, model: str, expected_missing: str
+):
+    error: Final = _quota_error([model], setting=setting)
     assert error is not None
     assert expected_missing in error
 
@@ -1708,20 +1730,18 @@ def test_quota_policy_model_on_several_providers_needs_every_required_limit():
     assert "video-pool (model_tpm_limit)" in error
 
 
-@pytest.mark.parametrize("setting", [True, "true", {}])
-def test_quota_setting_true_or_empty_mapping_still_requires_both_limits(setting):
-    error = _quota_error(["runway-gen4-turbo"], setting=setting)
+@pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"]])
+def test_quota_setting_truthy_non_mapping_still_requires_both_limits(setting: object):
+    error: Final = _quota_error(["runway-gen4-turbo"], setting=setting)
     assert error is not None
     assert "runway-gen4-turbo (model_rpm_limit and model_tpm_limit)" in error
 
 
-@pytest.mark.parametrize("setting", [False, None])
-def test_quota_setting_off_enforces_nothing(setting):
-    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
-        parse_project_model_quota_setting,
-    )
+@pytest.mark.parametrize("setting", [False, None, {}, "", 0, []])
+def test_quota_setting_off_enforces_nothing(setting: object):
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
-    assert parse_project_model_quota_setting(setting) is None
+    assert parse_model_quota_setting(setting) is None
 
 
 def test_update_quota_policy_resolves_providers_for_the_resulting_models():
@@ -1730,11 +1750,9 @@ def test_update_quota_policy_resolves_providers_for_the_resulting_models():
     from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _raise_on_missing_project_model_quota_on_update,
     )
-    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
-        parse_project_model_quota_setting,
-    )
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
-    policy = parse_project_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
+    policy = parse_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
     assert policy is not None
     existing = types.SimpleNamespace(models=["runway-gen4-turbo"], metadata={})
     assert (
@@ -1775,6 +1793,25 @@ def _customer_router() -> "litellm.Router":
             },
         ]
     )
+
+
+def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
+    from litellm.proxy.management_helpers.model_quota_policy import router_deployment_providers
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gen4*", "litellm_params": {"model": "runwayml/gen4*", "api_key": "qa-runway-key"}},
+            {
+                "model_name": "media-team-gen",
+                "litellm_params": {"model": "vertex_ai/*", "vertex_project": "qa-project"},
+                "model_info": {"team_id": "media-team", "team_public_model_name": "gen*"},
+            },
+        ]
+    )
+    providers_of: Final = router_deployment_providers(router, "media-team")
+
+    assert providers_of("gen4_turbo") == frozenset({"runwayml"})
+    assert providers_of("gen3a_turbo") == frozenset({"vertex_ai"})
 
 
 @pytest.mark.asyncio

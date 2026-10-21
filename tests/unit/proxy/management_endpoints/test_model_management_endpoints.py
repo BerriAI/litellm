@@ -38,6 +38,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     patch_model,
     update_model,
 )
+from litellm.proxy.management_helpers.model_quota_policy import REQUIRE_BOTH_LIMITS, ModelQuotaPolicy
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
@@ -7352,12 +7353,19 @@ class TestAutoRouterClassifierDefaultPrompt:
             assert response.system_prompt == classification_system_prompt(5)
 
 
+_CUSTOMER_MODEL_ADD_POLICY: Final = ModelQuotaPolicy.model_validate(
+    {
+        "providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []},
+        "models": {"veo-*": ["rpm"], "jev-latest": []},
+    }
+)
+
+
 class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_disabled_even_without_limits(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
-                litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
-                enforced=False,
+                model_name="gpt-5.2", litellm_params=LiteLLM_Params(model="azure/gpt-5.2"), policy=None
             )
             is None
         )
@@ -7365,8 +7373,9 @@ class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_enabled_and_both_set(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
+                model_name="gpt-5.2",
                 litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
-                enforced=True,
+                policy=REQUIRE_BOTH_LIMITS,
             )
             is None
         )
@@ -7381,13 +7390,84 @@ class TestEnforceRpmTpmOnModelAdd:
             (LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=-1), "tpm"),
         ],
     )
-    def test_raises_when_enabled_and_missing(self, params, expected_missing):
-        from litellm.proxy._types import ProxyException
-
+    def test_raises_when_enabled_and_missing(self, params: LiteLLM_Params, expected_missing: str):
         with pytest.raises(ProxyException) as exc_info:
-            _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
-        assert expected_missing in str(exc_info.value.message)
+            _raise_if_rate_limits_required_but_missing(
+                model_name="gpt-5.2", litellm_params=params, policy=REQUIRE_BOTH_LIMITS
+            )
+        assert exc_info.value.message.startswith(f"{expected_missing} must be set")
         assert exc_info.value.code == "400"
+
+    @pytest.mark.parametrize(
+        ("model_name", "params"),
+        [
+            ("runway-gen4", LiteLLM_Params(model="runwayml/gen4_turbo")),
+            ("my-runway", LiteLLM_Params(model="gen4_turbo", custom_llm_provider="runwayml")),
+            ("jev-latest", LiteLLM_Params(model="openai/jev-latest")),
+            ("veo-3.1-generate-001", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=10)),
+            ("gemini-3-pro", LiteLLM_Params(model="vertex_ai/gemini-3-pro", rpm=10, tpm=1000)),
+        ],
+    )
+    def test_policy_asks_each_model_only_for_the_limits_its_entry_requires(
+        self, model_name: str, params: LiteLLM_Params
+    ):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("model_name", "params", "expected_missing"),
+        [
+            ("veo-3.1-generate-001", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", tpm=1000), "rpm"),
+            ("gemini-3-pro", LiteLLM_Params(model="vertex_ai/gemini-3-pro", rpm=10), "tpm"),
+            ("openai-gpt", LiteLLM_Params(model="openai/gpt-5.2"), "rpm and tpm"),
+            ("runway-gen4", LiteLLM_Params(model="runwayml/gen4_turbo", rpm=0), "rpm"),
+        ],
+    )
+    def test_policy_rejects_a_model_missing_a_required_or_carrying_a_non_positive_limit(
+        self, model_name: str, params: LiteLLM_Params, expected_missing: str
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+        assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
+        assert exc_info.value.code == "400"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setting", "expected_code", "expected_message"),
+    [
+        ({"default": [], "models": {"veo-*": ["rpm"]}}, "400", "rpm must be set to a positive value for 'veo-3.1'"),
+        ("yes", "400", "rpm and tpm must be set to a positive value for 'veo-3.1'"),
+        (
+            {"providers": {"vertex_ai": ["qps"]}},
+            "500",
+            "general_settings.enforce_rpm_tpm_on_model_add is invalid",
+        ),
+    ],
+)
+async def test_model_add_resolves_the_quota_policy_for_the_public_model_name(
+    monkeypatch: pytest.MonkeyPatch, setting: object, expected_code: str, expected_message: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_rpm_tpm_on_model_add": setting})
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(model_name="veo-3.1", litellm_params={"model": "vertex_ai/veo-3.1"}),
+            UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.code == expected_code
+    assert error.value.message.startswith(expected_message)
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
 
 
 class TestBlockModelResponseSerialization:

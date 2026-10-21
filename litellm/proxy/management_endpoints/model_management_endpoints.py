@@ -102,6 +102,13 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_write,
 )
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
+from litellm.proxy.management_helpers.model_quota_policy import (
+    ModelQuotaPolicy,
+    deployment_provider,
+    parse_model_quota_setting,
+    required_limits,
+    unmet_limits,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -151,6 +158,7 @@ from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     GenericLiteLLMParams,
+    LiteLLM_Params,
     ModelInfo,
     updateDeployment,
     updateLiteLLMParams,
@@ -760,26 +768,39 @@ async def _auto_router_capability_slot(
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
 
 
-def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
-    """Require both rpm and tpm (each a positive value) when the operator opts in via config.yaml.
+def _model_add_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
+    try:
+        return parse_model_quota_setting(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING))
+    except ValidationError as e:
+        raise ProxyException(
+            message=f"general_settings.{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING} is invalid: {e}",
+            type=ProxyErrorTypes.internal_server_error.value,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        ) from e
 
-    Off by default, so deployments keep adding models without limits. When
-    ``enforce_rpm_tpm_on_model_add: true`` is set under general_settings, a model added
-    without both rpm and tpm set to a positive value is rejected rather than stored
-    unbounded (or effectively excluded from routing by a zero/negative limit).
-    """
-    if not enforced:
+
+def _raise_if_rate_limits_required_but_missing(
+    *, model_name: str, litellm_params: LiteLLM_Params, policy: ModelQuotaPolicy | None
+) -> None:
+    """Off by default, so deployments keep adding models without limits. Once the operator opts in under
+    general_settings, the policy decides per model name and provider which of rpm and tpm a new model needs,
+    and a model missing one, or carrying a zero or negative one, is rejected rather than stored unbounded
+    (or effectively excluded from routing)."""
+    if policy is None:
         return
-    missing: Final = tuple(
-        field
-        for field, value in (("rpm", litellm_params.rpm), ("tpm", litellm_params.tpm))
-        if value is None or value <= 0
+    provider: Final = deployment_provider(
+        MappingProxyType({"model": litellm_params.model, "custom_llm_provider": litellm_params.custom_llm_provider})
+    )
+    missing: Final = unmet_limits(
+        required_limits(policy, model_name, frozenset() if provider is None else frozenset((provider,))),
+        MappingProxyType({"rpm": litellm_params.rpm, "tpm": litellm_params.tpm}),
     )
     if not missing:
         return
     raise ProxyException(
         message=(
-            f"{' and '.join(missing)} must be set to a positive value when "
+            f"{' and '.join(missing)} must be set to a positive value for '{model_name}' when "
             f"'{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING}' is enabled in general_settings"
         ),
         type=ProxyErrorTypes.validation_error.value,
@@ -2717,8 +2738,9 @@ async def add_new_model(
         )
 
         _raise_if_rate_limits_required_but_missing(
+            model_name=model_params.model_name,
             litellm_params=model_params.litellm_params,
-            enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
+            policy=_model_add_quota_policy(general_settings),
         )
 
         clean_model_info: Final = ModelInfo.model_validate(

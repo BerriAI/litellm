@@ -17,14 +17,8 @@ from typing import TYPE_CHECKING, Final, cast
 from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
     ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
-    REQUIRE_BOTH_LIMITS,
-    ProjectModelQuotaPolicy,
-    ProvidersOf,
     describe_missing_quota,
     missing_project_model_quota,
-    no_providers,
-    parse_project_model_quota_setting,
-    router_deployment_providers,
 )
 from pydantic import TypeAdapter, ValidationError
 
@@ -38,6 +32,14 @@ from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
+from litellm.proxy.management_helpers.model_quota_policy import (
+    REQUIRE_BOTH_LIMITS,
+    ModelQuotaPolicy,
+    ProvidersOf,
+    no_providers,
+    parse_model_quota_setting,
+    router_deployment_providers,
+)
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
@@ -307,9 +309,9 @@ def _raise_on_project_models_expanding_at_request_time(
     )
 
 
-def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ProjectModelQuotaPolicy | None:
+def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
     try:
-        return parse_project_model_quota_setting(general_settings.get(ENFORCE_PROJECT_MODEL_QUOTA_SETTING))
+        return parse_model_quota_setting(general_settings.get(ENFORCE_PROJECT_MODEL_QUOTA_SETTING))
     except ValidationError as e:
         raise HTTPException(
             status_code=500,
@@ -320,7 +322,7 @@ def _project_model_quota_policy(general_settings: Mapping[str, object]) -> Proje
 def _raise_on_missing_project_model_quota(
     data: NewProjectRequest | UpdateProjectRequest,
     access_group_names: frozenset[str] = frozenset(),
-    policy: ProjectModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
+    policy: ModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
     providers_of: ProvidersOf = no_providers,
 ) -> None:
     """Require the positive `rpm`/`tpm` quotas the policy asks of each model on project CREATE.
@@ -347,7 +349,7 @@ def _raise_on_missing_project_model_quota_on_update(
     data: UpdateProjectRequest,
     existing_project: object,
     access_group_names: frozenset[str] = frozenset(),
-    policy: ProjectModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
+    policy: ModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
     providers_of: ProvidersOf = no_providers,
 ) -> None:
     """Require the positive `rpm`/`tpm` quotas the policy asks of each model over the RESULTING state on project UPDATE.
