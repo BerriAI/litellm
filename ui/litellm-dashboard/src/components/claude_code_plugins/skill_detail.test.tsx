@@ -10,6 +10,7 @@ const buildSkill = (source: Plugin["source"]): Plugin => ({
   name: "my-skill",
   source,
   enabled: true,
+  serve_archive: false,
   version: null,
   description: null,
   created_at: null,
@@ -17,6 +18,21 @@ const buildSkill = (source: Plugin["source"]): Plugin => ({
 });
 
 describe("SkillDetail source", () => {
+  it("shows a skill that LiteLLM hosts for Claude Desktop", () => {
+    render(
+      <SkillDetail
+        skill={{ ...buildSkill({ source: "archive", url: "https://example.com/s.zip" }), serve_archive: true }}
+        onBack={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("row", { name: "Hosted for Claude Desktop Yes" })).toBeInTheDocument();
+  });
+
+  it("shows a skill that is not hosted for Claude Desktop", () => {
+    render(<SkillDetail skill={buildSkill({ source: "github", repo: "org/repo" })} onBack={vi.fn()} />);
+    expect(screen.getByRole("row", { name: "Hosted for Claude Desktop No" })).toBeInTheDocument();
+  });
+
   it("renders a skill whose API metadata is null", () => {
     render(
       <SkillDetail

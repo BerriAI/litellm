@@ -156,6 +156,20 @@ export const getPluginTableColumns = ({
     ),
   },
   {
+    id: "serve_archive",
+    accessorKey: "serve_archive",
+    meta: { title: "Hosted for Desktop", skeleton: "badge" },
+    header: "Hosted for Desktop",
+    size: 150,
+    enableSorting: false,
+    cell: ({ row }) => (
+      <StatusBadge
+        tone={row.original.serve_archive ? "success" : "neutral"}
+        label={row.original.serve_archive ? "Yes" : "No"}
+      />
+    ),
+  },
+  {
     id: "created_at",
     accessorKey: "created_at",
     sortingFn: "datetime",

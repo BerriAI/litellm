@@ -15,6 +15,7 @@ const mockPlugins: Plugin[] = [
     source: { source: "github", repo: "org/newer-skill" },
     category: "development",
     enabled: true,
+    serve_archive: true,
     created_at: "2025-01-15T10:30:00Z",
   },
   {
@@ -44,9 +45,25 @@ describe("PluginTable", () => {
 
   it("should render every column header", () => {
     render(<PluginTable {...defaultProps} />);
-    for (const header of ["Skill Name", "Version", "Description", "Category", "Public", "Created At"]) {
+    for (const header of [
+      "Skill Name",
+      "Version",
+      "Description",
+      "Category",
+      "Public",
+      "Hosted for Desktop",
+      "Created At",
+    ]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
+  });
+
+  it("should show whether each skill is hosted for Claude Desktop", () => {
+    render(<PluginTable {...defaultProps} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const hostedCell = (row: HTMLElement) => within(row).getAllByRole("cell")[5];
+    expect(hostedCell(rows[0])).toHaveTextContent("Yes");
+    expect(hostedCell(rows[1])).toHaveTextContent("No");
   });
 
   it("should display the empty state when data is empty", () => {
@@ -83,8 +100,10 @@ describe("PluginTable", () => {
 
   it("should show whether the skill is public", () => {
     render(<PluginTable {...defaultProps} />);
-    expect(screen.getByText("Yes")).toBeInTheDocument();
-    expect(screen.getByText("No")).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").slice(1);
+    const publicCell = (row: HTMLElement) => within(row).getAllByRole("cell")[4];
+    expect(publicCell(rows[0])).toHaveTextContent("Yes");
+    expect(publicCell(rows[1])).toHaveTextContent("No");
   });
 
   it("should delete a skill through the actions menu when admin", async () => {

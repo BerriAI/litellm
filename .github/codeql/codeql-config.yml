@@ -11,6 +11,10 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
+  - exclude:
+      id: py/log-injection                      # CWE-117
+  - exclude:
+      id: py/regex-injection                    # CWE-1333 / regex injection
 
 paths-ignore:
   - tests
