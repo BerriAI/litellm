@@ -28,6 +28,7 @@ import litellm
 from litellm.constants import MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
+from litellm_enterprise.proxy.common_utils.check_batch_cost import FAILED_RETRIEVES_BEFORE_EXPIRY
 
 if TYPE_CHECKING:
     from litellm.batches.batch_utils import BatchCostUsageResult
@@ -3016,13 +3017,16 @@ class TestPollPageStarvation:
         llm_router.aretrieve_batch = AsyncMock(side_effect=RuntimeError("timed out"))
         poller: Final = self._instance(prisma, llm_router)
 
+        for _ in range(FAILED_RETRIEVES_BEFORE_EXPIRY - 1):
+            await poller.check_batch_cost()
+        llm_router.aretrieve_batch.reset_mock()
         await poller.check_batch_cost()
 
-        assert [call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list] == [
+        assert table.update_many.await_count == 1
+        assert {call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list} == {
             "batch_old",
             "batch_new",
-        ]
-        assert table.update_many.await_count == 1
+        }
 
 
 class _FakeManagedObjectPages:
@@ -4607,7 +4611,7 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
             _PAST_THE_STALENESS_CUTOFF,
             "in_progress",
             _CLAIM_UNIFIED_BATCH_ID,
-            [_provider_batch("in_progress")],
+            [_provider_batch("in_progress")] * FAILED_RETRIEVES_BEFORE_EXPIRY,
             "in_progress",
         ),
         (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "stale_expired"),
@@ -4619,7 +4623,13 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
             "stale_expired",
         ),
         (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "stale_expired"),
-        (_PAST_THE_STALENESS_CUTOFF, "in_progress", "batch-raw-1", [_provider_batch("in_progress")], "stale_expired"),
+        (
+            _PAST_THE_STALENESS_CUTOFF,
+            "in_progress",
+            "batch-raw-1",
+            [_provider_batch("in_progress")] * FAILED_RETRIEVES_BEFORE_EXPIRY,
+            "stale_expired",
+        ),
         (_INSIDE_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "in_progress"),
         (_PAST_THE_STALENESS_CUTOFF, "completed", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "completed"),
         (_PAST_THE_STALENESS_CUTOFF, "completed", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "completed"),
@@ -4647,10 +4657,33 @@ async def test_a_batch_the_poller_cannot_settle_expires_only_once_past_the_stale
     poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
 
     with TestMultiPodBatchCostClaim._billing_patches([]):
-        await poller.check_batch_cost()
+        for _ in range(FAILED_RETRIEVES_BEFORE_EXPIRY):
+            await poller.check_batch_cost()
 
     assert row.status == expected_status
     assert row.batch_processed is False
+
+
+@pytest.mark.asyncio
+async def test_an_unfinished_batch_past_the_staleness_cutoff_expires_only_after_consecutive_failed_retrieves() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
+    timeout: Final = RuntimeError("timed out")
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = [
+        *([timeout] * (FAILED_RETRIEVES_BEFORE_EXPIRY - 1)),
+        _provider_batch("in_progress"),
+        *([timeout] * FAILED_RETRIEVES_BEFORE_EXPIRY),
+    ]
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
+    statuses: Final = []
+
+    with TestMultiPodBatchCostClaim._billing_patches([]):
+        for _ in range(2 * FAILED_RETRIEVES_BEFORE_EXPIRY):
+            await poller.check_batch_cost()
+            statuses.append(row.status)
+
+    assert statuses == [*(["in_progress"] * (2 * FAILED_RETRIEVES_BEFORE_EXPIRY - 1)), "stale_expired"]
 
 
 async def _a_vertex_job_that_no_longer_exists(*, model: str, batch_id: str, litellm_metadata: object) -> LiteLLMBatch:
@@ -4744,17 +4777,19 @@ async def test_expiring_a_batch_past_the_staleness_cutoff_keeps_a_finished_statu
     row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
     router: Final = TestMultiPodBatchCostClaim._router()
 
-    async def _a_client_reads_the_finished_batch_while_the_poller_retrieve_times_out(
+    async def _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_times_out(
         *, model: str, batch_id: str, litellm_metadata: object
     ) -> LiteLLMBatch:
-        row.status = "completed"
+        if router.aretrieve_batch.call_count == FAILED_RETRIEVES_BEFORE_EXPIRY:
+            row.status = "completed"
         raise RuntimeError("timed out")
 
-    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_poller_retrieve_times_out
+    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_times_out
     poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
 
     with TestMultiPodBatchCostClaim._billing_patches([]):
-        await poller.check_batch_cost()
+        for _ in range(FAILED_RETRIEVES_BEFORE_EXPIRY):
+            await poller.check_batch_cost()
 
     assert row.status == "completed"
     assert row.batch_processed is False

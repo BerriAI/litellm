@@ -47,6 +47,7 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
+FAILED_RETRIEVES_BEFORE_EXPIRY: Final = 3
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -120,6 +121,7 @@ class CheckBatchCost:
         self._arrival_cursor: tuple[datetime, str] | None = None
         self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
+        self._failed_retrieves: Mapping[str, int] = MappingProxyType({})
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
         self._poll_idle: Final = asyncio.Event()
@@ -252,6 +254,20 @@ class CheckBatchCost:
             await self._retire_job(job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created")
             return
         await self._expire_unfinished(job)
+
+    async def _expire_unfinished_after_repeated_failures(self, job: ManagedObjectRow) -> None:
+        failures: Final = self._failed_retrieves.get(job.id, 0) + 1
+        if failures < FAILED_RETRIEVES_BEFORE_EXPIRY:
+            self._failed_retrieves = MappingProxyType({**self._failed_retrieves, job.id: failures})
+            return
+        self._forget_failed_retrieves(job)
+        await self._expire_unfinished(job)
+
+    def _forget_failed_retrieves(self, job: ManagedObjectRow) -> None:
+        if job.id in self._failed_retrieves:
+            self._failed_retrieves = MappingProxyType(
+                {job_id: count for job_id, count in self._failed_retrieves.items() if job_id != job.id}
+            )
 
     async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
         try:
@@ -1202,8 +1218,9 @@ class CheckBatchCost:
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 elif self._is_past_staleness_cutoff(job) and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES:
-                    await self._expire_unfinished(job)
+                    await self._expire_unfinished_after_repeated_failures(job)
                 continue
+            self._forget_failed_retrieves(job)
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if response.status in PROVIDER_TERMINAL_BATCH_STATUSES and response.output_file_id is not None:
