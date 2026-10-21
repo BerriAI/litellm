@@ -552,8 +552,10 @@ def test_update_credential_keeps_a_short_secret_whose_read_back_is_all_asterisks
     placeholder check has to match that rendering too, not only the ``ab****yz`` shape."""
     served = CredentialItem(credential_name="existing", credential_values={"api_key": "abc"}, credential_info={})
     update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "abc"
 
-    response = _patch_credential("existing", {"credential_values": {"api_key": "*****"}, "credential_info": {}})
+    response = _patch_credential("existing", {"credential_values": read_back["credential_values"], "credential_info": {}})
 
     assert response.status_code == 200, response.text
     assert _written_values(update_by_name) == {"api_key": "abc"}
