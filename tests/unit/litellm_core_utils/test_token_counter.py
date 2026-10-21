@@ -2687,6 +2687,20 @@ def test_oversized_hex_pdf_strings_price_like_literal_text():
     assert literal_text_tokens * 5 <= hex_text_tokens * 6
 
 
+def test_oversized_pdf_octal_escapes_keep_sample_scaling_by_decoded_bytes():
+    plain_count: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // 2 + 2
+    octal_count: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // 2 + 2
+    text_object: Final = b"BT /F1 12 Tf (" + b"A" * plain_count + b"\\101" * octal_count + b") Tj ET\n"
+    page: Final = _fake_pdf_page(content_bytes=text_object)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    priced: Final = _price_pdf_pages((page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+    expected: Final = plain_count + octal_count
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
 def test_oversized_pdf_text_uses_a_sampled_token_estimate():
     string_operand: Final = b"(Revenue grew eleven percent)"
     text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
