@@ -141,6 +141,7 @@ def _response_metadata(response: httpx.Response, payload: dict[str, object], lat
     return {
         "call_id": headers.get("x-litellm-call-id"),
         "response_model": payload.get("model") or headers.get("x-litellm-response-model"),
+        "deployment_id": headers.get("x-litellm-model-id") or headers.get("x-litellm-deployment-id"),
         "reported_version": payload.get("version")
         or headers.get("x-litellm-model-version")
         or headers.get("x-litellm-version"),
@@ -184,7 +185,12 @@ def _problem_statement_text(content: object) -> str:
     return ""
 
 
-def _offline_label(client: httpx.Client, task_id: str, problem_statement: str) -> dict[str, object]:
+def _offline_label(
+    client: httpx.Client,
+    task_id: str,
+    problem_statement: str,
+    record_auxiliary: bool = True,
+) -> dict[str, object]:
     body = {
         "model": LABEL_MODEL,
         "max_completion_tokens": 400,
@@ -208,8 +214,15 @@ def _offline_label(client: httpx.Client, task_id: str, problem_statement: str) -
     metadata = (
         _response_metadata(response, payload, latency_s)
         if response is not None
-        else {"call_id": None, "response_model": None, "reported_version": None, "cost_usd": None,
-              "latency_s": latency_s, "usage": {}}
+        else {
+            "call_id": None,
+            "response_model": None,
+            "deployment_id": None,
+            "reported_version": None,
+            "cost_usd": None,
+            "latency_s": latency_s,
+            "usage": {},
+        }
     )
     choices = payload.get("choices")
     choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
@@ -218,7 +231,8 @@ def _offline_label(client: httpx.Client, task_id: str, problem_statement: str) -
     label, rationale, parse_ok = parse_label_response(raw_text)
     if error is not None:
         label, rationale, parse_ok = "unknown", None, False
-    _append_auxiliary_call("offline_label", task_id, LABEL_MODEL, metadata)
+    if record_auxiliary:
+        _append_auxiliary_call("offline_label", task_id, LABEL_MODEL, metadata)
     return {
         **metadata,
         "label": label,
