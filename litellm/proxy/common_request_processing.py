@@ -869,9 +869,7 @@ async def apply_hierarchical_router_settings(
                 data["_router_weights"] = validate_router_weights(router_settings.get("weights"))
             except ValidationError:
                 data["_router_weights"] = None
-                verbose_proxy_logger.warning(
-                    "Ignoring invalid saved router weights; update team/key router_settings"
-                )
+                verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
             alias_target: Final = await _resolve_per_request_model_group_alias(
                 requested_model=data.get("model"),
                 router_settings=router_settings,
