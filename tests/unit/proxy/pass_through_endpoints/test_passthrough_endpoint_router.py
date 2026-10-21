@@ -60,6 +60,23 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
     )
 
 
+def test_deployment_api_base_belongs_to_the_deployment_whose_key_is_used():
+    llm_router = litellm.Router(
+        model_list=[
+            _flagged_deployment("openai/gpt-4o", api_base="https://keyless.example/v1"),
+            _flagged_deployment("openai/gpt-4o-mini", api_key="sk-deployment", api_base="https://keyed.example/v1"),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-deployment"
+    assert (
+        passthrough_router.get_deployment_api_base(custom_llm_provider="openai", region_name=None)
+        == "https://keyed.example/v1"
+    )
+    assert passthrough_router.get_deployment_api_base(custom_llm_provider="anthropic", region_name=None) is None
+
+
 def test_credential_rotation_is_reflected_without_deployment_update():
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-before-rotation")])
     llm_router = litellm.Router(

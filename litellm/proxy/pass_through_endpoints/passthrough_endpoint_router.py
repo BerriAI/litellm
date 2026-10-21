@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -21,6 +22,12 @@ from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+@dataclass(frozen=True, slots=True)
+class _DeploymentCredentials:
+    api_key: str
+    api_base: str | None
 
 
 def _get_proxy_llm_router() -> "Router | None":
@@ -74,12 +81,12 @@ class PassthroughEndpointRouter:
         custom_llm_provider: str,
         region_name: str | None,
     ) -> str | None:
-        deployment_api_key: Final = self._get_deployment_api_key(
+        deployment_credentials: Final = self._get_deployment_credentials(
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
         )
-        if deployment_api_key is not None:
-            return _resolve_oidc_reference(deployment_api_key)
+        if deployment_credentials is not None:
+            return _resolve_oidc_reference(deployment_credentials.api_key)
         verbose_router_logger.debug(
             "No pass-through deployment credentials found for %s, looking for env variable", custom_llm_provider
         )
@@ -88,21 +95,32 @@ class PassthroughEndpointRouter:
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
 
-    def _get_deployment_api_key(
+    def get_deployment_api_base(
         self,
         custom_llm_provider: str,
         region_name: str | None,
     ) -> str | None:
+        deployment_credentials: Final = self._get_deployment_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=region_name,
+        )
+        return deployment_credentials.api_base if deployment_credentials is not None else None
+
+    def _get_deployment_credentials(
+        self,
+        custom_llm_provider: str,
+        region_name: str | None,
+    ) -> _DeploymentCredentials | None:
         llm_router: Final = self.llm_router_getter()
         if llm_router is None:
             return None
         deployments: Final = llm_router.get_model_list() or ()
         return next(
             (
-                api_key
+                credentials
                 for deployment in deployments
                 if (
-                    api_key := self._resolve_matching_deployment_api_key(
+                    credentials := self._resolve_matching_deployment_credentials(
                         litellm_params=deployment["litellm_params"],
                         custom_llm_provider=custom_llm_provider,
                         region_name=region_name,
@@ -113,12 +131,12 @@ class PassthroughEndpointRouter:
             None,
         )
 
-    def _resolve_matching_deployment_api_key(
+    def _resolve_matching_deployment_credentials(
         self,
         litellm_params: LiteLLMParamsTypedDict,
         custom_llm_provider: str,
         region_name: str | None,
-    ) -> str | None:
+    ) -> _DeploymentCredentials | None:
         if litellm_params.get("use_in_pass_through") is not True:
             return None
         if self._get_deployment_provider(litellm_params) != custom_llm_provider:
@@ -134,7 +152,8 @@ class PassthroughEndpointRouter:
         )
         if deployment_region != region_name:
             return None
-        return _get_str_value(credential_values, "api_key") or litellm_params.get("api_key")
+        api_key: Final = _get_str_value(credential_values, "api_key") or litellm_params.get("api_key")
+        return _DeploymentCredentials(api_key=api_key, api_base=api_base) if api_key is not None else None
 
     def _get_deployment_provider(self, litellm_params: LiteLLMParamsTypedDict) -> str | None:
         model: Final = litellm_params.get("model")

@@ -8,9 +8,10 @@ _EU_JEV_PREFIX: Final = "eu_jev/"
 
 
 def eu_jev_registry_model(requested_model: str | None) -> str:
-    if requested_model is None or requested_model in _EU_JEV_CURRENT_RELEASE_NAMES:
+    release: Final = requested_model.removeprefix(_EU_JEV_PREFIX) if requested_model is not None else None
+    if release is None or release in _EU_JEV_CURRENT_RELEASE_NAMES:
         return EU_JEV_LATEST_MODEL
-    return requested_model
+    return release
 
 
 def eu_jev_scoped_model(decision_body: Mapping[str, object]) -> str:
@@ -22,6 +23,9 @@ def eu_jev_upstream_body(hook_body: Mapping[str, object], client_body: Mapping[s
     hook_model: Final = hook_body.get("model")
     without_model: Final = {key: value for key, value in hook_body.items() if key != "model"}
     if hook_model == eu_jev_scoped_model(client_body):
+        client_model: Final = client_body.get("model")
+        if isinstance(client_model, str):
+            return MappingProxyType({**without_model, "model": client_model.removeprefix(_EU_JEV_PREFIX)})
         return MappingProxyType(
             {**without_model, **{key: value for key, value in client_body.items() if key == "model"}}
         )

@@ -8396,6 +8396,47 @@ class TestEuJevPassthroughRoute:
         assert response.status_code == 200
         assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
 
+    def test_a_provider_prefixed_model_is_limited_once_and_forwarded_without_the_prefix(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu_jev/eu-jeff-1.0.0", "state": "x"})
+
+        assert response.status_code == 200
+        assert recorder.models == ["eu_jev/eu-jeff-1.0.0"]
+        assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
+
+    def test_a_pass_through_deployment_key_goes_to_that_deployment_base(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        deployment_router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "eu-jev-friendly",
+                    "litellm_params": {
+                        "model": "eu_jev/eu-jeff-latest",
+                        "api_key": "eu-jev-deployment-key",
+                        "api_base": "https://eu-jev-deployment.example/v2",
+                        "use_in_pass_through": True,
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", deployment_router)
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev-deployment.example/v2/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers["authorization"] == "Bearer eu-jev-deployment-key"
+
     def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone", params={"trace": "yes"}).respond(

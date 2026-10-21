@@ -1039,6 +1039,8 @@ def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(pr
         ({"model": "jeff-latest"}, "eu_jev/eu-jeff-latest"),
         ({"model": "jeff-1.0.0"}, "eu_jev/eu-jeff-latest"),
         ({"model": "eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/jeff-latest"}, "eu_jev/eu-jeff-latest"),
     ],
 )
 @pytest.mark.parametrize("suffix", ["", "/"])

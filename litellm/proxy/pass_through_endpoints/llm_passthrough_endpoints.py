@@ -746,7 +746,11 @@ async def eu_jev_proxy_route(
     )
     if not eu_jev_api_key:
         raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
-    base_url: Final = httpx.URL(get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+    base_url: Final = httpx.URL(
+        passthrough_endpoint_router.get_deployment_api_base(custom_llm_provider="eu_jev", region_name=None)
+        or get_secret_str("EU_JEV_API_BASE")
+        or "https://eu-jev.com"
+    )
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
     )
