@@ -3813,3 +3813,42 @@ def test_live_session_preserves_pretty_printed_start_frame(
     assert captured.route_type == "_arealtime"
     assert routed_data["model"] == "gpt-live-1"
     assert routed_data["live_session_start"] == expected_start
+
+
+@pytest.mark.asyncio
+async def test_update_config_reports_an_unsupported_router_setting_as_a_request_error_not_an_auth_error():
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    body = {"router_settings": {"not_a_router_setting": True}}
+    request = MagicMock(spec=Request)
+    request.json = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(**body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_update_config_reports_a_non_admin_caller_as_a_permission_error():
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("403", "permission_error")

@@ -10137,3 +10137,23 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                 user_api_key_dict=admin,
             )
             assert result is created_row
+
+
+@pytest.mark.asyncio
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ModelInfoDelete
+    from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
+
+    prisma = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await delete_model(
+            model_info=ModelInfoDelete(id="no-such-model"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message

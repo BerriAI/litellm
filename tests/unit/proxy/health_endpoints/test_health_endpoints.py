@@ -5437,3 +5437,12 @@ async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch
     with pytest.raises(ProxyException, match="auth_check failed") as raised:
         await health_services_endpoint(service="langfuse")
     assert "connection refused by lf.internal.example" in str(raised.value.message)
+
+
+@pytest.mark.asyncio
+async def test_health_services_reports_an_unknown_service_as_a_request_error_not_an_auth_error():
+    with pytest.raises(ProxyException) as exc_info:
+        await health_services_endpoint(service="totally_unknown_service_xyz")
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
