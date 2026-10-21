@@ -1881,7 +1881,11 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils.count_characters(text=prompt)
+                    prompt_characters = (
+                        len(prompt.strip())
+                        if custom_llm_provider == LlmProviders.ELEVENLABS.value
+                        else litellm.utils.count_characters(text=prompt)
+                    )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
