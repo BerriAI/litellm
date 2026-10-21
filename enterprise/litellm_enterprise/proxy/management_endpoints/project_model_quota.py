@@ -5,8 +5,8 @@ from typing import Final
 
 from litellm.proxy.management_helpers.model_quota_policy import (
     ModelQuotaPolicy,
-    ProvidersOf,
     QuotaLimit,
+    RouteOf,
     required_limits,
     unmet_limits,
 )
@@ -32,14 +32,14 @@ def missing_project_model_quota(
     rpm_limits: Mapping[str, object] | None,
     tpm_limits: Mapping[str, object] | None,
     policy: ModelQuotaPolicy,
-    providers_of: ProvidersOf,
+    route_of: RouteOf,
 ) -> tuple[MissingModelQuota, ...]:
     rpm_set: Final = rpm_limits or _NO_LIMITS_SET
     tpm_set: Final = tpm_limits or _NO_LIMITS_SET
     gaps: Final = tuple(
         MissingModelQuota(
             model,
-            unmet_limits(required_limits(policy, model, providers_of(model)), _limits_set_for(model, rpm_set, tpm_set)),
+            unmet_limits(required_limits(policy, model, route_of(model)), _limits_set_for(model, rpm_set, tpm_set)),
         )
         for model in models
     )

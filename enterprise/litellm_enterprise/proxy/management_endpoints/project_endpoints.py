@@ -35,10 +35,10 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import team
 from litellm.proxy.management_helpers.model_quota_policy import (
     REQUIRE_BOTH_LIMITS,
     ModelQuotaPolicy,
-    ProvidersOf,
-    no_providers,
+    RouteOf,
+    no_route,
     parse_model_quota_setting,
-    router_deployment_providers,
+    router_model_routes,
 )
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
@@ -323,7 +323,7 @@ def _raise_on_missing_project_model_quota(
     data: NewProjectRequest | UpdateProjectRequest,
     access_group_names: frozenset[str] = frozenset(),
     policy: ModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
-    providers_of: ProvidersOf = no_providers,
+    route_of: RouteOf = no_route,
 ) -> None:
     """Require the positive `rpm`/`tpm` quotas the policy asks of each model on project CREATE.
 
@@ -333,7 +333,7 @@ def _raise_on_missing_project_model_quota(
     _raise_on_project_models_expanding_at_request_time(data.models, access_group_names)
     metadata = data.metadata or {}
     missing: Final = missing_project_model_quota(
-        data.models or (), metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit"), policy, providers_of
+        data.models or (), metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit"), policy, route_of
     )
     if not missing:
         return
@@ -350,7 +350,7 @@ def _raise_on_missing_project_model_quota_on_update(
     existing_project: object,
     access_group_names: frozenset[str] = frozenset(),
     policy: ModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
-    providers_of: ProvidersOf = no_providers,
+    route_of: RouteOf = no_route,
 ) -> None:
     """Require the positive `rpm`/`tpm` quotas the policy asks of each model over the RESULTING state on project UPDATE.
 
@@ -369,7 +369,7 @@ def _raise_on_missing_project_model_quota_on_update(
         resulting_metadata.get("model_rpm_limit"),
         resulting_metadata.get("model_tpm_limit"),
         policy,
-        providers_of,
+        route_of,
     )
     if not missing:
         return
@@ -576,15 +576,6 @@ async def new_project(
             data=data,
         )
 
-        quota_policy: Final = _project_model_quota_policy(general_settings_view())
-        if quota_policy is not None:
-            _raise_on_missing_project_model_quota(
-                data,
-                _router_access_group_names(llm_router),
-                quota_policy,
-                router_deployment_providers(llm_router, data.team_id),
-            )
-
         # Check if user has permission to create projects for this team
         # only team admins can create projects for their team
         has_permission = await _check_user_permission_for_project(
@@ -601,6 +592,15 @@ async def new_project(
                 detail={
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
+            )
+
+        quota_policy: Final = _project_model_quota_policy(general_settings_view())
+        if quota_policy is not None:
+            _raise_on_missing_project_model_quota(
+                data,
+                _router_access_group_names(llm_router),
+                quota_policy,
+                router_model_routes(llm_router, data.team_id),
             )
 
         # Generate project_id if not provided
@@ -839,7 +839,7 @@ async def update_project(
                 existing_project,
                 _router_access_group_names(llm_router),
                 quota_policy,
-                router_deployment_providers(llm_router, target_team_id),
+                router_model_routes(llm_router, target_team_id),
             )
 
         # Prepare update data

@@ -7365,7 +7365,7 @@ class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_disabled_even_without_limits(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
-                model_name="gpt-5.2", litellm_params=LiteLLM_Params(model="azure/gpt-5.2"), policy=None
+                model_name="gpt-5.2", team_model=False, litellm_params=LiteLLM_Params(model="azure/gpt-5.2"), policy=None
             )
             is None
         )
@@ -7373,7 +7373,7 @@ class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_enabled_and_both_set(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
-                model_name="gpt-5.2",
+                model_name="gpt-5.2", team_model=False,
                 litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
                 policy=REQUIRE_BOTH_LIMITS,
             )
@@ -7393,7 +7393,7 @@ class TestEnforceRpmTpmOnModelAdd:
     def test_raises_when_enabled_and_missing(self, params: LiteLLM_Params, expected_missing: str):
         with pytest.raises(ProxyException) as exc_info:
             _raise_if_rate_limits_required_but_missing(
-                model_name="gpt-5.2", litellm_params=params, policy=REQUIRE_BOTH_LIMITS
+                model_name="gpt-5.2", team_model=False, litellm_params=params, policy=REQUIRE_BOTH_LIMITS
             )
         assert exc_info.value.message.startswith(f"{expected_missing} must be set")
         assert exc_info.value.code == "400"
@@ -7413,7 +7413,7 @@ class TestEnforceRpmTpmOnModelAdd:
     ):
         assert (
             _raise_if_rate_limits_required_but_missing(
-                model_name=model_name, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
             )
             is None
         )
@@ -7432,10 +7432,42 @@ class TestEnforceRpmTpmOnModelAdd:
     ):
         with pytest.raises(ProxyException) as exc_info:
             _raise_if_rate_limits_required_but_missing(
-                model_name=model_name, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
             )
         assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
         assert exc_info.value.code == "400"
+
+    def test_policy_reads_the_provider_behind_a_known_api_base(self):
+        policy: Final = ModelQuotaPolicy.model_validate({"default": [], "providers": {"groq": ["rpm", "tpm"]}})
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(
+                model_name="qa-llama", team_model=False,
+                litellm_params=LiteLLM_Params(model="qa-llama", api_base="https://api.groq.com/openai/v1"),
+                policy=policy,
+            )
+        assert exc_info.value.message.startswith("rpm and tpm must be set to a positive value for 'qa-llama'")
+
+    @pytest.mark.parametrize(
+        ("model_name", "params", "expected_missing"),
+        [
+            ("jev-latest", LiteLLM_Params(model="vertex_ai/gemini-3.8-flash"), "rpm and tpm"),
+            ("veo-team", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=5), "tpm"),
+        ],
+    )
+    def test_policy_model_entries_never_match_a_team_model_name(
+        self, model_name: str, params: LiteLLM_Params, expected_missing: str
+    ):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+            is None
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, team_model=True, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+        assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
 
 
 @pytest.mark.asyncio
@@ -7444,6 +7476,7 @@ class TestEnforceRpmTpmOnModelAdd:
     [
         ({"default": [], "models": {"veo-*": ["rpm"]}}, "400", "rpm must be set to a positive value for 'veo-3.1'"),
         ("yes", "400", "rpm and tpm must be set to a positive value for 'veo-3.1'"),
+        ({"enabled": True}, "400", "rpm and tpm must be set to a positive value for 'veo-3.1'"),
         (
             {"providers": {"vertex_ai": ["qps"]}},
             "500",
@@ -7467,6 +7500,32 @@ async def test_model_add_resolves_the_quota_policy_for_the_public_model_name(
         )
     assert error.value.code == expected_code
     assert error.value.message.startswith(expected_message)
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_add_cannot_borrow_a_model_entry_by_its_public_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"jev-latest": []}}},
+    )
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(
+                model_name="jev-latest",
+                litellm_params={"model": "vertex_ai/gemini-3.8-flash"},
+                model_info={"team_id": "media-team"},
+            ),
+            UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.code == "400"
+    assert error.value.message.startswith("rpm and tpm must be set to a positive value for 'jev-latest'")
     prisma.db.litellm_proxymodeltable.create.assert_not_called()
 
 

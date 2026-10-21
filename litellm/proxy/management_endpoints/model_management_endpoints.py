@@ -104,6 +104,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.management_helpers.model_quota_policy import (
     ModelQuotaPolicy,
+    ModelRoute,
     deployment_provider,
     parse_model_quota_setting,
     required_limits,
@@ -781,7 +782,7 @@ def _model_add_quota_policy(general_settings: Mapping[str, object]) -> ModelQuot
 
 
 def _raise_if_rate_limits_required_but_missing(
-    *, model_name: str, litellm_params: LiteLLM_Params, policy: ModelQuotaPolicy | None
+    *, model_name: str, litellm_params: LiteLLM_Params, team_model: bool, policy: ModelQuotaPolicy | None
 ) -> None:
     """Off by default, so deployments keep adding models without limits. Once the operator opts in under
     general_settings, the policy decides per model name and provider which of rpm and tpm a new model needs,
@@ -790,10 +791,20 @@ def _raise_if_rate_limits_required_but_missing(
     if policy is None:
         return
     provider: Final = deployment_provider(
-        MappingProxyType({"model": litellm_params.model, "custom_llm_provider": litellm_params.custom_llm_provider})
+        MappingProxyType(
+            {
+                "model": litellm_params.model,
+                "custom_llm_provider": litellm_params.custom_llm_provider,
+                "api_base": litellm_params.api_base,
+            }
+        )
     )
     missing: Final = unmet_limits(
-        required_limits(policy, model_name, frozenset() if provider is None else frozenset((provider,))),
+        required_limits(
+            policy,
+            model_name,
+            ModelRoute(providers=frozenset() if provider is None else frozenset((provider,)), team_named=team_model),
+        ),
         MappingProxyType({"rpm": litellm_params.rpm, "tpm": litellm_params.tpm}),
     )
     if not missing:
@@ -2740,6 +2751,7 @@ async def add_new_model(
         _raise_if_rate_limits_required_but_missing(
             model_name=model_params.model_name,
             litellm_params=model_params.litellm_params,
+            team_model=model_params.model_info.team_id is not None,
             policy=_model_add_quota_policy(general_settings),
         )
 

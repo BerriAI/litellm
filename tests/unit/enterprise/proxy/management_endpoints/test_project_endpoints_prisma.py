@@ -30,6 +30,7 @@ from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     delete_project,
     project_info,
 )
+from litellm.proxy.management_helpers.model_quota_policy import ModelRoute, router_model_routes
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
@@ -1618,8 +1619,8 @@ _CUSTOMER_MODEL_PROVIDERS: Final = {
 }
 
 
-def _customer_providers_of(model: str) -> frozenset[str]:
-    return _CUSTOMER_MODEL_PROVIDERS.get(model, frozenset())
+def _customer_route_of(model: str) -> ModelRoute:
+    return ModelRoute(providers=_CUSTOMER_MODEL_PROVIDERS.get(model, frozenset()))
 
 
 def _quota_error(
@@ -1627,7 +1628,7 @@ def _quota_error(
     rpm: dict[str, int] | None = None,
     tpm: dict[str, int] | None = None,
     setting: object = _CUSTOMER_QUOTA_POLICY,
-    providers_of: Callable[[str], frozenset[str]] = _customer_providers_of,
+    route_of: Callable[[str], ModelRoute] = _customer_route_of,
 ) -> str | None:
     from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _raise_on_missing_project_model_quota,
@@ -1638,7 +1639,7 @@ def _quota_error(
     assert policy is not None
     data: Final = NewProjectRequest(team_id="test-team", models=models, model_rpm_limit=rpm, model_tpm_limit=tpm)
     try:
-        _raise_on_missing_project_model_quota(data, frozenset(), policy, providers_of)
+        _raise_on_missing_project_model_quota(data, frozenset(), policy, route_of)
     except HTTPException as e:
         rejection: Final = e
     else:
@@ -1722,16 +1723,32 @@ def test_quota_policy_model_entry_matches_names_literally_apart_from_star():
 
 
 def test_quota_policy_model_on_several_providers_needs_every_required_limit():
-    def mixed_providers(_model: str) -> frozenset[str]:
-        return frozenset({"runwayml", "vertex_ai"})
+    def mixed_providers(_model: str) -> ModelRoute:
+        return ModelRoute(providers=frozenset({"runwayml", "vertex_ai"}))
 
-    error = _quota_error(["video-pool"], rpm={"video-pool": 10}, providers_of=mixed_providers)
+    error = _quota_error(["video-pool"], rpm={"video-pool": 10}, route_of=mixed_providers)
     assert error is not None
     assert "video-pool (model_tpm_limit)" in error
 
 
-@pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"]])
-def test_quota_setting_truthy_non_mapping_still_requires_both_limits(setting: object):
+def test_quota_policy_model_pattern_matches_from_the_start_like_the_router():
+    setting: Final = {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"*-lite": []}}
+    assert _quota_error(["veo-3.1-lite-generate-001"], setting=setting) is None
+    assert _quota_error(["gemini-3.8-flash"], setting=setting) is not None
+
+
+def test_quota_policy_model_entries_never_match_a_team_model_name():
+    def team_vertex_route(_model: str) -> ModelRoute:
+        return ModelRoute(providers=frozenset({"vertex_ai"}), team_named=True)
+
+    exact: Final = _quota_error(["jev-latest"], route_of=team_vertex_route)
+    pattern: Final = _quota_error(["veo-team"], rpm={"veo-team": 5}, route_of=team_vertex_route)
+    assert exact is not None and "jev-latest (model_rpm_limit and model_tpm_limit)" in exact
+    assert pattern is not None and "veo-team (model_tpm_limit)" in pattern
+
+
+@pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"], {"enabled": True}, {"provider": {"runwayml": []}}])
+def test_quota_setting_truthy_non_policy_value_still_requires_both_limits(setting: object):
     error: Final = _quota_error(["runway-gen4-turbo"], setting=setting)
     assert error is not None
     assert "runway-gen4-turbo (model_rpm_limit and model_tpm_limit)" in error
@@ -1761,7 +1778,7 @@ def test_update_quota_policy_resolves_providers_for_the_resulting_models():
             existing,
             frozenset(),
             policy,
-            _customer_providers_of,
+            _customer_route_of,
         )
         is None
     )
@@ -1771,7 +1788,7 @@ def test_update_quota_policy_resolves_providers_for_the_resulting_models():
             existing,
             frozenset(),
             policy,
-            _customer_providers_of,
+            _customer_route_of,
         )
     assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.detail)
 
@@ -1796,8 +1813,6 @@ def _customer_router() -> "litellm.Router":
 
 
 def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
-    from litellm.proxy.management_helpers.model_quota_policy import router_deployment_providers
-
     router: Final = litellm.Router(
         model_list=[
             {"model_name": "gen4*", "litellm_params": {"model": "runwayml/gen4*", "api_key": "qa-runway-key"}},
@@ -1808,10 +1823,30 @@ def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
             },
         ]
     )
-    providers_of: Final = router_deployment_providers(router, "media-team")
+    route_of: Final = router_model_routes(router, "media-team")
 
-    assert providers_of("gen4_turbo") == frozenset({"runwayml"})
-    assert providers_of("gen3a_turbo") == frozenset({"vertex_ai"})
+    assert route_of("gen4_turbo") == ModelRoute(providers=frozenset({"runwayml"}))
+    assert route_of("gen3a_turbo") == ModelRoute(providers=frozenset({"vertex_ai"}), team_named=True)
+
+
+def test_quota_providers_read_the_provider_behind_a_known_api_base():
+    groq_api_base: Final = "https://api.groq.com/openai/v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qa-llama",
+                "litellm_params": {"model": "qa-llama", "api_base": groq_api_base, "api_key": "qa-groq-key"},
+            },
+            {
+                "model_name": "qa-runway",
+                "litellm_params": {"model": "gen4_turbo", "custom_llm_provider": "runwayml", "api_base": groq_api_base},
+            },
+        ]
+    )
+    route_of: Final = router_model_routes(router, None)
+
+    assert route_of("qa-llama").providers == frozenset({"groq"})
+    assert route_of("qa-runway").providers == frozenset({"runwayml"})
 
 
 @pytest.mark.asyncio
@@ -1839,7 +1874,7 @@ async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_i
         monkeypatch,
         team_models=["runway-gen4-turbo"],
         llm_router=_customer_router(),
-        quota_setting={"provider": {"runwayml": []}},
+        quota_setting={"providers": {"runwayml": []}, "model": {"jev-latest": []}},
     )
 
     with pytest.raises(ProxyException) as exc_info:
@@ -1847,6 +1882,47 @@ async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_i
 
     assert exc_info.value.code == "500"
     assert "general_settings.enforce_project_model_quota is invalid" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_checks_permission_before_reading_the_quota_setting(monkeypatch):
+    from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
+
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["runway-gen4-turbo"],
+        llm_router=_customer_router(),
+        quota_setting={"providers": {"runwayml": []}, "model": {"jev-latest": []}},
+    )
+    monkeypatch.setattr(pe, "_check_user_permission_for_project", mock.AsyncMock(return_value=False))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
+
+    assert exc_info.value.code == "403"
+    assert "enforce_project_model_quota" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_quota_policy_ignores_model_entries_for_a_team_model_name(monkeypatch):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_test-team_qa",
+                "litellm_params": {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"},
+                "model_info": {"team_id": "test-team", "team_public_model_name": "jev-latest"},
+            },
+        ]
+    )
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=["jev-latest"], llm_router=router, quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["jev-latest"]))
+
+    assert exc_info.value.code == "400"
+    assert "jev-latest (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.message)
 
 
 _ACCESS_NOW: Final = datetime.now(timezone.utc)
