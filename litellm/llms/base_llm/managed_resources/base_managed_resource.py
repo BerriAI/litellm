@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient as _PrismaClient
     from litellm.router import Router as _Router
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
     Router = _Router
@@ -550,7 +550,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         limit: int | None = None,
         after: str | None = None,
         additional_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         List resources created by a user.
 

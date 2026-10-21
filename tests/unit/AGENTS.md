@@ -1,6 +1,9 @@
 # tests/unit
 
-In-process. No network, clock or subprocess
+In-process. No network or subprocess
+
+Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
+and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
 
 ## What good looks like
 

@@ -78,6 +78,7 @@ def _is_function_tool(tool: Mapping[str, JsonValue]) -> bool:
 
 def _map_function_tools(
     tools: object | None,
+    model: str,
 ) -> tuple[Mapping[str, object], ...] | None | VertexGeminiCountContextError:
     try:
         tool_values: Final = _TOOLS.validate_python(tools or ())
@@ -89,15 +90,21 @@ def _map_function_tools(
     if not all(_has_object_schema(tool) for tool in function_tools):
         return _INVALID_TOOLS
 
+    from litellm.llms.vertex_ai.common_utils import with_integer_enums_that_fit
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     chat_tools: Final = tuple(
         chat_tool for tool in function_tools for chat_tool in chat_completion_tools_for(tool)
     )  # comprehension-ok: flattens each tool's translation
+    config: Final = VertexGeminiConfig()
     try:
-        mapped_tools: Final = VertexGeminiConfig().map_function(
-            value=[dict(tool) for tool in chat_tools],
-            optional_params={},
+        mapped_tools: Final = with_integer_enums_that_fit(
+            lambda send_integer_enums: config.map_function(
+                value=[dict(tool) for tool in chat_tools],
+                optional_params={},
+                send_integer_enums=send_integer_enums,
+            ),
+            VertexGeminiConfig.is_gemini_3_or_newer(model),
         )
     except (AttributeError, TypeError, ValueError):
         return _INVALID_TOOLS
@@ -110,11 +117,12 @@ def _map_function_tools(
 def vertex_gemini_count_context(
     system: object | None,
     tools: object | None,
+    model: str,
 ) -> VertexGeminiCountContext | VertexGeminiCountContextError:
     system_parts: Final = _system_parts(system)
     if isinstance(system_parts, VertexGeminiCountContextError):
         return system_parts
-    function_tools: Final = _map_function_tools(tools)
+    function_tools: Final = _map_function_tools(tools, model)
     if isinstance(function_tools, VertexGeminiCountContextError):
         return function_tools
     return VertexGeminiCountContext(

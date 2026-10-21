@@ -585,7 +585,7 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
-@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill"])
+@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"])
 def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
     """A deployment's capability override must not land on the shared
     ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
@@ -4318,3 +4318,100 @@ def test_router_capacity_reads_a_model_info_base_model_before_a_litellm_params_o
     assert _effective_max_input_tokens(router) == 1024
     assert _deployments_allowed_for_2048_input_tokens(router) == 0
     _invalidate_model_cost_lowercase_map()
+
+
+def test_deployment_id_equal_to_another_providers_catalog_key_bills_its_own_prices_under_pricing_provider() -> None:
+    """Resolving the id by name under the routing provider lands on the other provider's row and the
+    provider check rejects it, billing $0. ``pricing_provider`` names the row's provider, so the
+    deployment's own prices (merged into that row) bill."""
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        router: Final = Router(
+            model_list=[
+                _pricing_provider_deployment(
+                    _COLLIDING_BUILTIN_KEY,
+                    {"input_cost_per_token": 0.00000096, "output_cost_per_token": 0.00000302},
+                )
+            ]
+        )
+
+        response: Final = _glm_completion(router)
+
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 0.00000096 + 500 * 0.00000302)
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def _pricing_provider_deployment(model_id: str, model_info: dict) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider="openai",
+    )
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info={"id": model_id, "pricing_provider": "baseten", **model_info},
+    )
+
+
+def _glm_completion(router: Router) -> litellm.ModelResponse:
+    response: Final = router.completion(
+        model="nvidia/zai-org/glm-5.2",
+        messages=[{"role": "user", "content": "priced under another provider"}],
+        mock_response=litellm.ModelResponse(
+            model="zai-org/GLM-5.2",
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    return response
+
+
+def test_pricing_provider_without_custom_prices_bills_that_providers_catalog_rate() -> None:
+    """An openai-compatible deployment pointed at another provider's host can name that provider for
+    pricing: the request is priced from its catalog row, where the routing provider has none."""
+    model_id: Final = "glm52-priced-as-baseten"
+    catalog_row: Final = litellm.model_cost[_COLLIDING_BUILTIN_KEY]
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        response: Final = _glm_completion(Router(model_list=[_pricing_provider_deployment(model_id, {})]))
+
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * catalog_row["input_cost_per_token"] + 500 * catalog_row["output_cost_per_token"]
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() -> None:
+    """Rates the deployment sets win, rates it leaves out come from the pricing provider's row for the
+    backend model rather than defaulting to 0 because the routing provider has no row."""
+    model_id: Final = "glm52-priced-as-baseten-custom"
+    catalog_row: Final = copy.deepcopy(litellm.model_cost[_COLLIDING_BUILTIN_KEY])
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    rates: Final = {"input_cost_per_token": 0.00000096, "output_cost_per_token": 0.00000302}
+    try:
+        router: Final = Router(model_list=[_pricing_provider_deployment(model_id, rates)])
+
+        registered: Final = litellm.model_cost[model_id]
+        assert {key: registered[key] for key in rates} == rates
+        assert registered["cache_read_input_token_cost"] == catalog_row["cache_read_input_token_cost"]
+        assert _glm_completion(router)._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+        assert litellm.model_cost[_COLLIDING_BUILTIN_KEY] == catalog_row
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
