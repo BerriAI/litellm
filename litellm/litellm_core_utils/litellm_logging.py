@@ -47,6 +47,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
+    SILENT_EXPERIMENT_METADATA_KEY,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -305,7 +306,7 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
-    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY)
+    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
 )
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
@@ -6435,6 +6436,11 @@ class StandardLoggingPayloadSetup:
             used_client_oauth_token=resolve_used_client_oauth_token(
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
+            ),
+            is_silent_experiment=(
+                metadata is not None
+                and SILENT_EXPERIMENT_METADATA_KEY in metadata
+                and metadata[SILENT_EXPERIMENT_METADATA_KEY] is True
             ),
         )
         if isinstance(metadata, dict):

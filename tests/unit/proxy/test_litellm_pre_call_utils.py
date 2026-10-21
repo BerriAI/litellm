@@ -23,6 +23,7 @@ from litellm.constants import (
     SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    SILENT_EXPERIMENT_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -8278,12 +8279,12 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
 
 _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
-    "is_silent_experiment": True,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
+    SILENT_EXPERIMENT_METADATA_KEY: True,
     "client_key": "client_value",
 }
 
@@ -8313,7 +8314,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
 
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
-    assert "is_silent_experiment" not in updated["metadata"]
+    assert SILENT_EXPERIMENT_METADATA_KEY not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]

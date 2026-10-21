@@ -31,6 +31,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
+    SILENT_EXPERIMENT_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.constants import (
@@ -290,7 +291,8 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
-        is_silent_experiment="is_silent_experiment" in metadata and metadata["is_silent_experiment"] is True,
+        is_silent_experiment=SILENT_EXPERIMENT_METADATA_KEY in metadata
+        and metadata[SILENT_EXPERIMENT_METADATA_KEY] is True,
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )

@@ -43,6 +43,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    SILENT_EXPERIMENT_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
@@ -469,12 +470,12 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logg
 _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
-        "is_silent_experiment",
         "original_model_group",
         "previous_models",
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+        SILENT_EXPERIMENT_METADATA_KEY,
     }
 )
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
