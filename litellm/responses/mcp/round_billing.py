@@ -10,7 +10,6 @@ from pydantic_core import to_jsonable_python
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
@@ -90,9 +89,9 @@ def _usage_of_both_rounds(
 
 
 def _repeated_fixed_margin(
-    first: ResponsesAPIResponse | ModelResponse | OpenAIDecisionResponse,
+    first: ResponsesAPIResponse | ModelResponse,
     first_breakdown: CostBreakdown | None,
-    final: ResponsesAPIResponse | ModelResponse | OpenAIDecisionResponse,
+    final: ResponsesAPIResponse | ModelResponse,
     final_breakdown: CostBreakdown | None,
 ) -> float:
     if first_breakdown is None or final_breakdown is None or first_breakdown is final_breakdown:
@@ -118,9 +117,9 @@ def breakdown_less_repeated_fixed_margin(
 
 
 def summed_cost_breakdown(
-    first: ResponsesAPIResponse | ModelResponse | OpenAIDecisionResponse,
+    first: ResponsesAPIResponse | ModelResponse,
     first_breakdown: CostBreakdown | None,
-    final: ResponsesAPIResponse | ModelResponse | OpenAIDecisionResponse,
+    final: ResponsesAPIResponse | ModelResponse,
     final_breakdown: CostBreakdown | None,
 ) -> CostBreakdown | None:
     """The breakdown of the charged rounds, or None when a charged round was priced without its own breakdown, since a

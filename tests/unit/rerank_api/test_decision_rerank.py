@@ -7,9 +7,10 @@ import pytest
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.cost_calculator import _decision_rerank_breakdown
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import return_raw_request
 
 MODEL: Final = "typesafe/jevrank-unit-test"
@@ -379,9 +380,7 @@ async def test_multiple_choice_ranks_one_whole_set_and_bills_once(sync, respx_mo
 @pytest.mark.parametrize(
     "probabilities",
     [
-        {"p0": 1},
         {"p0": 0.5, "wrong": 0.5},
-        {"p0": 0.5, "p1": 0.5, "extra": 0},
         {"p0": 0.8, "p1": 0.8},
         {"p0": -0.1, "p1": 1.1},
         {"p0": 0, "p1": 0},
@@ -395,6 +394,64 @@ async def test_multiple_choice_rejects_malformed_distributions(probabilities, re
             documents=["first", "second"],
             decision_rerank={"strategy": "multiple_choice"},
         )
+
+
+@pytest.mark.parametrize(
+    "model,url",
+    [
+        (MODEL, URL),
+        ("perplexity/pplx-unit-test", "https://api.perplexity.ai/v1/decisions"),
+        ("openai/decision-unit-test", "https://api.openai.com/v1/decisions"),
+    ],
+)
+@pytest.mark.parametrize("probabilities", [{"p0": 1}, {"p0": 1, "p1": 0, "extra": 0}])
+async def test_multiple_choice_uses_existing_decisions_normalization(model, url, probabilities, respx_mock):
+    if model.startswith("openai/"):
+        upstream = httpx.Response(
+            200,
+            json={
+                "model": "decision-unit-test",
+                "answers": [
+                    {
+                        "type": "choice",
+                        "name": "relevance",
+                        "choice": "p0",
+                        "confidence": 1,
+                        "probabilities": [
+                            {"value": label, "probability": score} for label, score in probabilities.items()
+                        ],
+                    }
+                ],
+                "usage": {"input_tokens": 20, "output_tokens": 0, "total_tokens": 20},
+            },
+        )
+    else:
+        upstream = choice_response(probabilities)
+    route = respx_mock.post(url).mock(return_value=upstream)
+    native = await litellm.adecisions(
+        model=model,
+        api_key="test-key",
+        input="warranty",
+        questions=[
+            {
+                "type": "choice",
+                "name": "relevance",
+                "instructions": "Which passage is most relevant?",
+                "choices": [{"value": "p0"}, {"value": "p1"}],
+            }
+        ],
+    )
+    result = await rerank(
+        False,
+        model=model,
+        documents=["one", "two"],
+        decision_rerank={"strategy": "multiple_choice"},
+    )
+    native_scores = tuple(item.probability for item in native.answers[0].probabilities)
+    assert native_scores == (1, 0)
+    assert tuple(item["relevance_score"] for item in result.results) == native_scores
+    assert tuple(item["index"] for item in result.results) == (0, 1)
+    assert route.call_count == 2
 
 
 async def test_multiple_choice_rejects_excess_mass_at_maximum_candidate_count(
@@ -560,7 +617,7 @@ async def test_direct_token_price_override_is_respected(respx_mock):
         ],
     ],
 )
-async def test_openai_choice_duplicate_labels_and_nonfinite_scores_rejected(probabilities, respx_mock):
+async def test_openai_choice_invalid_normalized_scores_rejected(probabilities, respx_mock):
     payload = {
         "model": "test-decision",
         "answers": [
@@ -584,6 +641,38 @@ async def test_openai_choice_duplicate_labels_and_nonfinite_scores_rejected(prob
             documents=["one", "two"],
             decision_rerank={"strategy": "multiple_choice"},
         )
+
+
+async def test_openai_choice_duplicate_labels_use_native_last_value(respx_mock):
+    respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "test-decision",
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "relevance",
+                    "choice": "p0",
+                    "confidence": 0.7,
+                    "probabilities": [
+                        {"value": "p0", "probability": 0.2},
+                        {"value": "p0", "probability": 0.7},
+                        {"value": "p1", "probability": 0.3},
+                    ],
+                }
+            ],
+            "usage": {"input_tokens": 20, "output_tokens": 0, "total_tokens": 20},
+        }
+    )
+    result = await rerank(
+        False,
+        model="openai/test-decision",
+        documents=["one", "two"],
+        decision_rerank={"strategy": "multiple_choice"},
+    )
+    assert result.results == [
+        {"index": 0, "relevance_score": 0.7},
+        {"index": 1, "relevance_score": 0.3},
+    ]
 
 
 async def test_success_cache_hit_reuses_aggregate_response_without_new_provider_calls(respx_mock, monkeypatch):
@@ -697,6 +786,50 @@ async def test_fixed_margin_uses_the_pricing_provider_for_aggregate_and_breakdow
     assert logger.events[0]["response_cost"] == pytest.approx(expected)
     assert logger.events[0]["cost_breakdown"]["total_cost"] == pytest.approx(expected)
     assert logger.events[0]["cost_breakdown"]["margin_fixed_amount"] == pytest.approx(0.02)
+
+
+def test_aggregate_breakdown_adds_charges_and_preserves_pricing_metadata():
+    first: Final[CostBreakdown] = {
+        "input_cost": 0.02,
+        "total_cost": 0.034,
+        "additional_costs": {"request": 0.004},
+        "discount_percent": 0.1,
+        "margin_percent": 0.2,
+        "margin_fixed_amount": 0.01,
+        "margin_total_amount": 0.014,
+        "service_tier": "default",
+        "data_residency": "us",
+        "vertex_location": None,
+    }
+    second: Final[CostBreakdown] = {
+        **first,
+        "input_cost": 0.04,
+        "total_cost": 0.058,
+        "additional_costs": {"request": 0.004, "other": 0.002},
+        "margin_total_amount": 0.018,
+    }
+    actual = _decision_rerank_breakdown((first, second), repeated_fixed=0.01)
+    assert actual is not None
+    assert actual["input_cost"] == pytest.approx(0.06)
+    assert actual["total_cost"] == pytest.approx(0.082)
+    assert actual["margin_total_amount"] == pytest.approx(0.022)
+    assert actual["additional_costs"] == {"request": pytest.approx(0.008), "other": pytest.approx(0.002)}
+    for key in (
+        "discount_percent",
+        "margin_percent",
+        "margin_fixed_amount",
+        "service_tier",
+        "data_residency",
+        "vertex_location",
+    ):
+        assert actual[key] == second[key]
+
+
+@pytest.mark.parametrize("missing_first", [True, False])
+def test_aggregate_breakdown_does_not_publish_partial_totals(missing_first):
+    priced: Final[CostBreakdown] = {"input_cost": 0.02, "total_cost": 0.02}
+    breakdowns = (None, priced) if missing_first else (priced, None)
+    assert _decision_rerank_breakdown(breakdowns, repeated_fixed=0) is None
 
 
 async def test_cancelled_child_fails_whole_request_and_bills_completed_usage(respx_mock, monkeypatch):

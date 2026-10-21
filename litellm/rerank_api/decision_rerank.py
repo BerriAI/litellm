@@ -21,15 +21,13 @@ import litellm
 from litellm.decisions.call import (
     DecisionsCall,
     OpenAIDecisionRequestFields,
-    asend_result,
+    asend,
     prepare_call,
-    send_result,
+    send,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.decisions import (
-    DecisionsIRChoiceAnswer,
-    DecisionsIRRefusal,
-    DecisionsIRResponse,
+    OpenAIChoiceAnswer,
     OpenAIDecisionResponse,
     OpenAIPredicateAnswer,
     OpenAIRefusalAnswer,
@@ -96,7 +94,6 @@ class _DocumentCall:
 class _Outcome:
     document: _DocumentCall
     response: OpenAIDecisionResponse | None = None
-    ir_response: DecisionsIRResponse | None = None
     error: Exception | None = None
 
 
@@ -120,10 +117,9 @@ def _send(document: _DocumentCall, deadline: float) -> _Outcome:
     if isinstance(call, litellm.Timeout):
         return _Outcome(document, error=call)
     try:
-        result: Final = send_result(call)
-        response: Final = result.response
+        response: Final = send(call)
         if isinstance(response, OpenAIDecisionResponse):
-            return _Outcome(document, response=response, ir_response=result.ir_response)
+            return _Outcome(document, response=response)
         return _Outcome(document, error=_invalid_response(document, "expected a Decisions response"))
     except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
         return _Outcome(document, error=error)
@@ -135,10 +131,9 @@ async def _asend(document: _DocumentCall, deadline: float, semaphore: asyncio.Se
         if isinstance(call, litellm.Timeout):
             return _Outcome(document, error=call)
         try:
-            result: Final = await asend_result(call)
-            response: Final = result.response
+            response: Final = await asend(call)
             if isinstance(response, OpenAIDecisionResponse):
-                return _Outcome(document, response=response, ir_response=result.ir_response)
+                return _Outcome(document, response=response)
             return _Outcome(
                 document,
                 error=_invalid_response(document, "expected a Decisions response"),
@@ -194,17 +189,17 @@ def _is_refusal(response: OpenAIDecisionResponse) -> bool:
 def _choice_scores(outcome: _Outcome, request: _Request) -> tuple[float, ...] | Exception:
     if outcome.error is not None:
         return outcome.error
-    response: Final = outcome.ir_response
+    response: Final = outcome.response
     if response is None or len(response.answers) != 1:
         return _invalid_response(outcome.document, "expected one choice answer")
     answer: Final = response.answers[0]
-    if isinstance(answer, DecisionsIRRefusal):
+    if isinstance(answer, OpenAIRefusalAnswer):
         return litellm.ContentPolicyViolationError(
             message="Decision model refused to rank the candidate set",
             model=outcome.document.call.requested_model,
             llm_provider=outcome.document.call.custom_llm_provider,
         )
-    if not isinstance(answer, DecisionsIRChoiceAnswer):
+    if not isinstance(answer, OpenAIChoiceAnswer) or answer.name != "relevance":
         return _invalid_response(outcome.document, "expected the relevance choice")
     labels: Final = tuple(f"p{index}" for index in range(len(request.documents)))
     probabilities: Final = {item.value: item.probability for item in answer.probabilities}

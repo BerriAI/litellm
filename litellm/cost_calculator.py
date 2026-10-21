@@ -5,7 +5,7 @@ import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache, partial, reduce
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -1501,6 +1501,43 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _decision_rerank_breakdown(
+    breakdowns: Sequence[CostBreakdown | None], repeated_fixed: float
+) -> CostBreakdown | None:
+    complete: Final = tuple(item for item in breakdowns if item is not None)
+    if not complete or len(complete) != len(breakdowns):
+        return None
+    monetary_fields: Final = (
+        "input_cost",
+        "cache_read_cost",
+        "cache_creation_cost",
+        "output_cost",
+        "reasoning_cost",
+        "total_cost",
+        "tool_usage_cost",
+        "guardrail_cost",
+        "original_cost",
+        "discount_amount",
+        "margin_total_amount",
+    )
+    totals: Final = {
+        key: sum(value for item in complete if isinstance(value := item.get(key), (int, float)))
+        for key in monetary_fields
+        if any(key in item for item in complete)
+    }
+    additional_keys: Final = frozenset[str]().union(*(item.get("additional_costs", {}) for item in complete))
+    return TypeAdapter(CostBreakdown).validate_python(
+        {
+            **complete[-1],
+            **totals,
+            "additional_costs": {
+                key: sum(item.get("additional_costs", {}).get(key, 0.0) for item in complete) for key in additional_keys
+            },
+            **{key: totals[key] - repeated_fixed for key in ("total_cost", "margin_total_amount") if key in totals},
+        }
+    )
+
+
 def _decision_rerank_cost(
     responses: Sequence[OpenAIDecisionResponse],
     price: Callable[[OpenAIDecisionResponse], float],
@@ -1508,8 +1545,6 @@ def _decision_rerank_cost(
     provider: str | None,
     custom_pricing: bool,
 ) -> float:
-    from litellm.responses.mcp.round_billing import summed_cost_breakdown
-
     def price_child(
         response: OpenAIDecisionResponse,
     ) -> tuple[float, CostBreakdown | None, float]:
@@ -1531,18 +1566,9 @@ def _decision_rerank_cost(
     prices: Final = tuple(price_child(response) for response in responses)
     repeated_fixed: Final = sum(item[2] for item in prices) - max((item[2] for item in prices), default=0.0)
 
-    def merge_breakdown(
-        accumulated: CostBreakdown | None,
-        item: tuple[OpenAIDecisionResponse, tuple[float, CostBreakdown | None, float]],
-    ) -> CostBreakdown | None:
-        return summed_cost_breakdown(responses[0], accumulated, item[0], item[1][1])
-
     if logging_obj is not None and responses:
-        logging_obj.cost_breakdown = reduce(  # rebind-ok: the outer request logs the aggregate rather than the last child
-            merge_breakdown,
-            zip(responses[1:], prices[1:], strict=True),
-            prices[0][1],
-        )
+        combined: Final = _decision_rerank_breakdown(tuple(item[1] for item in prices), repeated_fixed)
+        logging_obj.cost_breakdown = combined  # rebind-ok: log the aggregate rather than the last child
     return sum(item[0] for item in prices) - repeated_fixed
 
 

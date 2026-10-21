@@ -210,12 +210,6 @@ class DecisionsCall:
     caller_questions: tuple[DecisionsIRQuestion, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class DecisionsResult:
-    ir_response: DecisionsIRResponse
-    response: DecisionsResponse | OpenAIDecisionResponse
-
-
 def supported_decisions_providers() -> tuple[str, ...]:
     return tuple(
         provider.value
@@ -756,7 +750,7 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
             )
 
 
-async def asend_result(call: DecisionsCall) -> DecisionsResult:
+async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -777,10 +771,10 @@ async def asend_result(call: DecisionsCall) -> DecisionsResult:
         )
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
-    return DecisionsResult(ir_response=response, response=_format_response(response, inlined))
+    return _format_response(response, inlined)
 
 
-def send_result(call: DecisionsCall) -> DecisionsResult:
+def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -801,15 +795,7 @@ def send_result(call: DecisionsCall) -> DecisionsResult:
         )
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
-    return DecisionsResult(ir_response=response, response=_format_response(response, inlined))
-
-
-async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    return (await asend_result(call)).response
-
-
-def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    return send_result(call).response
+    return _format_response(response, inlined)
 
 
 def reject_other_format(*, model: str, kwargs: Mapping[str, object], field_name: str, other_function: str) -> None:
