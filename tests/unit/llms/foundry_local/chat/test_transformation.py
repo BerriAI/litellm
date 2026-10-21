@@ -11,11 +11,17 @@ from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("foundry_local/local-model:1", None), ("local-model:1", "foundry_local")],
+)
+@pytest.mark.parametrize(
     ("api_base", "api_key", "env_base", "env_key", "expected_base", "expected_key"),
     [
         (None, None, None, None, None, "fake-api-key"),
         (None, None, "http://127.0.0.1:61234/v1", None, "http://127.0.0.1:61234/v1", "fake-api-key"),
         (None, None, "http://127.0.0.1:61234/v1", "env-key", "http://127.0.0.1:61234/v1", "env-key"),
+        ("http://localhost:5272/v1", None, None, "env-key", "http://localhost:5272/v1", "env-key"),
+        (None, "explicit-key", "http://127.0.0.1:61234/v1", None, "http://127.0.0.1:61234/v1", "explicit-key"),
         ("http://localhost:5272/v1", "explicit-key", None, None, "http://localhost:5272/v1", "explicit-key"),
         (
             "http://localhost:5272/v1",
@@ -29,6 +35,8 @@ from litellm.types.utils import ModelResponse
 )
 def test_should_resolve_foundry_endpoint_and_credentials(
     monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str | None,
     api_base: str | None,
     api_key: str | None,
     env_base: str | None,
@@ -43,7 +51,7 @@ def test_should_resolve_foundry_endpoint_and_credentials(
     if env_key is not None:
         monkeypatch.setenv("FOUNDRY_LOCAL_API_KEY", env_key)
 
-    assert get_llm_provider("foundry_local/local-model:1", api_base=api_base, api_key=api_key) == (
+    assert get_llm_provider(model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key) == (
         "local-model:1",
         "foundry_local",
         expected_key,

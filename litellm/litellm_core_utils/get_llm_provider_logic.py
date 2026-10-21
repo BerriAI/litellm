@@ -736,10 +736,10 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.LMStudioChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "foundry_local":
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.FoundryLocalChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+        foundry_api_base, foundry_api_key = litellm.FoundryLocalChatConfig().get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        return model, custom_llm_provider, foundry_api_key, foundry_api_base
     elif custom_llm_provider == "deepseek":
         # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
         api_base = api_base or get_secret("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"
