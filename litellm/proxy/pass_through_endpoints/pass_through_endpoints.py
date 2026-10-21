@@ -2403,15 +2403,21 @@ def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
 
 def _truncated_close_reason(reason: str) -> str:
     """
-    Fit a close reason inside the byte budget a WebSocket close frame allows, ending on the last whole sentence
-    that fits when there is one and never splitting a character
+    Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
     """
     encoded: Final = reason.encode("utf-8")
     if len(encoded) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES:
         return reason
-    clipped: Final = encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+    return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
+def _refusal_close_reason(message: str) -> str:
+    """
+    The proxy's own refusal message as a close reason, ending on the last whole sentence that fits
+    """
+    clipped: Final = _truncated_close_reason(message)
     sentence_end: Final = clipped.rfind(". ")
-    return clipped if sentence_end == -1 else clipped[: sentence_end + 1]
+    return clipped if clipped == message or sentence_end == -1 else clipped[: sentence_end + 1]
 
 
 SENDABLE_CLOSE_CODES: Final = frozenset(CloseCode) - frozenset(
@@ -2486,7 +2492,7 @@ async def _relay_client_frame(
     if refusal is None:
         await upstream_ws.send(forwarded_frame)
         return None
-    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_truncated_close_reason(refusal.message))
+    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
     return refusal
 
 
@@ -2663,16 +2669,17 @@ async def websocket_passthrough_request(
                         bytes_data: bytes | None = message.get("bytes")
 
                         if text_data is not None:
-                            refusal = await _relay_client_frame(
-                                websocket,
-                                upstream_ws,
-                                text_data,
-                                _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
-                                client_frame_gate,
-                                user_api_key_dict,
-                            )
-                            if refusal is not None:
-                                return refusal
+                            if (
+                                text_refusal := await _relay_client_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    text_data,
+                                    _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
+                                    client_frame_gate,
+                                    user_api_key_dict,
+                                )
+                            ) is not None:
+                                return text_refusal
                             # Try to extract model from client setup message for Vertex AI Live
                             if endpoint and "/vertex_ai/live" in endpoint:
                                 verbose_proxy_logger.debug(
@@ -2730,16 +2737,17 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                         elif bytes_data is not None:
-                            refusal = await _relay_client_frame(
-                                websocket,
-                                upstream_ws,
-                                bytes_data,
-                                bytes_data,
-                                client_frame_gate,
-                                user_api_key_dict,
-                            )
-                            if refusal is not None:
-                                return refusal
+                            if (
+                                bytes_refusal := await _relay_client_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    bytes_data,
+                                    bytes_data,
+                                    client_frame_gate,
+                                    user_api_key_dict,
+                                )
+                            ) is not None:
+                                return bytes_refusal
                 except asyncio.CancelledError:
                     raise
                 except Exception:
