@@ -3369,6 +3369,25 @@ async def test_streamable_mcp_oversized_setup_request_obeys_virtual_key_rpm_limi
 
 
 @pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_dispatches_without_virtual_key_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-unlimited-key")
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "params": {"_meta": {"pad": "x" * 5000}},
+                "method": "tools/list",
+            }
+        ).encode()
+        await request("tools/list", oversized_body)
+
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_streamable_mcp_tools_call_is_not_charged_by_setup_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     auth: Final = UserAPIKeyAuth(api_key="mcp-tools-call-rpm-key", rpm_limit=1)
     async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):

@@ -2388,10 +2388,13 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
 
 
 @pytest.mark.asyncio
-async def test_mcp_routing_full_body_fallback_replays_oversized_chunked_body():
+async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     """
-    A no-session-id POST with a truncated routing peek should read the full
-    body for charge resolution, then replay every chunk to the downstream handler.
+    A no-session-id POST with a very large chunked body should not force
+    the proxy to buffer the entire body just to decide routing — the peek
+    should stop once ``_MCP_ROUTING_PEEK_MAX_BYTES`` worth of body has been
+    consumed, and the remaining chunks should stream through the original
+    receive into the downstream handler.
     """
     try:
         from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -2468,8 +2471,12 @@ async def test_mcp_routing_full_body_fallback_replays_oversized_chunked_body():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert receive_count_at_dispatch["value"] == len(messages), (
-        "charge resolution should read every chunk after the routing peek is truncated"
+    # The routing peek must stop pulling from the wire once the cap is reached.
+    # Without the cap fix, every chunk would have been pulled before dispatch,
+    # so this assertion guards against unbounded pre-dispatch buffering.
+    assert receive_count_at_dispatch["value"] == 1, (
+        "routing should stop reading after the peek cap is filled, "
+        f"but consumed {receive_count_at_dispatch['value']} chunks before dispatching"
     )
     # All chunks must still reach the downstream handler via replay+stream.
     total_streamed = sum(len(b) for b in stateless_received_chunks)
@@ -2514,7 +2521,7 @@ async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
     received: Final[asyncio.Future[bytes]] = asyncio.get_running_loop().create_future()
 
     async def handle_request(incoming: Scope, downstream_receive: Receive, outgoing: Send) -> None:
-        assert receive.await_count == len(messages)
+        assert receive.await_count == (2 if chunked else 1)
         received.set_result(await _drain_body(downstream_receive))
 
         async def dispatch(context):
@@ -2526,16 +2533,12 @@ async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
 
     stateless_handle: Final = AsyncMock(side_effect=handle_request)
     stateful_handle: Final = AsyncMock()
-    max_request_body_size: Final = mcp_module.session_manager_stateless.max_request_body_size
     scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
     with (
         _client_allowlist_patches({}, None),
         patch(
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(
-                handle_request=stateless_handle,
-                max_request_body_size=max_request_body_size,
-            ),
+            SimpleNamespace(handle_request=stateless_handle),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
