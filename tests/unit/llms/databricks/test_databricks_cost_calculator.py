@@ -32,6 +32,7 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
