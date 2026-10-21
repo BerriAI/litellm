@@ -181,6 +181,13 @@ def test_tools_and_reasoning_effort_reach_zerogpu_only_for_models_that_support_t
     }
 
 
+@pytest.mark.parametrize("model", ZEROGPU_MODELS)
+def test_model_info_reports_the_reasoning_support_litellm_routes_with(model: str):
+    model_info: Final = litellm.get_model_info(f"zerogpu/{model}")
+
+    assert bool(model_info.get("supports_reasoning")) == litellm.utils.supports_reasoning(f"zerogpu/{model}")
+
+
 def test_zerogpu_key_and_base_come_from_zerogpu_env_vars(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ZEROGPU_API_KEY", "zerogpu-env-key")
     monkeypatch.delenv("ZEROGPU_API_BASE", raising=False)
