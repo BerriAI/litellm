@@ -2111,15 +2111,15 @@ class TestCommonRequestProcessingHelpers:
             ),  # Valid string-integer code
             (
                 'data: {"error": {"code": "invalid_code", "message": "error"}}',
-                None,
+                500,
             ),  # Invalid string code
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
-                None,
+                500,
             ),  # Integer code too low
             (
                 'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
+                500,
             ),  # Integer code too high
             (
                 'data: {"id": "123", "content": "hello"}',
@@ -2134,11 +2134,11 @@ class TestCommonRequestProcessingHelpers:
             ("id: 123", None),  # Non-SSE event line
             (
                 'data: {"error": {"message": "some error"}}',
-                None,
+                500,
             ),  # Error event without 'code' field
             (
                 'data: {"error": {"code": null, "message": "code is null"}}',
-                None,
+                500,
             ),  # Error with null code
         ],
     )
