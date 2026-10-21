@@ -12827,6 +12827,7 @@
         "supports_vision": true
     },
     "azure_ai/Phi-4": {
+        "deprecation_date": "2027-01-17",
         "input_cost_per_token": 1.25e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 16384,
@@ -12840,6 +12841,7 @@
         "supports_vision": false
     },
     "azure_ai/Phi-4-mini-instruct": {
+        "deprecation_date": "2027-01-17",
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -12851,6 +12853,7 @@
         "supports_function_calling": true
     },
     "azure_ai/Phi-4-multimodal-instruct": {
+        "deprecation_date": "2027-01-17",
         "input_cost_per_audio_token": 4e-06,
         "input_cost_per_token": 8e-08,
         "litellm_provider": "azure_ai",
@@ -12865,6 +12868,7 @@
         "supports_vision": true
     },
     "azure_ai/Phi-4-mini-reasoning": {
+        "deprecation_date": "2027-01-17",
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -12876,6 +12880,7 @@
         "supports_function_calling": true
     },
     "azure_ai/Phi-4-reasoning": {
+        "deprecation_date": "2027-01-17",
         "input_cost_per_token": 1.25e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32768,
