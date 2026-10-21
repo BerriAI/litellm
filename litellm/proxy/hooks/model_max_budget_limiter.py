@@ -55,6 +55,8 @@ _GLOB_WILDCARD: Final = "*"
 
 ModelAccessGroups: TypeAlias = Callable[[str], Collection[str]]
 
+AccessGroupMembers: TypeAlias = Callable[[str], Collection[str]]
+
 _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
     {
         Litellm_EntityType.KEY: "virtual_key_budget_start_time",
@@ -153,6 +155,16 @@ def proxy_model_access_groups(model: str) -> frozenset[str]:
     return frozenset(llm_router.get_model_access_groups(model_name=model))
 
 
+def proxy_access_group_members(access_group: str) -> frozenset[str]:
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except ImportError:
+        return frozenset()
+    if llm_router is None:
+        return frozenset()
+    return frozenset(llm_router.get_model_access_groups(model_access_group=access_group).get(access_group, ()))
+
+
 def resolve_model_budget(
     model: str,
     model_max_budget: Mapping[str, object],
@@ -221,6 +233,47 @@ def _after_piece(name: str, end: int) -> Callable[[int, str], int]:
 
 def _glob_precedence(pattern: str) -> tuple[tuple[int, int], str]:
     return PatternUtils.calculate_pattern_specificity(pattern), pattern
+
+
+def entries_outranked_by(
+    entry: str,
+    model_max_budget: Collection[str],
+    access_group_members: AccessGroupMembers = proxy_access_group_members,
+) -> Iterator[str]:
+    """Entries that `entry` can take precedence over for some request model.
+
+    A pattern can match a provider-prefixed or wildcard-routed name whose
+    candidates or access groups include any other entry, so patterns are taken
+    to overlap: a pattern outranks every less specific pattern, and a model or
+    group entry outranks every pattern.
+    """
+    if _GLOB_WILDCARD in entry:
+        entry_precedence: Final = _glob_precedence(entry)
+        yield from (
+            other
+            for other in model_max_budget
+            if _GLOB_WILDCARD in other and _glob_precedence(other) < entry_precedence
+        )
+        return
+    yield from (other for other in model_max_budget if _GLOB_WILDCARD in other)
+    entry_members: Final = frozenset(access_group_members(entry))
+    yield from (
+        other
+        for other in model_max_budget
+        if _GLOB_WILDCARD not in other
+        and _ranks_ahead_of_group(
+            entry=entry, entry_members=entry_members, group=other, group_members=access_group_members(other)
+        )
+    )
+
+
+def _ranks_ahead_of_group(entry: str, entry_members: frozenset[str], group: str, group_members: Iterable[str]) -> bool:
+    return any(
+        _GLOB_WILDCARD in member
+        or entry in _budget_model_candidates(member)
+        or (member in entry_members and entry < group)
+        for member in group_members
+    )
 
 
 def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget | None:

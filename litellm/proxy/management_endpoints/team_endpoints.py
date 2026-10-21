@@ -137,7 +137,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
+    AccessGroupMembers,
     build_model_max_budget_usage,
+    entries_outranked_by,
+    proxy_access_group_members,
     resolve_model_budget,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
@@ -1427,6 +1430,7 @@ def _check_team_model_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_model_max_budget: Mapping[str, object] | None,
+    access_group_members: AccessGroupMembers = proxy_access_group_members,
 ) -> None:
     """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap."""
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
@@ -1454,11 +1458,7 @@ def _check_team_model_budget_update_authority(
         cap = governing.budget_config
         if cap.max_budget is None:
             continue
-        if (
-            proposed.max_budget is None
-            or proposed.max_budget > cap.max_budget
-            or proposed.budget_duration != cap.budget_duration
-        ):
+        if _looser_model_cap(proposed=proposed, cap=cap):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -1470,6 +1470,73 @@ def _check_team_model_budget_update_authority(
                     )
                 },
             )
+    for model_name, proposed in requested.items():
+        _check_outranked_model_caps(
+            entry=model_name,
+            proposed=proposed,
+            existing_model_max_budget=existing_model_max_budget,
+            access_group_members=access_group_members,
+        )
+
+
+def _check_outranked_model_caps(
+    entry: str,
+    proposed: BudgetConfig,
+    existing_model_max_budget: Mapping[str, object],
+    access_group_members: AccessGroupMembers,
+) -> None:
+    if _keeps_or_tightens(proposed=proposed, existing=_existing_model_cap(existing_model_max_budget.get(entry))):
+        return
+    outranked: Final = next(
+        _looser_than_outranked_caps(entry, proposed, existing_model_max_budget, access_group_members), None
+    )
+    if outranked is None:
+        return
+    outranked_name, cap = outranked
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can set a team's model_max_budget entry {entry!r} looser than "
+                f"{outranked_name!r}, which it can take precedence over. Current max_budget={cap.max_budget} per "
+                f"{cap.budget_duration} (entry {outranked_name!r}), requested={proposed.max_budget} per "
+                f"{proposed.budget_duration}."
+            )
+        },
+    )
+
+
+def _looser_than_outranked_caps(
+    entry: str,
+    proposed: BudgetConfig,
+    existing_model_max_budget: Mapping[str, object],
+    access_group_members: AccessGroupMembers,
+) -> Iterator[tuple[str, BudgetConfig]]:
+    outranked_caps: Final = (
+        (outranked, _existing_model_cap(existing_model_max_budget[outranked]))
+        for outranked in entries_outranked_by(
+            entry=entry, model_max_budget=existing_model_max_budget, access_group_members=access_group_members
+        )
+    )
+    yield from (
+        (outranked, cap)
+        for outranked, cap in outranked_caps
+        if cap is not None and cap.max_budget is not None and _looser_model_cap(proposed=proposed, cap=cap)
+    )
+
+
+def _keeps_or_tightens(proposed: BudgetConfig, existing: BudgetConfig | None) -> bool:
+    return existing is not None and (
+        existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing)
+    )
+
+
+def _looser_model_cap(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
+    return (
+        proposed.max_budget is None
+        or (cap.max_budget is not None and proposed.max_budget > cap.max_budget)
+        or proposed.budget_duration != cap.budget_duration
+    )
 
 
 def _should_auto_add_team_creator(
