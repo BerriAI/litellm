@@ -1,4 +1,5 @@
 # ruff: noqa: T201
+import functools
 import importlib
 import json
 import os
@@ -7,7 +8,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -209,6 +210,21 @@ def _print_enforce_prisma_migration_check_notice() -> None:
         "deprecated and has no effect, because the proxy always exits "
         "when database setup fails at startup. You can safely remove it.\033[0m",
     )
+
+
+def _print_or_hold_enforce_prisma_migration_check_notice(
+    *, reads_config_file: bool, returns_before_config: bool
+) -> Callable[[], None] | None:
+    """Print the notice now, or, while a config file can still switch json_logs on, return a printer
+    to call once it is read; a boot that fails before that prints the held notice on the way out."""
+    if not reads_config_file or litellm.json_logs or returns_before_config:
+        _print_enforce_prisma_migration_check_notice()
+        return None
+    print_once: Final = functools.cache(_print_enforce_prisma_migration_check_notice)
+    ctx: Final = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.call_on_close(print_once)
+    return print_once
 
 
 class ProxyInitializationHelpers:
@@ -1185,11 +1201,15 @@ def run_server(
     if validate_config is True:
         ProxyInitializationHelpers.run_config_validation(config)
         return
+    held_prisma_notice: Final = (
+        _print_or_hold_enforce_prisma_migration_check_notice(
+            reads_config_file=config is not None, returns_before_config=health is True or test is True
+        )
+        if enforce_prisma_migration_check
+        else None
+    )
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers.run_ollama_serve()
-    if enforce_prisma_migration_check and (health is True or test is True):
-        # --health and --test return before the config is read, where a server start emits the notice
-        _print_enforce_prisma_migration_check_notice()
     if health is True:
         ProxyInitializationHelpers.run_health_check(host, port)
         return
@@ -1309,6 +1329,8 @@ def run_server(
                 os.environ["JSON_LOGS"] = "true"
 
                 litellm.turn_on_json()
+            if held_prisma_notice is not None:
+                held_prisma_notice()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -1371,9 +1393,6 @@ def run_server(
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
 
-        # After the config is read, so a json_logs set only in the config applies to this notice too.
-        if enforce_prisma_migration_check:
-            _print_enforce_prisma_migration_check_notice()
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
             # Use helper function to construct DATABASE_URL from individual variables

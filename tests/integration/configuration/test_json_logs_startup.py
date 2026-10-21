@@ -8,7 +8,8 @@ startup information those lines used to carry is still present as JSON records. 
 on through the environment and through the config, at one and two uvicorn workers, at the INFO, the
 default and the WARNING log level, under a concurrent burst that lands on both workers, under an operator
 --log_config that names the proxy logger or gives it a handler of its own, and with a policy list longer
-than the stdout cap.
+than the stdout cap. The deprecated --enforce_prisma_migration_check notice is one JSON record under a
+config-only json_logs, and a boot whose config cannot be loaded still prints it before failing.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import yaml
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import owned_proxy_process, refused_boot_log
 
 JSON_RECORD: Final = TypeAdapter(dict[str, JsonValue])
 PLAIN_LOG_LINE: Final = re.compile(r"^\d\d:\d\d:\d\d - LiteLLM")
@@ -52,6 +53,9 @@ STDOUT_CAP: Final = 4096
 POLICY_COUNT: Final = 60
 POLICY_LIST_HEADER: Final = "LiteLLM Policy Engine: Loaded"
 TRUNCATION_MARKER: Final = "litellm_truncated"
+DEPRECATED_FLAG: Final = "--enforce_prisma_migration_check"
+DEPRECATED_FLAG_NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
+UNPARSEABLE_CONFIG: Final = "model_list: [\n  - bad: yaml: here\n"
 # an operator logging config of the usual shape: it sets the proxy logger's level and gives it no handler
 # of its own, and formats everything else, uvicorn included, as JSON through the root handler
 OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
@@ -346,6 +350,30 @@ def test_json_logs_burst_on_two_workers_keeps_every_line_json(gateway: Gateway, 
     plaintext: Final = _non_json_lines(text)
     assert plaintext == (), "plaintext lines with JSON logs on:\n" + "\n".join(plaintext)
     assert sum(STARTED_WORKER in message for message in _messages(text)) == 2, _messages(text)
+
+
+def test_json_logs_config_makes_the_deprecated_flag_notice_one_json_record(gateway: Gateway, tmp_path: Path) -> None:
+    """The notice waits until the config is read, so a json_logs set only there makes it a JSON record."""
+    models: Final = _models()
+    config: Final = _write_config(tmp_path, gateway.upstream_url, models, {"json_logs": True})
+    log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, 1, models, (DEPRECATED_FLAG,))
+    plaintext: Final = _non_json_lines(log)
+    assert plaintext == (), "plaintext lines with JSON logs on:\n" + "\n".join(plaintext)
+    assert sum(DEPRECATED_FLAG_NOTICE in message for message in _messages(log)) == 1, _messages(log)
+
+
+@pytest.mark.parametrize("config_text", (None, UNPARSEABLE_CONFIG), ids=("missing", "unparseable"))
+def test_a_config_that_fails_to_load_still_prints_the_deprecated_flag_notice(
+    gateway: Gateway, tmp_path: Path, config_text: str | None
+) -> None:
+    """A boot with the deprecated flag and a config file that does not exist or does not parse exits
+    non-zero, and it still prints the notice once before the error, as it did before the notice waited
+    for the config."""
+    config: Final = tmp_path / f"unloadable_{uuid.uuid4().hex}.yaml"
+    if config_text is not None:
+        config.write_text(config_text)
+    log: Final = refused_boot_log(gateway, tmp_path, {}, config=config, extra_arguments=(DEPRECATED_FLAG,))
+    assert log.count(DEPRECATED_FLAG_NOTICE) == 1, log
 
 
 def test_plain_logs_control_prints_startup_text(gateway: Gateway, tmp_path: Path) -> None:

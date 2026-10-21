@@ -3995,6 +3995,67 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {}) is None
 
 
+class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
+    """With a config file, the `--enforce_prisma_migration_check` deprecation notice waits until the config
+    is read, so a `json_logs: true` set only there makes it a JSON record. It is printed once either way,
+    and a boot whose config read fails still prints it before the error, as it did before the wait."""
+
+    NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
+
+    @staticmethod
+    def _boot(config_path: Path, get_config: AsyncMock) -> None:
+        mock_proxy_config: Final = MagicMock()
+        mock_proxy_config.return_value.get_config = get_config
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("atexit.register"),
+            patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
+        ):
+            run_server.main(
+                ["--config", str(config_path), "--local", "--skip_server_startup", "--enforce_prisma_migration_check"],
+                standalone_mode=False,
+            )
+
+    def test_a_config_read_that_fails_still_prints_the_notice(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+        missing: Final = tmp_path / "missing.yaml"
+
+        with pytest.raises(FileNotFoundError):
+            self._boot(missing, AsyncMock(side_effect=FileNotFoundError(f"Config file not found: {missing}")))
+
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
+
+    def test_a_plain_config_prints_the_notice_once(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+
+        self._boot(tmp_path / "config.yaml", AsyncMock(return_value={"model_list": [], "litellm_settings": {}}))
+
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
+
+    def test_a_config_only_json_logs_makes_the_notice_one_json_record(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
+        config: Final = {"model_list": [], "litellm_settings": {"json_logs": True}}
+
+        self._boot(tmp_path / "config.yaml", AsyncMock(return_value=config))
+
+        notice_lines: Final = [line for line in capsys.readouterr().out.splitlines() if self.NOTICE in line]
+        assert len(notice_lines) == 1, notice_lines
+        assert self.NOTICE in json.loads(notice_lines[0])["message"]
+
+
 def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
     """The yellow notices for the flags Granian ignores (`--max_requests_before_restart`, `--ciphers`) are
     printed while the launcher starts; with json_logs on they are INFO records on stdout like every other
