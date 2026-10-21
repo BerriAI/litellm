@@ -3,8 +3,9 @@
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
+import { DateCell, IdCell, IdentityCell, MoneyCell } from "@/components/shared/table_cells";
 import { DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { userDetailHref } from "@/utils/entityLinks";
 
 function TruncatedTextCell({ value }: { value: string | null | undefined }) {
   if (!value) {
@@ -13,6 +14,17 @@ function TruncatedTextCell({ value }: { value: string | null | undefined }) {
   return (
     <span className="block max-w-60 truncate" title={value}>
       {value}
+    </span>
+  );
+}
+
+function UserLinkCell({ userId }: { userId: string | null | undefined }) {
+  if (!userId) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+  return (
+    <span className="block max-w-60" title={userId}>
+      <IdentityCell title={userId} titleClassName="font-normal" href={userDetailHref(userId)} />
     </span>
   );
 }
@@ -89,7 +101,7 @@ export const getDeletedKeysTableColumns = (): ColumnDef<DeletedKeyResponse>[] =>
     header: "User ID",
     size: 120,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.user_id} variant="plain" />,
+    cell: ({ row }) => <UserLinkCell userId={row.original.user_id} />,
   },
   {
     id: "created_at",
@@ -107,7 +119,7 @@ export const getDeletedKeysTableColumns = (): ColumnDef<DeletedKeyResponse>[] =>
     header: "Created By",
     size: 120,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedTextCell value={row.original.created_by} />,
+    cell: ({ row }) => <UserLinkCell userId={row.original.created_by} />,
   },
   {
     id: "deleted_at",
@@ -125,6 +137,6 @@ export const getDeletedKeysTableColumns = (): ColumnDef<DeletedKeyResponse>[] =>
     header: "Deleted By",
     size: 120,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedTextCell value={row.original.deleted_by} />,
+    cell: ({ row }) => <UserLinkCell userId={row.original.deleted_by} />,
   },
 ];

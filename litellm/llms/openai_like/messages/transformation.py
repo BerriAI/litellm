@@ -2,12 +2,13 @@ from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -31,6 +32,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def __init__(self, cache_control_ttl: bool = False) -> None:
         super().__init__()
         self._cache_control_ttl: Final = cache_control_ttl
+
+    def is_native_messages_route(self) -> bool:
+        return False
 
     def validate_anthropic_messages_environment(
         self,
@@ -56,6 +60,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         merged: Final = self._update_headers_with_anthropic_beta(
             headers=normalized,
             optional_params=optional_params,
+            messages=messages,
+            beta_map_provider=LlmProviders.OPENAI_LIKE.value,
+            drop_params=litellm_params.get("drop_params") is True,  # pyright: ignore[reportUnknownMemberType]  # the litellm params arrive as a bare dict
         )
         return merged, api_base
 
@@ -128,6 +135,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def supports_safeguards(self) -> bool:
+        return False
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key

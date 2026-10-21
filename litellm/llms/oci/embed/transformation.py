@@ -22,9 +22,11 @@ Supported models:
 Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/latest/EmbedTextResult/EmbedText
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -52,6 +54,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 # OCI sends up to 96 texts per embedText request (Cohere limit).
 OCI_EMBED_BATCH_LIMIT: Final = 96
 
@@ -77,7 +81,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     Required call-time params (via optional_params or env vars):
     - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
-    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``). The realm comes from the realm
+      key in ``oci_compartment_id`` (``ocid1.compartment.oc2..`` is the Government realm), so
+      non-commercial realms need no extra setting. A realm unknown to litellm can be described in
+      ``OCI_REGION_METADATA`` or ``~/.oci/regions-config.json``, resolved through the OCI SDK when
+      it is installed, or given as ``api_base``.
 
     Optional call-time params:
     - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``
@@ -271,7 +279,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            parsed: Final = OCIEmbedResponse(**json_response)
+            parsed: Final = OCIEmbedResponse.model_validate(_JSON_OBJECT.validate_python(json_response))
         except Exception as e:
             raise OCIError(
                 status_code=500,

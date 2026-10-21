@@ -1,6 +1,6 @@
 """Block Code Execution guardrail: blocks or masks fenced code blocks by language."""
 
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 
@@ -20,8 +20,8 @@ def _get_param(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
     key: str,
-    default: Any = None,
-) -> Any:
+    default: object = None,
+) -> object:
     """Get a param from litellm_params, with fallback to raw guardrail litellm_params (for extra fields not on LitellmParams)."""
     value: Final = getattr(litellm_params, key, default)
     if value is not None:

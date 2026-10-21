@@ -24,7 +24,7 @@ from typing import Final
 
 import httpx
 import jwt
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     PrivateKeyJwtAuth,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # The cache stores (fingerprint, token); anything else in the slot is treated as absent.
@@ -65,7 +66,7 @@ class ExchangedToken:
     expires_in: int | None
 
 
-class _TokenEndpointResponse(BaseModel):
+class _TokenEndpointResponse(LiteLLMBaseModel):
     access_token: str
     expires_in: int | None = None
 
