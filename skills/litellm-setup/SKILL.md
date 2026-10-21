@@ -17,14 +17,14 @@ unset DATABASE_URL DIRECT_URL DATABASE_HOST; while IFS= read -r line || [ -n "$l
 
 Ask everything in one message, with defaults the user can accept by saying "go":
 
-- Providers and models. Default is OpenAI with its newest flagship model, using the `OPENAI_API_KEY` in your environment when `[ -n "$OPENAI_API_KEY" ] && echo set` says it is there. Run that check before asking, and name the variable but never its value, since a key in your environment can belong to another account
+- Providers and models. Default is OpenAI with its newest flagship model, using the `OPENAI_API_KEY` in your environment when `[ -n "$OPENAI_API_KEY" ] && echo set` says it is there. Run that check before asking, and say in the question that the default uses that variable, naming it but never its value, since a key in your environment can belong to another account
 - Whether they want virtual keys, teams, spend tracking, or the Admin UI. Those need Postgres, plain routing does not. Default is no
 - uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres server they already have, with a new, empty database for LiteLLM
 - Folder and port. Defaults are `./litellm-proxy` (`./litellm-gateway` for the quickstart) and 4000
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
 
-In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy, which then listens on every network interface and stops with Ctrl+C in that window. When the user is done, run `chmod 600 litellm_config.yaml`, since the wizard leaves it readable by every account on the machine, then skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
 
 ## 2. Check prerequisites
 
@@ -65,7 +65,7 @@ uv tool install --python '>=3.10,<3.15' 'litellm[proxy]'
 litellm --version
 ```
 
-With their own Postgres, install `'litellm[proxy,extra_proxy]'` instead, with the same `--python` range, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. If `litellm` is not found, call `"$(uv tool dir --bin)/litellm"` in this shell. `uv tool update-shell` puts it on the PATH of new shells by editing the user's shell profile, so run it only after the user says yes
+With their own Postgres, install `'litellm[proxy,extra_proxy]'` instead, with the same `--python` range, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. If `litellm` is not found, start every later command that runs it with `export PATH="$(uv tool dir --bin):$PATH";`. `uv tool update-shell` puts it on the PATH of new shells by editing the user's shell profile, so run it only after the user says yes
 
 Docker:
 
@@ -174,7 +174,7 @@ Tell the user, without printing any secret:
 
 - The base URL is `http://127.0.0.1:4000`. Any OpenAI-compatible client works with it as the base URL and the master key or a virtual key as the API key
 - The master key is `LITELLM_MASTER_KEY` in the folder's `.env`
-- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), or `<folder>/litellm-gateway stop` (quickstart). To start it again, rerun the step 7 command, `docker start litellm`, or `<folder>/litellm-gateway start`. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
+- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), `<folder>/litellm-gateway stop` (quickstart), or Ctrl+C in its window (`litellm --setup`). To start it again, rerun the step 7 command, `docker start litellm`, or `<folder>/litellm-gateway start`. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
 - With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 3 or 6 first
 - The Admin UI warns that the master-key login is a shared secret, which is fine while only this machine reaches the proxy. Before anyone else can reach it, invite an admin with their own password on the Internal Users page, then set `general_settings.disable_env_credential_login: true` in the proxy config
 - To manage the running proxy from a coding agent (keys, teams, users, models, MCP servers), install `npx skills add BerriAI/litellm-skills -g`
