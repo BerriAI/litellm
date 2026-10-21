@@ -8838,8 +8838,11 @@ def speech(
 
         generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
-        # Handle Gemini models separately (they use speech_to_completion_bridge)
-        if "gemini" in model:
+        needs_cloud_text_to_speech: Final = (
+            litellm.utils.is_gemini_tts_model(model)
+            and response_format in VertexAITextToSpeechConfig.GEMINI_FORMAT_MAPPINGS
+        )
+        if "gemini" in model and not needs_cloud_text_to_speech:
             from .endpoints.speech.speech_to_completion_bridge.handler import (
                 speech_to_completion_bridge_handler,
             )

@@ -10,7 +10,7 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
@@ -59,6 +59,9 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+
+if TYPE_CHECKING:
+    from .litellm_logging import BilledRoundsSpend
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE: Final = "audio"
@@ -259,6 +262,8 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    _earlier_rounds_spend: "BilledRoundsSpend | None" = None
+
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
         return self._hidden_params
@@ -342,6 +347,10 @@ class CustomStreamWrapper:
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        self.caller_requested_stream_usage: Final = (
+            self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
+            and getattr(logging_obj, "stream_usage_injected", False) is not True
+        )
         self.tool_call = False
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
@@ -2070,7 +2079,7 @@ class CustomStreamWrapper:
         except StopIteration:
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
-                response = self.model_response_creator()
+                response = self._new_usage_chunk()
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
@@ -2222,27 +2231,10 @@ class CustomStreamWrapper:
                     )
 
                     if _has_usage:
-                        # Store a copy ONLY when usage stripping below will mutate
-                        # the chunk. For non-usage chunks (vast majority), store
-                        # directly to avoid expensive model_copy() per chunk.
-                        self.chunks.append(processed_chunk.model_copy())
-
-                        # Strip usage from the outgoing chunk so it's not sent twice
-                        # (once in the chunk, once in _hidden_params).
-                        obj_dict = processed_chunk.model_dump()
-                        if "usage" in obj_dict:
-                            del obj_dict["usage"]
-                        processed_chunk = self.model_response_creator(
-                            chunk=obj_dict,
-                            hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
-                                Mapping[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                            ),
-                        )
-                        is_empty = is_model_response_stream_empty(
-                            model_response=cast(ModelResponseStream, processed_chunk)
-                        )
-                        if is_empty:
+                        usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
+                        if usage_free_chunk is None:
                             continue
+                        processed_chunk = usage_free_chunk
                     else:
                         # No usage data — safe to store directly without copying
                         self.chunks.append(processed_chunk)
@@ -2273,13 +2265,18 @@ class CustomStreamWrapper:
                         if processed_chunk is None:
                             continue
 
-                        choice = processed_chunk.choices[0]
-                        if isinstance(choice, StreamingChoices):
-                            self._accumulate_streamed_delta(choice.delta)
+                        if processed_chunk.choices:
+                            choice = processed_chunk.choices[0]
+                            if isinstance(choice, StreamingChoices):
+                                self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        # RETURN RESULT
-                        self.chunks.append(processed_chunk)
-                        return processed_chunk
+                        if not self.send_stream_usage or getattr(processed_chunk, "usage", None) is None:
+                            self.chunks.append(processed_chunk)
+                            return processed_chunk
+                        usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
+                        if usage_free_chunk is None:
+                            continue
+                        return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
@@ -2306,7 +2303,7 @@ class CustomStreamWrapper:
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
-            response: Final = self.model_response_creator()
+            response: Final = self._new_usage_chunk()
             if complete_streaming_response is not None:
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
@@ -2407,6 +2404,9 @@ class CustomStreamWrapper:
             return
         await asyncio.wait((self._failure_logging,), timeout=timeout)
 
+    def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
+        self._earlier_rounds_spend = earlier
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2433,10 +2433,12 @@ class CustomStreamWrapper:
             if self.model:
                 partial_response.model = self.model
             backfill_missing_cache_usage_fields(usage)
-            self.logging_obj.model_call_details["combined_usage_object"] = usage
-            self.logging_obj.model_call_details["response_cost"] = (
-                self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
-            )
+            partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
+            if self._earlier_rounds_spend is None:
+                self.logging_obj.model_call_details["combined_usage_object"] = usage
+                self.logging_obj.model_call_details["response_cost"] = partial_cost
+                return
+            self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, usage, partial_cost)
         except Exception as recover_error:
             verbose_logger.debug(
                 "could not recover partial usage for interrupted stream: %s",
@@ -2462,6 +2464,22 @@ class CustomStreamWrapper:
         if not callable(get):
             return False
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
+
+    def _new_usage_chunk(self) -> ModelResponseStream:
+        usage_chunk: Final = self.model_response_creator()
+        if self.caller_requested_stream_usage:
+            usage_chunk.choices = []
+        return usage_chunk
+
+    def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
+        self.chunks.append(chunk.model_copy())
+        usage_free_chunk: Final = self.model_response_creator(
+            chunk={key: value for key, value in chunk.model_dump().items() if key != "usage"},
+            hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
+                Mapping[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
+            ),
+        )
+        return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
         # Shared by the sync, async, and non-aiohttp iteration sites so answer
