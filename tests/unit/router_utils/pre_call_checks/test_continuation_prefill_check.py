@@ -322,8 +322,25 @@ def test_continuation_output_ceilings_decline_once_a_ceiling_has_no_tokens_left(
         ({"text": {"verbosity": "low"}}, False),
         ({"tool_choice": "required"}, True),
         ({"tool_choice": "auto"}, False),
+        ({"tool_choice": {"type": "function", "name": "lookup"}}, True),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "f"}]}}, True),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, False),
+        ({"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}}, False),
+        ({"tool_choice": {"type": "web_search_preview"}}, False),
     ],
-    ids=["json_schema", "json_object", "text_format", "verbosity_only", "required_tool", "auto_tool"],
+    ids=[
+        "json_schema",
+        "json_object",
+        "text_format",
+        "verbosity_only",
+        "required_tool",
+        "auto_tool",
+        "forced_function",
+        "allowed_tools_required",
+        "allowed_tools_auto",
+        "chat_allowed_tools_auto",
+        "hosted_tool",
+    ],
 )
 def test_constrains_continuation_reads_the_responses_text_format(sent, expected):
     assert constrains_continuation(sent) is expected
@@ -335,8 +352,12 @@ def test_constrains_continuation_reads_the_responses_text_format(sent, expected)
         (_deployment(CLAUDE_PREFILL_MODEL, "a"), True),
         (_deployment(CLAUDE_NON_PREFILL_MODEL, "b"), False),
         (_deployment(PREFILL_MODEL, "c"), False),
+        (
+            {"litellm_params": {"model": "anthropic/support-model-v1"}, "model_info": {"id": "d", "base_model": CLAUDE_PREFILL_MODEL}},
+            True,
+        ),
     ],
-    ids=["claude_with_prefill", "claude_without_prefill", "prefill_capable_but_not_claude"],
+    ids=["claude_with_prefill", "claude_without_prefill", "prefill_capable_but_not_claude", "claude_named_by_base_model"],
 )
 def test_deployment_takes_responses_prefill_only_on_claude_with_prefill(deployment, expected):
     assert deployment_takes_responses_prefill(deployment) is expected

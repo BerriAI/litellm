@@ -11,6 +11,7 @@ import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm import Router
+from pydantic import BaseModel, ConfigDict
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -1490,6 +1491,12 @@ async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cann
         router.discard()
 
 
+class _Numbers(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    numbers: tuple[int, ...]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "constraint",
@@ -1497,8 +1504,9 @@ async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cann
         {"text": {"format": {"type": "json_schema", "name": "numbers", "strict": True, "schema": {"type": "object"}}}},
         {"text": {"format": {"type": "json_object"}}},
         {"tool_choice": "required", "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]},
+        {"text_format": _Numbers},
     ],
-    ids=["json_schema", "json_object", "required_tool"],
+    ids=["json_schema", "json_object", "required_tool", "sdk_text_format"],
 )
 async def test_responses_fallback_surfaces_the_primary_error_once_constrained_output_was_streamed(
     constraint: dict[str, object],
@@ -1517,6 +1525,48 @@ async def test_responses_fallback_surfaces_the_primary_error_once_constrained_ou
     try:
         stream: Final = await router.aresponses(
             model="primary", input="Numbers 1 to 3 as JSON.", stream=True, max_output_tokens=100, **constraint
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_within_the_callers_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(model="primary", input="Count to 5.", stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert json.loads(fallback.calls.last.request.content)["max_tokens"] == 100 - litellm.token_counter(
+            text="1, 2, "
+        )
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_used_the_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Count to 5.", stream=True, max_output_tokens=litellm.token_counter(text="1, 2, ")
         )
         with pytest.raises(litellm.InternalServerError, match="interrupted"):
             [event async for event in stream]
