@@ -4,12 +4,41 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai.guardrails_ai import (
     GuardrailsAI,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.utils import Choices, Message, ModelResponse
+
+
+def test_guardrails_ai_init_registers_the_configured_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "guardrails_ai",
+                    "guard_name": "gibberish_guard",
+                    "mode": "post_call",
+                    "api_base": "http://guardrails.test",
+                },
+            }
+        ],
+        config_file_path="",
+    )
+
+    callbacks = [callback for callback in litellm.callbacks if isinstance(callback, GuardrailsAI)]
+    assert len(callbacks) == 1
+    assert callbacks[0].guardrail_name == "gibberish-guard"
+    assert callbacks[0].guardrails_ai_guard_name == "gibberish_guard"
+    assert callbacks[0].event_hook == "post_call"
 
 
 @pytest.mark.asyncio

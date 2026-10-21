@@ -123,14 +123,13 @@ async def get_router_settings(
             # generic `hasattr` loop below would miss them.
             current_values["routing_groups"] = [
                 group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
-                for group in llm_router._routing_groups.values()
+                for group in llm_router.routing_groups.values()
             ]
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
                 if hasattr(llm_router, field.field_name):
-                    value = getattr(llm_router, field.field_name)
-                    current_values[field.field_name] = value
+                    current_values[field.field_name] = getattr(llm_router, field.field_name, None)
 
         # Merge with config values (config takes precedence)
         current_values.update(router_settings_from_config)

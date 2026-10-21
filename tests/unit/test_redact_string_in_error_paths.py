@@ -1,5 +1,5 @@
 """
-Tests for _redact_string usage in error/logging paths.
+Tests for redact_string usage in error/logging paths.
 
 Covers actual execution of redaction in:
 - WebSocket close reasons in realtime handlers (openai, bedrock)
@@ -15,36 +15,36 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
+from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string
 
 
 class TestRedactStringFunction:
     def test_redacts_bearer_token(self):
         text = "Authorization: Bearer sk-9876567890abcdefghij"
-        result = _redact_string(text)
+        result = redact_string(text)
         assert "sk-9876567890abcdefghij" not in result
         assert "REDACTED" in result
 
     def test_redacts_api_key_in_url(self):
         text = "Error at https://example.com?api_key=my-secret-key-value-here"
-        result = _redact_string(text)
+        result = redact_string(text)
         assert "my-secret-key-value-here" not in result
 
     def test_redacts_google_api_key(self):
         text = "key=AIzaSyB1234567890abcdefghijklmnopqrstuvwx"
-        result = _redact_string(text)
+        result = redact_string(text)
         assert "AIzaSyB1234567890abcdefghijklmnopqrstuvwx" not in result
 
     def test_passes_clean_text_through(self):
         text = "This is a normal error message with no secrets"
-        assert _redact_string(text) == text
+        assert redact_string(text) == text
 
     @pytest.mark.skipif(
         not _ENABLE_SECRET_REDACTION, reason="redaction disabled via env var"
     )
     def test_redaction_enabled_by_default(self):
         text = "Bearer sk-9876567890abcdefghij"
-        result = _redact_string(text)
+        result = redact_string(text)
         assert "sk-9876567890abcdefghij" not in result
 
 
@@ -93,26 +93,26 @@ class TestOpenAIRealtimeRedaction:
 
 
 class TestBedrockRealtimeRedaction:
-    """Test that _redact_string produces safe close reasons for Bedrock-style errors."""
+    """Test that redact_string produces safe close reasons for Bedrock-style errors."""
 
     def test_internal_error_message_redacted(self):
         secret_error = RuntimeError(
             "Failed with aws_secret_access_key=AKIAIOSFODNN7EXAMPLE123456"
         )
-        reason = _redact_string(f"Internal error: {str(secret_error)}")
+        reason = redact_string(f"Internal error: {str(secret_error)}")
         assert "AKIAIOSFODNN7EXAMPLE123456" not in reason
 
 
 class TestLLMHTTPHandlerRealtimeRedaction:
-    """Test _redact_string on the exact patterns used in llm_http_handler WS close."""
+    """Test redact_string on the exact patterns used in llm_http_handler WS close."""
 
     def test_invalid_status_pattern(self):
         error_msg = "InvalidStatusCode: 403 for wss://api.example.com?api_key=sk-leaked-key-here"
-        assert "sk-leaked-key-here" not in _redact_string(str(error_msg))
+        assert "sk-leaked-key-here" not in redact_string(str(error_msg))
 
     def test_internal_server_error_pattern(self):
         error_msg = "Connection failed for api_key=sk-secret-key-12345678"
-        assert "sk-secret-key-12345678" not in _redact_string(
+        assert "sk-secret-key-12345678" not in redact_string(
             f"Internal server error: {error_msg}"
         )
 
@@ -126,7 +126,7 @@ class TestProxyStreamingDataGeneratorRedaction:
         except RuntimeError:
             raw_tb = traceback.format_exc()
 
-        redacted_tb = _redact_string(raw_tb)
+        redacted_tb = redact_string(raw_tb)
 
         assert "sk-9876567890abcdefghij" not in redacted_tb
         assert "Traceback" in redacted_tb

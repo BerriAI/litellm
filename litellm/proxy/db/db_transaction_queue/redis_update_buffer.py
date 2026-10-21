@@ -147,7 +147,7 @@ class RedisUpdateBuffer:
         self.redis_cache = redis_cache
 
     @staticmethod
-    def _should_commit_spend_updates_to_redis() -> bool:
+    def should_commit_spend_updates_to_redis() -> bool:
         """
         Checks if the Pod should commit spend updates to Redis
 
@@ -163,12 +163,16 @@ class RedisUpdateBuffer:
             return False
         return _use_redis_transaction_buffer
 
+    _should_commit_spend_updates_to_redis = should_commit_spend_updates_to_redis
+
     @with_service_target(SPEND_QUEUE_TARGET)
     async def _store_transactions_in_redis(
         self,
-        transactions: Mapping[str, BaseDailySpendTransaction] | None,
+        transactions: dict[str, BaseDailySpendTransaction] | None,  # mutable-ok: add_update requires dict
         redis_key: str,
         service_type: ServiceTypes,
+        *,
+        source_queue: DailySpendUpdateQueue,
     ) -> None:
         """
         Helper method to store transactions in Redis and emit an event
@@ -177,6 +181,7 @@ class RedisUpdateBuffer:
             transactions: The transactions to store
             redis_key: The Redis key to store under
             service_type: The service type for event emission
+            source_queue: The in-memory queue to restore transactions to if Redis push fails
         """
         if transactions is None or len(transactions) == 0:
             return
@@ -189,6 +194,15 @@ class RedisUpdateBuffer:
                 key=redis_key,
                 values=list_of_transactions,
             )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). "
+                "Restoring them to the in-memory queue for retry on next tick. Error: %s",
+                redis_key,
+                str(e),
+            )
+            await source_queue.add_update(transactions)
+        else:
             verbose_proxy_logger.debug(
                 "Spend tracking - pushed spend updates to Redis buffer. redis_key=%s, buffer_size=%s",
                 redis_key,
@@ -197,12 +211,6 @@ class RedisUpdateBuffer:
             await self._emit_new_item_added_to_redis_buffer_event(
                 queue_size=current_redis_buffer_size,
                 service=service_type,
-            )
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). Error: %s",
-                redis_key,
-                str(e),
             )
 
     @with_service_target(SPEND_QUEUE_TARGET)
@@ -556,7 +564,7 @@ class RedisUpdateBuffer:
         max_rows: int = REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     ) -> bool:
         """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
-        if self.redis_cache is None or len(rows) == 0 or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or len(rows) == 0 or not self.should_commit_spend_updates_to_redis():
             return False
         try:
             buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
@@ -582,7 +590,7 @@ class RedisUpdateBuffer:
     @with_service_target(SPEND_QUEUE_TARGET)
     async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
-        if self.redis_cache is None or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
         popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
             key=REDIS_SPEND_LOGS_BUFFER_KEY,
@@ -791,6 +799,7 @@ class RedisUpdateBuffer:
             transactions=daily_tag_spend_update_transactions,
             redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
             service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
+            source_queue=daily_tag_spend_update_queue,
         )
 
     @with_service_target(SPEND_QUEUE_TARGET)

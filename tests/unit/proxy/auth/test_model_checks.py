@@ -1,6 +1,11 @@
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -11,9 +16,7 @@ def test_get_team_models_for_all_models_and_team_only_models():
     model_access_groups = {}
     include_model_access_groups = False
 
-    result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups
-    )
+    result: Final = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
     combined_models = team_models + proxy_model_list
     assert set(result) == set(combined_models)
 
@@ -246,9 +249,7 @@ def test_get_key_models_does_not_mutate_input():
         ),
     ],
 )
-def test_get_complete_model_list_order(
-    key_models, team_models, proxy_model_list, model_list, expected
-):
+def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
     """
     Test that get_complete_model_list preserves order
     """
@@ -401,9 +402,7 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         captured_params["api_key"] = litellm_params.api_key
         captured_params["api_version"] = litellm_params.api_version
         captured_params["credential_name"] = litellm_params.litellm_credential_name
-        captured_params["has_unexpected_field"] = hasattr(
-            litellm_params, "unexpected_field"
-        )
+        captured_params["has_unexpected_field"] = hasattr(litellm_params, "unexpected_field")
         return ["gpt-4o"]
 
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
@@ -448,9 +447,7 @@ def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
 
     result = get_known_models_from_wildcard(
         wildcard_model="ollama_server1/*",
-        litellm_params=LiteLLM_Params(
-            model="ollama_chat/*", custom_llm_provider="ollama_chat"
-        ),
+        litellm_params=LiteLLM_Params(model="ollama_chat/*", custom_llm_provider="ollama_chat"),
     )
 
     assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
@@ -477,9 +474,7 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(
-            model="huggingface/*", custom_llm_provider="huggingface"
-        ),
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
@@ -927,9 +922,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
-            model_cost_map={
-                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
-            }
+            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
@@ -939,6 +932,26 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.vertex_language_models.discard(fake_model)
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
+
+
+def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    bare: Final = "gpt-dedupe-regression"
+    entry: Final = {"litellm_provider": "openai", "mode": "chat"}
+    try:
+        litellm.register_model({bare: entry, f"openai/{bare}": entry}, persist_across_reloads=False)
+
+        listed: Final = get_known_models_from_wildcard("openai/*")
+
+        assert listed.count(f"openai/{bare}") == 1
+    finally:
+        litellm.model_cost.pop(bare, None)
+        litellm.model_cost.pop(f"openai/{bare}", None)
+        litellm.open_ai_chat_completion_models.discard(bare)
+        litellm.open_ai_chat_completion_models.discard(f"openai/{bare}")
+        litellm.add_known_models(model_cost_map={})
 
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():
@@ -967,6 +980,81 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
     assert result == []
 
 
+def test_get_provider_models_admits_providers_without_a_static_catalog():
+    """Providers without a static model list are no longer rejected up front.
+
+    With endpoint discovery off, get_valid_models falls back to the (empty)
+    static list, so the result is [] rather than None. Before the fix this
+    returned None and the wildcard was never expanded.
+    """
+    import litellm
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    assert "litellm_proxy" not in litellm.models_by_provider
+    assert "hosted_vllm" not in litellm.models_by_provider
+
+    result = get_provider_models(
+        "litellm_proxy",
+        litellm_params=LiteLLM_Params(
+            model="litellm_proxy/*",
+            api_base="http://upstream:4000",
+            api_key="sk-upstream",
+        ),
+    )
+
+    assert result == []
+
+
+def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models(monkeypatch):
+    """A litellm_proxy/* deployment lists the upstream proxy's models when endpoint discovery is on."""
+    import litellm
+    from litellm import Router
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    captured = {}
+
+    def fake_get_models(self, api_key=None, api_base=None):
+        captured["api_key"] = api_key
+        captured["api_base"] = api_base
+        return ["gpt-4o", "claude-sonnet"]
+
+    monkeypatch.setattr(OpenAIGPTConfig, "get_models", fake_get_models)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "litellm_proxy/*",
+                "litellm_params": {
+                    "model": "litellm_proxy/*",
+                    "api_base": "http://upstream:4000",
+                    "api_key": "sk-upstream",
+                },
+            }
+        ]
+    )
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["litellm_proxy/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert captured == {"api_key": "sk-upstream", "api_base": "http://upstream:4000"}
+    assert "litellm_proxy/gpt-4o" in result
+    assert "litellm_proxy/claude-sonnet" in result
+
+
+def test_get_provider_models_returns_none_for_an_unknown_provider():
+    from litellm.proxy.auth.model_checks import get_provider_models
+
+    assert get_provider_models("not-a-real-provider") is None
+
+
 def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     import litellm
     from litellm.proxy.auth.model_checks import (
@@ -977,6 +1065,459 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert "transcribe" in litellm.models_by_provider
     assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
     assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
-    assert get_known_models_from_wildcard("transcribe/*") == [
-        "transcribe/StartTranscriptionJob"
+    assert get_known_models_from_wildcard("transcribe/*") == ["transcribe/StartTranscriptionJob"]
+
+
+@respx.mock
+def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ap-south-1"
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "modelSummaries": [
+                    {"modelId": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+                    {"modelId": "amazon.nova-micro-v1:0"},
+                ]
+            },
+        )
+    )
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/anthropic.*",
+        aws_access_key_id="AKIAPARTIALWILDCARD",
+        aws_secret_access_key="partial-wildcard-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == [
+        "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
     ]
+
+
+@respx.mock
+def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_its_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ap-southeast-2"
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(return_value=httpx.Response(200, json={"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}))
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/anthropic.*",
+        aws_access_key_id="AKIAPROFILEONLYACCOUNT",
+        aws_secret_access_key="profile-only-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == []
+
+
+@respx.mock
+def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ca-central-1"
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "modelSummaries": [
+                    {"modelId": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+                    {"modelId": "amazon.nova-micro-v1:0"},
+                ]
+            },
+        )
+    )
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/*",
+        aws_access_key_id="AKIACUSTOMPREFIXACCOUNT",
+        aws_secret_access_key="custom-prefix-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("anthropic/*", deployment) == [
+        "anthropic/amazon.nova-micro-v1:0",
+        "anthropic/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    ]
+
+
+@contextmanager
+def _registered_chat_models(provider_by_model: Mapping[str, str]) -> Generator[None, None, None]:
+    import litellm
+
+    litellm.register_model(
+        {model: {"litellm_provider": provider, "mode": "chat"} for model, provider in provider_by_model.items()},
+        persist_across_reloads=False,
+    )
+    try:
+        yield
+    finally:
+        provider_model_sets: Final = tuple(known for known in vars(litellm).values() if isinstance(known, set))
+        for model in provider_by_model:
+            litellm.model_cost.pop(model, None)
+            for provider_models in provider_model_sets:
+                provider_models.discard(model)
+        litellm.add_known_models(model_cost_map={})
+
+
+@pytest.mark.parametrize(
+    ("wildcard", "deployment_model", "catalog", "expected"),
+    [
+        pytest.param(
+            "cloudflare/@cf/partial-wildcard-org/*",
+            "cloudflare/@cf/partial-wildcard-org/*",
+            ("cloudflare/@cf/partial-wildcard-org/model-a", "cloudflare/@hf/partial-wildcard-org/model-b"),
+            ["cloudflare/@cf/partial-wildcard-org/model-a"],
+            id="prefixed-catalog-with-deployment",
+        ),
+        pytest.param(
+            "cloudflare/@cf/partial-wildcard-org/*",
+            None,
+            ("cloudflare/@cf/partial-wildcard-org/model-a", "cloudflare/@hf/partial-wildcard-org/model-b"),
+            ["cloudflare/@cf/partial-wildcard-org/model-a"],
+            id="prefixed-catalog-without-deployment",
+        ),
+        pytest.param(
+            "gemini/gemini-partial-wildcard-9*",
+            "gemini/gemini-partial-wildcard-9*",
+            (
+                "gemini-partial-wildcard-9-flash",
+                "gemini/gemini-partial-wildcard-9-pro",
+                "gemini/gemini-other-partial-wildcard-9",
+            ),
+            ["gemini/gemini-partial-wildcard-9-flash", "gemini/gemini-partial-wildcard-9-pro"],
+            id="mixed-bare-and-prefixed-catalog",
+        ),
+    ],
+)
+def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
+    wildcard: str, deployment_model: str | None, catalog: tuple[str, ...], expected: list[str]
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    provider: Final = wildcard.split("/", 1)[0]
+    deployment: Final = None if deployment_model is None else LiteLLM_Params(model=deployment_model)
+    with _registered_chat_models(dict.fromkeys(catalog, provider)):
+        listed: Final = get_known_models_from_wildcard(wildcard, deployment)
+
+    assert sorted(listed) == expected
+
+
+_ROUTE_CF_ID: Final = "cloudflare/@cf/partial-route-org/model-a-instruct"
+_ROUTE_CF_SUFFIXED_ID: Final = "cloudflare/@cf/partial-route-org/model-b-instruct-v2"
+_ROUTE_HF_ID: Final = "cloudflare/@hf/partial-route-org/model-c"
+_ROUTE_GEMINI_ID: Final = "gemini-partial-route-9-flash"
+_ROUTE_OPENAI_ID: Final = "gpt-partial-route-9-mini"
+_ROUTE_BEDROCK_ID: Final = "anthropic.partial-route-9-v1:0"
+_ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "key_model", "reachable"),
+    [
+        pytest.param("cloudflare/@cf/*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="filter"),
+        pytest.param(
+            "cloudflare/@cf/*-instruct", "cloudflare/@cf/*-instruct", None, {_ROUTE_CF_ID}, id="filter-with-suffix"
+        ),
+        pytest.param(
+            "cloudflare/@cf/*",
+            "cloudflare/*",
+            None,
+            {*_ROUTE_CF_IDS, _ROUTE_HF_ID},
+            id="alias-whose-prefix-matches-catalog-ids",
+        ),
+        pytest.param("cloudflare/team-*", "cloudflare/*", None, {*_ROUTE_CF_IDS, _ROUTE_HF_ID}, id="alias"),
+        pytest.param("cloudflare/cf-*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="alias-over-partial-deployment"),
+        pytest.param("my-cf/*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="bare-alias-over-partial-deployment"),
+        pytest.param(
+            "cloudflare/team-*", "cloudflare/@cf/*/*", None, set(), id="alias-with-fewer-wildcards-than-its-deployment"
+        ),
+        pytest.param("partial-route-v/*/*", "cloudflare/@cf/*/*", None, _ROUTE_CF_IDS, id="multi-wildcard-alias"),
+        pytest.param(
+            "partial-route-v/*-*", "cloudflare/@cf/*/*", None, set(), id="multi-wildcard-alias-routing-splits-elsewhere"
+        ),
+        pytest.param(
+            "partial-route-team/*", "openai/gpt-partial-route-9*", None, set(), id="alias-over-mid-word-deployment"
+        ),
+        pytest.param(
+            "team/gpt-partial-route-9*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="alias-repeating-the-deployment-partial-word",
+        ),
+        pytest.param(
+            "team/gpt-partial-route-9-prod*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="alias-extending-the-deployment-partial-word",
+        ),
+        pytest.param(
+            "partial-route-g/*",
+            "gemini/gemini-partial-route-*",
+            None,
+            {_ROUTE_GEMINI_ID},
+            id="alias-over-deployment-cut-at-a-word-boundary",
+        ),
+        pytest.param(
+            "cloudflare/*", "cloudflare/*", "cloudflare/@cf/*", _ROUTE_CF_IDS, id="key-filter-over-provider-wildcard"
+        ),
+        pytest.param("gemini/gemini-*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="alias-over-bare-id"),
+        pytest.param(
+            "gemini/*", "gemini/*", "gemini/gemini-partial-route-9*", {_ROUTE_GEMINI_ID}, id="key-filter-over-bare-id"
+        ),
+        pytest.param(
+            "openai/*", "openai/responses/*", None, {f"openai/responses/{_ROUTE_OPENAI_ID}"}, id="responses-route"
+        ),
+        pytest.param(
+            "openai/*",
+            "openai/responses/*",
+            "openai/gpt-partial-route-9*",
+            {f"openai/responses/{_ROUTE_OPENAI_ID}"},
+            id="key-filter-over-responses-route",
+        ),
+        pytest.param(
+            "bedrock/*", "bedrock/converse/*", None, {f"bedrock/converse/{_ROUTE_BEDROCK_ID}"}, id="converse-route"
+        ),
+        pytest.param(
+            "openai/partial-route-org/*",
+            "openai/partial-route-org/*",
+            None,
+            set(),
+            id="same-name-namespace-the-catalog-lacks",
+        ),
+        pytest.param(
+            "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
+        ),
+        pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
+        pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
+        pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
+        pytest.param(
+            "*", "gemini/gemini-partial-route-9-flash*", None, set(), id="catch-all-whose-only-match-is-its-fixed-text"
+        ),
+    ],
+)
+def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
+    model_name: str, deployment_model: str, key_model: str | None, reachable: set[str]
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.types.router import LiteLLM_Params
+
+    routed_params: Final = TypeAdapter(tuple[LiteLLM_Params, ...])
+    router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": deployment_model}}])
+
+    def routed_model(listed_id: str) -> str:
+        routed: Final = routed_params.validate_python(
+            tuple(deployment["litellm_params"] for deployment in router.wildcard_route_deployments(listed_id, None))
+        )
+        return routed[0].model if routed else listed_id
+
+    def routed_catalog_ids(listed: list[str]) -> list[str]:
+        routed_models: Final = [routed_model(listed_id) for listed_id in listed]
+        return sorted(
+            routed.removeprefix("gemini/") if routed.startswith("gemini/gemini-") else routed
+            for routed in routed_models
+            if "partial-route" in routed
+        )
+
+    with _registered_chat_models(
+        {
+            _ROUTE_CF_ID: "cloudflare",
+            _ROUTE_CF_SUFFIXED_ID: "cloudflare",
+            _ROUTE_HF_ID: "cloudflare",
+            _ROUTE_GEMINI_ID: "gemini",
+            _ROUTE_OPENAI_ID: "openai",
+            _ROUTE_BEDROCK_ID: "bedrock",
+        }
+    ):
+        v1_models: Final = get_complete_model_list(
+            key_models=[key_model or model_name],
+            team_models=[],
+            proxy_model_list=[model_name],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+            if row["model_name"] != model_name
+        ]
+        listed_v1_models: Final = routed_catalog_ids(v1_models)
+        listed_model_info_names: Final = routed_catalog_ids(model_info_names)
+
+    unrouted_ids: Final = [
+        listed_id
+        for listed_id in [*v1_models, *model_info_names]
+        if not router.wildcard_route_deployments(listed_id, None)
+    ]
+    assert unrouted_ids == []
+    assert all(v1_models) and all(model_info_names)
+    if model_name == "*":
+        assert [listed_id for listed_id in v1_models if not routed_model(listed_id).endswith(f"/{listed_id}")] == []
+    assert listed_v1_models == sorted(reachable)
+    if key_model is None:
+        assert listed_model_info_names == sorted(reachable)
+
+
+def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    unshadowed_id: Final = "cloudflare/@cf/unshadowed-route-org/model-d"
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "cloudflare/@cf/*"}},
+            {"model_name": "partial-route-org/*", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+
+    def routed_models(listed: list[str]) -> dict[str, object]:
+        return {
+            listed_id: router.wildcard_route_deployments(listed_id, None)[0]["litellm_params"]["model"]
+            for listed_id in listed
+            if "route-org/model-" in listed_id
+        }
+
+    with _registered_chat_models(
+        {_ROUTE_CF_ID: "cloudflare", _ROUTE_CF_SUFFIXED_ID: "cloudflare", unshadowed_id: "cloudflare"}
+    ):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=["*", "partial-route-org/*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+        ]
+
+    assert routed_models(v1_models) == {"unshadowed-route-org/model-d": unshadowed_id}
+    assert routed_models(model_info_names) == {"unshadowed-route-org/model-d": unshadowed_id}
+
+
+def test_wildcard_lists_an_id_a_more_specific_sibling_serves_with_the_same_model() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/gpt-partial-route-9*", "litellm_params": {"model": "openai/gpt-partial-route-9*"}},
+            {
+                "model_name": "openai/gpt-partial-route-9-mini*",
+                "litellm_params": {"model": "openai/gpt-partial-route-9-mini*"},
+            },
+        ]
+    )
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=["openai/gpt-partial-route-9*"],
+            team_models=[],
+            proxy_model_list=["openai/gpt-partial-route-9*", "openai/gpt-partial-route-9-mini*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+        ]
+
+    assert v1_models == [f"openai/{_ROUTE_OPENAI_ID}"]
+    assert "openai/gpt-partial-route-9*" not in model_info_names
+
+
+def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    router: Final = Router(model_list=[{"model_name": "team-partial-route/*", "litellm_params": {"model": "*"}}])
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=["team-partial-route/*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+
+    unrouted_ids: Final = [
+        listed_id for listed_id in v1_models if not router.wildcard_route_deployments(listed_id, None)
+    ]
+    assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
+    assert unrouted_ids == []

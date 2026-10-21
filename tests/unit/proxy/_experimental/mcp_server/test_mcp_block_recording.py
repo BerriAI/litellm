@@ -66,8 +66,7 @@ async def _call_block(logging_obj, order: list, *, user_api_key_auth=mock.sentin
     proxy_logging_obj = mock.MagicMock()
     proxy_logging_obj.post_call_failure_hook.side_effect = _record_post_call_failure_hook
 
-    fake_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-    fake_proxy_server.proxy_logging_obj = proxy_logging_obj  # pyright: ignore[reportAttributeAccessIssue]
+    fake_proxy_server = types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj, prisma_client=None)
 
     with mock.patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}):
         with contextlib.suppress(HTTPException):

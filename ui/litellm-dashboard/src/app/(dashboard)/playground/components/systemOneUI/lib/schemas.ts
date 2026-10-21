@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type DecisionEndpoint = "/v1/decisions" | "/typesafe/v1/systemone";
+export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
 
 const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const decisionInstructions = decisionsJson.nullish();
@@ -20,7 +20,7 @@ const decisionQuestionSchema = z.discriminatedUnion("type", [
       criteria: z.partialRecord(z.enum(["true", "false"]), decisionsJson.nullable()).nullish(),
     })
     .refine((value) => value.instructions != null || value.criteria != null, {
-      message: "A noul question requires instructions or criteria.",
+      message: "A yes / no question requires instructions or criteria.",
     }),
   z.looseObject({
     type: z.literal("score"),

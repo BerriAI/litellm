@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -86,6 +86,14 @@ class _FeedbackContext:
 class AdaptiveRouter:
     """One instance per router_name. Holds in-memory caches + the update queue."""
 
+    @property
+    def _state_loaded(self) -> bool:
+        return self.state_loaded
+
+    @_state_loaded.setter
+    def _state_loaded(self, value: bool) -> None:
+        self.state_loaded = value
+
     def __init__(
         self,
         router_name: str,
@@ -109,7 +117,7 @@ class AdaptiveRouter:
         self._response_signal_updates_total: int = 0
         # Set to True once the proxy flusher has loaded persisted priors from
         # Postgres. Checked to support lazy-load on hot-reloaded routers.
-        self._state_loaded: bool = False
+        self.state_loaded: bool = False
         self._lock = asyncio.Lock()
 
         self._init_cold_start_cells()
@@ -172,8 +180,8 @@ class AdaptiveRouter:
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, Any],
-        messages: list[dict[str, Any]] | None = None,
+        request_kwargs: dict[str, object],
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:

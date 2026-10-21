@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -41,6 +42,12 @@ else:
     HTTPHandler = Any
     AsyncHTTPHandler = Any
     CustomStreamWrapper = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _content_type(headers: Mapping[str, str]) -> str:
+    return headers.get("content-type", "")
 
 
 class VertexAgentEngineError(BaseLLMException):
@@ -296,7 +303,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         We need to collect all the chunks and extract the final response.
         """
         try:
-            content_type: Final = raw_response.headers.get("content-type", "").lower()
+            content_type: Final = _content_type(raw_response.headers).lower()
             verbose_logger.debug("Vertex Agent Engine response Content-Type: %s", content_type)
 
             # Parse the SSE response
@@ -311,7 +318,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                     continue
 
                 try:
-                    data = json.loads(line)
+                    data = _DECODED_JSON.validate_python(json.loads(line))
                     if isinstance(data, dict):
                         text = self._extract_text_from_response(data)
                         if text:
@@ -373,12 +380,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making sync streaming request to Vertex AI endpoint.")

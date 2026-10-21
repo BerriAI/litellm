@@ -194,6 +194,7 @@ _SDK_SCRIPT: Final = textwrap.dedent(
 
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.types.utils import ModelInfo
 
@@ -208,7 +209,7 @@ _SDK_SCRIPT: Final = textwrap.dedent(
             end_time: object,
         ) -> None:
             standard: Final = kwargs.get("standard_logging_object")
-            hidden: Final = getattr(response_obj, "_hidden_params", None)
+            hidden: Final = get_hidden_params(response_obj)
             if not isinstance(standard, dict):
                 raise RuntimeError("success callback omitted standard_logging_object")
             if standard.get("call_type") != "aretrieve_batch":
