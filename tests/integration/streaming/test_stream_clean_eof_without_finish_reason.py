@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
+import httpx
 import openai
 import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
@@ -17,7 +18,7 @@ from integration._support.client import Gateway, Scenario, eventually, string_va
 from integration._support.database import read_rows, scratch_database
 from integration._support.database_relay import DatabaseRelay, database_relay
 from integration._support.openai_wire import answering_model_discovery, posted_targets
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.responses_stream import data_frames, spend_row, sse_events
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._count_tokens_system_lift import (
@@ -467,7 +468,7 @@ _SPEND_LOG_INSERT: Final = b'INSERT INTO "public"."LiteLLM_SpendLogs"'
 Outcomes = tuple[tuple[bool, str], ...]
 
 
-def _spend_statuses(database_url: str) -> Counter[tuple[str, str]]:
+def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
     rows: Final = read_rows('SELECT litellm_call_id, status FROM "LiteLLM_SpendLogs"', (), database_url=database_url)
     return Counter((string_value(row["litellm_call_id"]), string_value(row["status"])) for row in rows)
 
@@ -516,3 +517,53 @@ def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row
             seconds=120,
         )
         assert landed == expected
+
+
+def _attempt(gateway: Gateway, model: str, route: Route, ending: Ending) -> tuple[bool, str] | None:
+    """One stream's outcome, or None when the worker serving it was killed before the proxy finished the reply"""
+    try:
+        return _stream_outcome(gateway, model, route, ending)
+    except httpx.TransportError:
+        return None
+
+
+def test_worker_killed_mid_burst_leaves_the_proxy_ending_each_stream_by_whether_its_provider_finished_it(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    endings: Final[tuple[Ending, ...]] = ("ending-complete", "ending-clean-eof")
+    cases: Final = tuple(itertools.product(_BRIDGED_FAMILY, endings, range(4)))
+    probes: Final = tuple(itertools.product(_BRIDGED_FAMILY, endings))
+    with (
+        owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned,
+        ExitStack() as wires,
+        owned.gateway.scenario() as scenario,
+    ):
+        candidate: Final = owned.gateway
+        models: Final = {
+            route: _deploy(scenario, family, wires.enter_context(wire_server(_upstream(family))))
+            for route, family in _BRIDGED_FAMILY.items()
+        }
+        workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=60)
+        with owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=len(cases)) as pool:
+            futures: Final = [
+                pool.submit(_attempt, candidate, models[route], route, ending) for route, ending, _ in cases
+            ]
+            kill()
+            attempts: Final = tuple(future.result() for future in futures)
+        answered: Final = tuple(
+            (outcome[0], ending == "ending-complete")
+            for (_, ending, _), outcome in zip(cases, attempts, strict=True)
+            if outcome is not None
+        )
+        assert all(finished == expected for finished, expected in answered), attempts
+        after: Final = tuple(_stream_outcome(candidate, models[route], route, ending) for route, ending in probes)
+        assert tuple(finished for finished, _ in after) == tuple(ending == "ending-complete" for _, ending in probes)
+        statuses: Final = eventually(
+            lambda: _spend_statuses(candidate.database_url),
+            lambda rows: {call_id for _, call_id in after} <= {call_id for call_id, _ in rows},
+            seconds=120,
+        )
+        assert tuple(
+            statuses[(call_id, "success" if ending == "ending-complete" else "failure")]
+            for (_, ending), (_, call_id) in zip(probes, after, strict=True)
+        ) == (1,) * len(probes)
