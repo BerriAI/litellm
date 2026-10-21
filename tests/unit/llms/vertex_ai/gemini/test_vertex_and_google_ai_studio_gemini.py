@@ -3278,6 +3278,14 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
+        async def dispatch_attempt_failure_handlers(
+            self, exception: Exception, traceback_exception: str
+        ) -> None:
+            return None
+
+        def attempt_scoped_copy(self) -> "DummyLogging":
+            return self
+
     async def failing_make_call(client=None, **kwargs):
         raise VertexAIError(status_code=400, message="bad input", headers={})
 
