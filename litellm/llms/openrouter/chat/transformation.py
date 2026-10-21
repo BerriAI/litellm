@@ -60,8 +60,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
-        if non_default_params.get("reasoning_effort") == "max":
+        if (
+            non_default_params.get("reasoning_effort") == "max"
+            and model.removeprefix("openrouter/") != "minimax/minimax-m3.1-flash:free"
+        ):
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
 
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)

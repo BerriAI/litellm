@@ -475,6 +475,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
+  [Providers.MiniMax]: "minimax/MiniMax-M3.1-Flash",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
@@ -553,5 +554,13 @@ export const getProviderModels = (provider: string, modelMap: any): Array<string
     }
   }
 
-  return providerModels;
+  const isMiniMaxText = (model: string) =>
+    modelMap[model]?.mode === "chat" && /(?:^|\/)(?:fw-)?(?:minimax\.)?minimax-m\d/i.test(model);
+  const currentMiniMaxModels = providerModels
+    .filter((model) => isMiniMaxText(model) && /minimax-m3(?:\.1-flash|p1-flash)?(?::free)?$/i.test(model))
+    .sort((a, b) => Number(!/flash/i.test(a)) - Number(!/flash/i.test(b)));
+  let miniMaxIndex = 0;
+  return providerModels
+    .filter((model) => !isMiniMaxText(model) || currentMiniMaxModels.includes(model))
+    .map((model) => (isMiniMaxText(model) ? currentMiniMaxModels[miniMaxIndex++] : model));
 };
