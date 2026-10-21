@@ -80,6 +80,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_host",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
             "responses_api_version",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }

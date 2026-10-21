@@ -1261,6 +1261,10 @@ def encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str
 _encode_tool_call_id_with_signature = encode_tool_call_id_with_signature
 
 
+def embeds_thought_signature_in_tool_call_id(litellm_params: Mapping[str, object]) -> bool:
+    return litellm_params.get("thought_signature_in_tool_call_id") is not False
+
+
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 

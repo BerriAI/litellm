@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from itertools import chain
 from typing import Final
 
@@ -25,7 +26,8 @@ pytestmark = pytest.mark.e2e
 
 BACKEND_MODEL: Final = "gemini/gemini-3.5-flash"
 GEMINI_API_KEY: Final = "os.environ/GEMINI_API_KEY"
-MAX_TOOL_CALL_ID_LENGTH: Final = 128
+# bedrock-agentcore HarnessToolUseId shape in botocore 1.43.6, read 2026-10-20
+AGENTCORE_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 WEATHER_TOOL: Final = ChatTool(
     function=ChatToolFunction(
         name="get_weather",
@@ -59,7 +61,11 @@ def _register_model(client: PassthroughClient, resources: ResourceManager) -> st
     model_name: Final = f"e2e-gemini-tool-call-id-{unique_marker()}"
     model_id: Final = client.proxy.create_model(
         model_name,
-        LiteLLMParamsBody(model=BACKEND_MODEL, api_key=GEMINI_API_KEY),
+        LiteLLMParamsBody(
+            model=BACKEND_MODEL,
+            api_key=GEMINI_API_KEY,
+            thought_signature_in_tool_call_id=False,
+        ),
     )
     resources.defer(lambda: client.proxy.delete_model(model_id))
     return model_name
@@ -94,12 +100,9 @@ def _tool_call_id(call: ToolCall) -> str:
     return call.id
 
 
-def _assert_id_lengths(ids: tuple[str, ...]) -> None:
-    lengths: Final = tuple(len(call_id) for call_id in ids)
-    assert all(length <= MAX_TOOL_CALL_ID_LENGTH for length in lengths), (
-        f"tool call id length(s)={lengths}; each id must be at most "
-        f"{MAX_TOOL_CALL_ID_LENGTH} characters"
-    )
+def _assert_agentcore_accepts_ids(ids: tuple[str, ...]) -> None:
+    rejected: Final = tuple(call_id for call_id in ids if not AGENTCORE_TOOL_USE_ID.fullmatch(call_id))
+    assert not rejected, f"tool call id(s) AgentCore would reject: {tuple(call_id[:80] for call_id in rejected)}"
 
 
 def _stream_tool_calls(events: list[str]) -> tuple[_StreamToolCall, ...]:
@@ -113,7 +116,7 @@ class TestGeminiToolCallIdLength:
         "llm.chat_completions.gemini.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_non_streaming_tool_call_id_fits_128_chars(
+    def test_non_streaming_tool_call_id_fits_agentcore(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model: Final = _register_model(client, resources)
@@ -123,13 +126,13 @@ class TestGeminiToolCallIdLength:
         calls: Final = _tool_calls(response)
         ids: Final = tuple(_tool_call_id(call) for call in calls)
 
-        _assert_id_lengths(ids)
+        _assert_agentcore_accepts_ids(ids)
 
     @pytest.mark.covers(
         "llm.chat_completions.gemini.tool_use.stream.works",
         exercised_on=["chat_completions"],
     )
-    def test_streaming_tool_call_id_fits_128_chars(
+    def test_streaming_tool_call_id_fits_agentcore(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model: Final = _register_model(client, resources)
@@ -145,7 +148,7 @@ class TestGeminiToolCallIdLength:
         ids: Final = tuple(call.id for call in calls if call.id)
         assert ids, f"Gemini stream tool call deltas contained no ids: {calls}"
 
-        _assert_id_lengths(ids)
+        _assert_agentcore_accepts_ids(ids)
 
     @pytest.mark.covers(
         "llm.chat_completions.gemini.multi_turn.nonstream.works",
