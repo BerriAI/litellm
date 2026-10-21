@@ -4858,6 +4858,52 @@ def test_translate_response_format_native_output_config(monkeypatch):
         assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "WeatherResult"
     finally:
         litellm.model_cost = old_cost
+
+
+def test_translate_response_format_native_output_config_claude_5_family(monkeypatch):
+    """Claude 5-family models on Bedrock Converse route json_schema to native
+    outputConfig even without thinking: the json tool path 400s or returns
+    content_filter empties for these models.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/47687
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ScoreResult",
+                "schema": {
+                    "type": "object",
+                    "properties": {"score": {"type": "number"}},
+                    "required": ["score"],
+                },
+            },
+        }
+        for model in (
+            "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-sonnet-5-5",
+            "us.anthropic.claude-haiku-5-5",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-sonnet-5",
+        ):
+            optional_params: dict = {}
+            result = config._translate_response_format_param(
+                value=response_format,
+                model=model,
+                optional_params=optional_params,
+                non_default_params={"response_format": response_format},
+                is_thinking_enabled=False,
+            )
+            assert "outputConfig" in result, f"{model}: json_schema should route to native outputConfig without thinking"
+            assert "tools" not in result, f"{model}: json tool path must not be used for Claude 5 family"
+            assert "tool_choice" not in result
+    finally:
+        litellm.model_cost = old_cost
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
@@ -10620,7 +10666,7 @@ _OUTPUT_CONFIG_FORMAT: Final = {
     ],
     ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
 )
-@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "eu.anthropic.claude-opus-4-8"])
 def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
     optional_params: Final = _converse_params(model, None, request_params)
 

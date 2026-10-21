@@ -1972,7 +1972,7 @@ def _invoke_chat_params(
     [{"thinking": {"type": "adaptive"}}, {"reasoning_effort": "low"}],
     ids=["adaptive", "reasoning_effort"],
 )
-@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-opus-4-8"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
     local_model_cost_map, model, thinking_params
 ):
