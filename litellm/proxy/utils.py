@@ -158,7 +158,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -1161,6 +1161,43 @@ def _timed_out_earlier_records(
     return tuple(record for identity, record in by_identity.items() if identity != final_identity)
 
 
+def _record_pricing(
+    model_call_details: Mapping[str, object], record: Mapping[str, object], base_model: str | None
+) -> tuple[Mapping[str, object], str | None]:
+    """The ``(model_call_details, base_model)`` to price one earlier attempt with: the record's own
+    deployment model and ``base_model`` when it served a different model than the final attempt
+    (the provider is then inferred from that model), else the final attempt's."""
+    record_model: Final = record.get("model")
+    if not isinstance(record_model, str) or record_model == model_call_details.get("model"):
+        return model_call_details, base_model
+    record_base_model: Final = record.get("base_model")
+    return (
+        {**model_call_details, "model": record_model, "custom_llm_provider": None},
+        record_base_model if isinstance(record_base_model, str) else None,
+    )
+
+
+def _billed_earlier_attempt(
+    model_call_details: Mapping[str, object],
+    record: Mapping[str, object],
+    index: int,
+    estimated_usage: Usage,
+    base_model: str | None,
+) -> BilledFailedAttempt:
+    pricing_details, pricing_base_model = _record_pricing(model_call_details, record, base_model)
+    return BilledFailedAttempt(
+        attempted_retries=_attempt_number(record, index),
+        deployment_id=_record_deployment_id(record),
+        usage=estimated_usage,
+        response_cost=_estimated_input_cost(
+            pricing_details,
+            estimated_usage.prompt_tokens,
+            deployment_id=_record_deployment_id(record),
+            base_model=pricing_base_model,
+        ),
+    )
+
+
 def _billed_earlier_attempts(
     model_call_details: Mapping[str, object],
     litellm_params: Mapping[str, object] | None,
@@ -1174,23 +1211,14 @@ def _billed_earlier_attempts(
     request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
     hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
     ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
-    attempt, at that deployment's input rate (else the cost map's rate for ``base_model`` or the
-    model). Only the exception class survives on the record, so an earlier connect timeout is
-    billed too; any other failure class is not."""
+    attempt, at that deployment's input rate (else the cost map's rate for the record's own
+    ``base_model`` or model, which a fallback hop can make a different model than the final one).
+    Only the exception class survives on the record, so an earlier connect timeout is billed too;
+    any other failure class is not."""
     final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
     final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
     return tuple(
-        BilledFailedAttempt(
-            attempted_retries=_attempt_number(record, index),
-            deployment_id=_record_deployment_id(record),
-            usage=estimated_usage,
-            response_cost=_estimated_input_cost(
-                model_call_details,
-                estimated_usage.prompt_tokens,
-                deployment_id=_record_deployment_id(record),
-                base_model=base_model,
-            ),
-        )
+        _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
     )
 
@@ -4704,19 +4732,25 @@ class ProxyLogging:
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:
-        """Drop the parked success dispatch for an assembled chat stream that ends in an error
-        ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
+        """Drop the parked success dispatch for an assembled chat stream or a stream that billed several rounds when it
+        ends in an error ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
         Returns False when the parked dispatch should still be flushed by the caller."""
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             return False
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        assembled: Final = _args[0] if _args else None
-        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(assembled, ModelResponse):
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
+        match _args:
+            case (ModelResponse() as assembled, *_):
+                logging_obj.record_assembled_response_for_failure(assembled)
+            case (BilledRoundsDispatch() as billed,):
+                billed.dispatch.close()
+                logging_obj.record_billed_rounds_for_failure(billed.spend)
+            case _:
+                return False
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
-        logging_obj.record_assembled_response_for_failure(assembled)
         return True
 
     async def arelease_max_parallel_requests_on_disconnect(
@@ -4804,6 +4838,7 @@ def jsonify_object(data: dict) -> dict:
 _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(max_size=1000)
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
+_PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
 
 
 async def _lookup_deprecated_key(
@@ -5210,13 +5245,17 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
-    def tx(self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT) -> "TransactionManager":
+    def tx(
+        self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT, max_wait: timedelta = _PRISMA_DEFAULT_TX_MAX_WAIT
+    ) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
         Callers go through this instead of reaching into ``self.db`` so writer
         selection and read-replica routing stay encapsulated in the wrapper.
         """
-        return cast("TransactionManager", self.db.tx(timeout=timeout))  # cast-ok: untyped __getattr__ delegate
+        return cast(  # cast-ok: untyped __getattr__ delegate
+            "TransactionManager", self.db.tx(max_wait=max_wait, timeout=timeout)
+        )
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """

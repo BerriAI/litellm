@@ -29,6 +29,7 @@ from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
@@ -267,7 +268,7 @@ def sanitize_for_log(value: object) -> str:
 
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
@@ -426,6 +427,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
     "litellm_roi_estimator",
@@ -1216,6 +1218,32 @@ def get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+def _callback_settings_fields(callback_settings_obj: TeamCallbackMetadata) -> Mapping[str, object]:
+    callback_vars: Final = callback_settings_obj.callback_vars
+    return {
+        "success_callback": callback_settings_obj.success_callback,
+        "failure_callback": callback_settings_obj.failure_callback,
+        **({**callback_vars, TRUSTED_CALLBACK_VARS_FIELD: callback_vars} if callback_vars is not None else {}),
+    }
+
+
+def key_and_team_logging_fields(user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig) -> Mapping[str, object]:
+    callback_settings_obj: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+    disabled_callbacks: Final = (user_api_key_dict.metadata or {}).get("litellm_disabled_callbacks")
+    return MappingProxyType(
+        {
+            **(_callback_settings_fields(callback_settings_obj) if callback_settings_obj is not None else {}),
+            **(
+                {"litellm_disabled_callbacks": disabled_callbacks}
+                if disabled_callbacks and isinstance(disabled_callbacks, list)
+                else {}
+            ),
+        }
+    )
 
 
 _get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
@@ -2342,7 +2370,15 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
+        frozenset(
+            {
+                "secret_fields",
+                "proxy_server_request",
+                "litellm_logging_obj",
+                VECTOR_STORE_CALLER_METADATA_KWARG,
+                STREAM_USAGE_INJECTED_FIELD,
+            }
+        )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -2841,27 +2877,7 @@ async def add_litellm_data_to_request(
         request=request, request_data=data, metadata_key=_metadata_variable_name
     )
 
-    # Team Callbacks controls
-    callback_settings_obj: Final = get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
-    )
-    if callback_settings_obj is not None:
-        data["success_callback"] = callback_settings_obj.success_callback
-        data["failure_callback"] = callback_settings_obj.failure_callback
-
-        if callback_settings_obj.callback_vars is not None:
-            # unpack callback_vars in data
-            for k, v in callback_settings_obj.callback_vars.items():
-                data[k] = v
-            # Callbacks that must not honour request-supplied credentials read this
-            # proxy-owned field instead of the raw request kwargs.
-            data[TRUSTED_CALLBACK_VARS_FIELD] = callback_settings_obj.callback_vars
-
-    # Add disabled callbacks from key metadata
-    if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
-        disabled_callbacks: Final = user_api_key_dict.metadata["litellm_disabled_callbacks"]
-        if disabled_callbacks and isinstance(disabled_callbacks, list):
-            data["litellm_disabled_callbacks"] = disabled_callbacks
+    data.update(key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config))
 
     # Guardrails from key/team metadata and policy engine
     await move_guardrails_to_metadata(

@@ -76,6 +76,7 @@ from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
+from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -128,6 +129,7 @@ from litellm.types.containers.main import (
     DeleteContainerResult,
 )
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -1698,6 +1700,115 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
         return provider_config.transform_decisions_response(
             model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
+        )
+
+    def _prepare_extraction_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
+        if logging_obj is not None:
+            logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # Logging.pre_call is untyped
+                input=dict(body),
+                api_key=api_key,
+                model=model,
+                additional_args={"api_base": url, "complete_input_dict": dict(body), "headers": outbound_headers},
+            )
+        return url, outbound_headers
+
+    def extraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: HTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        sync_httpx_client: Final = client if client is not None else get_httpx_client()
+        try:
+            response: Final = sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
+        )
+
+    async def aextraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: AsyncHTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        async_httpx_client: Final = (
+            client
+            if client is not None
+            else get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
+        )
+        try:
+            response: Final = await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
         )
 
     def _prepare_audio_transcription_request(
@@ -6462,6 +6573,7 @@ class BaseLLMHTTPHandler:
         provider_config: Union[
             BaseConfig,
             BaseDecisionsConfig,
+            BaseExtractionConfig,
             BaseRerankConfig,
             BaseResponsesAPIConfig,
             BaseImageEditConfig,
