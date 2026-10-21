@@ -2069,7 +2069,13 @@ def completion_cost(
                                 )
                             )
                             and (
-                                call_type in _RERANK_CALL_TYPES
+                                (
+                                    call_type in _RERANK_CALL_TYPES
+                                    and (
+                                        deployment_model_info.get("input_cost_per_query") is not None
+                                        or deployment_model_info.get("cost_per_query") is not None
+                                    )
+                                )
                                 or deployment_model_info.get("input_cost_per_token") is not None
                             )
                         )
@@ -2711,11 +2717,14 @@ def rerank_cost(
             provider=LlmProviders(custom_llm_provider),
         )
 
-        if model_info is None:
+        if model_info is None or (
+            model_info.get("input_cost_per_query") is None and model_info.get("cost_per_query") is None
+        ):
             try:
-                model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+                builtin_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+                model_info = {**(model_info or {}), **builtin_info} if model_info else builtin_info
             except Exception:
-                model_info = None
+                pass
 
         return config.calculate_rerank_cost(
             model=model,
