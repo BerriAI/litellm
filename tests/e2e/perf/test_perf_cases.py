@@ -29,6 +29,7 @@ from setup.event_loop import (
     render_stalls,
     summarize,
 )
+from setup.event_loop import junit_properties as stall_properties
 from setup.observe import (
     Observation,
     evaluate,
@@ -168,7 +169,9 @@ def test_perf_case(
     item.user_properties[:] = [
         entry for entry in item.user_properties if not entry[0].startswith("perf_")
     ]  # rebind-ok: a --reruns retry replaces the first attempt's numbers instead of appending a second set
-    item.user_properties.extend(junit_properties(rows))
+    item.user_properties.extend(
+        stall_properties(case.event_loop, stall_rows) if case.event_loop is not None else junit_properties(rows)
+    )
     item.user_properties.extend(step_properties(observation.steps()))
     print(render(case, observation, rows))
     if case.event_loop is not None:
