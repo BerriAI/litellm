@@ -1,6 +1,13 @@
-import pytest
-from typing import AsyncIterator, Iterator, cast
+import importlib
+from types import ModuleType
 
+import pytest
+from typing import AsyncIterator, Final, Iterator, cast
+
+from openai import AsyncOpenAI, OpenAI
+from openai._types import Response as SDKResponse
+
+import litellm
 from litellm.files import main as files_main
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentStreamingResult
@@ -323,3 +330,80 @@ def test_file_content_streaming_passes_exception_to_context_manager_exit():
     assert response_cm.exc_info[0] is RuntimeError
     assert response_cm.exc_info[1] is exc_info.value
     assert response_cm.exc_info[2] is not None
+
+
+@pytest.fixture(params=("httpx", "sdk"))
+def http_backend(request: pytest.FixtureRequest) -> ModuleType:
+    return importlib.import_module("httpx" if request.param == "httpx" else SDKResponse.__module__)
+
+
+_TRANSPORT_FAILURES: Final = pytest.mark.parametrize(
+    ("failure_name", "public_error"),
+    (
+        ("ReadTimeout", litellm.Timeout),
+        ("ReadError", litellm.APIConnectionError),
+        ("RemoteProtocolError", litellm.APIConnectionError),
+    ),
+)
+
+
+def _body_then_failure_transport(http_backend: ModuleType, failure: Exception) -> object:
+    class BodyThenFailure(http_backend.SyncByteStream, http_backend.AsyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"hello"
+            raise failure
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"hello"
+            raise failure
+
+    return http_backend.MockTransport(
+        lambda _request: http_backend.Response(
+            200, headers={"content-type": "application/octet-stream"}, stream=BodyThenFailure()
+        )
+    )
+
+
+@_TRANSPORT_FAILURES
+def test_file_content_stream_raises_litellm_errors_when_the_transport_fails_mid_body(
+    http_backend: ModuleType, failure_name: str, public_error: type[Exception]
+):
+    failure: Final = getattr(http_backend, failure_name)("transport failed mid-body")
+
+    with http_backend.Client(transport=_body_then_failure_transport(http_backend, failure)) as http_client:
+        result: Final = litellm.file_content(
+            file_id="file-abc123",
+            custom_llm_provider="openai",
+            client=OpenAI(api_key="transport-only", http_client=http_client),
+            stream=True,
+            chunk_size=len(b"hello"),
+        )
+        stream: Final = cast(Iterator[bytes], result.stream_iterator)
+        assert next(stream) == b"hello"
+        with pytest.raises(public_error) as excinfo:
+            next(stream)
+
+    assert excinfo.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+@_TRANSPORT_FAILURES
+async def test_afile_content_stream_raises_litellm_errors_when_the_transport_fails_mid_body(
+    http_backend: ModuleType, failure_name: str, public_error: type[Exception]
+):
+    failure: Final = getattr(http_backend, failure_name)("transport failed mid-body")
+
+    async with http_backend.AsyncClient(transport=_body_then_failure_transport(http_backend, failure)) as http_client:
+        result: Final = await litellm.afile_content(
+            file_id="file-abc123",
+            custom_llm_provider="openai",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            stream=True,
+            chunk_size=len(b"hello"),
+        )
+        stream: Final = cast(AsyncIterator[bytes], result.stream_iterator)
+        assert await stream.__anext__() == b"hello"
+        with pytest.raises(public_error) as excinfo:
+            await stream.__anext__()
+
+    assert excinfo.value.__cause__ is failure

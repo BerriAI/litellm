@@ -11,6 +11,7 @@ from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, 
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
+import openai
 import pytest
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel
@@ -4584,6 +4585,132 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
         if chunk.choices and chunk.choices[0].finish_reason
     ]
     assert fabricated_finish_reasons == []
+
+
+_SDK3_CHAT_REQUEST_URL: Final = "https://api.openai.com/v1/chat/completions"
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+def _httpx2_read_error() -> Exception:
+    return pytest.importorskip("httpx2").ReadError("peer closed connection")
+
+
+def _httpx2_protocol_error() -> Exception:
+    return pytest.importorskip("httpx2").RemoteProtocolError("peer closed connection without sending complete body")
+
+
+def _sdk_wrapped_read_error() -> Exception:
+    httpx2: Final = pytest.importorskip("httpx2")
+    return _raised_from(
+        openai.APIConnectionError(request=httpx2.Request("POST", _SDK3_CHAT_REQUEST_URL)),
+        httpx2.ReadError("peer closed connection"),
+    )
+
+
+def _httpx2_read_timeout() -> Exception:
+    return pytest.importorskip("httpx2").ReadTimeout("timed out")
+
+
+def _sdk_wrapped_read_timeout() -> Exception:
+    httpx2: Final = pytest.importorskip("httpx2")
+    return _raised_from(
+        openai.APITimeoutError(request=httpx2.Request("POST", _SDK3_CHAT_REQUEST_URL)),
+        httpx2.ReadTimeout("timed out"),
+    )
+
+
+_SDK3_DROPPED_CONNECTIONS: Final = pytest.mark.parametrize(
+    "dropped_connection",
+    (_httpx2_read_error, _httpx2_protocol_error, _sdk_wrapped_read_error),
+    ids=("httpx2_read_error", "httpx2_protocol_error", "sdk_wrapped_read_error"),
+)
+_SYNC_AND_ASYNC: Final = pytest.mark.parametrize("sync_mode", (True, False), ids=("sync", "async"))
+
+
+def _chunks_then_failure(chunks: Sequence[ModelResponseStream], failure: Exception) -> Iterator[ModelResponseStream]:
+    yield from chunks
+    raise failure
+
+
+def _openai_stream_over(
+    chunks: Sequence[ModelResponseStream], failure: Exception, sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    stream: Final = _chunks_then_failure(chunks, failure)
+    return CustomStreamWrapper(
+        completion_stream=stream if sync_mode else _as_async(stream),
+        model="openai/stub-model",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+
+async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelResponseStream]:
+    if sync_mode:
+        return list(wrapper)
+    return [chunk async for chunk in wrapper]
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@_SDK3_DROPPED_CONNECTIONS
+async def test_sdk3_dropped_connection_after_finish_reason_ends_the_stream_cleanly(
+    logging_obj: Logging, sync_mode: bool, dropped_connection: Callable[[], Exception]
+):
+    wrapper: Final = _openai_stream_over(
+        (_reset_test_chunk(content="Hello"), _reset_test_chunk(finish_reason="stop")),
+        dropped_connection(),
+        sync_mode,
+        logging_obj,
+    )
+
+    chunks: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello"
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@_SDK3_DROPPED_CONNECTIONS
+async def test_sdk3_dropped_connection_before_finish_reason_raises_mid_stream_fallback(
+    logging_obj: Logging, sync_mode: bool, dropped_connection: Callable[[], Exception]
+):
+    wrapper: Final = _openai_stream_over(
+        (_reset_test_chunk(content="Hel"),), dropped_connection(), sync_mode, logging_obj
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert excinfo.value.generated_content == "Hel"
+    assert isinstance(excinfo.value.original_exception, litellm.APIConnectionError)
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    "read_timeout", (_httpx2_read_timeout, _sdk_wrapped_read_timeout), ids=("httpx2", "sdk_wrapped_httpx2")
+)
+@pytest.mark.parametrize("finished", (False, True), ids=("before_finish_reason", "after_finish_reason"))
+async def test_sdk3_read_timeout_mid_stream_falls_back_as_a_timeout(
+    logging_obj: Logging, sync_mode: bool, read_timeout: Callable[[], Exception], finished: bool
+):
+    chunks: Final = (_reset_test_chunk(content="Hel"), _reset_test_chunk(finish_reason="stop"))
+    wrapper: Final = _openai_stream_over(chunks if finished else chunks[:1], read_timeout(), sync_mode, logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.status_code == 408
 
 
 def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: Logging):
