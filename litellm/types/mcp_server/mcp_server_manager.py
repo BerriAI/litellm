@@ -117,7 +117,7 @@ class MCPServer(LiteLLMBaseModel):
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
-    env_vars: list[dict[str, Any]] | None = None
+    env_vars: list[dict[str, object]] | None = None
     # OAuth-specific fields
     authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     client_id: str | None = None
@@ -240,7 +240,7 @@ class MCPServer(LiteLLMBaseModel):
     # token_validation: key-value pairs that must match fields in the OAuth token
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
-    token_validation: dict[str, Any] | None = None
+    token_validation: dict[str, object] | None = None
     oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never

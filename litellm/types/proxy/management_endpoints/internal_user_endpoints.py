@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
@@ -80,7 +80,7 @@ class UserUpdateResult(LiteLLMBaseModel):
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
 
 
 class BulkUpdateUserResponse(LiteLLMBaseModel):

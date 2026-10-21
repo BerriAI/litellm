@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
     with_config,
 )
+from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, Self, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -30,7 +31,7 @@ def _is_none(value: object) -> bool:
     return value is None
 
 
-_OMITTED_WHEN_NONE: Final = Field(exclude_if=_is_none)
+_OMITTED_WHEN_NONE: Final = FieldInfo.from_field(exclude_if=_is_none)
 OptionalJson: TypeAlias = Annotated[JsonValue, _OMITTED_WHEN_NONE]
 OptionalFloat: TypeAlias = Annotated[float | None, _OMITTED_WHEN_NONE]
 OptionalInt: TypeAlias = Annotated[int | None, _OMITTED_WHEN_NONE]
