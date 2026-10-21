@@ -5860,7 +5860,7 @@ async def _until_evicted(cache: UserApiKeyCache, hashed_token: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeypatch):
+async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """Auth serves key objects cache-first, so a peer worker that is not told about the delete keeps
     authenticating the deleted key from its own copy until user_api_key_cache_ttl expires"""
     raw_key: Final = "sk-" + uuid4().hex
@@ -5899,7 +5899,7 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(monkeypatch):
+async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """/key/delete accepts any string, and a name that is not a key row passes through unhashed. A key
     owner padding the request with another team's spend counter name must not wipe that counter from
     every worker's memory: only the rows the caller was allowed to delete are evicted and broadcast"""
