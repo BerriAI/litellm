@@ -1,24 +1,22 @@
-from typing import Optional
-
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
 
-class PrivaiteGuardrailConfigModel(GuardrailConfigModel):
-    preset: Optional[str] = Field(
+class PrivaiteGuardrailConfigModel(GuardrailConfigModel):  # pyright: ignore[reportMissingTypeArgument]  # parameterizing adds an optional_params field to the UI form
+    preset: str | None = Field(
         default="onnx",
         description=("Detection preset: 'onnx' (full suite, also detects secrets) or 'light' (faster, Presidio only)."),
     )
-    languages: Optional[str] = Field(
+    languages: str | None = Field(
         default="en,fr",
         description="Comma-separated spaCy languages used for detection.",
     )
-    deanonymize: Optional[bool] = Field(
+    deanonymize: bool | None = Field(
         default=True,
         description="Restore the original PII values in the response.",
     )
-    block_entities: str | list[str] | None = Field(
+    block_entities: str | tuple[str, ...] | None = Field(
         default=None,
         description=(
             "PII types to reject outright instead of masking: a list, or a "
