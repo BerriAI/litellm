@@ -16,7 +16,7 @@ import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
 from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows, scratch_database
-from integration._support.database_relay import DatabaseRelay, database_relay
+from integration._support.database_relay import database_relay
 from integration._support.openai_wire import answering_model_discovery, posted_targets
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.responses_stream import data_frames, spend_row, sse_events
@@ -465,18 +465,11 @@ def test_concurrent_burst_ends_each_stream_by_whether_its_provider_finished_it(g
 
 
 _SPEND_LOG_INSERT: Final = b'INSERT INTO "public"."LiteLLM_SpendLogs"'
-Outcomes = tuple[tuple[bool, str], ...]
 
 
 def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
     rows: Final = read_rows('SELECT litellm_call_id, status FROM "LiteLLM_SpendLogs"', (), database_url=database_url)
     return Counter((string_value(row["litellm_call_id"]), string_value(row["status"])) for row in rows)
-
-
-def _bursts_until_recovered(relay: DatabaseRelay, burst: Callable[[], Outcomes]) -> Iterator[tuple[bool, Outcomes]]:
-    """Bursts until the proxy reconnects after the outage, each marked by whether the database was down when it began"""
-    while not relay.reconnected.is_set():
-        yield relay.tripped.is_set(), burst()
 
 
 def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row_once(
@@ -497,19 +490,21 @@ def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row
             for route, family in _BRIDGED_FAMILY.items()
         }
 
-        def burst() -> Outcomes:
+        def burst() -> tuple[tuple[bool, str], ...]:
             return tuple(pool.map(lambda case: _stream_outcome(candidate, models[case[0]], case[0], case[1]), cases))
 
         relay.arm()
-        waves: Final = tuple(itertools.islice(_bursts_until_recovered(relay, burst), 60))
-        assert relay.reconnected.is_set(), "the proxy never reconnected to the database after the outage"
-        assert relay.refused >= 1 and any(down for down, _ in waves), (relay.refused, len(waves))
+        before: Final = burst()
+        assert relay.tripped.wait(90), "no spend log write reached the database after the first burst"
+        down: Final = not relay.reconnected.is_set()
+        during: Final = burst()
+        assert relay.reconnected.wait(90), "the proxy never reconnected to the database after the outage"
+        assert down and relay.refused >= 1, relay.refused
         finished: Final = tuple(ending == "ending-complete" for _, ending in cases)
-        assert all(tuple(done for done, _ in outcomes) == finished for _, outcomes in waves), waves
-        sent: Final = tuple(itertools.chain.from_iterable(outcomes for _, outcomes in waves))
+        assert tuple(done for done, _ in before + during) == finished * 2, (before, during)
         expected: Final = Counter(
             (call_id, "success" if ending == "ending-complete" else "failure")
-            for (_, ending), (_, call_id) in zip(cases * len(waves), sent, strict=True)
+            for (_, ending), (_, call_id) in zip(cases * 2, before + during, strict=True)
         )
         landed: Final = eventually(
             lambda: _spend_statuses(database_url),
