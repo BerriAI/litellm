@@ -75,6 +75,7 @@ from litellm.types.llms.vertex_ai import (
     VertexToolName,
 )
 from litellm.types.utils import (
+    CachedTokensDetails,
     ChatCompletionAudioResponse,
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
@@ -2380,8 +2381,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             # Subtract from text tokens since implicit caching is primarily for text content
             # See: https://github.com/BerriAI/litellm/issues/16341
             prompt_text_tokens = prompt_text_tokens - cached_tokens
-        if cached_audio_tokens is not None and prompt_audio_tokens is not None:
-            prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
         if cached_image_tokens is not None and prompt_image_tokens is not None:
             prompt_image_tokens = prompt_image_tokens - cached_image_tokens
         if cached_video_tokens is not None and prompt_video_tokens is not None:
@@ -2412,6 +2411,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             image_tokens=prompt_image_tokens,
             video_tokens=prompt_video_tokens,
             tool_use_tokens=tool_use_prompt_tokens,
+            cached_tokens_details=CachedTokensDetails(audio_tokens=cached_audio_tokens)
+            if cached_audio_tokens
+            else None,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
