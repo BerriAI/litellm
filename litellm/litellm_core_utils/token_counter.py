@@ -1193,7 +1193,7 @@ def _pdf_text_object_records(  # noqa: C901  # coordinates memoized per-stream P
             yield (
                 match.start("text_object"),
                 match.end("text_object"),
-                match.group("text_object_end") is None,
+                False,
                 match.group("text_object_end") is not None,
             )
 
@@ -1376,7 +1376,7 @@ def _pdf_truncated_text_sample_closures(  # noqa: C901  # single-pass PDF syntax
         best_bare_string_complete,
     ) = best_state
     operand_closures: Final = (
-        (b"\\\\" if best_escape_open else b"")
+        (b"\\" if best_escape_open else b"")
         + (b")" * best_literal_depth if best_literal_depth else b"")
         + (b">" if best_hex_open else b"")
     )

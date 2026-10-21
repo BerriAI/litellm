@@ -2753,6 +2753,57 @@ def test_oversized_literal_cut_after_escape_stays_extractable():
     assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
 
 
+@pytest.mark.parametrize("backslash_count", [1, 2, 3])
+def test_oversized_unclosed_literal_with_backslash_run_stays_extractable(backslash_count: int):
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) - 1)
+    literal_prefix: Final = b"BT /F1 12 Tf (escaped \\(paren\\) " + b"x" * 512 + b"\\" * backslash_count
+    closed_suffix: Final = b")" * (1 + backslash_count % 2) + b" Tj ET\n"
+    closed_page: Final = _fake_pdf_page(path_padding + literal_prefix + closed_suffix)
+    unclosed_page: Final = _fake_pdf_page(path_padding + literal_prefix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    closed_price: Final = _price_pdf_pages((closed_page,), count_x_tokens) - blank_price
+    unclosed_price: Final = _price_pdf_pages((unclosed_page,), count_x_tokens) - blank_price
+    expected: Final = literal_prefix.count(b"x")
+
+    assert expected * 3 // 4 <= closed_price <= expected * 5 // 4
+    assert expected * 3 // 4 <= unclosed_price <= expected * 5 // 4
+
+
+def test_unclosed_end_of_stream_text_keeps_sampling_form_text():
+    form_text: Final = b"BT /F1 12 Tf (form text) Tj ET\n"
+    form_repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(form_text) + 1
+    form_object: Final = _pdf_stream(
+        form_text * form_repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    unclosed_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm Do\nBT /F1 12 Tf (hi) Tj",
+        b"<< /Fm 6 0 R >>",
+        (form_object,),
+    )
+    closed_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm Do\nBT /F1 12 Tf (hi) Tj ET\n",
+        b"<< /Fm 6 0 R >>",
+        (form_object,),
+    )
+
+    def count_form_tokens(value: str) -> int:
+        return value.count("form")
+
+    unclosed_price: Final = _count_inline_pdf_tokens(unclosed_data_url, count_form_tokens)
+    closed_price: Final = _count_inline_pdf_tokens(closed_data_url, count_form_tokens)
+
+    assert unclosed_price is not None
+    assert closed_price is not None
+    assert closed_price * 3 // 4 <= unclosed_price <= closed_price * 5 // 4
+
+
 def test_oversized_literal_cut_after_et_inside_string_stays_extractable():
     text_prefix: Final = b"BT /F1 12 Tf ("
     literal_prefix: Final = b"x" * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(text_prefix) - len(b"ET")) + b"ET"
