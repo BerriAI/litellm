@@ -45623,7 +45623,6 @@
         "output_cost_per_token": 0.0
     },
     "openai.gpt-oss-120b-1:0": {
-        "supports_vision": false,
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -45649,7 +45648,6 @@
         "supports_tool_choice": true
     },
     "openai.gpt-oss-20b-1:0": {
-        "supports_vision": false,
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -49354,7 +49352,6 @@
         "supports_vision": false
     },
     "us-gov.openai.gpt-oss-20b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 8.4e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -49374,7 +49371,6 @@
         "supports_tool_choice": true
     },
     "us-gov.openai.gpt-oss-120b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -59921,7 +59917,6 @@
         }
     },
     "bedrock_mantle/openai.gpt-oss-120b": {
-        "supports_vision": false,
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
         "input_cost_per_token_flex": 7.5e-08,
@@ -59947,7 +59942,6 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-20b": {
-        "supports_vision": false,
         "input_cost_per_token": 7e-08,
         "input_cost_per_token_batches": 3.5e-08,
         "input_cost_per_token_flex": 3.5e-08,
@@ -59973,7 +59967,6 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
-        "supports_vision": false,
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7e-08,
         "input_cost_per_token_flex": 7e-08,
@@ -59997,7 +59990,6 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-safeguard-20b": {
-        "supports_vision": false,
         "input_cost_per_token": 7e-08,
         "input_cost_per_token_batches": 3e-08,
         "input_cost_per_token_flex": 3e-08,
@@ -67845,7 +67837,6 @@
         "supports_vision": false
     },
     "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 8.4e-08,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -67865,7 +67856,6 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/openai.gpt-oss-120b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -68144,7 +68134,6 @@
         "supports_vision": false
     },
     "bedrock/us-gov-east-1/openai.gpt-oss-20b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 8.4e-08,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -68164,7 +68153,6 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-east-1/openai.gpt-oss-120b-1:0": {
-        "supports_vision": false,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -68553,7 +68541,6 @@
         "supports_vision": true
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-oss-20b": {
-        "supports_vision": false,
         "input_cost_per_token": 8.4e-08,
         "output_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock_mantle",
@@ -68573,7 +68560,6 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-oss-120b": {
-        "supports_vision": false,
         "input_cost_per_token": 1.8e-07,
         "output_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock_mantle",
@@ -68714,7 +68700,6 @@
         "supports_vision": true
     },
     "bedrock_mantle/us-gov-east-1/openai.gpt-oss-20b": {
-        "supports_vision": false,
         "input_cost_per_token": 8.4e-08,
         "output_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock_mantle",
@@ -68734,7 +68719,6 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/us-gov-east-1/openai.gpt-oss-120b": {
-        "supports_vision": false,
         "input_cost_per_token": 1.8e-07,
         "output_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock_mantle",

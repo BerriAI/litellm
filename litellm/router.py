@@ -221,6 +221,7 @@ from litellm.router_utils.common_utils import (
     request_user_api_key_auth,
     require_image_compatible_deployments,
     resolve_model_group_alias,
+    responses_routing_scope,
     team_may_use_deployment,
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
@@ -2995,12 +2996,13 @@ class Router:
             )
 
             # pick the one that is available (lowest TPM/RPM)
-            deployment = self.get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with responses_routing_scope(None):
+                deployment = self.get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -4345,12 +4347,13 @@ class Router:
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with responses_routing_scope(None):
+                deployment = await self.async_get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -6078,7 +6081,7 @@ class Router:
         try:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
-                with self._video_call_pin(handler_name, kwargs):
+                with self._video_call_pin(handler_name, kwargs), responses_routing_scope(handler_name):
                     deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                         model=model,
                         request_kwargs=kwargs,
@@ -6838,7 +6841,7 @@ class Router:
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
-            with self._video_call_pin(handler_name, kwargs):
+            with self._video_call_pin(handler_name, kwargs), responses_routing_scope(handler_name):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     messages=kwargs.get("messages", None),

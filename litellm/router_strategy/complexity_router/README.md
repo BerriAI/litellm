@@ -413,7 +413,7 @@ response = litellm.completion(
 
 ### Modality-based capability routing
 
-Image requests route only to deployments with confirmed vision support. The router reads
+Responses API image requests route only to deployments with confirmed vision support. The router reads
 `model_info.supports_vision` first, then the loaded model catalog. False or unknown support
 excludes a deployment from image requests. Text requests retain their existing routing behavior.
 
@@ -423,8 +423,8 @@ quota, ordering, and routing plugin checks still apply.
 
 If the chosen group cannot accept images, the auto-router tries compatible peers and higher
 tiers, then an allowed `default_model`. Otherwise it returns an actionable 400 before provider
-dispatch. A plan-mode floor cannot be undercut. `modality_routing` is retained for configuration
-compatibility, but setting it to false no longer disables these checks.
+dispatch. A plan-mode floor cannot be undercut. These checks always apply to Responses API requests. Other endpoints retain their existing
+`modality_routing` behavior and default setting.
 
 For custom deployments missing catalog metadata, set `model_info.supports_vision: true` only
 when the underlying model supports images. Existing custom deployments without that declaration

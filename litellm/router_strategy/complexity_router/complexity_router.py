@@ -68,7 +68,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
-from litellm.router_utils.common_utils import deployment_supports_image_input, get_request_team_id
+from litellm.router_utils.common_utils import deployment_supports_image_input, get_request_team_id, is_responses_routing
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -3690,6 +3690,8 @@ class ComplexityRouter(CustomLogger):
         return tuple(deployment_verdict(deployment) for deployment in deployments)
 
     def _model_accepts_image_input(self, model_name: str, request_kwargs: Mapping[str, object]) -> bool:
+        if not is_responses_routing():
+            return all(verdict is not False for verdict in self._vision_verdicts(model_name))
         team_id: Final = get_request_team_id(request_kwargs)
         deployments: Final = (
             self.litellm_router_instance.get_model_list(model_name=model_name, team_id=team_id)
@@ -3723,8 +3725,15 @@ class ComplexityRouter(CustomLogger):
         """Keep compatible placements, reject incompatible pins, and repick permitted image routes."""
         decision: Final = response.routing_decision
         if (
-            not resolved_messages
+            (not is_responses_routing() and not self.config.modality_routing)
+            or not resolved_messages
             or response.model is None
+            or (
+                not is_responses_routing()
+                and decision is not None
+                and decision.get("cause") == "session_affinity_pin"
+                and not self.config.modality_pin_override
+            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         ):
@@ -3777,6 +3786,11 @@ class ComplexityRouter(CustomLogger):
                     f"at or above the decided tier has confirmed image support. "
                     f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
                     f"or set model_info.supports_vision: true for a custom vision deployment, or remove the image content."
+                    if is_responses_routing()
+                    else f"Auto-router {self.model_name} received a request with image input, but no model "
+                    f"at or above the decided tier accepts images and modality_routing is enabled. "
+                    f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
+                    f"or set a vision-capable default_model, or remove the image content."
                 ),
                 model=self.model_name,
                 llm_provider="",
@@ -3922,7 +3936,9 @@ class ComplexityRouter(CustomLogger):
             return response
         eligible: Final = (
             self._modality_eligible_models(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
-            if resolved_messages and request_contains_image_content(resolved_messages)
+            if (is_responses_routing() or self.config.modality_routing)
+            and resolved_messages
+            and request_contains_image_content(resolved_messages)
             else None
         )
         pools: Final = self._tier_pools()
