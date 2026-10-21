@@ -141,6 +141,16 @@ _STRICT_TOOLS_REJECTIONS: Final = tuple(
     )
 )
 _TOO_MANY_STRICT_TOOLS: Final = _STRICT_TOOLS_REJECTIONS[0]
+# Bedrock's 400s for requests with a strict tool that fail for other reasons, seen live on
+# us.anthropic.claude-sonnet-4-6 on 2026-10-21, which echo tool names and tool call ids
+_OTHER_400S_WITH_A_STRICT_TOOL: Final = tuple(
+    BedrockError(status_code=400, message=f'{{"message":"{text}"}}')
+    for text in (
+        "The tool check_grammar is already defined at toolConfig.tools.1.",
+        "Expected toolResult blocks at messages.0.content for the following Ids: call_grammar_9",
+        "tool_use ids were found without tool_result blocks immediately after: call_grammar_1",
+    )
+)
 
 
 def _call_with_strict_tools_fallback(
@@ -174,10 +184,18 @@ def test_a_strict_tools_rejection_is_sent_again_once_with_the_strict_tools_fallb
     ("error", "strict_tools_fallback"),
     [
         (_OTHER_400, _STRICT_FALLBACK),
+        *((error, _STRICT_FALLBACK) for error in _OTHER_400S_WITH_A_STRICT_TOOL),
         (BedrockError(status_code=500, message=_TOO_MANY_STRICT_TOOLS.message), _STRICT_FALLBACK),
         (_TOO_MANY_STRICT_TOOLS, None),
     ],
-    ids=["other_400", "server_error", "no_strict_tools_fallback"],
+    ids=[
+        "other_400",
+        "duplicate_tool_name",
+        "missing_tool_result",
+        "orphan_tool_use",
+        "server_error",
+        "no_strict_tools_fallback",
+    ],
 )
 def test_no_second_request_without_both_a_strict_tools_rejection_and_a_strict_tools_fallback(
     asynchronous: bool, error: BedrockError, strict_tools_fallback: NativeOutputFallback | None

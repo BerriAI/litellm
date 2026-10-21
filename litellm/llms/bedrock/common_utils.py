@@ -360,10 +360,13 @@ class NativeOutputFallback:
 
 
 _BEDROCK_STRICT_TOOLS_REJECTION: Final = re.compile(
-    r"strict tools|grammar|compilation|tools\.\d+\.custom(?:\.strict)?: "
+    r"Too many strict tools \(\d+\)"
+    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
+    r"|[Cc]ompiled grammar (?:is too large|size)"
+    r"|tools\.\d+\.custom(?:\.strict)?: "
 )
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_TOOL_FUNCTION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_bedrock_strict_tools_rejection(status_code: int, error_text: str) -> bool:
@@ -379,10 +382,11 @@ def warn_bedrock_strict_tools_dropped(model: str) -> None:
 
 
 def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
-    if "function" not in tool:
+    spec_key: Final = next((key for key in ("function", "toolSpec") if key in tool), None)
+    if spec_key is None:
         return tool
-    function: Final = _TOOL_FUNCTION_ADAPTER.validate_python(tool["function"])
-    return {**tool, "function": {key: value for key, value in function.items() if key != "strict"}}
+    spec: Final = _TOOL_SPEC_ADAPTER.validate_python(tool[spec_key])
+    return {**tool, spec_key: {key: value for key, value in spec.items() if key != "strict"}}
 
 
 def bedrock_strict_tools_fallback(

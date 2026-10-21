@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9838,16 +9838,19 @@ _TOO_MANY_STRICT_TOOLS: Final = (
 
 
 async def _converse_with_a_strict_tools_limit_rejection_first(
-    sent: list[dict[str, object]], asynchronous: bool, stream: bool, drop_params: bool | None
+    sent: list[tuple[str, dict[str, object]]],
+    asynchronous: bool,
+    stream: Literal["off", "fake", "real"],
+    drop_params: bool | None,
 ) -> None:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from tests.unit.llms.bedrock.slow_upstream import CONVERSE_ANSWER
 
     def respond(request: httpx.Request) -> httpx.Response:
-        sent.append(json.loads(request.content))
+        sent.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
         if len(sent) == 1:
             return httpx.Response(400, json={"message": _TOO_MANY_STRICT_TOOLS})
-        return httpx.Response(200, content=CONVERSE_ANSWER)
+        return httpx.Response(200, content=b"" if stream == "real" else CONVERSE_ANSWER)
 
     kwargs: Final = {
         "model": "bedrock/us.anthropic.claude-sonnet-4-6",
@@ -9858,37 +9861,39 @@ async def _converse_with_a_strict_tools_limit_rejection_first(
         "aws_region_name": "us-east-1",
         "num_retries": 0,
         "drop_params": drop_params,
-        "stream": stream,
-        "fake_stream": stream,
+        "stream": stream != "off",
+        "fake_stream": stream == "fake",
     }
     if asynchronous:
         response = await litellm.acompletion(
             client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)), **kwargs
         )
-        chunks = [chunk async for chunk in response] if stream else [response]
+        chunks = [chunk async for chunk in response] if stream == "fake" else [response]
     else:
         response = litellm.completion(
             client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), **kwargs
         )
-        chunks = list(response) if stream else [response]
+        chunks = list(response) if stream == "fake" else [response]
     assert chunks
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("stream", [False, True], ids=["completion", "stream"])
+@pytest.mark.parametrize("stream", ["off", "fake", "real"], ids=["completion", "fake_stream", "stream"])
 async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict_under_drop_params(
-    asynchronous: bool, stream: bool, local_model_cost_map: None
+    asynchronous: bool, stream: Literal["off", "fake", "real"], local_model_cost_map: None
 ) -> None:
-    sent: Final[list[dict[str, object]]] = []
+    sent: Final[list[tuple[str, dict[str, object]]]] = []
 
     await _converse_with_a_strict_tools_limit_rejection_first(sent, asynchronous, stream, drop_params=True)
 
-    first_tool_spec: Final = sent[0]["toolConfig"]["tools"][0]["toolSpec"]
+    (first_path, first_body), (second_path, second_body) = sent
+    first_tool_spec: Final = first_body["toolConfig"]["tools"][0]["toolSpec"]
     assert first_tool_spec["strict"] is True
-    assert sent[1] == {
-        **sent[0],
+    assert first_path == second_path == ("converse-stream" if stream == "real" else "converse")
+    assert second_body == {
+        **first_body,
         "toolConfig": {
-            **sent[0]["toolConfig"],
+            **first_body["toolConfig"],
             "tools": [{"toolSpec": {key: value for key, value in first_tool_spec.items() if key != "strict"}}],
         },
     }
@@ -9898,9 +9903,9 @@ async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict
 async def test_bedrock_strict_tools_limit_rejection_reaches_the_caller_without_drop_params(
     asynchronous: bool, local_model_cost_map: None
 ) -> None:
-    sent: Final[list[dict[str, object]]] = []
+    sent: Final[list[tuple[str, dict[str, object]]]] = []
 
     with pytest.raises(litellm.BadRequestError, match="Too many strict tools"):
-        await _converse_with_a_strict_tools_limit_rejection_first(sent, asynchronous, stream=False, drop_params=None)
+        await _converse_with_a_strict_tools_limit_rejection_first(sent, asynchronous, stream="off", drop_params=None)
 
     assert len(sent) == 1

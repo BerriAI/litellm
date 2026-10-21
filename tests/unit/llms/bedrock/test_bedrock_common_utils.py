@@ -2162,10 +2162,12 @@ def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_el
     }
     plain_tool: Final = {"type": "function", "function": {"name": "plain", "parameters": {"type": "object"}}}
     anthropic_tool: Final = {"name": "native", "input_schema": {"type": "object"}}
+    bedrock_tool: Final = {"toolSpec": {"name": "spec", "strict": True, "inputSchema": {"json": {"type": "object"}}}}
     litellm_params: Final = {"drop_params": True}
 
     fallback: Final = bedrock_strict_tools_fallback(
-        {"tools": [strict_tool, plain_tool, anthropic_tool], "maxTokens": 16, "stream": True}, litellm_params
+        {"tools": [strict_tool, plain_tool, anthropic_tool, bedrock_tool], "maxTokens": 16, "stream": True},
+        litellm_params,
     )
 
     assert fallback == NativeOutputFallback(
@@ -2174,6 +2176,7 @@ def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_el
                 {**strict_tool, "function": {"name": "lookup", "description": "Look up", "parameters": {"type": "object"}}},
                 plain_tool,
                 anthropic_tool,
+                {"toolSpec": {"name": "spec", "inputSchema": {"json": {"type": "object"}}}},
             ],
             "maxTokens": 16,
             "stream": True,
@@ -2181,12 +2184,17 @@ def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_el
         litellm_params=litellm_params,
     )
     assert strict_tool["function"]["strict"] is True
+    assert bedrock_tool["toolSpec"]["strict"] is True
 
 
 @pytest.mark.parametrize(
     "optional_params",
-    [{"maxTokens": 16}, {"tools": [{"type": "function", "function": {"name": "plain", "parameters": {}}}]}],
-    ids=["no_tools", "no_strict_tool"],
+    [
+        {"maxTokens": 16},
+        {"tools": [{"type": "function", "function": {"name": "plain", "parameters": {}}}]},
+        {"tools": [{"toolSpec": {"name": "spec", "inputSchema": {"json": {}}}}]},
+    ],
+    ids=["no_tools", "no_strict_tool", "no_strict_tool_spec"],
 )
 def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_params):
     assert bedrock_strict_tools_fallback(optional_params, {}) is None
