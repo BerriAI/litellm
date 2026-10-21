@@ -591,19 +591,31 @@ async def test_aresponses_streams_agent_answers_from_foundry():
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("model", ["azure_ai/agents/support-agent", "azure_ai/gpt-4.1"])
 @pytest.mark.parametrize(
-    "configured_scope,expected_scope",
-    [(None, AZURE_AI_AGENTS_SCOPE), ("api://custom-app/.default", "api://custom-app/.default")],
+    "configured_scope,env_scope,expected_scope",
+    [
+        (None, None, AZURE_AI_AGENTS_SCOPE),
+        ("api://custom-app/.default", None, "api://custom-app/.default"),
+        (None, "https://ai.azure.us/.default", "https://ai.azure.us/.default"),
+        ("api://custom-app/.default", "https://ai.azure.us/.default", "api://custom-app/.default"),
+    ],
 )
-async def test_aresponses_mints_the_service_principal_token_for_the_project_scope(configured_scope, expected_scope):
+async def test_aresponses_mints_the_service_principal_token_for_the_project_scope(
+    monkeypatch, model, configured_scope, env_scope, expected_scope
+):
+    if env_scope is None:
+        monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("AZURE_SCOPE", env_scope)
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
     )
 
-    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope an agent entry requests and the bearer it sends; live service principal path proven by the PR's Foundry e2e QA
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope a project entry requests and the bearer it sends; live service principal path proven by the PR's Foundry e2e QA
         mock_entra_id.return_value = lambda: "agent-sp-token"
         await litellm.aresponses(
-            model="azure_ai/agents/support-agent",
+            model=model,
             input="What is 2+2?",
             api_base=FOUNDRY_PROJECT_BASE,
             tenant_id="tenant",

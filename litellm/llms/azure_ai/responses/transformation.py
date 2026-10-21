@@ -1,3 +1,4 @@
+import os
 from collections.abc import Collection, Mapping, Sequence
 from typing import Final
 
@@ -54,7 +55,9 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
         on_project: Final = api_base is not None and bool(_project_root(httpx.URL(api_base)))
         auth_params: Final = (
-            params.model_copy(update={"azure_scope": params.azure_scope or AZURE_AI_AGENTS_SCOPE})
+            params.model_copy(
+                update={"azure_scope": params.azure_scope or os.getenv("AZURE_SCOPE") or AZURE_AI_AGENTS_SCOPE}
+            )
             if on_project
             else params
         )
