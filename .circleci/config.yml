@@ -1291,7 +1291,7 @@ jobs:
                 name: Install MCP SDK1 peer
                 command: |
                   uv venv --python 3.12 .venv-mcp-peer
-                  uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+                  uv pip install --no-config --exclude-newer "3 days" --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
                   echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
       - when:
           condition:
