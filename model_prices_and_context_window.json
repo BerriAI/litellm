@@ -63558,6 +63558,32 @@
         "supports_vision": true,
         "source": "https://www.bitdeer.ai/en/pricing/ai-models"
     },
+    "bitdeer-ai/BAAI/bge-m3": {
+        "max_input_tokens": 8192,
+        "input_cost_per_token": 1e-08,
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "litellm_provider": "bitdeer-ai",
+        "mode": "embedding",
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
+    "bitdeer-ai/BAAI/bge-reranker-v2-m3": {
+        "max_input_tokens": 8192,
+        "input_cost_per_token": 1e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bitdeer-ai",
+        "mode": "rerank",
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
+    "bitdeer-ai/seedream-5.0-lite": {
+        "litellm_provider": "bitdeer-ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
     "fallback_generalizations": {
         "rules": [
             {

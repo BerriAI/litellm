@@ -9561,7 +9561,7 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_rerank_config(
+    def get_provider_rerank_config(  # noqa: C901  # flat one-branch-per-provider dispatch
         model: str,
         provider: LlmProviders,
         api_base: str | None,
@@ -9584,6 +9584,12 @@ class ProviderConfigManager:
             )
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
+        elif litellm.LlmProviders.BITDEER_AI == provider:
+            from litellm.llms.openai_like.rerank.bitdeer_transformation import (
+                BitdeerRerankConfig,
+            )
+
+            return BitdeerRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:

@@ -88,6 +88,11 @@ class JSONProviderRegistry:
         return "/v1/responses" in provider.supported_endpoints
 
     @classmethod
+    def supports_embeddings(cls, slug: str) -> bool:
+        provider: Final = cls._providers.get(slug)
+        return provider is not None and "/v1/embeddings" in provider.supported_endpoints
+
+    @classmethod
     def list_providers(cls) -> list:
         """List all registered provider slugs"""
         return list(cls._providers.keys())

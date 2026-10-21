@@ -8,7 +8,7 @@
     "special_handling": {
       "require_api_key_for_custom_base": true
     },
-    "supported_endpoints": ["/v1/chat/completions"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/images/generations"]
   },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",

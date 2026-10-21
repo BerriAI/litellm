@@ -7652,6 +7652,27 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+            if not api_key:
+                raise litellm.AuthenticationError(
+                    message=f"{custom_llm_provider} embeddings need an api_key",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
+            response = openai_chat_completions.embedding(  # rebind-ok: one assignment per provider branch
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                litellm_params=litellm_params_dict,
+            )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         if response is not None and hasattr(response, "_hidden_params") and isinstance(response, EmbeddingResponse):

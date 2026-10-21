@@ -12,6 +12,9 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 BASE_URL: Final = "https://api-inference.bitdeer.ai/v1"
 MODEL: Final = "deepseek-ai/DeepSeek-V4-Flash"
+EMBEDDING_MODEL: Final = "BAAI/bge-m3"
+RERANK_MODEL: Final = "BAAI/bge-reranker-v2-m3"
+IMAGE_MODEL: Final = "seedream-5.0-lite"
 MODELS: Final = (
     "deepseek-ai/DeepSeek-V4.1-Flash",
     "deepseek-ai/DeepSeek-V4.1-Flash-1017",
@@ -212,12 +215,127 @@ def test_bitdeer_pricing_and_packaged_registry() -> None:
     )
     backup: Final = json.loads((root / "litellm/model_prices_and_context_window_backup.json").read_text())
 
+    for model in (*MODELS, EMBEDDING_MODEL, RERANK_MODEL, IMAGE_MODEL):
+        extra: Final = f"bitdeer-ai/{model}"
+        assert prices[extra] == backup[extra] == litellm.model_cost[extra]
+        assert prices[extra]["litellm_provider"] == "bitdeer-ai"
+
     for model in MODELS:
         name: Final = f"bitdeer-ai/{model}"
         entry: Final = prices[name]
-        assert entry == backup[name] == litellm.model_cost[name]
+        assert entry["mode"] == "chat"
         assert entry["max_input_tokens"] > 0
         assert entry["litellm_provider"] == "bitdeer-ai"
         prompt_cost, output_cost = litellm.cost_per_token(model=name, prompt_tokens=100, completion_tokens=10)
         assert prompt_cost == pytest.approx(100 * entry["input_cost_per_token"])
         assert output_cost == pytest.approx(10 * entry["output_cost_per_token"])
+
+
+def test_bitdeer_embedding_sends_selected_key_and_charges_input_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BITDEER_API_KEY", "environment-key")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(BASE_URL + "/embeddings").respond(
+            200,
+            json={
+                "object": "list",
+                "model": EMBEDDING_MODEL,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.25, -0.5]}],
+                "usage": {"prompt_tokens": 7, "total_tokens": 7},
+            },
+        )
+        response: Final = litellm.embedding(model=f"bitdeer-ai/{EMBEDDING_MODEL}", input=["hello"], api_base=BASE_URL)
+
+    request: Final = route.calls.last.request
+    assert json.loads(request.content) == {"model": EMBEDDING_MODEL, "input": ["hello"]}
+    assert request.headers["authorization"] == "Bearer environment-key"
+    assert response.data[0]["embedding"] == [0.25, -0.5]
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        7 * litellm.model_cost[f"bitdeer-ai/{EMBEDDING_MODEL}"]["input_cost_per_token"]
+    )
+
+
+def test_bitdeer_embedding_without_bitdeer_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BITDEER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.AuthenticationError, match="api_key"):
+            litellm.embedding(model=f"bitdeer-ai/{EMBEDDING_MODEL}", input=["hello"], api_base=BASE_URL)
+        assert len(upstream.calls) == 0
+
+
+def test_bitdeer_rerank_orders_results_and_sends_selected_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BITDEER_API_KEY", "environment-key")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(BASE_URL + "/rerank").respond(
+            200,
+            json={
+                "id": "rerank-bitdeer",
+                "model": RERANK_MODEL,
+                "usage": {"total_tokens": 9},
+                "results": [
+                    {"index": 1, "relevance_score": 0.91, "document": {"text": "paris"}},
+                    {"index": 0, "relevance_score": 0.02, "document": {"text": "berlin"}},
+                ],
+            },
+        )
+        response: Final = litellm.rerank(
+            model=f"bitdeer-ai/{RERANK_MODEL}",
+            query="capital of france",
+            documents=["berlin", "paris"],
+            api_key="explicit-key",
+        )
+
+    request: Final = route.calls.last.request
+    payload: Final = json.loads(request.content)
+    assert payload["model"] == RERANK_MODEL
+    assert payload["query"] == "capital of france"
+    assert payload["documents"] == ["berlin", "paris"]
+    assert request.headers["authorization"] == "Bearer explicit-key"
+    assert [(result["index"], result["relevance_score"]) for result in response.results] == [(1, 0.91), (0, 0.02)]
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        9 * litellm.model_cost[f"bitdeer-ai/{RERANK_MODEL}"]["input_cost_per_token"]
+    )
+
+
+def test_bitdeer_rerank_without_bitdeer_key_never_sends_the_hosted_vllm_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BITDEER_API_KEY", raising=False)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "vllm-secret")
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.AuthenticationError, match="BITDEER_API_KEY"):
+            litellm.rerank(model=f"bitdeer-ai/{RERANK_MODEL}", query="q", documents=["d"])
+        assert len(upstream.calls) == 0
+
+
+def test_bitdeer_rerank_rejects_custom_base_before_sending(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BITDEER_API_KEY", "server-secret")
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.BadRequestError, match="explicit api_key is required"):
+            litellm.rerank(
+                model=f"bitdeer-ai/{RERANK_MODEL}",
+                query="q",
+                documents=["d"],
+                api_base="https://custom.example/v1",
+            )
+        assert len(upstream.calls) == 0
+
+
+def test_bitdeer_image_generation_sends_selected_key_and_charges_per_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BITDEER_API_KEY", "environment-key")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(BASE_URL + "/images/generations").respond(
+            200,
+            json={"created": 0, "data": [{"url": "https://images.example/out.jpeg", "size": "2048x2048"}]},
+        )
+        response: Final = litellm.image_generation(
+            model=f"bitdeer-ai/{IMAGE_MODEL}", prompt="a red circle", api_base=BASE_URL, api_key="explicit-key"
+        )
+
+    request: Final = route.calls.last.request
+    payload: Final = json.loads(request.content)
+    assert payload["model"] == IMAGE_MODEL
+    assert payload["prompt"] == "a red circle"
+    assert request.headers["authorization"] == "Bearer explicit-key"
+    assert response.data[0].url == "https://images.example/out.jpeg"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost[f"bitdeer-ai/{IMAGE_MODEL}"]["output_cost_per_image"]
+    )
