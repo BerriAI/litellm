@@ -219,9 +219,7 @@ class DailyActivityRepository:
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("api_key") is not None))
         return KeyPage(rows=rows, total_api_keys=total_api_keys)
 
-    async def tag_page(
-        self, scope: DailyActivityScope, *, team_id: str, offset: int, limit: int
-    ) -> TagPage:
+    async def tag_page(self, scope: DailyActivityScope, *, team_id: str, offset: int, limit: int) -> TagPage:
         query: Final = build_tag_page_sql(scope, team_id=team_id, offset=offset, limit=limit)
         result: Final = await self._query(query)
         total_tags_value: Final = result[0].get("total_tags") if result else 0
