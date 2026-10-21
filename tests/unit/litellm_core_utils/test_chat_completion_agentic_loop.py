@@ -519,3 +519,40 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
         if include_usage
         else []
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prefix", (WEBSEARCH_INTERCEPTION_PREFIX, CODE_INTERPRETER_INTERCEPTION_PREFIX, HEADROOM_INTERCEPTION_PREFIX)
+)
+async def test_converted_stream_replays_the_original_reply_when_no_tool_is_called(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+):
+    """A streamed request that was converted to a non-streaming call still gets a
+    stream back when the model answers without a tool call and no callback gates."""
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-no-tool",
+        function_id="fn-no-tool",
+    )
+
+    result: Final = await maybe_run_chat_completion_agentic_loop(
+        response=_plain_model_response("no tool needed"),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        kwargs={f"{prefix}_converted_stream": True},
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+        stream=False,
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in result]
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert content == "no tool needed"
