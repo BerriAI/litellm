@@ -18,7 +18,7 @@ The draft selects only the resolved deterministic hash-order prefix. The reposit
 
 No 429 response was recorded, so no `Retry-After` backoff was used. The collector did not persist `RateLimit-Remaining`; its exact value is unavailable. No credentials were used or recorded
 
-Selected compressed image layers total 86,932,156,867 bytes (80.962 GiB). The peak planned three-image batch is 6,264,019,473 bytes (5.834 GiB). Disk free space was 78 GiB before held-out image cleanup and 79 GiB after cleanup, with 79 GiB observed during discovery. No profiling images were pulled
+Across the 60 confirmed available image candidates, compressed layers total 86,932,156,867 bytes (80.962 GiB). The peak planned three-image batch is 6,264,019,473 bytes (5.834 GiB). These are discovery estimates, not the current two-task prefix-eligible draft. Disk free space was 78 GiB before held-out image cleanup and 79 GiB after cleanup, with 79 GiB observed during discovery. No profiling images were pulled
 
 The earlier 15-run durations were 187.882 seconds mean and 272.907 seconds p90. For 180 solver runs across three workers, the corresponding estimates are 11,272.907 seconds (3.13 hours) at the mean and 16,374.392 seconds (4.55 hours) at p90, before validation time. Estimated spend is $67.86 at the prior $0.377/run mean and up to $180 at the $1/run cap, plus the completed $0.109114 label spend
 
