@@ -24,7 +24,7 @@ Ask everything in one message, with defaults the user can accept by saying "go":
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
 
-In the same message, say that someone who would rather answer prompts can run `litellm --setup` in their own terminal after step 4. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+In the same message, say that someone who would rather answer prompts can run `litellm --setup` in a separate terminal window after step 4, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
 
 ## 2. Check prerequisites
 
@@ -32,7 +32,7 @@ In the same message, say that someone who would rather answer prompts can run `l
 uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version; command -v python3 lsof
 ```
 
-Every path needs curl, openssl, python3, and lsof, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it the way https://docs.astral.sh/uv/getting-started/installation/ shows for their OS, and run the installer only after the user says yes. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
+Every path needs curl, openssl, python3, and lsof, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it, and only after the user says yes run `curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh`, which leaves their shell profile alone (https://docs.astral.sh/uv/getting-started/installation/). It puts uv in `~/.local/bin`, so start every later command that runs `uv` or `litellm` with `export PATH="$HOME/.local/bin:$PATH";`. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
 
 Check the port is free with `lsof -nP -iTCP:4000 -sTCP:LISTEN`, which prints nothing when it is. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
 
@@ -170,6 +170,7 @@ Tell the user, without printing any secret:
 - The master key is `LITELLM_MASTER_KEY` in the folder's `.env`
 - To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), or `<folder>/litellm-gateway stop` (quickstart). To start it again, rerun the step 7 command, `docker start litellm`, or `<folder>/litellm-gateway start`. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
 - With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 3 or 6 first
+- The Admin UI warns that the master-key login is a shared secret, which is fine while only this machine reaches the proxy. Before anyone else can reach it, invite an admin with their own password on the Internal Users page, then set `general_settings.disable_env_credential_login: true` in the proxy config
 - To manage the running proxy from a coding agent (keys, teams, users, models, MCP servers), install `npx skills add BerriAI/litellm-skills -g`
 
 ## Troubleshooting
