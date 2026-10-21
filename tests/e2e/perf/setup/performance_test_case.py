@@ -9,8 +9,10 @@ so a case is a literal a reviewer can read top to bottom.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import accumulate
 from typing import Final, Literal
 
 from setup.event_loop import EventLoopStalls
@@ -36,6 +38,7 @@ Metric = Literal[
     "postgres_active_sessions",
     "postgres_slowest_statement_seconds",
     "postgres_peak_connections",
+    "sustained_rps",
 ]
 
 
@@ -98,11 +101,49 @@ LONG: Final = RequestShape("long", input_tokens=(300_000, 1_000_000), tools=True
 
 
 @dataclass(frozen=True, slots=True)
+class Ramp:
+    """Rate stepped up through the run: `first_rps`, then `step_rps` more every `step_seconds`, up to `last_rps`.
+    Each step is scored on its own and the run reports `sustained_rps`, the last step the pod held before the
+    first one it did not: a step holds when its `gateway_added_seconds` p99 stayed under `held_p99_seconds`, it
+    completed at least `HELD_SHARE` of its rate and no more than `HELD_UNEXPECTED_SHARE` of its requests came back
+    with an unexpected status (`setup/ramp.py`). Requests are sent on a schedule drawn from the plan's seed, not
+    from per-user intervals, so the rate changes on the step boundary."""
+
+    first_rps: float
+    last_rps: float
+    step_rps: float
+    step_seconds: float
+    held_p99_seconds: float
+
+    @property
+    def rates(self) -> tuple[float, ...]:
+        count: Final = round((self.last_rps - self.first_rps) / self.step_rps) + 1
+        return tuple(self.first_rps + index * self.step_rps for index in range(count))
+
+    @property
+    def counts(self) -> tuple[int, ...]:
+        return tuple(round(rate * self.step_seconds) for rate in self.rates)
+
+    @property
+    def total_requests(self) -> int:
+        return sum(self.counts)
+
+    @property
+    def seconds(self) -> float:
+        return len(self.rates) * self.step_seconds
+
+    def step_of(self, seq: int) -> int:
+        """Zero-based step of the request with 1-based plan number `seq`."""
+        return bisect.bisect_left(tuple(accumulate(self.counts)), seq)
+
+
+@dataclass(frozen=True, slots=True)
 class Traffic:
     """The plan: `total_requests` drawn from `seed`, sent at `rps` by `concurrency` simulated
-    users. Shares are fractions of the requests: `endpoints` and `shapes` must each sum to 1,
-    `intervene_share` picks non-streaming requests the guardrail rewrites, `block_share` picks
-    requests it blocks."""
+    users, or stepped up through a `ramp` (then `rps` is its first step and `total_requests` its
+    total, see `ramped`). Shares are fractions of the requests: `endpoints` and `shapes` must each
+    sum to 1, `intervene_share` picks non-streaming requests the guardrail rewrites, `block_share`
+    picks requests it blocks."""
 
     seed: int
     rps: float
@@ -113,20 +154,33 @@ class Traffic:
     intervene_share: float = 0.0
     block_share: float = 0.0
     concurrency: int = 20
+    ramp: Ramp | None = None
 
     @property
     def expected_seconds(self) -> float:
-        return self.total_requests / self.rps
+        return self.total_requests / self.rps if self.ramp is None else self.ramp.seconds
+
+
+def ramped(base: Traffic, ramp: Ramp, *, seed: int, concurrency: int) -> Traffic:
+    """`base`'s request mix sent along `ramp` instead of at one rate. `concurrency` caps the requests in
+    flight, so size it past the deepest step the ramp is expected to reach."""
+    return replace(
+        base, seed=seed, rps=ramp.first_rps, total_requests=ramp.total_requests, concurrency=concurrency, ramp=ramp
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class Limit:
-    """One pass/fail rule: `metric` (at `percentile`, or the whole-run value) must not exceed `max`.
-    Metrics without a Limit are still reported."""
+    """One pass/fail rule: `metric` (at `percentile`, or the whole-run value) must not exceed `max`, or must
+    reach `min` for a floor such as `sustained_rps`. Metrics without a Limit are still reported."""
 
     metric: Metric
-    max: float
+    max: float | None = None
     percentile: int | None = None
+    min: float | None = None
+
+    def __post_init__(self) -> None:
+        assert (self.max is None) != (self.min is None), f"{self.metric}: a Limit is either a max or a min"
 
     @property
     def label(self) -> str:
@@ -201,6 +255,14 @@ class PerformanceTestCase:
         assert 0 <= self.traffic.stream_share <= 1, f"{self.name}: stream_share out of range"
         assert self.traffic.intervene_share + self.traffic.block_share <= 1, f"{self.name}: guardrail shares exceed 1"
         assert self.traffic.total_requests > 0 and self.traffic.rps > 0, f"{self.name}: empty traffic"
+        ramp: Final = self.traffic.ramp
+        assert ramp is None or (ramp.first_rps, ramp.total_requests) == (
+            self.traffic.rps,
+            self.traffic.total_requests,
+        ), f"{self.name}: traffic rps and total_requests must be the ramp's, build it with ramped()"
+        assert ramp is None or (0 < ramp.first_rps <= ramp.last_rps and ramp.step_rps > 0 and ramp.step_seconds > 0), (
+            f"{self.name}: ramp {ramp} does not step up"
+        )
         assert self.model_groups, f"{self.name}: no model groups"
         assert 0 <= self.mock_latency.jitter_seconds <= self.mock_latency.seconds or self.mock_latency.seconds == 0, (
             f"{self.name}: mock latency jitter {self.mock_latency.jitter_seconds} s exceeds {self.mock_latency.seconds} s"

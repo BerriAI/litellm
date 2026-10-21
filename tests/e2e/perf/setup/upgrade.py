@@ -145,7 +145,9 @@ class UpgradeMonitor:
         self.clock: Final = clock
         self.wall_clock: Final = wall_clock
         self.started: Final = clock()
-        self.status_limit: Final = next(limit.max for limit in CASE.limits if limit.metric == "unexpected_status_count")
+        self.status_limit: Final = next(
+            limit.max for limit in CASE.limits if limit.metric == "unexpected_status_count" and limit.max is not None
+        )
         self.pending: tuple[WireRecord, ...] = ()
         self.processed = 0
         self.successes = 0
