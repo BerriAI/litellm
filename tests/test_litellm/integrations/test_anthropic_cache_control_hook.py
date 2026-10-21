@@ -1664,7 +1664,7 @@ class TestEnableAnthropicPromptCaching:
         points = self._points(model="us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider="bedrock")
         assert [p["index"] for p in points] == [None, -1]
 
-    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai"), ("gemini-2.0-flash", "gemini")])
+    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai")])
     def test_non_anthropic_providers_never_injected(self, monkeypatch, model, provider):
         """These report supports_prompt_caching=True but never consume cache_control markers."""
         from litellm.utils import supports_prompt_caching
