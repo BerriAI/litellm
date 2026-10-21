@@ -1,50 +1,24 @@
-use crate::error::Error;
-use crate::fallback::{FallbackGeneralizations, FallbackRule};
-use crate::model_info::ModelInfo;
-use indexmap::IndexMap;
-use serde::Deserialize;
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Provenance {
-    pub source: Option<String>,
-    pub revision: Option<String>,
-    pub etag: Option<String>,
-}
+use indexmap::IndexMap;
+use serde_json::Value;
 
+use crate::error::{IntegrityViolation, InvalidDocument, Problem};
+use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::model::Model;
+use crate::wire::{EntryWire, Fields};
+
+/// How far a registry may shrink against the one it replaces.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
-    pub reference_model_count: usize,
-    pub min_model_count: usize,
-    pub min_reference_ratio: f64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AliasIssue {
-    InvalidList { model: String },
-    InvalidName { model: String },
-    CanonicalCollision { model: String, alias: String },
-    AliasCollision { model: String, alias: String },
+    min_model_count: usize,
+    min_reference_ratio: f64,
 }
 
 #[derive(Clone, Debug)]
 pub struct ModelEntry {
-    fields: Map<String, Value>,
-    info: ModelInfo,
-}
-
-impl ModelEntry {
-    pub fn field(&self, name: &str) -> Option<&Value> {
-        self.fields.get(name)
-    }
-    pub fn fields(&self) -> &Map<String, Value> {
-        &self.fields
-    }
-    /// The entry deserialized into the typed mirror of the catalog schema.
-    pub fn info(&self) -> &ModelInfo {
-        &self.info
-    }
+    fields: Fields,
+    model: Option<Model>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +28,8 @@ pub struct ModelMatch<'a> {
     pub entry: &'a ModelEntry,
 }
 
+/// A registry document read entry by entry. A bad entry keeps its raw fields and its problems are
+/// listed, so the caller decides what to serve.
 #[derive(Debug)]
 pub struct Catalog {
     entries: IndexMap<String, ModelEntry>,
@@ -61,67 +37,82 @@ pub struct Catalog {
     lowercase_keys: HashMap<String, String>,
     sample_spec: Option<Value>,
     fallback_generalizations: Option<FallbackGeneralizations>,
-    provenance: Provenance,
-    alias_issues: Vec<AliasIssue>,
+    problems: Vec<Problem>,
+}
+
+impl IntegrityLimits {
+    pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
+        (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
+            min_model_count,
+            min_reference_ratio,
+        })
+    }
+}
+
+impl ModelEntry {
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        self.fields.get(name)
+    }
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+    pub fn model(&self) -> Option<&Model> {
+        self.model.as_ref()
+    }
 }
 
 impl Catalog {
-    pub fn parse(body: &[u8], provenance: Provenance) -> Result<Self, Error> {
-        let root: IndexMap<String, Value> = serde_json::from_slice(body)?;
-        if root.is_empty() {
-            return Err(Error::Empty);
+    pub fn parse(body: &[u8]) -> Result<Self, InvalidDocument> {
+        let mut document: IndexMap<String, Value> = serde_json::from_slice(body)?;
+        let sample_spec = document.shift_remove("sample_spec");
+        let fallback_generalizations = document
+            .shift_remove("fallback_generalizations")
+            .map(serde_json::from_value)
+            .transpose()?;
+        if document.is_empty() {
+            return Err(InvalidDocument::Empty);
         }
 
-        let mut entries = IndexMap::with_capacity(root.len());
+        let mut problems = Vec::new();
+        let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
-        let mut alias_issues = Vec::new();
-        let mut sample_spec = None;
-        let mut fallback_generalizations = None;
-        for (name, value) in root {
-            match name.as_str() {
-                "sample_spec" => {
-                    sample_spec = Some(value);
-                    continue;
-                }
-                "fallback_generalizations" => {
-                    fallback_generalizations =
-                        Some(serde_json::from_value::<FallbackGeneralizations>(value)?);
-                    continue;
-                }
-                _ => {}
-            }
-            let Value::Object(mut fields) = value else {
-                return Err(Error::EntryNotObject { model: name });
+        for (name, value) in document {
+            let Value::Object(fields) = value else {
+                problems.push(Problem::NotAnObject { model: name });
+                continue;
             };
-            let info = ModelInfo::deserialize(&fields)?;
-            if let Some(aliases) = fields.remove("aliases") {
-                match aliases {
-                    Value::Array(names) => alias_lists.push((name.clone(), names)),
-                    _ => alias_issues.push(AliasIssue::InvalidList {
-                        model: name.clone(),
-                    }),
-                }
+            let wire = EntryWire::read(&fields);
+            if let Some(aliases) = wire.attributes.aliases.clone() {
+                alias_lists.push((name.clone(), aliases));
             }
-            entries.insert(name, ModelEntry { fields, info });
+            let model = Model::try_from(wire)
+                .map_err(|found| {
+                    problems.extend(found.into_iter().map(|problem| Problem::Entry {
+                        model: name.clone(),
+                        problem,
+                    }))
+                })
+                .ok();
+            problems.extend(
+                model
+                    .as_ref()
+                    .and_then(|model| unknown_timezone(&name, model)),
+            );
+            entries.insert(name, ModelEntry { fields, model });
         }
 
-        let mut aliases = IndexMap::new();
+        let mut aliases: IndexMap<String, String> = IndexMap::new();
         for (model, names) in alias_lists {
-            for name in names {
-                let Value::String(alias) = name else {
-                    alias_issues.push(AliasIssue::InvalidName {
-                        model: model.clone(),
-                    });
-                    continue;
-                };
+            for alias in names {
                 if entries.contains_key(&alias) {
-                    alias_issues.push(AliasIssue::CanonicalCollision {
+                    problems.push(Problem::AliasShadowsModel {
                         model: model.clone(),
                         alias,
                     });
-                } else if aliases.contains_key(&alias) {
-                    alias_issues.push(AliasIssue::AliasCollision {
+                } else if let Some(taken_by) = aliases.get(&alias) {
+                    problems.push(Problem::AliasTaken {
                         model: model.clone(),
+                        taken_by: taken_by.clone(),
                         alias,
                     });
                 } else {
@@ -141,34 +132,46 @@ impl Catalog {
             lowercase_keys,
             sample_spec,
             fallback_generalizations,
-            provenance,
-            alias_issues,
+            problems,
         })
     }
 
-    pub fn validate(&self, limits: IntegrityLimits) -> Result<(), Error> {
-        if !limits.min_reference_ratio.is_finite()
-            || !(0.0..=1.0).contains(&limits.min_reference_ratio)
-        {
-            return Err(Error::InvalidRatio);
-        }
-        let actual = self.entries.len();
+    /// Whether this catalog is big enough to replace one of `reference` models.
+    pub fn check_size(
+        &self,
+        reference: usize,
+        limits: IntegrityLimits,
+    ) -> Result<(), IntegrityViolation> {
+        let actual = self.model_count();
         if actual < limits.min_model_count {
-            return Err(Error::BelowMinimum {
+            return Err(IntegrityViolation::BelowMinimum {
                 actual,
                 minimum: limits.min_model_count,
             });
         }
-        if limits.reference_model_count > 0
-            && (actual as f64) < (limits.reference_model_count as f64) * limits.min_reference_ratio
-        {
-            return Err(Error::Shrunk {
+        if (actual as f64) < (reference as f64) * limits.min_reference_ratio {
+            return Err(IntegrityViolation::Shrunk {
                 actual,
-                reference: limits.reference_model_count,
+                reference,
                 ratio: limits.min_reference_ratio,
             });
         }
         Ok(())
+    }
+
+    pub fn problems(&self) -> &[Problem] {
+        &self.problems
+    }
+
+    /// Every `(model, key)` no type of this build reads.
+    pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries.iter().flat_map(|(name, entry)| {
+            entry
+                .model
+                .iter()
+                .flat_map(|model| &model.unrecognized)
+                .map(move |key| (name.as_str(), key.as_str()))
+        })
     }
 
     pub fn lookup(&self, key: &str) -> Option<ModelMatch<'_>> {
@@ -205,25 +208,27 @@ impl Catalog {
     pub fn model_names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
     }
-    pub fn alias_count(&self) -> usize {
-        self.aliases.len()
-    }
     pub fn aliases(&self) -> &IndexMap<String, String> {
         &self.aliases
-    }
-    pub fn alias_issues(&self) -> &[AliasIssue] {
-        &self.alias_issues
     }
     pub fn sample_spec(&self) -> Option<&Value> {
         self.sample_spec.as_ref()
     }
-    pub fn fallback_generalizations(&self) -> Option<&FallbackGeneralizations> {
-        self.fallback_generalizations.as_ref()
-    }
     pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
         Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
     }
-    pub fn provenance(&self) -> &Provenance {
-        &self.provenance
-    }
+}
+
+fn unknown_timezone(name: &str, model: &Model) -> Option<Problem> {
+    let zone = model
+        .prices
+        .off_peak()?
+        .schedule()
+        .weekday_timezone
+        .as_deref()?
+        .trim();
+    (!zone.is_empty() && jiff::tz::TimeZone::get(zone).is_err()).then(|| Problem::UnknownTimezone {
+        model: name.to_owned(),
+        zone: zone.to_owned(),
+    })
 }
