@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     Litellm_EntityType,
     LitellmUserRoles,
+    ProxyErrorTypes,
     ProxyException,
 )
 from litellm.proxy.utils import PrismaClient
@@ -1602,6 +1603,135 @@ async def test_can_key_call_model_via_access_group_ids():
             valid_token=user_api_key_object,
             llm_router=router,
         )
+
+
+def _router_deploying(*model_names: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "test"}}
+            for name in model_names
+        ]
+    )
+
+
+async def _key_denial(
+    model: str, key: UserAPIKeyAuth, router: litellm.Router, group_models: list[str]
+) -> ProxyException:
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=group_models,
+    ):
+        with pytest.raises(ProxyException) as denial:
+            await can_key_call_model(model=model, llm_model_list=[], valid_token=key, llm_router=router)
+    return denial.value
+
+
+@pytest.mark.asyncio
+async def test_key_with_empty_models_and_group_is_allowed_only_group_models():
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    key = UserAPIKeyAuth(token="test-token", models=[], access_group_ids=["ag-gpt4"])
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        result = await can_key_call_model(
+            model="gpt-4",
+            llm_model_list=[],
+            valid_token=key,
+            llm_router=_router_deploying("gpt-4", "claude-sonnet"),
+        )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_key_with_empty_models_and_group_is_denied_deployed_model_outside_group_like_native_key():
+    router = _router_deploying("gpt-4", "claude-sonnet")
+    group_restricted_key = UserAPIKeyAuth(token="test-token", models=[], access_group_ids=["ag-gpt4"])
+    natively_restricted_key = UserAPIKeyAuth(token="test-token", models=["gpt-4"])
+
+    group_denial = await _key_denial("claude-sonnet", group_restricted_key, router, ["gpt-4"])
+    native_denial = await _key_denial("claude-sonnet", natively_restricted_key, router, [])
+
+    assert (group_denial.type, group_denial.code, group_denial.message) == (
+        native_denial.type,
+        "403",
+        native_denial.message,
+    )
+    assert group_denial.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-4", "claude-sonnet"])
+async def test_key_with_group_resolving_to_no_models_is_denied_every_model(model):
+    key = UserAPIKeyAuth(token="test-token", models=[], access_group_ids=["ag-empty"])
+
+    denial = await _key_denial(model, key, _router_deploying("gpt-4", "claude-sonnet"), [])
+
+    assert (denial.type, denial.code) == (ProxyErrorTypes.key_model_access_denied, "403")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_models, access_group_ids, model",
+    [
+        (["gpt-4"], ["ag-claude"], "gpt-4"),
+        ([], [], "claude-sonnet"),
+        (["*"], ["ag-claude"], "gpt-3.5-turbo"),
+        (["all-proxy-models"], ["ag-claude"], "gpt-3.5-turbo"),
+    ],
+)
+async def test_key_allowed_natively_is_allowed_without_group_lookup(key_models, access_group_ids, model):
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    key = UserAPIKeyAuth(token="test-token", models=key_models, access_group_ids=access_group_ids)
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-sonnet"],
+    ) as group_lookup:
+        result = await can_key_call_model(
+            model=model,
+            llm_model_list=[],
+            valid_token=key,
+            llm_router=_router_deploying("gpt-4", "claude-sonnet", "gpt-3.5-turbo"),
+        )
+    assert result is True
+    assert group_lookup.await_count == 0, "a natively decided key must not pay for a group lookup"
+
+
+@pytest.mark.asyncio
+async def test_key_with_native_models_and_group_is_allowed_group_model():
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    key = UserAPIKeyAuth(token="test-token", models=["gpt-4"], access_group_ids=["ag-claude"])
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-sonnet"],
+    ):
+        result = await can_key_call_model(
+            model="claude-sonnet",
+            llm_model_list=[],
+            valid_token=key,
+            llm_router=_router_deploying("gpt-4", "claude-sonnet", "gpt-3.5-turbo"),
+        )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_key_with_native_models_and_group_is_denied_model_in_neither():
+    key = UserAPIKeyAuth(token="test-token", models=["gpt-4"], access_group_ids=["ag-claude"])
+
+    denial = await _key_denial(
+        "gpt-3.5-turbo", key, _router_deploying("gpt-4", "claude-sonnet", "gpt-3.5-turbo"), ["claude-sonnet"]
+    )
+
+    assert (denial.type, denial.code) == (ProxyErrorTypes.key_model_access_denied, "403")
 
 
 # ---------------------------------------------------------------------------
