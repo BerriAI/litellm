@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
@@ -910,3 +910,82 @@ def test_the_sync_path_clears_old_results_too(respx_mock: respx.MockRouter, monk
     ]
     assert isinstance(served, dict)
     assert served["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_polyfill_crash_is_a_500_before_the_responses_api_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.pass_through.responses_adapters import handler
+
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=TEXT_RESPONSE
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
+    monkeypatch.setattr(handler, "apply_context_management", AsyncMock(side_effect=RuntimeError("editor bug")))
+    with pytest.raises(AnthropicContextManagementError) as raised:
+        await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+            max_tokens=1024,
+            messages=_three_reads(),
+            model="openai/gpt-5.6-luna",
+            custom_llm_provider="openai",
+            context_management={"edits": [dict(CLEAR_EDIT)]},
+        )
+    assert raised.value.status_code == 500
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+async def test_under_drop_params_a_rejected_edit_is_skipped_and_the_request_goes_out(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.pass_through.responses_adapters import handler
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=TEXT_RESPONSE
+    )
+    rejected: Final = AnthropicContextManagementError(status_code=400, message="bad edit")
+    monkeypatch.setattr(handler, "apply_context_management", AsyncMock(side_effect=rejected))
+
+    served: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=_three_reads(),
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        context_management={"edits": [dict(CLEAR_EDIT)]},
+        drop_params=True,
+    )
+    assert upstream.called
+    assert isinstance(served, dict) and "context_management" not in served
+
+
+@pytest.mark.asyncio
+async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY
+    )
+
+    sse: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        max_tokens=1024,
+        messages=_three_reads(),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=True,
+        custom_llm_provider="openai",
+        context_management={"edits": [dict(CLEAR_EDIT)]},
+    )
+    events: Final = [
+        json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], sse)
+    ]
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2

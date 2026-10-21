@@ -67,12 +67,7 @@ def _split_context_management(
     """
     if not spec or context_management_explicitly_dropped(kwargs.get("additional_drop_params")):
         return spec, ()
-    try:
-        edits: Final = normalize_spec(spec) or []
-    except AnthropicContextManagementError:
-        if drops_unsupported_params(kwargs.get("drop_params")):
-            return None, ()
-        raise
+    edits: Final = normalize_spec(spec) or []
     native: Final = [edit for edit in edits if edit.get("type") == COMPACT_EDIT_TYPE]
     return ({"edits": native} if native else None), tuple(
         edit for edit in edits if edit.get("type") != COMPACT_EDIT_TYPE
