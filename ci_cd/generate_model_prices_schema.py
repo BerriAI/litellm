@@ -19,6 +19,7 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
+NON_BLANK_STRING: Final[JsonSchema] = {"type": "string", "pattern": r"\S"}
 TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
 WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
@@ -61,6 +62,28 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
 }
 
 OBJECT_KEYS: dict[str, JsonSchema] = {
+    "search_free_requests": {
+        "type": "object",
+        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+        "required": ["count", "period", "shared_group"],
+        "additionalProperties": False,
+        "properties": {
+            "count": {"type": "integer", "minimum": 0},
+            "period": {"type": "string", "enum": ["day", "month"]},
+            "shared_group": {"type": "string", "pattern": "\\S"},
+        },
+    },
+    "token_count_model": {
+        "type": "object",
+        "required": ["model"],
+        "additionalProperties": False,
+        "properties": {
+            "model": NON_BLANK_STRING,
+            "region": NON_BLANK_STRING,
+            "litellm_provider": {"type": "string", "enum": ["bedrock", "bedrock_mantle"]},
+        },
+        "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in.",
+    },
     "off_peak_pricing": {
         "type": "object",
         "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
@@ -169,6 +192,10 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
 }
 
 INTEGER_KEYS: dict[str, JsonSchema] = {
+    "token_count_framing": {
+        **NONNEG_INTEGER,
+        "description": "Tokens added once per request to a local count estimate, for the provider's chat framing.",
+    },
     "max_tokens": {
         **NONNEG_INTEGER,
         "description": "Legacy field: max output tokens if the provider specifies it, else max input tokens.",
@@ -262,6 +289,11 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "Date the provider deprecates the model, YYYY-MM-DD.",
             "format": "date",
             "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+        },
+        "token_count_tokenizer": {
+            "type": "string",
+            "description": "Local tokenizer used to count tokens for this model.",
+            "enum": ["kimi_k3"],
         },
         "web_search_billing_unit": {
             "type": "string",
