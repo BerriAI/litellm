@@ -15,8 +15,8 @@ import pytest
 
 from litellm.types.completion import (
     ChatCompletionMessageParam,
-    CompletionRequest,
     CompletionDispatchContext,
+    CompletionRequest,
 )
 
 
@@ -179,6 +179,7 @@ def _build_dispatch_context() -> CompletionDispatchContext:
         model="gpt-4o",
         model_response=None,  # type: ignore[arg-type]
         optional_params={},
+        optional_params_for_model_info=lambda model_info: {},
         organization=None,
         provider_config=None,
         request_params={},

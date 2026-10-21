@@ -14,6 +14,7 @@ import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
+from integration._support.mcp_e2e_upstream_server import add, multiply
 from integration._support.wire import Reply, Request, wire_server
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -21,7 +22,6 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
-from integration._support.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
@@ -282,6 +282,7 @@ class ScriptedTool:
     respond: Callable[[JsonRpc], Reply | JsonRpc]
     description: str | Callable[[Mapping[str, str]], str] | None = None
     input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+    event_stream: bool = False
 
     def listing(self, headers: Mapping[str, str]) -> JsonRpc:
         described: Final = self.description(headers) if callable(self.description) else self.description
@@ -334,7 +335,10 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
         if tool is None:
             return jsonrpc_error(identity, -32602, "unknown tool")
         produced: Final = tool.respond(body["params"])
-        return produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        reply: Final = produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        if not tool.event_stream:
+            return reply
+        return Reply(content_type="text/event-stream", body=b"event: message\ndata: " + reply.body + b"\n\n")
 
     with wire_server(provider) as wire:
         yield McpPeer(wire.url + "/mcp", observed)
