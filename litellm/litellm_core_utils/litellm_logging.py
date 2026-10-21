@@ -1572,7 +1572,10 @@ class Logging(LiteLLMLoggingBaseClass):
                         "api_call_start_time"
                     ]
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
+            callbacks: Final = (
+                *self._without_replaced_global_callbacks(litellm.input_callback),
+                *(self.dynamic_input_callbacks or ()),
+            )
             for callback in callbacks:
                 try:
                     if callback == "supabase" and supabaseClient is not None:
@@ -1745,7 +1748,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
-            callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
+            callbacks: Final = (
+                *self._without_replaced_global_callbacks(litellm.input_callback),
+                *(self.dynamic_input_callbacks or ()),
+            )
             for callback in callbacks:
                 try:
                     if callback == "sentry" and add_breadcrumb:
@@ -4492,23 +4498,26 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
+    def _without_replaced_global_callbacks(
+        self, global_callbacks: Iterable[str | Callable[..., object] | CustomLogger]
+    ) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        if not self.replaced_global_callback_keys:
+            return tuple(global_callbacks)
+        return tuple(
+            litellm.logging_callback_manager.without_custom_logger_keys(
+                global_callbacks, self.replaced_global_callback_keys
+            )
+        )
+
     def get_combined_callback_list(
         self,
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
         global_callbacks: list[str | Callable[..., object] | CustomLogger],
     ) -> list[str | Callable[..., object] | CustomLogger]:
-        kept_global_callbacks: Final = (
-            list(
-                litellm.logging_callback_manager.without_custom_logger_keys(
-                    global_callbacks, self.replaced_global_callback_keys
-                )
-            )
-            if self.replaced_global_callback_keys
-            else global_callbacks
-        )
+        kept_global_callbacks: Final = self._without_replaced_global_callbacks(global_callbacks)
         if dynamic_success_callbacks is None:
             return list(kept_global_callbacks)
-        return list(dict.fromkeys(dynamic_success_callbacks + kept_global_callbacks))
+        return list(dict.fromkeys((*dynamic_success_callbacks, *kept_global_callbacks)))
 
     def _remove_internal_litellm_callbacks(self, callbacks: list) -> list:
         """

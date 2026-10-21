@@ -402,6 +402,30 @@ def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
     ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
 
 
+class _InputEventRecorder(CustomLogger):
+    def __init__(self, label: str, events: list[str]) -> None:
+        self._label = label
+        self.events = events
+
+    def log_pre_api_call(self, model, messages, kwargs) -> None:
+        self.events.append(f"{self._label} pre")
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.events.append(f"{self._label} post")
+
+
+def test_input_events_reach_the_replacement_and_not_the_global_callback_it_replaced(logging_obj, monkeypatch):
+    events: Final[list[str]] = []
+    monkeypatch.setattr(litellm, "input_callback", [_InputEventRecorder("global", events)])
+    logging_obj.replace_global_callback(_InputEventRecorder("replacement", events))
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    logging_obj.pre_call(input="", api_key="")
+    logging_obj.post_call(original_response="ok", input="", api_key="")
+
+    assert events == ["replacement pre", "replacement post"]
+
+
 def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
