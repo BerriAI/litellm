@@ -72,26 +72,26 @@ fn duration(seconds: f64) -> Result<Duration, Error> {
 #[derive(Clone, Default)]
 pub(crate) struct CacheHeaders(std::sync::Arc<std::sync::OnceLock<String>>);
 
-impl litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for CacheHeaders {
+impl litellm_host::interceptors::Interceptors<litellm_inference::Error> for CacheHeaders {
     async fn before_provider_request(
         &self,
         wire: litellm_host::interceptors::WireRequest,
         _: litellm_host::interceptors::RequestContext,
-    ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::RouteError> {
+    ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::Error> {
         Ok(wire)
     }
 
     async fn after_provider_response(
         &self,
         _: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), litellm_inference::RouteError> {
+    ) -> Result<(), litellm_inference::Error> {
         Ok(())
     }
 
     async fn result_ready(
         &self,
         facts: litellm_host::interceptors::ExecutionFacts,
-    ) -> Result<(), litellm_inference::RouteError> {
+    ) -> Result<(), litellm_inference::Error> {
         if let litellm_host::interceptors::ResultSource::Cache { key } = facts.source {
             let _ = self.0.set(key);
         }

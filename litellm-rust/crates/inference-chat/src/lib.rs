@@ -1,7 +1,7 @@
 use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
-pub use litellm_inference::RouteError as Error;
+pub use litellm_inference::Error;
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;

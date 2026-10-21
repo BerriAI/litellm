@@ -1,5 +1,5 @@
 use litellm_host::observation::ObservationSender;
-pub use litellm_inference::RouteError as Error;
+pub use litellm_inference::Error;
 
 pub mod ids;
 pub mod route;

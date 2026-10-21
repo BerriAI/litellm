@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
 
@@ -19,7 +19,7 @@ pub enum Error {
     )]
     UnknownModel(String),
     #[error(transparent)]
-    Route(#[from] RouteError),
+    Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
     #[error("{0} is not implemented by the Rust gateway")]
@@ -36,8 +36,8 @@ impl IntoResponse for Error {
     }
 }
 
-impl From<litellm_host_http::Error<RouteError>> for Error {
-    fn from(error: litellm_host_http::Error<RouteError>) -> Self {
+impl From<litellm_host_http::Error<InferenceError>> for Error {
+    fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
             litellm_host_http::Error::Call(error) => Self::Route(error),
             litellm_host_http::Error::Protocol => Self::Internal(error.to_string()),
@@ -50,7 +50,7 @@ impl Error {
         match self {
             Self::Auth(error) => error.status(),
             Self::Unsupported(_)
-            | Self::Route(RouteError::Unsupported(_))
+            | Self::Route(InferenceError::Unsupported(_))
             | Self::Ocr(OcrError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Ocr(
@@ -64,10 +64,10 @@ impl Error {
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
+            Self::Route(InferenceError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
-            Self::Route(RouteError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
+            Self::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
                 StatusCode::UNAUTHORIZED
             }
             Self::Route(error) if error.is_request() => StatusCode::BAD_REQUEST,
@@ -97,7 +97,9 @@ impl Error {
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
         let raw = match self {
-            Self::Route(RouteError::Transport(TransportError::Http { body, .. })) => body.clone(),
+            Self::Route(InferenceError::Transport(TransportError::Http { body, .. })) => {
+                body.clone()
+            }
             other => other.to_string(),
         };
         let parsed = serde_json::from_str::<Value>(&raw).ok();
@@ -175,7 +177,7 @@ mod tests {
     use super::*;
 
     fn upstream(status: u16, body: &str) -> Error {
-        Error::Route(RouteError::Transport(TransportError::Http {
+        Error::Route(InferenceError::Transport(TransportError::Http {
             status,
             body: body.into(),
         }))
@@ -225,16 +227,16 @@ mod tests {
 
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
-    #[case::rejected_request(Error::Route(RouteError::InvalidRequest("top_k".into())), StatusCode::BAD_REQUEST)]
+    #[case::rejected_request(Error::Route(InferenceError::InvalidRequest("top_k".into())), StatusCode::BAD_REQUEST)]
     #[case::missing_key(
-        Error::Route(RouteError::Auth(litellm_auth::Error::MissingApiKey {
+        Error::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey {
             provider: "Anthropic",
             environment_variable: "ANTHROPIC_API_KEY",
         })),
         StatusCode::UNAUTHORIZED,
     )]
     #[case::lost_connection(
-        Error::Route(RouteError::Transport(TransportError::Network("reset".into()))),
+        Error::Route(InferenceError::Transport(TransportError::Network("reset".into()))),
         StatusCode::INTERNAL_SERVER_ERROR,
     )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
