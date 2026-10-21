@@ -14354,6 +14354,24 @@ _CJK_TURNS = [
 ]
 
 
+_BEDROCK_PROFILE_ARN: Final = (
+    "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz"
+)
+_LLAMA_BASE_MODEL: Final = "meta.llama3-8b-instruct-v1:0"
+
+
+def _turns_past(window: int) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "user",
+            "content": "Here is everything discussed so far. "
+            + "The meeting notes were saved to the shared folder for later review this week. " * (window // 4),
+        },
+        {"role": "assistant", "content": "Noted, I have read all of it."},
+        {"role": "user", "content": "ok continue"},
+    ]
+
+
 def _tier_config(**overrides: object) -> dict[str, object]:
     return {
         "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
@@ -14393,49 +14411,119 @@ class TestContextWindowEscalation:
         assert result.routing_decision["tier"] == "COMPLEX"
         assert "context_escalation" in result.routing_decision["signals"]
 
-    @pytest.mark.asyncio
-    @pytest.mark.usefixtures("local_model_cost_map")
-    async def test_an_inference_profile_window_declared_only_through_base_model_escalates_too(self):
-        base_model: Final = "meta.llama3-8b-instruct-v1:0"
-        base_window: Final = litellm.get_model_info(model=base_model)["max_input_tokens"]
-        assert base_window is not None
+    @staticmethod
+    def _base_model_tier_router(small: dict[str, object], base_window: int) -> ComplexityRouter:
         litellm_router: Final = Router(
             model_list=[
-                {
-                    "model_name": "small-model",
-                    "litellm_params": {
-                        "model": "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz",
-                        "mock_response": "ok",
-                    },
-                    "model_info": {"base_model": base_model},
-                },
+                {"model_name": "small-model", **small},
                 {
                     "model_name": "big-model",
                     "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "ok"},
-                    "model_info": {"max_input_tokens": base_window * 8},
+                    "model_info": {"max_input_tokens": base_window * 16},
                 },
             ]
         )
-        router: Final = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=litellm_router,
-            complexity_router_config=_tier_config(),
+        return ComplexityRouter(
+            model_name="test-router", litellm_router_instance=litellm_router, complexity_router_config=_tier_config()
         )
-        filler_repeats: Final = (base_window * 4) // len(_CONTEXT_FILLER) + 2
-        oversized_turns: Final = [
-            {"role": "user", "content": "Here is everything discussed so far. " + _CONTEXT_FILLER * filler_repeats},
-            {"role": "assistant", "content": "Noted, I have read all of it."},
-            {"role": "user", "content": "ok continue"},
-        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        "arn",
+        [
+            _BEDROCK_PROFILE_ARN,
+            "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:provisioned-model/abc123xyz",
+            "bedrock/llama/arn:aws:bedrock:us-west-2:000000000000:imported-model/abc123xyz",
+        ],
+    )
+    @pytest.mark.parametrize("declared_in", ["model_info", "litellm_params"])
+    async def test_a_bedrock_arn_window_declared_only_through_base_model_escalates_too(
+        self, arn: str, declared_in: str
+    ):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {
+                    "model": arn,
+                    "mock_response": "ok",
+                    **({"base_model": _LLAMA_BASE_MODEL} if declared_in == "litellm_params" else {}),
+                },
+                "model_info": {"base_model": _LLAMA_BASE_MODEL} if declared_in == "model_info" else {},
+            },
+            base_window,
+        )
 
         result: Final = await router.async_pre_routing_hook(
-            model="test-router", request_kwargs={}, messages=oversized_turns
+            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
         )
 
         assert result is not None
         assert result.model == "big-model"
         assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
         assert "context_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize("own_window", ["declared", "registered", "not_a_bedrock_arn"])
+    async def test_base_model_never_overrides_an_own_window_or_reaches_a_non_arn_route(
+        self, own_window: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        if own_window == "registered":
+            monkeypatch.setitem(
+                litellm.model_cost,
+                _BEDROCK_PROFILE_ARN,
+                {"max_input_tokens": base_window * 8, "litellm_provider": "bedrock", "mode": "chat"},
+            )
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {
+                    "model": (
+                        "openai/a-model-the-cost-map-does-not-know"
+                        if own_window == "not_a_bedrock_arn"
+                        else _BEDROCK_PROFILE_ARN
+                    ),
+                    "mock_response": "ok",
+                },
+                "model_info": {
+                    "base_model": _LLAMA_BASE_MODEL,
+                    **({"max_input_tokens": base_window * 8} if own_window == "declared" else {}),
+                },
+            },
+            base_window,
+        )
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
+        )
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    async def test_an_unmapped_base_model_leaves_a_bedrock_arn_tier_in_place(self):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {"model": _BEDROCK_PROFILE_ARN, "mock_response": "ok"},
+                "model_info": {"base_model": "anthropic.claude-not-in-the-cost-map-v1:0"},
+            },
+            base_window,
+        )
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
+        )
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_a_prompt_that_fits_routes_exactly_as_before(self):

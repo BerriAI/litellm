@@ -312,6 +312,36 @@ async def test_undersized_native_compactor_does_not_block_explicit_escalation(
     assert json.loads(answer.calls[0].request.content)["model"] == "wide-answer"
 
 
+@pytest.mark.parametrize("escalate", [False, True])
+async def test_a_bedrock_arn_tier_windowed_only_through_base_model_is_never_compacted(
+    wire: tuple[respx.Route, respx.Route], escalate: bool,
+) -> None:
+    base_model: Final = "meta.llama3-8b-instruct-v1:0"
+    base_window: Final = litellm.get_model_info(model=base_model)["max_input_tokens"]
+    assert base_window is not None
+    router: Final = make_router(settings={
+        "enable_context_window_escalation": escalate,
+        "tiers": {"SIMPLE": "profile", "MEDIUM": "large", "COMPLEX": "large", "REASONING": "large"},
+    })
+    router.add_deployment(Deployment(
+        model_name="profile", litellm_params={
+            "model": "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz",
+            "mock_response": "profile answer",
+        }, model_info={"id": "profile-answer", "base_model": base_model},
+    ))
+    payload: Final = {"messages": [
+        {"role": "user", "content": "Project code MAPLE-47. Background detail. " * (base_window // 14)},
+        {"role": "assistant", "content": "Recorded"},
+        {"role": "user", "content": "Answer with the project code"},
+    ]}
+    output: Final = base_window // 4
+    trigger: Final = int(base_window * ContextCompactionConfig().trigger_ratio)
+    assert trigger - output < router._count_pre_call_check_tokens(payload["messages"], None, payload) < trigger
+    response: Final = await router.acompletion(model="auto", max_tokens=output, **payload)
+    assert all(route.call_count == 0 for route in wire)
+    assert response.choices[0].message.content == "profile answer"
+
+
 @pytest.mark.parametrize(
     ("surface", "failure"),
     [(surface, failure) for surface in ("chat", "messages", "responses") for failure in ("unsigned", "oversized", "provider")]

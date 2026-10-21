@@ -981,6 +981,10 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     return model
 
 
+def is_bedrock_arn(model: str) -> bool:
+    return re.search(r"\barn:aws[\w-]*:bedrock:", model) is not None
+
+
 def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     """
     An application inference profile ARN ends in an opaque id with no provider

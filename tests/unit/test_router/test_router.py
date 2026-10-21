@@ -16263,55 +16263,6 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
-
-INFERENCE_PROFILE_ARN: Final = (
-    "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz"
-)
-INFERENCE_PROFILE_BASE_MODEL: Final = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-class TestApplicationInferenceProfileWindowFromBaseModel:
-    def _profile_window(self, model_info: dict[str, object], litellm_params: dict[str, object] | None = None) -> object:
-        router: Final = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "haiku",
-                    "litellm_params": {"model": INFERENCE_PROFILE_ARN, **(litellm_params or {})},
-                    "model_info": {"id": "haiku-profile", **model_info},
-                }
-            ]
-        )
-        return router.get_router_model_info(deployment=None, received_model_name="haiku", id="haiku-profile")[
-            "max_input_tokens"
-        ]
-
-    def test_model_info_base_model_sets_the_profile_window(self):
-        base_window: Final = litellm.get_model_info(model=INFERENCE_PROFILE_BASE_MODEL)["max_input_tokens"]
-        assert base_window is not None
-
-        assert self._profile_window({"base_model": INFERENCE_PROFILE_BASE_MODEL}) == base_window
-
-    def test_litellm_params_base_model_sets_the_profile_window(self):
-        base_window: Final = litellm.get_model_info(model=INFERENCE_PROFILE_BASE_MODEL)["max_input_tokens"]
-        assert base_window is not None
-
-        assert self._profile_window({}, {"base_model": INFERENCE_PROFILE_BASE_MODEL}) == base_window
-
-    def test_explicit_max_input_tokens_still_wins_over_base_model(self):
-        base_window: Final = litellm.get_model_info(model=INFERENCE_PROFILE_BASE_MODEL)["max_input_tokens"]
-        assert base_window is not None
-
-        declared_window: Final = self._profile_window(
-            {"base_model": INFERENCE_PROFILE_BASE_MODEL, "max_input_tokens": base_window // 2}
-        )
-
-        assert declared_window == base_window // 2
-
-    def test_an_unmapped_base_model_leaves_the_profile_window_unknown(self):
-        assert self._profile_window({"base_model": "anthropic.claude-not-in-the-cost-map-v1:0"}) is None
-
-
 def test_model_group_info_intersects_supported_reasoning_efforts():
     router = litellm.Router(
         model_list=[

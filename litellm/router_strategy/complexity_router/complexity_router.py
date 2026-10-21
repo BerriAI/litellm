@@ -1273,6 +1273,28 @@ def _window_can_hold(window: int | None, needed: int, buffer: float) -> bool:
     return window is None or needed <= int(window * buffer)
 
 
+def _declared_base_model(deployment: Mapping[str, object]) -> str | None:
+    match deployment:
+        case {"model_info": {"base_model": str() as base_model}} | {
+            "litellm_params": {"base_model": str() as base_model}
+        }:
+            return base_model
+        case _:
+            return None
+
+
+def _bedrock_arn_base_model_window(deployment: Mapping[str, object]) -> int | None:
+    from litellm.llms.bedrock.common_utils import is_bedrock_arn
+    from litellm.router import exact_base_model_max_input_tokens
+
+    base_model: Final = _declared_base_model(deployment)
+    match deployment:
+        case {"litellm_params": {"model": str() as model}} if base_model is not None and is_bedrock_arn(model):
+            return exact_base_model_max_input_tokens(base_model)
+        case _:
+            return None
+
+
 def _group_provably_fits(facts: tuple[int | None, bool], needed: int, buffer: float) -> bool:
     window, has_unknown = facts
     return window is not None and not has_unknown and needed <= int(window * buffer)
@@ -3391,7 +3413,8 @@ class ComplexityRouter(CustomLogger):
         return name if self.config.has_custom_tiers else ComplexityTier(name)
 
     def _deployment_window(self, group: str, deployment: Mapping[str, object]) -> int | None:
-        return self._deployment_limit(group, deployment, "max_input_tokens")
+        window: Final = self._deployment_limit(group, deployment, "max_input_tokens")
+        return window if window is not None else _bedrock_arn_base_model_window(deployment)
 
     def _deployment_limit(
         self, group: str, deployment: Mapping[str, object], key: Literal["max_input_tokens", "max_output_tokens"]

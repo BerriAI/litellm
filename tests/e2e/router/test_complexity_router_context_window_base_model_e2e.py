@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from typing import Final
 
 import pytest
-
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -159,6 +159,14 @@ def routers(proxy: ProxyClient, router_stack: ExitStack) -> EscalationRouters:
 
 class TestContextWindowEscalationFromBaseModel:
     @pytest.mark.covers("reliability.routing.context_window_escalation.escalates_from_base_model_window")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.BEDROCK,),
+            models=(SIMPLE_BACKEND, UPPER_BACKEND),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_base_model_window_escalates(
         self, proxy: ProxyClient, resources: ResourceManager, routers: EscalationRouters
     ) -> None:
@@ -174,6 +182,14 @@ class TestContextWindowEscalationFromBaseModel:
         _served_by(proxy.poll_logs_for_key(key), routers.upper, UPPER_BACKEND, "oversized ask, window from base_model")
 
     @pytest.mark.covers("reliability.routing.context_window_escalation.escalates_from_explicit_window")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.BEDROCK,),
+            models=(EXPLICIT_WINDOW_BACKEND, UPPER_BACKEND),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_explicit_window_escalates(
         self, proxy: ProxyClient, resources: ResourceManager, routers: EscalationRouters
     ) -> None:
@@ -189,6 +205,14 @@ class TestContextWindowEscalationFromBaseModel:
         _served_by(proxy.poll_logs_for_key(key), routers.upper, UPPER_BACKEND, "ask beyond the declared window")
 
     @pytest.mark.covers("reliability.routing.context_window_escalation.fitting_prompt_stays_on_tier")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.BEDROCK,),
+            models=(SIMPLE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_fitting_prompt_stays_on_the_simple_tier(
         self, proxy: ProxyClient, resources: ResourceManager, routers: EscalationRouters
     ) -> None:

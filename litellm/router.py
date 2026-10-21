@@ -135,7 +135,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model, is_bedrock_application_inference_profile_arn
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -1104,7 +1104,7 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
+def exact_base_model_max_input_tokens(base_model: str) -> int | None:
     try:
         model_info: Final = litellm.get_model_info(model=base_model)
     except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
@@ -1133,22 +1133,15 @@ def _declared_base_model(user_model_info: Mapping[str, object]) -> str | None:
             return None
 
 
-def _base_model_window(
+def _base_model_widened_window(
     route_model_info: ModelMapInfo, base_model: str | None, custom_llm_provider: str
 ) -> Mapping[str, int]:
-    if base_model is None:
-        return MappingProxyType({})
-    if is_bedrock_application_inference_profile_arn(route_model_info["key"]):
-        profile_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
-        return MappingProxyType(
-            {} if profile_max_input_tokens is None else {"max_input_tokens": profile_max_input_tokens}
-        )
     route_max_input_tokens: Final = route_model_info.get("max_input_tokens")
-    if route_max_input_tokens is None:
+    if base_model is None or route_max_input_tokens is None:
         return MappingProxyType({})
     if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
         return MappingProxyType({})
-    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
+    base_max_input_tokens: Final = exact_base_model_max_input_tokens(base_model)
     if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
         return MappingProxyType({})
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
@@ -11993,8 +11986,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
-        For every other provider, a base_model naming the same model as `model:` can only widen its context window,
-        and a Bedrock application inference profile ARN, which names no model, takes its base_model's window.
+        For every other provider, a base_model naming the same model as `model:` can only widen its context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -12101,7 +12093,7 @@ class Router:
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **_base_model_window(
+            **_base_model_widened_window(
                 model_info,
                 _declared_base_model(user_model_info) or _declared_base_model(litellm_params.model_extra or {}),
                 custom_llm_provider,
