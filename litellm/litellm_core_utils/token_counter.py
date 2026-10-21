@@ -1118,7 +1118,7 @@ _PdfTextTreeWalkItem: TypeAlias = tuple[_PdfStreamMetrics, bool]
 _PdfTextRecordWalkItem: TypeAlias = tuple[_PdfStreamMetrics, tuple[int, ...]]
 
 
-def _pdf_text_object_records(
+def _pdf_text_object_records(  # noqa: C901  # coordinates memoized per-stream PDF traversal
     metrics: _PdfStreamMetrics,
     invocation_path: tuple[int, ...] = (),
 ) -> Iterable[_PdfTextObjectRecord]:
@@ -1240,7 +1240,9 @@ def _pdf_text_object_record_bytes(record: _PdfTextObjectRecord) -> bytes:
     return separator + text_object + closure
 
 
-def _pdf_truncated_text_sample_closures(prefix: bytes, include_text_show: bool) -> tuple[int, bytes]:
+def _pdf_truncated_text_sample_closures(  # noqa: C901  # single-pass PDF syntax-state scanner
+    prefix: bytes, include_text_show: bool
+) -> tuple[int, bytes]:
     comment_open: bool = False  # rebind-ok: scans one bounded PDF prefix
     escape_open: bool = False  # rebind-ok: scans one bounded PDF prefix
     literal_depth: int = 0  # rebind-ok: tracks balanced literal strings
