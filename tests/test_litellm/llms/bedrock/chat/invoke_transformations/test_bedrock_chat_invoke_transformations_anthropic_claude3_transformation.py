@@ -638,9 +638,10 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     assert "tools" not in result
 
 
-def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
+def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(set_native_structured_output):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
     for models with native structured-output support (Claude Opus 4.7)."""
+    set_native_structured_output("anthropic.claude-opus-4-7", "legacy")
     schema_format = {
         "type": "json_schema",
         "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": False},

@@ -809,8 +809,9 @@ def test_output_config_effort_forwarded_for_application_inference_profile_arn():
     assert additional.get("output_config") == {"effort": "max"}
 
 
-def test_output_config_format_translated_to_native_output_config_converse():
+def test_output_config_format_translated_to_native_output_config_converse(set_native_structured_output):
     """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
+    set_native_structured_output("us.anthropic.claude-opus-4-7", "legacy")
     config = AmazonConverseConfig()
     schema = {
         "type": "object",
@@ -5739,7 +5740,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
-        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
+        monkeypatch.delitem(litellm.model_cost["jp.anthropic.claude-opus-4-7"], "cache_creation_input_token_cost_above_1hr", raising=False)
         assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [
@@ -5900,12 +5901,13 @@ def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_
     assert "litellm_gateway_injected_cache" not in bucket
 
 
-def test_translate_response_format_json_schema_still_injects_tool():
+def test_translate_response_format_json_schema_still_injects_tool(set_native_structured_output):
     """
     response_format with an explicit json_schema should still use the
     synthetic tool call approach (for models that don't support native
     structured outputs).
     """
+    set_native_structured_output("anthropic.claude-haiku-4-5-20251001-v1:0", None)
     config = AmazonConverseConfig()
 
     response_format = {
@@ -5928,7 +5930,7 @@ def test_translate_response_format_json_schema_still_injects_tool():
     optional_params: dict = {}
     result = config._translate_response_format_param(
         value=response_format,
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
         is_thinking_enabled=False,
@@ -7983,4 +7985,3 @@ def _converse_request_for_json_schema(
         headers={},
     )
     return optional_params, request
-

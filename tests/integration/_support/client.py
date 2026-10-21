@@ -219,4 +219,3 @@ def _misses_within(read: Callable[[], T], satisfied: Callable[[T], bool], holdin
         if not satisfied(observed):
             return (observed,)
     return ()
-

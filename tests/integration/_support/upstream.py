@@ -303,4 +303,3 @@ def aws_event_stream_frame(headers: Mapping[str, str | int], payload: bytes) -> 
     prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
     message: Final = prelude + prelude_crc + headers_bytes + payload
     return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
-
