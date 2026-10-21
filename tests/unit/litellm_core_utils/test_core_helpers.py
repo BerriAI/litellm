@@ -662,6 +662,16 @@ def test_a_patched_sub_path_model_still_takes_the_request_provider():
     )
 
 
+def test_a_patched_model_on_a_json_configured_provider_reaches_that_provider():
+    assert qualify_agentic_followup_model("aihubmix/gpt-4o", "gpt-4o", "openai") == "aihubmix/gpt-4o"
+
+
+def test_a_patch_echoing_the_request_model_keeps_the_request_provider():
+    assert qualify_agentic_followup_model("openai/gpt-4o", "openai/gpt-4o", "openrouter") == (
+        "openrouter/openai/gpt-4o"
+    )
+
+
 def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:
     metadata: Final[dict[str, object]] = {}
 

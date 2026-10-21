@@ -48,7 +48,10 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    qualify_agentic_followup_model,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
@@ -5846,8 +5849,6 @@ class BaseLLMHTTPHandler:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
-
-        from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
 
         full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
 

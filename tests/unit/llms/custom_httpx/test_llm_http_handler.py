@@ -5368,3 +5368,9 @@ class TestAgenticFollowUpKeepsTheProviderPrefix:
 
         assert response.model == "claude-sonnet-4-5"
         assert response._hidden_params["custom_llm_provider"] == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self):
+        response = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
+
+        assert response._hidden_params["custom_llm_provider"] == "openrouter"
