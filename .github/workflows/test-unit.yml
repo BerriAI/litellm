@@ -139,6 +139,7 @@ jobs:
             test-path: |-
               tests/unit/batch_completion
               tests/unit/decisions
+              tests/unit/extraction
               tests/unit/litellm_core_utils
               tests/unit/systemone
             python-version: "3.12"
@@ -266,6 +267,7 @@ jobs:
               tests/unit/llms/featherless_ai
               tests/unit/llms/firecrawl
               tests/unit/llms/fireworks_ai
+              tests/unit/llms/friendliai
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
@@ -321,6 +323,7 @@ jobs:
               tests/unit/llms/pass_through
               tests/unit/llms/perplexity
               tests/unit/llms/pg_vector
+              tests/unit/llms/pi
               tests/unit/llms/publicai
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
@@ -410,6 +413,7 @@ jobs:
               tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
+              tests/unit/fine_tuning
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
@@ -430,6 +434,13 @@ jobs:
 
           - shard: rust-bridge-harness
             test-path: >-
+              tests/test_litellm_rust/test_dispatch.py
+              tests/test_litellm_rust/test_public_entries.py
+              tests/test_litellm_rust/chat_completions/test_dispatch.py
+              tests/test_litellm_rust/embeddings/test_dispatch.py
+              tests/test_litellm_rust/messages/test_dispatch.py
+              tests/test_litellm_rust/ocr/test_dispatch.py
+              tests/test_litellm_rust/responses/test_dispatch.py
               tests/unit/compression
               tests/unit/harness
               tests/unit/rust_bridge

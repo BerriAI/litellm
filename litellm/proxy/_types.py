@@ -86,6 +86,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -105,6 +106,7 @@ from litellm.types.utils import (
     ProviderField,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
+    StandardLoggingKubernetesPodRouting,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -375,6 +377,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/decisions",
         "/systemone",
         "/v1/systemone",
+        "/extraction",
+        "/v1/extraction",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -667,6 +671,7 @@ class LiteLLMRoutes(enum.Enum):
             "/model/update",
             "/model/delete",
             "/model/info",
+            "/model/{model_id}/kubernetes_pods",
             "/jwt/key/mapping/new",
             "/jwt/key/mapping/update",
             "/jwt/key/mapping/delete",
@@ -2455,6 +2460,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
+        None,
+        description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
+    )
+
+    @field_validator("request_tag_mappings")
+    @classmethod
+    def validate_request_tag_mapping_duplicates(
+        cls, rules: Sequence[RequestTagMapping] | None
+    ) -> Sequence[RequestTagMapping] | None:
+        if rules is not None and len({(rule.key, rule.value) for rule in rules}) != len(rules):
+            raise ValueError("Only one mapping is allowed for each baggage key/value, including its any-value fallback")
+        return rules
+
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
@@ -2791,6 +2810,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
+    self_serve_budget_policy: Literal["disabled", "lower_only", "ceiling"] | None = Field(
+        None,
+        description="Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.",
+    )
     user_mcp_management_mode: UserMCPManagementMode | None = Field(
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
@@ -2861,6 +2884,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
             "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
             "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
+        ),
+    )
+    maximum_spend_logs_size: str | None = Field(
+        None,
+        description=(
+            "Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex "
+            "(heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the "
+            "cleanup job deletes the oldest spend logs first until they are under "
+            "maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is "
+            "deleted when either rule says so. Unset means no size rule."
+        ),
+    )
+    maximum_spend_logs_cleanup_target_size: str | None = Field(
+        None,
+        description=(
+            "Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. "
+            "Unset means the run stops as soon as the tables are back under maximum_spend_logs_size."
+        ),
+    )
+    maximum_spend_logs_size_check_interval: str | None = Field(
+        None,
+        description=(
+            "How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when "
+            "maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(
@@ -3682,6 +3729,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None

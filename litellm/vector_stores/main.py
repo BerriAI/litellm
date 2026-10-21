@@ -31,7 +31,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
@@ -403,6 +403,7 @@ def search(
                 kwargs.update(registry_credentials)
             except Exception:
                 pass
+            load_credentials_from_list(kwargs)
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)

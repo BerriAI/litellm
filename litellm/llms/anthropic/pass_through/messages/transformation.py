@@ -7,7 +7,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -626,6 +628,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ):
             anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
 
+        output_format: Final[object] = anthropic_messages_optional_request_params.get("output_format")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the request params arrive as a bare dict
+        if (
+            output_format is not None
+            and not isinstance(output_format, Mapping)
+            and drops_unsupported_params(litellm_params.drop_params)
+        ):
+            anthropic_messages_optional_request_params.pop("output_format")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -692,7 +702,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
+            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
+                drop_non_string_tool_result_texts(messages, getattr(litellm_params, "drop_params", None))
+            ),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,

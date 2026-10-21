@@ -386,13 +386,14 @@ def _responses_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, 
     }
 
 
-def _responses_stream_caller_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def _responses_stream_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, JsonValue]:
     response_id: Final = body.get("id")
     assert isinstance(response_id, str), body
     usage: Final = _json_object_value(body["usage"]) if body.get("status") == "completed" else {}
     return {
         **body,
         "id": "<response-id>",
+        "model": model,
         **({"usage": {**usage, "cost": 4.05e-06}} if usage else {}),
     }
 
@@ -413,7 +414,7 @@ def _responses_caller_stream(reply: Reply, model: str) -> tuple[dict[str, JsonVa
             **event,
             "model": model,
             **(
-                {"response": _responses_stream_caller_body(_json_object_value(event["response"]))}
+                {"response": _responses_stream_caller_body(_json_object_value(event["response"]), model)}
                 if "response" in event
                 else {}
             ),

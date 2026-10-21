@@ -1118,6 +1118,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             non_default_params=openai_request_body,
             optional_params={},
             drop_params=False,
+            allow_integer_enums=False,
         )
         return vertex_params
 
