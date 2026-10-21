@@ -597,6 +597,22 @@ def _weather_tool_named(name):
             "converse",
         ),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"store": False}}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"store": None}}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"store": "false"}}, "converse"),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"previous_response_id": "resp_1"}},
+            "converse",
+        ),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "previous_response_id": "resp_1"}, "converse"),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"instructions": "Be terse."}},
+            "converse",
+        ),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "instructions": "Be terse."}, "converse"),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"prompt": {"id": "pmpt_1"}}},
+            "converse",
+        ),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"top_k": 5}}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": "store=false"}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "seed": 7}, "converse"),

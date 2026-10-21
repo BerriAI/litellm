@@ -1226,9 +1226,10 @@ def _function_tools_only(tools: object) -> bool:
 
 
 _EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RESPONSES_INPUTS_CHAT_HOOKS_NEVER_CHECK: Final = frozenset({"previous_response_id", "instructions", "prompt"})
 _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES: Final = frozenset(
     {*ResponsesAPIOptionalRequestParams.__annotations__, "reasoning_effort", "reasoningSummary", "reasoning_summary"}
-    - {"tools"}
+    - {"tools", *_RESPONSES_INPUTS_CHAT_HOOKS_NEVER_CHECK}
 )
 _CHAT_PARAMS_THE_RESPONSES_BRIDGE_DROPS: Final = MappingProxyType(
     {
@@ -1254,8 +1255,11 @@ _INCLUDE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 def _extra_body_bridgeable(extra_body: object) -> bool:
     if extra_body is None:
         return True
-    return isinstance(extra_body, dict) and (
-        _EXTRA_BODY_ADAPTER.validate_python(extra_body).keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+    if not isinstance(extra_body, dict):
+        return False
+    validated: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body)
+    return validated.keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES and isinstance(
+        validated.get("store", False), bool
     )
 
 
