@@ -424,13 +424,8 @@ async def test_aresponses_sends_agent_reference_instead_of_model(model, expected
     assert body["max_output_tokens"] == 50
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_router_aresponses_keeps_the_deployment_agent_over_extra_body():
-    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
-    )
-    router = litellm.Router(
+def _support_agent_router() -> litellm.Router:
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "support-agent",
@@ -444,14 +439,51 @@ async def test_router_aresponses_keeps_the_deployment_agent_over_extra_body():
         num_retries=0,
     )
 
-    await router.aresponses(
+
+OTHER_AGENT_EXTRA_BODIES = [
+    {"agent_reference": {"type": "agent_reference", "name": "billing-agent"}},
+    {"agent_reference": {"type": "agent_reference", "name": "support-agent", "version": "9"}},
+    {"agent": {"type": "agent_reference", "name": "billing-agent"}},
+]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("extra_body", OTHER_AGENT_EXTRA_BODIES)
+async def test_router_aresponses_rejects_another_agent_in_extra_body_without_drop_params(extra_body):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="support-agent"):
+        await _support_agent_router().aresponses(model="support-agent", input="What is 2+2?", extra_body=extra_body)
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "extra_body,drop_params",
+    [
+        *((extra_body, True) for extra_body in OTHER_AGENT_EXTRA_BODIES),
+        ({"agent": {"type": "agent_reference", "name": "support-agent"}}, None),
+        ({"agent_reference": {"type": "agent_reference", "name": "support-agent"}}, None),
+    ],
+)
+async def test_router_aresponses_sends_only_the_deployment_agent(extra_body, drop_params):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await _support_agent_router().aresponses(
         model="support-agent",
         input="What is 2+2?",
-        extra_body={"agent_reference": {"type": "agent_reference", "name": "billing-agent"}, "store": False},
+        extra_body={**extra_body, "store": False},
+        drop_params=drop_params,
     )
 
     body = json.loads(route.calls.last.request.content)
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
+    assert "agent" not in body
     assert body["store"] is False
     assert "model" not in body
 
@@ -557,6 +589,47 @@ async def test_aresponses_sends_instructions_to_the_agent_as_a_leading_system_me
     body = json.loads(route.calls.last.request.content)
     assert "instructions" not in body
     assert body["input"] == expected_input
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_rejects_instructions_on_a_previous_response_turn_without_drop_params():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="instructions"):
+        await litellm.aresponses(
+            model="azure_ai/agents/support-agent",
+            input="And 3+3?",
+            instructions="Answer in French",
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+            previous_response_id="resp_turn_1",
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_drops_instructions_on_a_previous_response_turn_under_drop_params():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/agents/support-agent",
+        input="And 3+3?",
+        instructions="Answer in French",
+        drop_params=True,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        previous_response_id="resp_turn_1",
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert "instructions" not in body
+    assert body["input"] == "And 3+3?"
+    assert body["previous_response_id"] == "resp_turn_1"
 
 
 @pytest.mark.asyncio

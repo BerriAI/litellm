@@ -5,6 +5,8 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
@@ -21,6 +23,7 @@ from litellm.types.utils import LlmProviders
 _PROJECT_PATH_PREFIX: Final = ("api", "projects")
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
 _AGENT_OWNED_PARAMS: Final = frozenset({"temperature", "top_p", "tools", "text", "reasoning"})
+_CALLER_AGENT_KEYS: Final = ("agent", "agent_reference")
 
 
 def _project_root(base_url: httpx.URL) -> tuple[str, ...]:
@@ -125,7 +128,21 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         mapped: Final = super().map_openai_params_for_deployment(
             response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
         )
-        return {key: value for key, value in mapped.items() if key not in _AGENT_OWNED_PARAMS}
+        resends_instructions: Final = bool(mapped.get("instructions")) and bool(mapped.get("previous_response_id"))
+        if resends_instructions and not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    "azure_ai Foundry agents store a turn's system message with the conversation, so `instructions` "
+                    "with `previous_response_id` would add another copy each turn. Send `instructions` on the first "
+                    "turn only, or set `drop_params: true` to drop it"
+                ),
+                llm_provider=LlmProviders.AZURE_AI.value,
+                model=model,
+            )
+        dropped: Final = _AGENT_OWNED_PARAMS | (
+            frozenset({"instructions"}) if resends_instructions else frozenset[str]()
+        )
+        return {key: value for key, value in mapped.items() if key not in dropped}
 
     def transform_responses_api_request(
         self,
@@ -160,4 +177,21 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         model: str,
         litellm_params: GenericLiteLLMParams,
     ) -> Mapping[str, object]:
-        return {**extra_body, "agent_reference": _agent_reference(model)}
+        deployment_agent: Final = _agent_reference(model)
+        other_agents: Final = tuple(
+            key for key in _CALLER_AGENT_KEYS if key in extra_body and extra_body[key] != deployment_agent
+        )
+        if other_agents and not (litellm.drop_params is True or litellm_params.drop_params is True):
+            raise UnsupportedParamsError(
+                message=(
+                    f"This model entry always calls Foundry agent {deployment_agent['name']!r}, so `{other_agents[0]}` "
+                    "in the request cannot pick another agent or version. Remove it, call the model entry for that "
+                    "agent, or set `drop_params: true` to drop it"
+                ),
+                llm_provider=LlmProviders.AZURE_AI.value,
+                model=model,
+            )
+        return {
+            **{key: value for key, value in extra_body.items() if key not in _CALLER_AGENT_KEYS},
+            "agent_reference": deployment_agent,
+        }
