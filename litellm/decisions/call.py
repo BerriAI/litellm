@@ -208,7 +208,12 @@ class DecisionsCall:
     timeout: float | httpx.Timeout | None
     litellm_params: Mapping[str, object] = field(repr=False)
     caller_questions: tuple[DecisionsIRQuestion, ...]
-    preserve_choice_probabilities: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsResult:
+    ir_response: DecisionsIRResponse
+    response: DecisionsResponse | OpenAIDecisionResponse
 
 
 def supported_decisions_providers() -> tuple[str, ...]:
@@ -728,12 +733,7 @@ def _formatted_response(
         case DecisionsRequestBody():
             return ir_to_systemone_response(caller_response, caller_request)
         case OpenAIDecisionRequestBody():
-            return ir_to_openai_response(
-                caller_response,
-                caller_request,
-                call.requested_model,
-                preserve_choice_probabilities=call.preserve_choice_probabilities,
-            )
+            return ir_to_openai_response(caller_response, caller_request, call.requested_model)
         case _:
             assert_never(call.request)
 
@@ -756,7 +756,7 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
             )
 
 
-async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+async def asend_result(call: DecisionsCall) -> DecisionsResult:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -777,10 +777,10 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
         )
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
-    return _format_response(response, inlined)
+    return DecisionsResult(ir_response=response, response=_format_response(response, inlined))
 
 
-def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+def send_result(call: DecisionsCall) -> DecisionsResult:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -801,7 +801,15 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
         )
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
-    return _format_response(response, inlined)
+    return DecisionsResult(ir_response=response, response=_format_response(response, inlined))
+
+
+async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    return (await asend_result(call)).response
+
+
+def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    return send_result(call).response
 
 
 def reject_other_format(*, model: str, kwargs: Mapping[str, object], field_name: str, other_function: str) -> None:
