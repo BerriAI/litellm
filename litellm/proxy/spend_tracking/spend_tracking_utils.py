@@ -188,6 +188,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "used_client_oauth_token",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
+        "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
     )
@@ -251,6 +252,7 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             internal_call_origin=None,
             litellm_roi_estimator=False,
+            is_silent_experiment=False,
             billed_retry_attempt=False,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
@@ -288,6 +290,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        is_silent_experiment="is_silent_experiment" in metadata and metadata["is_silent_experiment"] is True,
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )

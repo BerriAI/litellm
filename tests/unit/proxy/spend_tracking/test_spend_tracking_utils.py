@@ -163,6 +163,27 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
 
 
+@pytest.mark.parametrize(
+    ("silent_experiment_metadata", "expected"),
+    [({"is_silent_experiment": True}, True), ({"is_silent_experiment": "true"}, False), ({}, False)],
+)
+def test_get_logging_payload_records_whether_the_call_was_a_silent_experiment(
+    silent_experiment_metadata: dict[str, object], expected: bool
+) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", **silent_experiment_metadata}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert json.loads(payload["metadata"])["is_silent_experiment"] is expected
+
+
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
 def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch, store_prompts, redact):
     from litellm.proxy import proxy_server

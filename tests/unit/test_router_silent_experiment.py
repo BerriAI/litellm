@@ -263,6 +263,25 @@ async def test_multiple_shadow_targets_fan_out_async(recording_logger):
     assert primary_successes[0]["litellm_params"]["metadata"]["model_group"] == "primary-model"
 
 
+@pytest.mark.asyncio
+async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_experiments(recording_logger):
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    response: Final = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+    )
+    assert response.choices[0].message.content == "pong"
+    await _wait_for_all_successes(recording_logger, expected=3)
+
+    payloads: Final = [call["standard_logging_object"] for call in recording_logger.success_kwargs]
+    assert sorted(payload["model_group"] for payload in payloads) == ["primary-model", "shadow-a", "shadow-b"]
+    metadata_by_group: Final = {payload["model_group"]: payload["metadata"] for payload in payloads}
+    assert metadata_by_group["shadow-a"]["is_silent_experiment"] is True
+    assert metadata_by_group["shadow-b"]["is_silent_experiment"] is True
+    assert "is_silent_experiment" not in metadata_by_group["primary-model"]
+
+
 def test_multiple_shadow_targets_fan_out_sync(recording_logger):
     router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     response = router.completion(
