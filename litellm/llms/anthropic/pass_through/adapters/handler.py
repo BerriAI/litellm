@@ -13,7 +13,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
@@ -331,8 +331,10 @@ async def _run_polyfill_if_enabled(
     does not disable a valid spec because context_management is a supported
     param). Raises ``AnthropicContextManagementError`` so the /v1/messages
     endpoint can emit an Anthropic-format 400, unless ``drop_invalid_edits``
-    (``drop_params``) drops the invalid spec. All other exceptions are
-    best-effort swallowed (matches v0 behavior).
+    (``drop_params``) drops what is invalid: the malformed fields of a
+    ``clear_tool_uses`` edit alone, or the whole spec for an invalid ``compact``
+    trigger. All other
+    exceptions are best-effort swallowed (matches v0 behavior).
     """
     if not context_management_spec:
         return None
@@ -353,6 +355,7 @@ async def _run_polyfill_if_enabled(
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=parent_trace_id,
             count_only=count_only,
+            drop_invalid_edits=drop_invalid_edits,
         )
     except AnthropicContextManagementError:
         if drop_invalid_edits:
@@ -649,7 +652,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-            drop_params=litellm.drop_params is True or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
+            drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
         )
 
         if openai_request is None:
@@ -736,14 +739,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        drop_invalid_edits: Final = litellm.drop_params is True or (
-            "drop_params" in kwargs and kwargs["drop_params"] is True
-        )
         litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
         reject_malformed_tool_result_text(messages, model, request_kwargs)
+        drop_invalid_edits: Final = drops_unsupported_params(request_kwargs.get("drop_params"))
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
@@ -866,7 +867,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
-        reject_malformed_tool_result_text(messages, model, _REQUEST_KWARGS.validate_python(kwargs))
+        sync_request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        reject_malformed_tool_result_text(messages, model, sync_request_kwargs)
 
         # Run the context_management polyfill on the sync path too so that
         # ``litellm.messages.create()`` callers don't silently lose edits like
@@ -875,9 +877,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        drop_invalid_edits: Final = litellm.drop_params is True or (
-            "drop_params" in kwargs and kwargs["drop_params"] is True
-        )
+        drop_invalid_edits: Final = drops_unsupported_params(sync_request_kwargs.get("drop_params"))
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx

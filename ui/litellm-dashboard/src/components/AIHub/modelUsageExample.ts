@@ -38,10 +38,33 @@ response = requests.post(
 
 print(response.json()["answers"])`;
 
+const extractionExample = (baseUrl: string, model: string, keyHeaderName: string): string => `import requests
+
+response = requests.post(
+    ${JSON.stringify(`${baseUrl}/v1/extraction`)},  # Your LiteLLM Proxy URL
+    headers={${JSON.stringify(keyHeaderName)}: "Bearer your_api_key"},
+    json={
+        "model": ${JSON.stringify(model)},
+        "state": "Invoice #4471 from Acme Tools. Total $174.00, due in 30 days.",
+        "fields": {
+            "vendor": {"type": "text", "instructions": "Who sent the invoice?"},
+            "total": {"type": "number", "unit": "USD"}
+        }
+    }
+)
+
+print(response.json()["answers"])`;
+
 export const modelUsageExample = (
   mode: string | null | undefined,
   baseUrl: string,
   model: string,
   keyHeaderName: string,
-): string =>
-  isDecisionMode(mode) ? systemOneExample(baseUrl, model, keyHeaderName) : chatCompletionsExample(baseUrl, model);
+): string => {
+  if (mode === "extraction") {
+    return extractionExample(baseUrl, model, keyHeaderName);
+  }
+  return isDecisionMode(mode)
+    ? systemOneExample(baseUrl, model, keyHeaderName)
+    : chatCompletionsExample(baseUrl, model);
+};

@@ -133,6 +133,11 @@ MID: Final[tuple[AgentCases, ...]] = (
         bedrock_converse.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
     ),
     (
+        anthropic.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
         bedrock_converse.CLAUDE_OPUS_5_TEST_CASE,
         bedrock_converse.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
         bedrock_converse.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,

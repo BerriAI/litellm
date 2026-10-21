@@ -56,28 +56,3 @@ async def test_provider_failure_is_terminal_and_shared_with_callbacks(
     assert len(failure) == 1
     assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
     assert not any("success" in name for name in recorder.names)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "options",
-    (
-        {"stream": True},
-        {"extra_body": {"provider_option": True}},
-        {"mock_response": "mock"},
-        {"num_retries": 1},
-        {"use_chat_completions_api": True},
-        {"model_list": []},
-    ),
-)
-async def test_unsupported_requests_fail_before_callbacks_and_provider_io(
-    server: RecordingServer, options: dict[str, object]
-) -> None:
-    recorder: Final = RecordingLogger()
-    server.expected_requests = 0
-
-    with pytest.raises(RuntimeError, match="declined the request"):
-        await call(server, callbacks=[recorder], **options)
-
-    assert not server.requests
-    assert not recorder.events

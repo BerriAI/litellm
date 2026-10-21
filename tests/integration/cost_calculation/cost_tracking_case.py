@@ -94,6 +94,7 @@ class CostMapEntry(BaseModel):
     tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     input_cost_per_character: float | None = None

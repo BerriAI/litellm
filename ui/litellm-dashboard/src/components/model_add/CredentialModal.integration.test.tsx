@@ -67,6 +67,13 @@ vi.mock("../networking", async () => {
         credential_fields: [
           { key: "api_base", label: "API Base", field_type: "text" },
           { key: "api_key", label: "API Key", field_type: "password" },
+          {
+            key: "github_copilot_host",
+            label: "GitHub host",
+            placeholder: "github.com",
+            tooltip: "Leave empty for github.com. For GHE.com data residency enter your SUBDOMAIN.ghe.com host",
+            field_type: "text",
+          },
         ],
       },
     ]),
@@ -532,7 +539,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
 describe("CredentialModal with GitHub Copilot auth types", () => {
   const perUserCopilotCredential: CredentialItem = {
     credential_name: "copilot-per-user",
-    credential_values: { github_copilot_auth_type: "per_user_oauth" },
+    credential_values: { github_copilot_auth_type: "per_user_oauth", github_copilot_host: "octo.ghe.com" },
     credential_info: { custom_llm_provider: "GITHUB_COPILOT" },
   };
 
@@ -577,6 +584,7 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     const onSubmit = renderModal({ mode: "edit", existingCredential: perUserCopilotCredential });
 
     expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
+    expect(screen.getByLabelText("GitHub host")).toHaveValue("octo.ghe.com");
     await chooseOption(user, /^Auth Type:/, "Shared device login");
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
@@ -586,7 +594,7 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
       custom_llm_provider: "GITHUB_COPILOT",
       credential_values: {},
     });
-    expect(valuesToDelete).toEqual(["github_copilot_auth_type"]);
+    expect([...valuesToDelete].sort()).toEqual(["github_copilot_auth_type", "github_copilot_host"]);
   });
 });
 
