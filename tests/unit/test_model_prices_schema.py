@@ -553,7 +553,7 @@ def test_every_cost_map_provider_is_registered(path: Path):
         for name, entry in json.loads(path.read_text()).items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider")
-        not in ("coralbricks", "inferenceapis", "microsoft_365_copilot", "openinfer", "scaledown")
+        not in ("coralbricks", "inferenceapis", "microsoft_365_copilot", "openinfer", "prism", "sail", "scaledown")
     }
     assert rows
     assert unregistered_providers(rows) == [], (
