@@ -63,6 +63,11 @@ To qualify for a bounty, reports must include clear reproduction steps, a reprod
 
 - All commits run through Github's CodeQL checking
 
+### Dependency Security
+
+- The `proxy-runtime` extra requires `pypdf>=6.21.1,<7.0`, including fixes for malicious-PDF infinite loops, excessive memory use, and unexpected image-parser invocation.
+- Dashboard and VS Code extension test tooling requires Vitest 4.1.12 or later in the 4.x series to include the patched `@vitest/mocker`. OSV scans the Python, dashboard, and extension lockfiles in CI.
+
 ### Self-hosted Instances LiteLLM
 
 - **No data or telemetry is stored on LiteLLM Servers when you self host**
