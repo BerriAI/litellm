@@ -237,6 +237,7 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -320,6 +321,7 @@ def test_anthropic_format_returns_public_team_model_name(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -494,7 +496,11 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
 
     patched_models.get_model_list = MagicMock(
         return_value=[
-            {"model_name": internal_name, "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"}}
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"},
+            }
         ]
     )
     patched_models.get_model_names = MagicMock(return_value=[internal_name])

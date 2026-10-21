@@ -706,3 +706,19 @@ class TestClaudeModelPatternMatching:
         set_fallback_generalizations([])
         with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+class TestTypesafeJevPatternMatching:
+    @pytest.mark.parametrize("model", ["jev-latest", "jev-preview", "jev-1.14.0", "jev-2.0.0-rc1"])
+    def test_bare_jev_id_routes_to_typesafe(self, model, shipped_generalizations):
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        assert custom_llm_provider == "typesafe"
+
+    @pytest.mark.parametrize("model", ["foo/jev-latest", "openjev-latest", "jev-", "jev-latest model"])
+    def test_namespaced_or_partial_jev_name_does_not_match_rule(self, model, shipped_generalizations):
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            match_routing_generalization,
+        )
+
+        assert match_routing_generalization(model) is None

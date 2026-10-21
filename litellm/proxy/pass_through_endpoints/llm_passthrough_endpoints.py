@@ -695,7 +695,7 @@ _COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
 
 
 def typesafe_allowlist_model_names() -> tuple[str, ...]:
-    if passthrough_endpoint_router.get_credentials(custom_llm_provider="typesafe", region_name=None) is None:
+    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
         return ()
     cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
     priced_jev_models: Final = sorted(

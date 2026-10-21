@@ -88,6 +88,14 @@ class PassthroughEndpointRouter:
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
 
+    def has_credentials(self, custom_llm_provider: str) -> bool:
+        if self._get_deployment_api_key(custom_llm_provider=custom_llm_provider, region_name=None) is not None:
+            return True
+        env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
+            custom_llm_provider=custom_llm_provider,
+        )
+        return get_secret_str(env_variable_name) is not None
+
     def _get_deployment_api_key(
         self,
         custom_llm_provider: str,

@@ -57,6 +57,18 @@ async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(o
 
 
 @pytest.mark.asyncio
+async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_cannot_resolve(
+    openai_only_router, monkeypatch
+):
+    monkeypatch.delenv("LITELLM_QA_UNSET_TYPESAFE_TOKEN", raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "oidc/env/LITELLM_QA_UNSET_TYPESAFE_TOKEN")
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert {"gpt-4", "typesafe/*"} <= picker_models
+
+
+@pytest.mark.asyncio
 async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(openai_only_router, monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
 

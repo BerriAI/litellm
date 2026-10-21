@@ -721,6 +721,44 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             )
 
 
+@pytest.fixture
+def shipped_routing_rules() -> Iterator[None]:
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    set_fallback_generalizations(GetModelCostMap.load_local_model_cost_map()["fallback_generalizations"]["rules"])
+    yield
+    set_fallback_generalizations(previous_rules)
+
+
+@pytest.mark.parametrize("object_type", ["team", "project"])
+@pytest.mark.parametrize(
+    "allowed_models, model, expect_to_work",
+    [
+        (["typesafe/*"], "jev-latest", True),
+        (["typesafe/*"], "jev-1.14.0", True),
+        (["jev-latest"], "jev-latest", True),
+        (["openai/*"], "jev-latest", False),
+        (["typesafe/*"], "foo/jev-latest", False),
+    ],
+)
+def test_typesafe_provider_wildcard_covers_bare_jev_model(
+    shipped_routing_rules, object_type, allowed_models, model, expect_to_work
+):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    if expect_to_work:
+        assert can_object_call_model(model=model, llm_router=None, models=allowed_models, object_type=object_type)
+        return
+    with pytest.raises(ProxyException):
+        can_object_call_model(model=model, llm_router=None, models=allowed_models, object_type=object_type)
+
+
 @pytest.mark.parametrize(
     "key_models, model, expect_to_work",
     [
