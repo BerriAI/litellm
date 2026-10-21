@@ -330,6 +330,23 @@ describe("useUserLookup", () => {
     expect(result.current.data?.user_id).toBe("user-1-0");
   });
 
+  it("falls back when user info returns a different user id", async () => {
+    const response = buildUserListResponse(1, 1);
+    const exactUser = { ...response.users[0], user_id: "a b", user_alias: "Right User" };
+    vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("a+b"));
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [exactUser],
+    });
+
+    const { result } = renderHook(() => useUserLookup("a b"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({ user_id: "a b", user_alias: "Right User" });
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["a b"], 1, 100);
+  });
+
   it("falls back to the exact user list match when the user info endpoint returns a 404", async () => {
     const response = buildUserListResponse(1, 1);
     const exactUser = { ...response.users[1], user_id: "bob", user_alias: "Bob" };

@@ -91,14 +91,13 @@ export const useUserLookup = (userId: string | null) => {
     queryKey: userLookupKeys.detail(userId ?? ""),
     queryFn: async () => {
       try {
-        return mapUserInfoV2ToUserInfo(await userGetInfoV2(accessToken!, userId!));
+        const user = await userGetInfoV2(accessToken!, userId!);
+        if (user.user_id === userId) return mapUserInfoV2ToUserInfo(user);
       } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          const response = await userListCall(accessToken!, [userId!], 1, USER_LIST_MAX_PAGE_SIZE);
-          return response.users.find((user) => user.user_id === userId) ?? null;
-        }
-        throw error;
+        if (!(error instanceof ApiError && error.status === 404)) throw error;
       }
+      const response = await userListCall(accessToken!, [userId!], 1, USER_LIST_MAX_PAGE_SIZE);
+      return response.users.find((user) => user.user_id === userId) ?? null;
     },
     enabled: Boolean(accessToken) && Boolean(userId) && canListUsers(userRole),
   });
