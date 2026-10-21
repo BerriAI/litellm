@@ -20,20 +20,22 @@ from __future__ import annotations
 
 import math
 import time
+from typing import Final
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-
 from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
-from models import LiteLLMParamsBody
+from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
+from pydantic import BaseModel, ConfigDict
 
 pytestmark = pytest.mark.e2e
 
 #: The active DataDog callback's name in /health/readiness/details success_callbacks.
 DD_LOGGER_NAME = "DataDogLogger"
+FAILING_BACKEND_MODEL: Final = "anthropic/claude-haiku-4-5"
 
 
 class _DdMessagePayload(BaseModel):
@@ -110,6 +112,15 @@ def _assert_exactly_one_event(
 
 class TestDataDogLogDelivery:
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -135,6 +146,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -162,6 +182,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -187,6 +216,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -233,6 +271,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -277,6 +324,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -348,6 +404,15 @@ def _assert_exactly_one_failure_event(events: list[DdLogEvent], *, model_group: 
 
 class TestDataDogFailureDelivery:
     @pytest.mark.covers("logging.datadog.failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_chat_completions_emits_one_error_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -367,7 +432,7 @@ class TestDataDogFailureDelivery:
         model_name = f"dd-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"dd-err-key-{unique_marker()}", models=[model_name])
@@ -391,6 +456,79 @@ class TestDataDogFailureDelivery:
         )
         assert outcome.status_code == 401, (
             f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+        )
+
+        events = dd_logs.poll_events_for_query(f"@model_group:{model_name}")
+        payload = _assert_exactly_one_failure_event(events, model_group=model_name)
+        assert payload.error_str is not None and "AnthropicException" in payload.error_str, (
+            f"the event must carry the provider error, got error_str={payload.error_str!r}"
+        )
+
+    @pytest.mark.covers("logging.datadog.stream_failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
+    def test_failed_chat_completions_stream_emits_one_error_event(
+        self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
+    ) -> None:
+        """A STREAMED /chat/completions call that fails at the provider after
+        its configured retries must still reach the DataDog logs intake as
+        exactly one error-grade event: the retry loop invokes the failure
+        handler once per attempt on the same logging object, so a dedup that
+        only works for non-streaming calls multiplies every retried stream
+        failure by its attempt count (issue #42988).
+
+        The deployment fails with a connect error, not an auth error: the
+        router does not retry AuthenticationError when the model group has a
+        single deployment, so an invalid key would never reach the retry loop
+        this test exercises. api_base is an unroutable address, so every
+        attempt fails the same retryable way."""
+        _assert_datadog_configured(client)
+
+        model_name = f"dd-err-stream-{unique_marker()}"
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(
+                model=FAILING_BACKEND_MODEL,
+                api_key=INVALID_UPSTREAM_API_KEY,
+                api_base="http://localhost:1",
+            ),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = client.key_with_alias(f"dd-err-stream-key-{unique_marker()}", models=[model_name])
+        resources.defer(lambda: client.delete_key(key))
+
+        deadline = time.monotonic() + client.proxy.poll_timeout
+        while True:
+            outcome = client.proxy.transport.stream(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=ReliabilityChatBody(
+                    model=model_name,
+                    messages=[ChatMessage(role="user", content="trigger an upstream connect failure")],
+                    stream=True,
+                    max_tokens=16,
+                    router_settings_override=RouterSettingsOverride(num_retries=2),
+                ),
+            )
+            assert not outcome.ok, "the call must fail; the deployment's upstream is unreachable"
+            assert outcome.status_code != -1, (
+                "network failure between the test and the proxy while provoking the provider "
+                "failure; retrying now could double-log the failure payload and falsely trip "
+                f"the exactly-one assertion - fix the rig connectivity first: {outcome.body[:200]}"
+            )
+            if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
+                break
+            time.sleep(client.proxy.poll_interval)
+        assert "AnthropicException" in outcome.body, (
+            "never saw the upstream provider failure before the deadline; the deployment may still "
+            f"be propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
         )
 
         events = dd_logs.poll_events_for_query(f"@model_group:{model_name}")

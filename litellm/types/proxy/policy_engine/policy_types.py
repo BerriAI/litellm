@@ -29,8 +29,9 @@ Key concepts:
 - `condition`: Optional model condition for when guardrails apply
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyCondition(BaseModel):
+class PolicyCondition(LiteLLMBaseModel):
     """
     Condition for when a policy's guardrails apply.
 
@@ -66,7 +67,7 @@ class PolicyCondition(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyScope(BaseModel):
+class PolicyScope(LiteLLMBaseModel):
     """
     Defines the scope for matching requests.
 
@@ -130,7 +131,7 @@ class PolicyScope(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyGuardrails(BaseModel):
+class PolicyGuardrails(LiteLLMBaseModel):
     """
     Defines guardrails to add or remove in a policy.
 
@@ -167,7 +168,7 @@ class PolicyGuardrails(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class Policy(BaseModel):
+class Policy(LiteLLMBaseModel):
     """
     A policy that defines WHAT guardrails to apply.
 
@@ -244,7 +245,7 @@ class Policy(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyAttachment(BaseModel):
+class PolicyAttachment(LiteLLMBaseModel):
     """
     Attaches a policy to a scope - defines WHERE a policy applies.
 
@@ -294,6 +295,10 @@ class PolicyAttachment(BaseModel):
         le=2147483647,
         description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -313,7 +318,7 @@ class PolicyAttachment(BaseModel):
         )
 
 
-class PolicyConfig(BaseModel):
+class PolicyConfig(LiteLLMBaseModel):
     """
     Root configuration for all policies.
 

@@ -89,6 +89,19 @@ class FixedDimensionEmbedder:
         return tuple((1.0,) * self.dimensions for _ in texts)
 
 
+class OversizedAwareEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple(VECTORS[text] for text in texts)
+
+
 class TestSkillSearchText:
     def test_joins_title_description_and_instructions(self) -> None:
         assert skill_search_text(TRANSLATOR) == (
@@ -132,6 +145,19 @@ class TestSkillSearchIndex:
         assert isinstance(outcome, SkillSearchHits)
         assert [hit.skill.skill_id for hit in outcome.hits] == ["translate-file", "trip-planner"]
         assert outcome.hits[0].score > outcome.hits[1].score
+
+    @pytest.mark.asyncio
+    async def test_omits_skills_with_oversized_search_text(self) -> None:
+        oversized: Final = LiteLLM_SkillsTable(
+            skill_id="oversized", display_title="Oversized", instructions="OVERSIZED instructions"
+        )
+
+        outcome: Final = await SkillSearchIndex().search(
+            "language translation", (*SKILLS, oversized), top_k=5, embed=OversizedAwareEmbedder(), embedding_model="m"
+        )
+
+        assert isinstance(outcome, SkillSearchHits)
+        assert {hit.skill.skill_id for hit in outcome.hits} == {skill.skill_id for skill in SKILLS}
 
     @pytest.mark.asyncio
     async def test_second_search_only_embeds_the_query(self) -> None:
@@ -303,6 +329,29 @@ class TestSearchSkills:
         assert metadata["user_api_key"] == "hashed-caller-key"
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_user_id"] == "user-1"
+
+    @pytest.mark.asyncio
+    async def test_cli_session_embedding_spend_is_attributed_to_the_per_user_alias_not_the_login_token(self) -> None:
+        router = _embedding_router()
+        session = UserAPIKeyAuth(
+            api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+            user_id="alice",
+            key_alias="cli-session-alice",
+            is_session_token=True,
+        )
+        await search_skills(
+            "language translation",
+            SKILLS,
+            1,
+            router=router,
+            embedding_model="text-embedding-3-small",
+            index=SkillSearchIndex(),
+            user_api_key_dict=session,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+        metadata = router.aembedding.await_args.kwargs["metadata"]
+        assert metadata["user_api_key"] == "cli-session-alice"
+        assert metadata["user_api_key_hash"] == "cli-session-alice"
 
     @pytest.mark.asyncio
     async def test_key_limits_are_checked_against_the_real_embedding_call_before_it_runs(self) -> None:

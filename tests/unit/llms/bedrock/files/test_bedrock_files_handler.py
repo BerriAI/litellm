@@ -270,3 +270,40 @@ async def test_afile_content_assumes_role_with_external_id(monkeypatch):
     assert s3_client_kwargs["aws_access_key_id"] == "ASIAFILESDOWNLOADROLE"
     assert s3_client_kwargs["aws_session_token"] == "assumed-session-token"
     assert response.content == b'{"custom_id": "req-1"}'
+
+
+@pytest.mark.asyncio
+async def test_afile_content_builds_the_s3_client_with_the_s3_pair_when_it_differs_from_the_aws_identity():
+    import boto3
+
+    class FakeS3Body:
+        def read(self):
+            return b'{"custom_id": "req-1"}'
+
+    class FakeS3Client:
+        def get_object(self, Bucket, Key):
+            return {"Body": FakeS3Body()}
+
+    optional_params = {
+        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIABEDROCKONLY",
+        "aws_secret_access_key": "bedrock-only-secret",
+        "aws_session_token": "bedrock-only-token",
+        "s3_access_key_id": "AKIAS3ONLY",
+        "s3_secret_access_key": "s3-only-secret",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeS3Client()) as mock_boto3_client:
+        response = await BedrockFilesHandler().afile_content(
+            file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+            optional_params=optional_params,
+            timeout=10.0,
+            max_retries=None,
+        )
+
+    s3_client_kwargs = mock_boto3_client.call_args.kwargs
+    assert s3_client_kwargs["aws_access_key_id"] == "AKIAS3ONLY"
+    assert s3_client_kwargs["aws_secret_access_key"] == "s3-only-secret"
+    assert s3_client_kwargs["aws_session_token"] is None, "the aws_* session token belongs to the Bedrock identity"
+    assert response.content == b'{"custom_id": "req-1"}'

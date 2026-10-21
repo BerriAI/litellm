@@ -1,5 +1,6 @@
 import os
 import textwrap
+from typing import Final
 
 import pytest
 
@@ -65,14 +66,11 @@ _SDK_CONTRACT = textwrap.dedent(
 
     import litellm
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers["Content-Length"]))
-            if self.headers.get("User-Agent", "").startswith("python-httpx"):
-                self.send_response(418)
-                self.end_headers()
-                return
             body = json.dumps({
                 "pages": [{"index": 0, "markdown": "native", "images": [], "dimensions": None}],
                 "model": "mistral-ocr-latest",
@@ -96,8 +94,6 @@ _SDK_CONTRACT = textwrap.dedent(
         "api_base": f"http://127.0.0.1:{server.server_port}",
         "num_retries": 0,
     }
-    litellm.rust(True)
-
     SERVED, REFUSED, OTHER = 0, 3, 4
 
     def outcome(asynchronous):
@@ -107,7 +103,10 @@ _SDK_CONTRACT = textwrap.dedent(
             return REFUSED
         except Exception:
             return OTHER
-        return SERVED if response.pages[0].markdown == "native" else OTHER
+        return SERVED if (
+            response.pages[0].markdown == "native"
+            and get_hidden_params_dict(response).get("additional_headers", {}).get("x-litellm-rust") == "true"
+        ) else OTHER
 
     def forked(asynchronous):
         pid = os.fork()
@@ -137,10 +136,91 @@ def test_sdk_call_in_a_child_forked_after_native_use_raises_instead_of_hanging()
     env = {
         **os.environ,
         "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
-        "LITELLM_RUST": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
 
     result = run_child_interpreter(_SDK_CONTRACT, env=env, timeout=120)
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork only")
+@pytest.mark.parametrize("warm_fast_counter", (False, True))
+def test_tokenizers_share_the_native_process_guard(warm_fast_counter: bool) -> None:
+    script: Final = """
+import asyncio
+import os
+import litellm
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens
+from litellm.rust_bridge import _native, catalog
+from litellm.rust_bridge.catalog import Route, RouteRule
+from litellm.rust_bridge.configuration import Rollout
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
+from litellm.utils import claude_json_str
+
+catalog.RULES = (
+    RouteRule(Route.TOKENIZER, Rollout.RUST_REQUIRED),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_REQUIRED),
+    *catalog.RULES,
+)
+litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
+_native.reserve_process_for_forking()
+for create in (
+    lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
+    lambda: _native.Tokenizer.from_json(claude_json_str),
+    lambda: litellm.token_counter(model="tokenizer-fork-fixture", text="hello"),
+):
+    try:
+        create()
+    except _native.ProcessReservedForForking:
+        pass
+    else:
+        raise AssertionError("reserved parent ran a native tokenizer")
+assert not _native.process_state_started()
+
+pid = os.fork()
+if pid == 0:
+    tokenizer = HuggingFaceTokenizer.from_str(claude_json_str)
+    encoding = _native.Tokenizer.from_tiktoken("cl100k_base")
+    if os.environ["WARM_FAST_COUNTER"] == "True":
+        _native.TokenCounter.from_tokenizer(encoding, fast=True)
+    expected = [item.ids for item in tokenizer.encode_batch(["hello", "world"])]
+    assert _native.process_state_started()
+    grandchild = os.fork()
+    if grandchild == 0:
+        for call in (
+            lambda: tokenizer.encode_batch(["hello", "world"]),
+            lambda: tokenizer.encode("hello"),
+            lambda: encoding.count("hello"),
+            lambda: encoding.count("hello", fast=True),
+            lambda: _native.TokenCounter.from_tokenizer(encoding),
+            lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
+            lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
+            lambda: asyncio.run(
+                count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))
+            ),
+        ):
+            try:
+                call()
+            except _native.ForkedAfterNativeRuntimeStarted:
+                pass
+            else:
+                os._exit(1)
+        os._exit(0)
+    assert os.waitpid(grandchild, 0)[1] == 0
+    assert [item.ids for item in tokenizer.encode_batch(["hello", "world"])] == expected
+    os._exit(0)
+assert os.waitpid(pid, 0)[1] == 0
+"""
+    result: Final = run_child_interpreter(
+        script,
+        env={
+            **os.environ,
+            "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "WARM_FAST_COUNTER": str(warm_fast_counter),
+        },
+        timeout=30,
+    )
 
     assert result.returncode == 0, result.stderr
