@@ -5,6 +5,7 @@ import datetime
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1081,6 +1082,18 @@ def test_requests_go_to_the_plan_host_github_reports_for_the_token(
     assert [response._hidden_params["api_base"] for response in responses] == [PLAN_COPILOT_HOST] * 2
 
 
+def test_an_aliased_shared_model_goes_to_the_plan_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _shared_login(tmp_path, monkeypatch)
+    monkeypatch.setattr(litellm, "model_alias_map", {"copilot": _SURFACE_MODELS["completion"]})
+    lookups: Final[list[httpx.Request]] = []
+    with github_http(
+        _copilot_surface_responder(_surface_payload("completion")), answer_plan(PLAN_COPILOT_HOST), lookups
+    ) as requests:
+        _call_surface(litellm, "completion", model="copilot")
+    assert [str(request.url) for request in requests] == [f"{PLAN_COPILOT_HOST}/chat/completions"]
+    assert [request.headers["authorization"] for request in lookups] == ["token shared-copilot-token"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["shared", "per_user"])
 async def test_messages_go_to_the_plan_host_github_reports_for_the_token(
@@ -1466,7 +1479,7 @@ def test_e2e_completion_per_user_ghe_credential_sends_the_token_to_its_tenant(mo
         github_http(respond, answer_plan(GHE_COPILOT_HOST), lookups) as requests,
         _no_authenticator(),
     ):
-        litellm.completion(
+        response: Final = litellm.completion(
             model="github_copilot/gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             litellm_credential_name="copilot-cred",
@@ -1475,3 +1488,4 @@ def test_e2e_completion_per_user_ghe_credential_sends_the_token_to_its_tenant(mo
     assert [str(request.url) for request in lookups] == [GHE_COPILOT_USER_URL]
     assert [str(request.url) for request in requests] == [f"{GHE_COPILOT_HOST}/chat/completions"]
     assert requests[0].headers["authorization"] == "Bearer ghe-github-token"
+    assert response._hidden_params["api_base"] == GHE_COPILOT_HOST

@@ -36,10 +36,9 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def api_base_without_login(self, user_session: GithubCopilotUserSession | None = None) -> str | None:
         try:
-            return get_copilot_api_base(
-                None,
-                lambda: user_session.token if user_session is not None else self.authenticator.stored_access_token(),
-            )
+            if user_session is not None:
+                return get_copilot_api_base(None, lambda: user_session.token, user_session.endpoints)
+            return get_copilot_api_base(None, self.authenticator.stored_access_token)
         except InvalidAPIBaseError:
             return None
 

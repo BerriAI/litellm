@@ -556,8 +556,11 @@ def _plan_api_base_request(
     session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
     if isinstance(session, GithubCopilotUserSession):
         return session.token, None, session.endpoints
+    import litellm
+
+    requested_model: Final = litellm.model_alias_map.get(model, model) if isinstance(model, str) else model
     targets_github_copilot: Final = kwargs.get("custom_llm_provider") == _LLM_PROVIDER or (
-        isinstance(model, str) and model.startswith(f"{_LLM_PROVIDER}/")
+        isinstance(requested_model, str) and requested_model.startswith(f"{_LLM_PROVIDER}/")
     )
     shared_token: Final = Authenticator().stored_access_token() if targets_github_copilot else None
     return (shared_token, api_base, None) if shared_token is not None else None

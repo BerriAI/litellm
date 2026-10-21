@@ -9751,10 +9751,12 @@ def test_update_kwargs_with_deployment_no_tags():
     assert "tags" not in kwargs["metadata"]
 
 
-def _copilot_deployment_object(token_dir, monkeypatch, **litellm_params):
+def _copilot_deployment_object(
+    token_dir: Path, monkeypatch: pytest.MonkeyPatch, **litellm_params: object
+) -> tuple[litellm.Router, Deployment | None]:
     (token_dir / "access-token").write_text("shared-copilot-token")
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "copilot",
@@ -9773,7 +9775,7 @@ def test_update_kwargs_with_deployment_drops_caller_api_base_for_a_copilot_deplo
     tmp_path, monkeypatch
 ):
     router, deployment = _copilot_deployment_object(tmp_path, monkeypatch, drop_params=True)
-    kwargs: dict = {"metadata": {}, "api_base": "https://caller.example.com"}
+    kwargs: Final[dict[str, object]] = {"metadata": {}, "api_base": "https://caller.example.com"}
 
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
