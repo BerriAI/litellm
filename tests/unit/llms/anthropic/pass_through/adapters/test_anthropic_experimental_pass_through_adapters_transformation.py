@@ -1,10 +1,13 @@
 import base64
 import functools
 import json
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, cast
 
+import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -2847,6 +2850,37 @@ def test_translate_completion_input_params_keeps_provider_native_tools():
     assert translated["tools"] == [{"googleMaps": {}}]
 
 
+def _gemini_request_with_budget(budget: object, **extra: object) -> dict[str, object]:
+    return {
+        "model": "gemini/gemini-2.5-flash",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "Say ok"}],
+        "thinking": {"type": "enabled", "budget_tokens": budget},
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("budget", ["2048", True])
+def test_translate_completion_input_params_rejects_a_non_numeric_budget_without_drop_params(
+    budget: object, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens must be a number"):
+        AnthropicAdapter().translate_completion_input_params(_gemini_request_with_budget(budget))
+
+
+@pytest.mark.parametrize("budget", ["2048", True])
+def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop_params(
+    budget: object, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    translated: Final = AnthropicAdapter().translate_completion_input_params(
+        _gemini_request_with_budget(budget, drop_params=True)
+    )
+    assert translated is not None
+    assert not {"reasoning_effort", "thinking"} & translated.keys()
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
@@ -5235,3 +5269,153 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+_CHAT_BRIDGE_MODEL: Final = "azure/gpt-5.6"
+_CHAT_BRIDGE_API_BASE: Final = "https://tool-result-text.openai.azure.com"
+_CHAT_BRIDGE_URL: Final = r".*tool-result-text\.openai\.azure\.com/openai/deployments/gpt-5\.6/chat/completions.*"
+_CHAT_BRIDGE_REPLY: Final = {
+    "id": "chatcmpl-tool-result-text",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "build passed"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+}
+_MALFORMED_TOOL_RESULT_TEXTS: Final = (pytest.param(None, id="null"), pytest.param(5, id="number"))
+_MALFORMED_TOOL_RESULT_TEXT_ERROR: Final = (
+    "litellm.BadRequestError: tool_result toolu_log content.1.text: Input should be a valid string"
+)
+
+
+def _tool_result_with_text_blocks(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    blocks: Final = [{"type": "text", "text": "build ok"}, text_block, {"type": "text", "text": "done"}, text_block]
+    return [
+        {"role": "user", "content": "run the build"},
+        dict(_anthropic_tool_use_turn("toolu_log")),
+        dict(_anthropic_tool_result_turn({"toolu_log": blocks})),
+    ]
+
+
+def _chat_bridge_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(return_value=httpx.Response(200, json=_CHAT_BRIDGE_REPLY))
+
+
+def _sent_tool_messages(route: respx.Route) -> list[object]:
+    sent: Final = json.loads(route.calls.last.request.read())
+    return [message for message in sent["messages"] if message["role"] == "tool"]
+
+
+@pytest.fixture
+def _chat_bridge_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+async def test_chat_bridge_async_malformed_tool_result_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await litellm.anthropic.messages.acreate(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_tool_result_with_text_blocks({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.llm_provider == "azure"
+    assert rejected.value.message == _MALFORMED_TOOL_RESULT_TEXT_ERROR
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_malformed_tool_result_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_tool_result_with_text_blocks({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.llm_provider == "azure"
+    assert rejected.value.message == _MALFORMED_TOOL_RESULT_TEXT_ERROR
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+async def test_chat_bridge_drop_params_drops_a_malformed_tool_result_text(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, text: object, drop_params_source: str
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=_tool_result_with_text_blocks({"type": "text", "text": text}),
+        **({"drop_params": True} if drop_params_source == "request" else {}),
+    )
+
+    assert _sent_tool_messages(route) == [
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_log",
+            "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": "done"}],
+        }
+    ]
+    assert isinstance(response, dict)
+    assert response["content"] == [{"type": "text", "text": "build passed"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model_as_empty_text(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=_tool_result_with_text_blocks({"type": "text"}),
+    )
+
+    assert _sent_tool_messages(route) == [
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_log",
+            "content": [
+                {"type": "text", "text": "build ok"},
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "done"},
+                {"type": "text", "text": ""},
+            ],
+        }
+    ]

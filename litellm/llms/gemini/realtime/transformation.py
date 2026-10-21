@@ -13,6 +13,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -212,7 +213,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # so the API key must remain as a query parameter here. This is an accepted
         # limitation; httpx is not used for WebSocket so MaskedHTTPStatusError
         # already covers the main leak vector.
-        return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
+        live_url: Final = join_api_base(
+            api_base, "ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        )
+        return f"{live_url}?key={api_key}"
 
     def map_model_turn_event(self, model_turn: HttpxContentType) -> OpenAIRealtimeEventTypes:
         """

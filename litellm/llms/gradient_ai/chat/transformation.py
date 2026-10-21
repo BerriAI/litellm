@@ -1,5 +1,6 @@
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -105,10 +106,10 @@ class GradientAIConfig(OpenAILikeChatConfig):
     ) -> str:
         clean_api_base: Final = (api_base or "").rstrip("/")
         if clean_api_base and clean_api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            return f"{clean_api_base}/api/v1/chat/completions"
+            return join_api_base(clean_api_base, "api/v1/chat/completions")
         agent_endpoint: Final = (get_secret_str("GRADIENT_AI_AGENT_ENDPOINT") or "").rstrip("/")
         if agent_endpoint and agent_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            return f"{agent_endpoint}/api/v1/chat/completions"
+            return join_api_base(agent_endpoint, "api/v1/chat/completions")
         return f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
 
     def _get_openai_compatible_provider_info(

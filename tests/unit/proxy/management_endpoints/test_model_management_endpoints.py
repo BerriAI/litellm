@@ -2,6 +2,7 @@ import inspect
 import asyncio
 import contextlib
 import json
+import socket
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import Dict, Final, Optional
@@ -27,11 +28,13 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    KubernetesPodsResponse,
     ModelManagementAuthChecks,
     _get_team_deployments,
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
+    get_kubernetes_pods,
     patch_model,
     update_model,
 )
@@ -42,6 +45,210 @@ from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDe
 
 async def _passthrough_row(update_data):
     return update_data
+
+
+def _kubernetes_pod_router(
+    discovery_enabled: bool | None = True,
+    api_base: str = "http://vllm-headless.ns.svc.cluster.local:8000/v1",
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpu-llama",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_base": api_base,
+                    "api_key": "not-in-response",
+                    **({"kubernetes_pod_discovery": discovery_enabled} if discovery_enabled is not None else {}),
+                },
+                "model_info": {"id": "model-pods-1"},
+            }
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+async def test_get_kubernetes_pods_returns_sorted_read_only_response(
+    monkeypatch: pytest.MonkeyPatch,
+    user_role: LitellmUserRoles,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = _kubernetes_pod_router()
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.3", 8000)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 8000)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 8000)),
+        ]
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+
+    response: Final = await get_kubernetes_pods(
+        model_id="model-pods-1",
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=user_role),
+    )
+
+    assert isinstance(response, KubernetesPodsResponse)
+    assert response.model_dump() == {
+        "model_id": "model-pods-1",
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "port": 8000,
+        "pod_ips": ("10.0.0.1", "10.0.0.3"),
+        "pod_count": 2,
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_dns_error_without_exposing_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = _kubernetes_pod_router()
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        raise OSError("temporary DNS failure")
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+
+    response: Final = await get_kubernetes_pods(
+        model_id="model-pods-1",
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.model_dump() == {
+        "model_id": "model-pods-1",
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "port": 8000,
+        "pod_ips": (),
+        "pod_count": 0,
+        "error": "temporary DNS failure",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_404_for_unknown_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router())
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="unknown",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "404"
+    assert error.value.type == "not_found_error"
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_500_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "500"
+    assert error.value.type == "internal_server_error"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_400_when_discovery_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router(discovery_enabled=None))
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message == "Kubernetes pod discovery is not enabled for this model"
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://vllm-headless.ns.svc.cluster.local:8000/v1",
+        "http://192.0.2.10:8000/v1",
+    ],
+)
+async def test_get_kubernetes_pods_returns_400_for_ineligible_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router(api_base=api_base))
+    expected_message: Final = (
+        "Kubernetes pod discovery is enabled for this model, but its api_base is not an http:// "
+        "service hostname, so no pods are resolved"
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message == expected_message
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_rejects_internal_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router())
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert error.value.code == "403"
+    assert error.value.type == "auth_error"
 
 
 @pytest.mark.asyncio
@@ -310,6 +517,43 @@ class TestModelManagementAuthChecks:
             incoming_params=None,
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_info", "api_key", "refused"),
+        [
+            ({"team_id": "test_team"}, "oidc/env/MISTRAL_SA_TOKEN", True),
+            ({}, "oidc/env/MISTRAL_SA_TOKEN", False),
+            ({"team_id": "test_team"}, "sk-static", False),
+        ],
+        ids=["team model with a reference", "proxy-level model with a reference", "team model with a plain key"],
+    )
+    async def test_an_admin_cannot_save_an_oidc_api_key_reference_on_a_team_model(
+        self, model_info: dict, api_key: str, refused: bool
+    ):
+        """A team model's inline api_key is never resolved, so saving an oidc/ reference there would only ever send
+        the reference text upstream."""
+        model_params = Deployment(
+            model_name="test_model",
+            litellm_params=LiteLLM_Params(model="mistral/devstral-latest", api_key=api_key),
+            model_info=model_info,
+        )
+
+        async def save() -> object:
+            return await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.admin_user,
+                prisma_client=MockPrismaClient(team_exists=True),
+                premium_user=True,
+                incoming_params={"model": "mistral/devstral-latest", "api_key": api_key},
+            )
+
+        if not refused:
+            assert await save() is True
+            return
+        with pytest.raises(Exception, match="team model cannot hold an oidc/ api_key secret reference") as exc_info:
+            await save()
+        assert (getattr(exc_info.value, "param", None), getattr(exc_info.value, "code", None)) == ("api_key", "400")
 
     @pytest.mark.asyncio
     async def test_can_user_make_model_call_normal_user_fails(self):
@@ -4183,6 +4427,39 @@ class TestModelInfoCostMapEchoFilter:
         assert info["mode"] == echo["mode"]
         assert "litellm_provider" not in info
         assert "supported_openai_params" not in info
+
+    @pytest.mark.parametrize(
+        ("model", "field", "edited"),
+        [
+            ("bedrock/us.anthropic.claude-sonnet-5-5", "token_count_model", {}),
+            ("bedrock/us.moonshotai.kimi-k3", "token_count_framing", 0),
+        ],
+    )
+    def test_token_count_setting_is_stored_only_when_the_operator_changed_it(
+        self, model: str, field: str, edited: object
+    ) -> None:
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        entry: Final = litellm.get_model_info(model)
+        assert entry[field] not in (None, edited), entry
+        db_model: Final = Deployment(
+            model_name="count-settings",
+            litellm_params=LiteLLM_Params(model=model),
+            model_info=ModelInfo(id="dep-echo-count"),
+        )
+
+        echoed: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count"})),
+        )
+        changed: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count", field: edited})),
+        )
+
+        assert field not in json.loads(echoed["model_info"])
+        assert json.loads(changed["model_info"])[field] == edited
 
     def test_metadata_without_a_cost_map_key_is_persisted(self):
         import litellm
@@ -8597,6 +8874,63 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
     which server-side secret is read and where it is sent. A team admin who is otherwise
     authorized for a team-scoped model must not be able to set one via /model/new,
     /model/update, or PATCH /model/{id}/update; a proxy admin still can."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stored_api_key, patched_params",
+        [
+            ("sk-static", {"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"}),
+            ("oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token", {"api_base": "https://attacker.example"}),
+        ],
+        ids=["sets_the_reference", "redirects_a_stored_reference"],
+    )
+    async def test_patch_model_non_admin_cannot_touch_an_oidc_api_key_reference(
+        self, stored_api_key: str, patched_params: dict
+    ):
+        """The call path reads an oidc/ api_key from the proxy's own filesystem, so a team admin who could set one, or
+        move a deployment that has one to another api_base, could send the proxy's token to a host they pick."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "mistral/devstral-latest", "api_key": stored_api_key}
+        existing_row.model_dump.return_value = {
+            "model_name": "devstral",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["m1"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db",
+                True,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+        ):
+            with pytest.raises(Exception, match="oidc/ api_key secret reference") as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(**patched_params)),
+                    user_api_key_dict=non_admin,
+                )
+            assert getattr(exc_info.value, "param", "") == "api_key"
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_patch_model_non_admin_cannot_set_wif_field(self):
