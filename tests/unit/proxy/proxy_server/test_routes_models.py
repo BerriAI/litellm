@@ -663,3 +663,34 @@ async def test_scope_expand_lists_no_typesafe_models_to_a_client_not_asking_for_
     listed: Final = {model["id"] for model in response["data"]}
     assert "gpt-4" in listed
     assert listed.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "return_wildcard_routes", "only_model_access_groups"),
+    [
+        pytest.param(None, False, True, id="access-group-dropdown"),
+        pytest.param(None, None, None, id="dashboard-list-without-wildcard-routes"),
+        pytest.param("expand", None, None, id="expanded-list-without-wildcard-routes"),
+        pytest.param(None, True, True, id="access-groups-only-with-wildcard-routes"),
+    ],
+)
+async def test_dashboard_lists_not_asking_for_allowlist_names_offer_no_typesafe_models(
+    openai_only_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str | None,
+    return_wildcard_routes: bool | None,
+    only_model_access_groups: bool | None,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin,
+        include_model_access_groups=True,
+        return_wildcard_routes=return_wildcard_routes,
+        only_model_access_groups=only_model_access_groups,
+        scope=scope,
+    )
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})

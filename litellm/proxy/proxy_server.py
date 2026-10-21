@@ -12318,6 +12318,10 @@ async def model_list(
 
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
 
+    asks_for_allowlist_names: Final = (
+        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12340,7 +12344,7 @@ async def model_list(
             team_models=[],
             proxy_model_list=[
                 *proxy_model_list,
-                *(typesafe_allowlist_model_names() if include_model_access_groups else ()),
+                *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
             ],
             user_model=None,
             infer_model_from_keys=False,
@@ -12416,7 +12420,7 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
     offers_typesafe_allowlist_names: Final = (
-        include_model_access_groups is True and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
+        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
     )
     all_models = list(
         dict.fromkeys(
