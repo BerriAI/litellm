@@ -9612,6 +9612,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenRouterRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
