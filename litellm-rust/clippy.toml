@@ -1,4 +1,4 @@
-# The Tokio runtime is reached only through `host-python/src/execution.rs`, whose fork gate
+# The Tokio runtime is reached only through `host-python/src/runtime.rs`, whose fork gate
 # must see every entry. Going around it makes a fork-after-use hang instead of raising.
 disallowed-methods = [
     { path = "pyo3_async_runtimes::tokio::get_runtime", reason = "use litellm_host_python::run_sync / run_sync_value" },
@@ -12,6 +12,13 @@ disallowed-methods = [
     { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "set HttpClientConfig::verify instead" },
     { path = "reqwest::ClientBuilder::identity", reason = "set HttpClientConfig::client_certificate instead" },
     { path = "reqwest::ClientBuilder::use_preconfigured_tls", reason = "HttpClientConfig owns the TLS configuration" },
+    { path = "sqlx::query", reason = "use sqlx::query! or query_file! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::query_as", reason = "use sqlx::query_as! or query_file_as! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::query_scalar", reason = "use sqlx::query_scalar! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::query_with", reason = "use sqlx::query! or query_file! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::query_as_with", reason = "use sqlx::query_as! or query_file_as! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::query_scalar_with", reason = "use sqlx::query_scalar! so the SQL is checked against the migrated schema" },
+    { path = "sqlx::raw_sql", reason = "raw_sql is unchecked; use the checked query macros" },
 ]
 
 # Every outbound client comes from litellm_http::HttpClientPool so it honors the host's TLS,

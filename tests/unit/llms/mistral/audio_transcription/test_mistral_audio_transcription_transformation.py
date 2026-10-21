@@ -79,7 +79,6 @@ def test_mistral_audio_transcription_request_transform():
         os.path.dirname(__file__),
         "../../../../..",
         "tests",
-        "llm_translation",
         "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")
@@ -109,7 +108,6 @@ def test_mistral_audio_transcription_request_with_diarize():
         os.path.dirname(__file__),
         "../../../../..",
         "tests",
-        "llm_translation",
         "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")

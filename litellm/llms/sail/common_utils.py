@@ -45,7 +45,7 @@ def _entry(key: str, value: object) -> Mapping[str, object]:
 
 
 def json_body(mapping: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: HTTP bodies are plain dicts
-    return {key: _json_value(value) for key, value in mapping.items()}  # mutable-ok: HTTP bodies are plain dicts
+    return {key: _json_value(value) for key, value in mapping.items()}
 
 
 def _json_value(value: object) -> object:

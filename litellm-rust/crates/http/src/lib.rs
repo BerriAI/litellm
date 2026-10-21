@@ -7,6 +7,8 @@
 mod client;
 mod config;
 mod error;
+#[cfg(feature = "mcp")]
+mod mcp;
 pub mod media;
 pub mod outbound;
 mod pool;
@@ -15,6 +17,7 @@ pub mod request;
 mod settings;
 mod tls;
 pub mod transport;
+pub mod websocket;
 
 pub use client::Client;
 pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};

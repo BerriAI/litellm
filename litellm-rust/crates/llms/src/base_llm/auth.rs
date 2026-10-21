@@ -7,7 +7,8 @@
 
 use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
-use litellm_http::request::without_headers;
+use litellm_auth_gcp::VertexConfig;
+use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
 
@@ -24,6 +25,9 @@ pub enum AuthScheme {
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
     Token { provider: TokenProviderHandle },
+    /// A Google access token for the Vertex AI project the config names, acquired when the
+    /// request is sent through the shared GCP token cache.
+    GcpAccessToken { config: Box<VertexConfig> },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -73,6 +77,13 @@ pub async fn resolve_auth(
                 signer: None,
             })
         }
+        AuthScheme::GcpAccessToken { config } => {
+            let token = services.gcp.access_token(&config, env_lookup).await?;
+            Ok(Authenticated {
+                headers: with_credential(headers, CredentialPlacement::Bearer, &token),
+                signer: None,
+            })
+        }
         AuthScheme::AwsSigV4 {
             region,
             service,
@@ -87,31 +98,13 @@ pub async fn resolve_auth(
     }
 }
 
-/// Fills in the defaults the caller did not forward, matching Python's
-/// `if name not in headers` checks.
-pub fn with_default_headers(headers: Headers, defaults: &[(&str, &str)]) -> Headers {
-    let missing: Vec<(String, String)> = defaults
-        .iter()
-        .filter(|(name, _)| {
-            !headers
-                .iter()
-                .any(|(header, _)| header.eq_ignore_ascii_case(name))
-        })
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
-    headers.into_iter().chain(missing).collect()
-}
-
 fn with_credential(headers: Headers, placement: CredentialPlacement, credential: &str) -> Headers {
     let name = placement.header_name();
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),
         CredentialPlacement::Header(_) => credential.to_string(),
     };
-    without_headers(headers, &[name])
-        .into_iter()
-        .chain([(name.to_ascii_lowercase(), value)])
-        .collect()
+    with_header(headers, name, value)
 }
 
 #[cfg(test)]
@@ -177,29 +170,6 @@ mod tests {
         .await;
         assert_eq!(authenticated.headers, headers(expected));
         assert!(authenticated.signer.is_none());
-    }
-
-    #[rstest]
-    #[case::nothing_forwarded(
-        &[],
-        &[("x-version", "1"), ("content-type", "application/json")],
-        &[("x-version", "1"), ("content-type", "application/json")],
-    )]
-    #[case::forwarded_header_wins_in_any_case(
-        &[("X-Version", "custom"), ("x-api-key", "k")],
-        &[("x-version", "1"), ("content-type", "application/json")],
-        &[("X-Version", "custom"), ("x-api-key", "k"), ("content-type", "application/json")],
-    )]
-    #[case::no_defaults(&[("x-api-key", "k")], &[], &[("x-api-key", "k")])]
-    fn default_headers_fill_only_missing_names(
-        #[case] forwarded: &[(&str, &str)],
-        #[case] defaults: &[(&str, &str)],
-        #[case] expected: &[(&str, &str)],
-    ) {
-        assert_eq!(
-            with_default_headers(headers(forwarded), defaults),
-            headers(expected)
-        );
     }
 
     #[tokio::test]

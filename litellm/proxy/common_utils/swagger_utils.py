@@ -1,12 +1,13 @@
 import inspect
 from typing import Any, Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.exceptions import LITELLM_EXCEPTION_TYPES
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class ErrorResponse(BaseModel):
+class ErrorResponse(LiteLLMBaseModel):
     detail: dict[str, Any] = Field(
         ...,
         example={

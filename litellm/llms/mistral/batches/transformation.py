@@ -19,7 +19,7 @@ import httpx
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Errors as BatchErrors
 from openai.types.batch_error import BatchError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -29,6 +29,7 @@ from litellm.llms.base_llm.batches.transformation import (
     BatchHttpRequest,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, OpenAIBatchListResponse
 
@@ -72,14 +73,14 @@ class MistralListBatchJobsQuery(TypedDict):
     page_size: ReadOnly[int]
 
 
-class MistralBatchError(BaseModel):
+class MistralBatchError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     message: str
     count: int = 1
 
 
-class MistralBatchJob(BaseModel):
+class MistralBatchJob(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
@@ -100,7 +101,7 @@ class MistralBatchJob(BaseModel):
     metadata: dict[str, str] | None = None  # mutable-ok: LiteLLMBatch.metadata is typed as dict
 
 
-class MistralBatchJobList(BaseModel):
+class MistralBatchJobList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     total: int
@@ -112,9 +113,7 @@ def _to_batch_errors(errors: Sequence[MistralBatchError]) -> BatchErrors | None:
         return None
     return BatchErrors(
         object="list",
-        data=[  # mutable-ok: openai Batch.Errors.data is typed as list
-            BatchError(message=f"{e.message} (x{e.count})" if e.count > 1 else e.message) for e in errors
-        ],
+        data=[BatchError(message=f"{e.message} (x{e.count})" if e.count > 1 else e.message) for e in errors],
     )
 
 
@@ -217,7 +216,7 @@ class MistralBatchesConfig(BaseBatchesListConfig, BaseBatchesCancelConfig):
             if metadata
             else MistralCreateBatchJobRequest(input_files=(input_file_id,), endpoint=endpoint, model=model)
         )
-        return dict(body)  # mutable-ok: BaseBatchesConfig signature
+        return dict(body)
 
     def transform_create_batch_response(
         self,
@@ -236,7 +235,7 @@ class MistralBatchesConfig(BaseBatchesListConfig, BaseBatchesCancelConfig):
     ) -> dict[str, object]:  # mutable-ok: BaseBatchesConfig signature
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
         request: Final = _batch_http_request("GET", f"/v1/batch/jobs/{encoded_batch_id}", litellm_params)
-        return dict(request)  # mutable-ok: BaseBatchesConfig signature
+        return dict(request)
 
     def transform_retrieve_batch_response(
         self,

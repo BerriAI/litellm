@@ -6,6 +6,7 @@ in expected_responses_api_request/.
 
 import copy
 import json
+import logging
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -16,7 +17,13 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 def _expected_dir() -> Path:
@@ -272,6 +279,103 @@ async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_th
     request_body: Final = json.loads(upstream.calls[0].request.read())
     assert request_body["reasoning"] == {"effort": 5}
     assert response.id == "resp_bridge_int"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, api_base",
+    [
+        ("hosted_vllm/my-kimi", "https://vllm.example.test/v1"),
+        ("azure_ai/my-kimi", "https://kimi.services.ai.azure.com/openai/v1"),
+    ],
+)
+async def test_aresponses_sends_the_declared_reasoning_effort_level_rounded_up(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    api_base: str,
+):
+    verbose_logger.addHandler(caplog.handler)
+    verbose_logger.propagate = False
+    verbose_logger.setLevel(logging.INFO)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url__regex=rf"{api_base}/responses.*").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_effort", "my-kimi"))
+    )
+
+    response: Final = await litellm.aresponses(
+        model=model,
+        api_base=api_base,
+        api_key="fake-api-key",
+        input="hi",
+        reasoning={"effort": "minimal", "summary": "auto"},
+        model_info={"id": "kimi-1", "reasoning_effort_levels": ["low", "high", "max", "none"]},
+        litellm_metadata={"model_group": "kimi-k3"},
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": "low", "summary": "auto"}
+    assert response.output[0].content[0].text == "Done."
+    assert [
+        (
+            getattr(record, "reasoning_effort_deployment_id"),
+            getattr(record, "reasoning_effort_model_group"),
+            getattr(record, "reasoning_effort_sent"),
+        )
+        for record in caplog.records
+        if hasattr(record, "reasoning_effort_sent")
+    ] == [("kimi-1", "kimi-k3", "low")]
+
+
+def _effort_levels_disabled_by(entry: dict) -> tuple[str, ...]:
+    return tuple(level for level in ("none", "minimal", "low") if entry.get(f"supports_{level}_reasoning_effort") is False)
+
+
+def _gpt_5_row_disabling_a_level(provider: str) -> tuple[str, str]:
+    return next(
+        (key.removeprefix(f"{provider}/"), _effort_levels_disabled_by(entry)[0])
+        for key, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == provider and "gpt-5" in key and _effort_levels_disabled_by(entry)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider, api_base",
+    [("openai", "https://gpt5-gateway.example.test/v1"), ("azure", "https://gpt5.openai.azure.com")],
+)
+async def test_aresponses_sends_a_declared_level_the_model_map_disables(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    api_base: str,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model, level = _gpt_5_row_disabling_a_level(provider)
+    upstream: Final = respx_mock.post(url__regex=rf"{api_base}/.*responses.*").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_disabled", model))
+    )
+    request: Final = {
+        "model": f"{provider}/{model}",
+        "api_base": api_base,
+        "api_version": "2025-04-01-preview",
+        "api_key": "fake-api-key",
+        "input": "hi",
+        "reasoning": {"effort": level},
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.aresponses(**request, model_info={"id": "undeclared"})
+    await litellm.aresponses(**request, model_info={"id": "declared", "reasoning_effort_levels": [level, "high"]})
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read())["reasoning"] == {"effort": level}
 
 
 @pytest.mark.asyncio
@@ -662,7 +766,7 @@ async def test_aresponses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 def test_responses_injection_point_marks_input_text_on_gpt_5_6():
@@ -683,7 +787,7 @@ def test_responses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.asyncio
@@ -767,7 +871,7 @@ async def test_aresponses_custom_api_base_opts_in_through_prompt_cache_options()
 async def test_aresponses_regional_openai_api_base_marks_input_text():
     body = await _aresponses_body_with_system_point(model="gpt-5.6", api_base="https://eu.api.openai.com/v1")
     assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
-    assert body["prompt_cache_options"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.usefixtures("_no_openai_api_base_override")
@@ -824,6 +928,62 @@ async def test_injection_points_still_reach_a_native_responses_provider():
 
     body = _sent_body(mock_post)
     assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert "cache_control_injection_points" not in body
+
+
+@pytest.mark.asyncio
+async def test_injection_points_reach_a_provider_prefixed_native_responses_model():
+    """Bedrock Mantle resolves its Responses config from the price map by bare model name,
+    so predicting the bridge with the ``bedrock_mantle/``-prefixed name read as bridged and
+    deferred the system point to a chat-completions pass this native path never runs."""
+    injected_client = AsyncHTTPHandler()
+    mock_post = AsyncMock(
+        return_value=MockResponse(_minimal_responses_api_payload("resp_mantle", "openai.gpt-5.6-sol"), 200)
+    )
+    injected_client.post = mock_post
+
+    await litellm.aresponses(
+        model="bedrock_mantle/openai.gpt-5.6-sol",
+        api_key="fake-bearer-token",
+        aws_region_name="us-east-1",
+        input=copy.deepcopy(_INJECTION_POINT_INPUT),
+        cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        client=injected_client,
+    )
+
+    assert mock_post.call_args.kwargs["url"].endswith("/openai/v1/responses")
+    body = _sent_body(mock_post)
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
+    assert "cache_control_injection_points" not in body
+
+
+@pytest.mark.asyncio
+async def test_injection_points_reach_a_foundry_deployment_of_an_openai_model(monkeypatch):
+    """The router hands this layer the provider it resolved with the deployment's api_base, but the
+    hook reads the provider from the request kwargs, which never carry it, and resolving
+    ``azure_ai/gpt-6-astra`` by name alone reads the ambient ``AZURE_AI_API_BASE``, so next to an
+    Azure OpenAI one the Foundry deployment got Anthropic marks the Responses transform then stripped."""
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://other-deployment.openai.azure.com")
+    injected_client = AsyncHTTPHandler()
+    mock_post = AsyncMock(
+        return_value=MockResponse(_minimal_responses_api_payload("resp_foundry", "gpt-6-astra"), 200)
+    )
+    injected_client.post = mock_post
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-6-astra",
+        custom_llm_provider="azure_ai",
+        api_key="fake-api-key",
+        api_base="https://foundry.services.ai.azure.com",
+        input=copy.deepcopy(_INJECTION_POINT_INPUT),
+        cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        client=injected_client,
+    )
+
+    body = _sent_body(mock_post)
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
     assert "cache_control_injection_points" not in body
 
 
@@ -979,3 +1139,39 @@ async def test_a_native_responses_provider_places_every_point_itself():
 
     assert user_only == [0, 2, 4, 6]
     assert with_unmatchable_system == user_only
+
+
+def test_non_streamed_response_ignores_a_stream_timeout_it_never_uses() -> None:
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_unstreamed", "gpt-5.6")).encode()
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=answer)))
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.6", input="hi", stream_timeout="unset", api_key="fake-key", client=client
+    )
+
+    assert response.output[0].content[0].text == "Done."
+
+
+def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "slow-faked-responses-model",
+        {"litellm_provider": "openai", "mode": "responses", "supports_native_streaming": False},
+    )
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_faked", "slow-faked-responses-model")).encode()
+
+    response: Final = litellm.responses(
+        model="openai/slow-faked-responses-model",
+        input="hi",
+        stream=True,
+        timeout=str(UPSTREAM_FIRST_BYTE_SECONDS * 2),
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(answer),
+    )
+
+    assert [event.response.output[0].content[0].text for event in response if event.type == "response.completed"] == [
+        "Done."
+    ]

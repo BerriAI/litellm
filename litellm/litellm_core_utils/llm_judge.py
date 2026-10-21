@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -16,6 +20,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def default_router_provider() -> Router | None:
@@ -44,7 +49,7 @@ def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain pars
         parsed = json.loads(text[start : end + 1])
     if not isinstance(parsed, dict):
         raise ValueError("judge response is not a JSON object")
-    return {str(k): v for k, v in parsed.items()}  # mutable-ok: plain parsed-JSON payload
+    return {str(k): v for k, v in parsed.items()}
 
 
 def extract_text_from_content(content: object) -> str:
@@ -107,6 +112,62 @@ def judge_target(router: Router | None, model: str, team_id: str | None = None) 
         return JudgeTarget("router", frozenset(_provider_qualified(m) or m for m in served))
     qualified: Final = _provider_qualified(model)
     return JudgeTarget("sdk", frozenset({qualified})) if qualified is not None else JudgeTarget("nothing", frozenset())
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _bucket_auth(request_data: Mapping[str, object], bucket_name: str) -> UserAPIKeyAuth | None:
+    bucket: Final = _object_mapping(request_data.get(bucket_name))
+    auth: Final = bucket.get("user_api_key_auth") if bucket is not None else None
+    return auth if isinstance(auth, UserAPIKeyAuth) else None
+
+
+def attached_auth(request_data: object) -> UserAPIKeyAuth | None:
+    """The `UserAPIKeyAuth` the proxy attached to `request_data`'s metadata, or None.
+
+    Only an instance counts. A `user_api_key_auth` dict or a plain `user_api_key_team_id`
+    in the request is JSON the caller wrote, so neither is read.
+    """
+    data: Final = _object_mapping(request_data)
+    if data is None:
+        return None
+    return next(
+        (
+            auth
+            for bucket_name in ("metadata", "litellm_metadata")
+            if (auth := _bucket_auth(data, bucket_name)) is not None
+        ),
+        None,
+    )
+
+
+def _named_route(router: Router, deployment_id: str) -> bool:
+    deployment: Final = router.get_deployment(model_id=deployment_id)
+    if deployment is None:
+        return False
+    public_names: Final = (deployment.model_name, deployment.model_info.team_public_model_name or "")
+    return all("*" not in name for name in public_names)
+
+
+def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | None) -> str | None:
+    """The team a guardrail call for the caller behind `auth` resolves `model` under, or None.
+
+    It is the caller's team only when `judge_target` finds nothing that serves `model`
+    without a team, and the router's route to `model` for that team reaches deployments that
+    are each listed under a name rather than a wildcard pattern. A name the router or the SDK
+    serves without a team keeps resolving exactly as it does without one, so a team model
+    given that name cannot take over the guardrail's calls.
+    """
+    team_id: Final = auth.team_id if auth is not None else None
+    if team_id is None or router is None or judge_target(router, model).via != "nothing":
+        return None
+    team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
+    return team_id if team_route and all(_named_route(router, deployment_id) for deployment_id in team_route) else None
 
 
 async def judge_acompletion(
