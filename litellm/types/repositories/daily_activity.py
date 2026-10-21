@@ -39,13 +39,10 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
-    team_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
-        if self.team_id is not None and self.table is not DailyActivityTable.TAG:
-            raise ValueError(f"team_id applies only to {DailyActivityTable.TAG.value}, not {self.table.value}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +63,26 @@ class KeySpendRow:
 class KeyPage:
     rows: tuple[KeySpendRow, ...]
     total_api_keys: int
+
+
+@dataclass(frozen=True, slots=True)
+class TagSpendRow:
+    tag: str
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class TagPage:
+    rows: tuple[TagSpendRow, ...]
+    total_tags: int
 
 
 @dataclass(frozen=True, slots=True)

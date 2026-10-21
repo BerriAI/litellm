@@ -34,7 +34,7 @@ from litellm.proxy.management_endpoints.daily_activity_scopes import (
     EntityQuery,
     EntityScopeResolver,
     ResolvedScope,
-    group_by_tag_error,
+    named_team_ids,
 )
 from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
@@ -47,6 +47,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
     DailyActivityKeySearchResponse,
+    DailyActivityTagPageResponse,
     DailyActivityUserPageResponse,
     KeyActivityRow,
     KeyMetadata,
@@ -104,9 +105,6 @@ async def _resolved_scope(
     date_error: Final[InvalidDateRange | None] = _date_range_error(query, user_aggregated=user_aggregated)
     if date_error is not None:
         raise_public(date_error)
-    group_by_error: Final[str | None] = group_by_tag_error(query)
-    if group_by_error is not None:
-        raise_public(InvalidDateRange(reason=group_by_error))
     result: ResolvedScope | ScopeDenied = await resolver.resolve(user_api_key_dict, query, prisma_client)
     if isinstance(result, ScopeDenied):
         raise_public(result)
@@ -384,6 +382,60 @@ def _register_key_page_route(router: APIRouter, resolver: EntityScopeResolver, p
     )
 
 
+def _register_tag_page_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
+    @management_endpoint_wrapper
+    async def tag_page(
+        entity_query: Annotated[EntityQuery, Depends(resolver.query)],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+        repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
+        prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=constants.USAGE_TAG_PAGE_MAX)] = constants.USAGE_TAG_PAGE_DEFAULT,
+    ) -> DailyActivityTagPageResponse:
+        try:
+            team_ids: Final = named_team_ids(entity_query)
+            if len(team_ids) != 1:
+                raise_public(
+                    InvalidDateRange(reason=f"tags page needs exactly one team in team_ids, got {len(team_ids)}")
+                )
+            normalized_query: Final = replace(entity_query, entity_ids=team_ids)
+            resolved: Final = await _resolved_scope(
+                resolver,
+                normalized_query,
+                user_api_key_dict,
+                prisma_client,
+                user_aggregated=False,
+            )
+            page: Final = await repository.tag_page(
+                resolved.scope,
+                team_id=team_ids[0],
+                offset=offset,
+                limit=limit,
+            )
+            return DailyActivityTagPageResponse(
+                tags=list(page.rows),
+                total_tags=page.total_tags,
+                offset=offset,
+                limit=limit,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001, LIT003  # keep sibling routes' 500 error mapping
+            verbose_proxy_logger.exception("Daily activity tag page failed: %s", exc)
+            raise HTTPException(status_code=500, detail={"error": f"Failed to fetch analytics: {exc}"})
+
+    router.add_api_route(
+        f"{prefix}/daily/activity/aggregated/tags",
+        tag_page,
+        methods=["GET"],
+        name=resolver.operation_names["tag_page"],
+        tags=list(resolver.tags),
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=DailyActivityTagPageResponse,
+        include_in_schema=prefix != "/end_user",
+    )
+
+
 def _register_search_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
     @management_endpoint_wrapper
     async def search(
@@ -635,6 +687,8 @@ def register_daily_activity_routes(router: APIRouter, resolver: EntityScopeResol
     for prefix in resolver.route_prefixes:
         _register_aggregated_route(router, resolver, prefix)
         _register_key_page_route(router, resolver, prefix)
+        if resolver.entity == "team":
+            _register_tag_page_route(router, resolver, prefix)
         _register_search_route(router, resolver, prefix)
         _register_model_top_keys_route(router, resolver, prefix)
         _register_export_route(router, resolver, prefix)
