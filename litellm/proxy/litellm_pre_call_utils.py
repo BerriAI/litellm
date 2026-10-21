@@ -334,6 +334,7 @@ LITELLM_METADATA_ROUTES: Final = (
     "/v1/messages",
     "responses",
     "files",
+    "interactions",
 )
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
