@@ -208,6 +208,7 @@ class DecisionsCall:
     timeout: float | httpx.Timeout | None
     litellm_params: Mapping[str, object] = field(repr=False)
     caller_questions: tuple[DecisionsIRQuestion, ...]
+    preserve_choice_probabilities: bool = False
 
 
 def supported_decisions_providers() -> tuple[str, ...]:
@@ -727,7 +728,12 @@ def _formatted_response(
         case DecisionsRequestBody():
             return ir_to_systemone_response(caller_response, caller_request)
         case OpenAIDecisionRequestBody():
-            return ir_to_openai_response(caller_response, caller_request, call.requested_model)
+            return ir_to_openai_response(
+                caller_response,
+                caller_request,
+                call.requested_model,
+                preserve_choice_probabilities=call.preserve_choice_probabilities,
+            )
         case _:
             assert_never(call.request)
 

@@ -162,6 +162,8 @@ class DispatchOptions:
     use_chat_completions_api: bool | None = None
     use_in_pass_through: bool | None = None
     allowed_openai_params: Sequence[str] | None = None
+    rerank_mode: Literal["decisions"] | None = None
+    decision_rerank: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

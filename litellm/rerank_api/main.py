@@ -1,8 +1,10 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from functools import partial
 from typing import Final, Literal
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,6 +20,8 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
+
+_DECISION_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -153,6 +157,36 @@ def rerank(
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
         )
+
+        decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
+        if decision_kwargs.get("rerank_mode") is not None or decision_kwargs.get("decision_rerank") is not None:
+            from litellm.rerank_api.decision_rerank import rerank_with_decisions
+
+            return rerank_with_decisions(
+                model=model,
+                provider=_custom_llm_provider,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=dynamic_api_base or optional_params.api_base,
+                logging_obj=litellm_logging_obj,
+                is_async=_is_async,
+                params=_DECISION_KWARGS.validate_python(
+                    {
+                        **decision_kwargs,
+                        "query": query,
+                        "documents": documents,
+                        "top_n": top_n,
+                        "return_documents": return_documents,
+                        "rank_fields": rank_fields,
+                        "max_chunks_per_doc": max_chunks_per_doc,
+                        "max_tokens_per_doc": max_tokens_per_doc,
+                        "timeout": litellm.request_timeout
+                        if optional_params.timeout is None
+                        else optional_params.timeout,
+                        "extra_headers": decision_kwargs.get("extra_headers") or headers,
+                    }
+                ),
+                kwargs=decision_kwargs,
+            )
 
         rerank_provider_config: Final[BaseRerankConfig] = ProviderConfigManager.get_provider_rerank_config(
             model=model,

@@ -3,9 +3,9 @@
 import logging
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -124,9 +124,10 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.llms.xai import RealtimeMeteredUsage
-from litellm.types.rerank import RerankBilledUnits, RerankResponse
+from litellm.types.rerank import DecisionRerankResponse, RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
+    CostBreakdown,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
     LlmProvidersSet,
@@ -1500,6 +1501,51 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _decision_rerank_cost(
+    responses: Sequence[OpenAIDecisionResponse],
+    price: Callable[[OpenAIDecisionResponse], float],
+    logging_obj: LitellmLoggingObject | None,
+    provider: str | None,
+    custom_pricing: bool,
+) -> float:
+    from litellm.responses.mcp.round_billing import summed_cost_breakdown
+
+    def price_child(
+        response: OpenAIDecisionResponse,
+    ) -> tuple[float, CostBreakdown | None, float]:
+        if logging_obj is not None:
+            logging_obj.cost_breakdown = None
+        cost: Final = price(response)
+        breakdown: Final = logging_obj.cost_breakdown if logging_obj is not None else None
+        provider_cost: Final = get_response_cost_from_hidden_params(response.hidden_params)
+        fixed: Final = (
+            _apply_cost_margin(
+                0.0,
+                provider or str(response.hidden_params.get("custom_llm_provider", "")),
+            )[2]
+            if custom_pricing or provider_cost is None
+            else 0.0
+        )
+        return cost, breakdown, fixed
+
+    prices: Final = tuple(price_child(response) for response in responses)
+    repeated_fixed: Final = sum(item[2] for item in prices) - max((item[2] for item in prices), default=0.0)
+
+    def merge_breakdown(
+        accumulated: CostBreakdown | None,
+        item: tuple[OpenAIDecisionResponse, tuple[float, CostBreakdown | None, float]],
+    ) -> CostBreakdown | None:
+        return summed_cost_breakdown(responses[0], accumulated, item[0], item[1][1])
+
+    if logging_obj is not None and responses:
+        logging_obj.cost_breakdown = reduce(  # rebind-ok: the outer request logs the aggregate rather than the last child
+            merge_breakdown,
+            zip(responses[1:], prices[1:], strict=True),
+            prices[0][1],
+        )
+    return sum(item[0] for item in prices) - repeated_fixed
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1544,6 +1590,32 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
+    if isinstance(completion_response, DecisionRerankResponse):
+        return _decision_rerank_cost(
+            completion_response.decision_responses,
+            partial(
+                response_cost_calculator,
+                model=model
+                or (completion_response.decision_responses[0].model if completion_response.decision_responses else ""),
+                call_type="decisions",
+                custom_llm_provider=custom_llm_provider,
+                optional_params=optional_params or {},
+                custom_pricing=custom_pricing,
+                base_model=base_model,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+                litellm_logging_obj=litellm_logging_obj,
+                pricing_provider=pricing_provider,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=vertex_location,
+                region_name=region_name,
+                custom_cost_per_token=custom_cost_per_token,
+            ),
+            litellm_logging_obj,
+            custom_llm_provider,
+            bool(custom_pricing or custom_cost_per_token is not None),
+        )
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if pricing_provider is not None:
@@ -2262,6 +2334,7 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
 ) -> float:
     """
     Returns
@@ -2279,7 +2352,7 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing:
+                    if provider_response_cost is not None and not custom_pricing and custom_cost_per_token is None:
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -2300,6 +2373,7 @@ def response_cost_calculator(
                 data_residency=data_residency,
                 vertex_location=vertex_location,
                 region_name=region_name,
+                custom_cost_per_token=custom_cost_per_token,
             )
         return response_cost
     except Exception as e:

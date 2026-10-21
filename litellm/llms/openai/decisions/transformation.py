@@ -264,12 +264,18 @@ def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIR
     )
 
 
-def _openai_choice_answer(question: DecisionsIRChoiceQuestion, answer: DecisionsIRChoiceAnswer) -> OpenAIChoiceAnswer:
+def _openai_choice_answer(
+    question: DecisionsIRChoiceQuestion, answer: DecisionsIRChoiceAnswer, preserve_choice_probabilities: bool = False
+) -> OpenAIChoiceAnswer:
     probabilities: Final = {systemone_choice_key(item.value): item.probability for item in answer.probabilities}
     return OpenAIChoiceAnswer(
         name=question.name,
         choice=answer.choice,
         probabilities=tuple(
+            OpenAIChoiceProbability(value=item.value, probability=item.probability) for item in answer.probabilities
+        )
+        if preserve_choice_probabilities
+        else tuple(
             OpenAIChoiceProbability(
                 value=option.value, probability=probabilities.get(systemone_choice_key(option.value), 0.0)
             )
@@ -294,12 +300,14 @@ def _openai_score_answer(question: DecisionsIRScoreQuestion, answer: DecisionsIR
     )
 
 
-def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> OpenAIDecisionAnswer:
+def _openai_answer(
+    question: DecisionsIRQuestion, answer: DecisionsIRAnswer, preserve_choice_probabilities: bool = False
+) -> OpenAIDecisionAnswer:
     match question, answer:
         case DecisionsIRPredicateQuestion(), DecisionsIRPredicateAnswer():
             return OpenAIPredicateAnswer(name=question.name, probability=answer.probability)
         case DecisionsIRChoiceQuestion(), DecisionsIRChoiceAnswer():
-            return _openai_choice_answer(question, answer)
+            return _openai_choice_answer(question, answer, preserve_choice_probabilities)
         case DecisionsIRScoreQuestion(), DecisionsIRScoreAnswer():
             return _openai_score_answer(question, answer)
         case DecisionsIRBoxQuestion(), DecisionsIRBoxAnswer():
@@ -309,12 +317,16 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 
 
 def ir_to_openai_response(
-    response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
+    response: DecisionsIRResponse,
+    request: DecisionsIRRequest,
+    requested_model: str,
+    *,
+    preserve_choice_probabilities: bool = False,
 ) -> OpenAIDecisionResponse:
     return OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
-            _openai_answer(question, answer)
+            _openai_answer(question, answer, preserve_choice_probabilities)
             for question, answer in zip(request.questions, response.answers, strict=True)
         ),
         usage=OpenAIDecisionUsage(
