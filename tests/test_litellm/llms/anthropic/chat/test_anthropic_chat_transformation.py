@@ -6645,6 +6645,7 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             id="tool_name_value_without_a_nested_object_stays",
         ),
         pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
+        pytest.param(_RISK_SCHEMA, [1, 2], [1, 2], id="non_object_answer_is_preserved"),
         pytest.param(
             _TREE_SCHEMA,
             {"value": 1, "child": {"value": 2}},
@@ -6844,3 +6845,11 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
     assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
     assert result.choices[0].message.tool_calls is None
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_json_tool_without_arguments_has_no_message() -> None:
+    calls: Final = [ChatCompletionToolCallChunk(
+        id="toolu_empty", type="function", index=0,
+        function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME),
+    )]
+    assert AnthropicConfig._convert_tool_response_to_message(calls, _schema(_RISK_SCHEMA)) is None

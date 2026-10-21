@@ -2735,3 +2735,10 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
 
     assert "".join(contents) == encoded
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
+
+
+def test_json_envelope_split_before_its_value_keeps_the_schema_object() -> None:
+    envelope: Final = json.dumps({"parameters": _STREAMED_RISK_OBJECT})
+    split: Final = envelope.index(":") + 1
+    contents: Final = _streamed_json_mode_contents((envelope[:split], envelope[split:]))
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
