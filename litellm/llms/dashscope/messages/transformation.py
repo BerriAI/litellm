@@ -2,9 +2,10 @@
 DashScope Anthropic-compatible Messages transformation config.
 """
 
-from typing import Any  # noqa: TID251  # override below must mirror the legacy base signature
+from typing import ClassVar, Final
 
 import litellm
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -21,6 +22,8 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     ``dashscope.aliyuncs.com`` and ``{workspace}.{region}.maas.aliyuncs.com``.
     """
 
+    _workload_identity_eligible: ClassVar[bool] = False
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "dashscope"
@@ -36,23 +39,35 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def get_api_base(api_base: str | None = None) -> str:
         return resolve_dashscope_anthropic_api_base(api_base)
 
-    def validate_anthropic_messages_environment(
+    def validate_anthropic_messages_environment(  # pyright: ignore[reportUnknownParameterType]  # return type mirrors the base signature
         self,
-        headers: dict,  # mutable-ok: mirrors the legacy base override signature
+        headers: dict[str, str],  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the legacy base override signature
-        optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
-        litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        messages: list[object],  # mutable-ok: mirrors the legacy base override signature
+        optional_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the legacy base override signature
-        return super().validate_anthropic_messages_environment(
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the base signature  # pyright: ignore[reportMissingTypeArgument]  # mirrors the base signature
+        resolved_api_key: Final = self.get_api_key(api_key=api_key)
+        if resolved_api_key is None:
+            present_headers: Final = {name.lower() for name in headers}
+            if "x-api-key" not in present_headers and "authorization" not in present_headers:
+                raise AuthenticationError(
+                    message=(
+                        "Missing DashScope API key. Set DASHSCOPE_API_KEY or pass api_key explicitly. "
+                        "Anthropic credentials are never sent to a DashScope endpoint."
+                    ),
+                    llm_provider="dashscope",
+                    model=model,
+                )
+        return super().validate_anthropic_messages_environment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # base signature uses an unparameterized dict
             headers=headers,
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            api_key=self.get_api_key(api_key=api_key),
+            api_key=resolved_api_key,
             api_base=api_base,
         )
 
@@ -61,8 +76,8 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: mirrors the base get_complete_url signature
-        litellm_params: dict,  # mutable-ok: mirrors the base get_complete_url signature
+        optional_params: dict[str, object],  # mutable-ok: mirrors the base get_complete_url signature
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the base get_complete_url signature
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(self.get_api_base(api_base=api_base), "v1/messages")

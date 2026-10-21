@@ -122,9 +122,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
 
         image_api_base: Final = (
-            None
-            if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH)
-            else api_base
+            None if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH) else api_base
         )
         return self._resolve_image_api_base(image_api_base)
 
