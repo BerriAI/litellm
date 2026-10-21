@@ -10,7 +10,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, targets_openai_api
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+    targets_openai_api,
+)
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -195,29 +199,54 @@ def _with_breakpoint_on_last_reading_part(
     return (*parts[:last], marked_last, *parts[last + 1 :])
 
 
-def _item_with_wire_safe_prompt_cache_breakpoints(item: object) -> object:
-    try:
-        fields: Final = _INPUT_ITEM.validate_python(item)
-    except ValidationError:
+def _json_object_or_none(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+def _json_array_or_empty(value: object) -> Sequence[object]:
+    return value if isinstance(value, (list, tuple)) else ()
+
+
+def _item_with_wire_safe_prompt_cache_breakpoints(item: object, keeps_markers: bool) -> object:
+    fields: Final = _json_object_or_none(item)
+    if fields is None or not _carries_prompt_cache_breakpoint(fields):
         return item
-    return {key: _parts_with_wire_safe_prompt_cache_breakpoints(key, value) for key, value in fields.items()}
+    return {
+        key: _parts_with_wire_safe_prompt_cache_breakpoints(key, value, keeps_markers)
+        for key, value in fields.items()
+        if key != "prompt_cache_breakpoint"
+    }
 
 
-def _parts_with_wire_safe_prompt_cache_breakpoints(key: str, value: object) -> object:
-    if key not in _INPUT_PART_LIST_KEYS:
+def _carries_prompt_cache_breakpoint(fields: Mapping[str, object]) -> bool:
+    return "prompt_cache_breakpoint" in fields or any(
+        _parts_carry_prompt_cache_breakpoint(fields.get(key)) for key in _INPUT_PART_LIST_KEYS
+    )
+
+
+def _parts_carry_prompt_cache_breakpoint(parts: object) -> bool:
+    return any(_has_own_prompt_cache_breakpoint(part) for part in _json_array_or_empty(parts))
+
+
+def _has_own_prompt_cache_breakpoint(part: object) -> bool:
+    fields: Final = _json_object_or_none(part)
+    return fields is not None and "prompt_cache_breakpoint" in fields
+
+
+def _parts_with_wire_safe_prompt_cache_breakpoints(key: str, value: object, keeps_markers: bool) -> object:
+    if key not in _INPUT_PART_LIST_KEYS or not _parts_carry_prompt_cache_breakpoint(value):
         return value
-    try:
-        parts: Final = _CONTENT_PARTS.validate_python(value)
-    except ValidationError:
-        return value
-    return [_part_with_wire_safe_prompt_cache_breakpoint(part) for part in parts]
+    return [_part_with_wire_safe_prompt_cache_breakpoint(part, keeps_markers) for part in _json_array_or_empty(value)]
 
 
-def _part_with_wire_safe_prompt_cache_breakpoint(part: Mapping[str, object]) -> Mapping[str, object]:
-    if "prompt_cache_breakpoint" not in part:
+def _part_with_wire_safe_prompt_cache_breakpoint(part: object, keeps_markers: bool) -> object:
+    fields: Final = _json_object_or_none(part)
+    if fields is None or "prompt_cache_breakpoint" not in fields:
         return part
-    marker: Final = prompt_cache_breakpoint_for_wire(part["prompt_cache_breakpoint"], drop_params=True)
-    unmarked: Final = {key: value for key, value in part.items() if key != "prompt_cache_breakpoint"}
+    unmarked: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    if not keeps_markers:
+        return unmarked
+    marker: Final = prompt_cache_breakpoint_for_wire(fields["prompt_cache_breakpoint"], drop_params=True)
     return with_prompt_cache_breakpoint(unmarked, marker)
 
 
@@ -542,12 +571,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
         validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
+        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
+            model=model, input=validated_input, litellm_params=litellm_params
+        )
         marked_input: Final = (
-            self._input_with_prompt_cache_breakpoints(validated_input)
+            self._input_with_prompt_cache_breakpoints(marker_safe_input)
             if self._reads_prompt_cache_breakpoints(
                 model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
             )
-            else validated_input
+            else marker_safe_input
         )
         maps_anthropic_tool_search: Final = self._targets_openai_api(litellm_params) and any(
             is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()
@@ -565,23 +597,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=replayable_input, tools=mapped_tools
         )
-        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
-            input=stripped_input, litellm_params=litellm_params
-        )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
-        return self._drop_foreign_tool_call_item_ids(marker_safe_input), sanitized_tools
+        return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
 
-    @staticmethod
     def _input_with_wire_safe_prompt_cache_breakpoints(
-        input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
     ) -> str | ResponseInputParam:
         if not isinstance(input, list) or not _drops_params(litellm_params):
             return input
-        wire_safe_items: Final = [_item_with_wire_safe_prompt_cache_breakpoints(item) for item in input]
+        keeps_markers: Final = self._supports_prompt_cache_breakpoints(model=model, litellm_params=litellm_params)
+        wire_safe_items: Final = [_item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input]
         return cast("ResponseInputParam", wire_safe_items)  # cast-ok: items keep their shape, minus a rejected marker
+
+    def _supports_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
+        provider: Final = _provider_name(self.custom_llm_provider)
+        base_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
+        return supports_openai_prompt_cache_breakpoint(model, provider) or (
+            base_model != model and supports_openai_prompt_cache_breakpoint(base_model, provider)
+        )
 
     def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
         host: Final = _DeploymentHost.model_validate(litellm_params)
@@ -698,14 +734,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _without_foreign_tool_call_item_id(item: object) -> object:
-        if not isinstance(item, dict):
+        fields: Final = _json_object_or_none(item)
+        if fields is None:
             return item
-        item_type: Final = item.get("type")
-        item_id: Final = item.get("id")
+        item_type: Final = fields.get("type")
+        item_id: Final = fields.get("id")
         genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
         if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
             return item
-        return {key: value for key, value in item.items() if key != "id"}
+        return {key: value for key, value in fields.items() if key != "id"}
 
     def _sanitized_tool_schemas_for_openai(
         self,
@@ -728,7 +765,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR:
             return tools
-        gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
+        gate_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
             if self._rejects_top_level_schema_combinators(gate_model)
@@ -744,9 +781,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return base_model.startswith(_MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS)
 
     @staticmethod
-    def _combinator_gate_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
-        model_info: Final[object] = getattr(litellm_params, "model_info", None)
-        base_model: Final[object] = model_info.get("base_model") if isinstance(model_info, dict) else None
+    def _declared_base_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+        model_info: Final = _json_object_or_none(getattr(litellm_params, "model_info", None))
+        base_model: Final = None if model_info is None else model_info.get("base_model")
         return base_model if isinstance(base_model, str) and base_model else model
 
     @staticmethod

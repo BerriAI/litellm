@@ -4271,6 +4271,65 @@ def test_input_without_a_marker_is_untouched_under_drop_params(
     assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == input
 
 
+def _transformed_input_for(model: str, input: list[dict[str, object]], litellm_params: GenericLiteLLMParams) -> object:
+    request: Final = _CONFIGS[0].transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+@pytest.mark.parametrize(
+    "marker", (*_VALID_MARKERS, *_MALFORMED_MARKERS), ids=(*_VALID_MARKER_IDS, *_MALFORMED_MARKER_IDS)
+)
+def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_without_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    dropped: Final = _transformed_input_for("local-model", input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+    assert _transformed_input_for("local-model", input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_a_declared_base_model_with_breakpoints_keeps_a_valid_marker_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True, model_info={"base_model": "gpt-6.1-sol"})
+    assert _transformed_input_for("prod-deployment", input, litellm_params) == input
+
+
+@pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
+def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, content: object, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unmarked: Final[dict[str, object]] = {"type": "message", "role": "user", "content": content}
+    input: Final = [{**unmarked, "prompt_cache_breakpoint": marker}]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == [unmarked]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_cache_control_still_marks_a_part_whose_own_marker_is_malformed_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    part: Final = {"type": "input_text", "text": "Say ok", "cache_control": {"type": "ephemeral"}}
+    input: Final = [{"type": "message", "role": "user", "content": [{**part, "prompt_cache_breakpoint": "yes"}]}]
+    transformed: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(transformed) == {
+        "type": "input_text",
+        "text": "Say ok",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures(httpx_transport.__name__)
 async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
