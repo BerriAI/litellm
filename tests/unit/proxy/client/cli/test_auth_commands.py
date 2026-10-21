@@ -1105,6 +1105,25 @@ class TestPrintTokenCommand:
         assert result.stderr == expected_stderr
         assert len(responses.calls) == 1
 
+    @responses.activate
+    def test_proxy_check_waits_only_a_few_seconds_for_a_silent_proxy(self):
+        _register_models_answer("sk-stale-key", 200)
+
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url=STALE_TOKEN_BASE_URL,
+                key="sk-stale-key",
+                timestamp=time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600,
+            ),
+        ):
+            result: Final = self.runner.invoke(print_token, obj={})
+
+        timeout: Final = responses.calls[0].request.req_kwargs["timeout"]
+        assert result.exit_code == 0
+        assert isinstance(timeout, int | float)
+        assert 0 < timeout <= 5
+
 
 class TestPrintTokenWithConfigFile:
     """A config-file base_url is a drop-in replacement for exporting

@@ -3,15 +3,12 @@ import shutil
 import stat
 import sys
 import time
-from typing import Final
 from unittest.mock import patch
 
 import click
 import pytest
-import responses
 from click.testing import CliRunner
 
-from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.client.cli.commands import up as up_module
 from litellm.proxy.client.cli.commands.agents import AgentRunError
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError, StaticToken
@@ -305,7 +302,7 @@ class TestEnsureFreshLogin:
         _FakeTokenStore(
             monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {"http://proxy-a:4000": "sk-a"}
         )
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
         login_calls = _capture_login(monkeypatch)
 
         ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
@@ -315,7 +312,7 @@ class TestEnsureFreshLogin:
     def test_forces_a_fresh_login_when_the_cached_token_is_for_a_different_proxy(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
         store = _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
         login_calls = _capture_login(
             monkeypatch, on_login=lambda: store.log_in({"key": "sk-b", "base_url": "http://proxy-b:4000"}, "sk-b")
         )
@@ -328,7 +325,7 @@ class TestEnsureFreshLogin:
     def test_forces_a_fresh_login_when_the_cached_token_has_no_readable_key(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
         store = _FakeTokenStore(monkeypatch, {"base_url": "http://proxy-a:4000"}, {})
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
         login_calls = _capture_login(
             monkeypatch,
             on_login=lambda: store.log_in({"key": "sk-a", "base_url": "http://proxy-a:4000"}, "sk-a"),
@@ -341,37 +338,10 @@ class TestEnsureFreshLogin:
     def test_fails_cleanly_non_interactively_when_only_a_different_proxys_token_is_cached(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
         _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
 
         with pytest.raises(UpError, match="Run `lite login` first"):
             ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
-
-    @pytest.mark.parametrize(("proxy_status", "expected_login_calls"), [(200, []), (401, [("http://proxy-a:4000", False)])])
-    @responses.activate
-    def test_lets_the_proxy_judge_a_classic_token_older_than_the_client_window(
-        self, monkeypatch, proxy_status: int, expected_login_calls: list[tuple[str, bool]]
-    ):
-        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
-        responses.get("http://proxy-a:4000/v1/models", json={"data": []}, status=proxy_status)
-        store: Final = _FakeTokenStore(
-            monkeypatch,
-            {
-                "key": "sk-a",
-                "base_url": "http://proxy-a:4000",
-                "timestamp": time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600,
-            },
-            {"http://proxy-a:4000": "sk-a"},
-        )
-        login_calls: Final = _capture_login(
-            monkeypatch,
-            on_login=lambda: store.log_in(
-                {"key": "sk-new", "base_url": "http://proxy-a:4000", "timestamp": time.time()}, "sk-new"
-            ),
-        )
-
-        ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
-
-        assert login_calls == expected_login_calls
 
     def test_trusts_a_pkce_credential_that_was_renewed_on_the_way_in(self, monkeypatch):
         """A --pkce key inside its freshness buffer is renewed by `get_stored_api_key`, so `lite up`
@@ -406,7 +376,7 @@ class TestEnsureFreshLogin:
         """`lite config set pkce true` is honoured by the login `lite up` starts, not only by `lite login`."""
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
         store = _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
         monkeypatch.setattr(up_module, "pkce_default", lambda: True)
         login_calls = _capture_login(
             monkeypatch,
@@ -420,7 +390,7 @@ class TestEnsureFreshLogin:
     def test_names_the_pkce_login_in_the_non_interactive_error_when_the_saved_pkce_default_is_on(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
         _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
-        monkeypatch.setattr(up_module, "token_expired", lambda token_data: False)
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
         monkeypatch.setattr(up_module, "pkce_default", lambda: True)
 
         with pytest.raises(UpError, match="Run `lite login --pkce` first"):
@@ -485,7 +455,7 @@ class TestUpCommand:
         with (
             patch(f"{UP_MODULE}.load_token", return_value={"key": "sk-fresh", "base_url": "http://localhost:4000"}),
             patch(f"{UP_MODULE}.get_stored_api_key", return_value="sk-fresh"),
-            patch(f"{UP_MODULE}.token_expired", return_value=False),
+            patch(f"{UP_MODULE}.is_cli_token_fresh", return_value=True),
             patch(f"{UP_MODULE}.resolve_api_key", return_value="sk-fresh"),
             patch(f"{UP_MODULE}.verify_proxy_key"),
         ):
@@ -516,7 +486,7 @@ class TestUpCommand:
         with (
             patch(f"{UP_MODULE}.load_token", return_value={"key": "sk-fresh", "base_url": "http://localhost:4000"}),
             patch(f"{UP_MODULE}.get_stored_api_key", return_value="sk-fresh"),
-            patch(f"{UP_MODULE}.token_expired", return_value=False),
+            patch(f"{UP_MODULE}.is_cli_token_fresh", return_value=True),
             patch(f"{UP_MODULE}.resolve_api_key", return_value="sk-fresh"),
             patch(
                 f"{UP_MODULE}.verify_proxy_key",
@@ -545,7 +515,7 @@ class TestUpCommand:
         with (
             patch(f"{UP_MODULE}.load_token", return_value={"key": "sk-fresh", "base_url": "http://localhost:4000"}),
             patch(f"{UP_MODULE}.get_stored_api_key", return_value="sk-fresh"),
-            patch(f"{UP_MODULE}.token_expired", return_value=False),
+            patch(f"{UP_MODULE}.is_cli_token_fresh", return_value=True),
             patch(f"{UP_MODULE}.resolve_api_key", return_value="sk-fresh"),
             patch(f"{UP_MODULE}.verify_proxy_key"),
             patch(f"{UP_MODULE}.signal.signal"),

@@ -15,18 +15,11 @@ import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import SecretVault
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import (
-    CliContextObj,
-    cli_context_obj,
-    context_secret_vault,
-    get_stored_api_key,
-    load_token,
-    login,
-    token_expired,
-)
+from .auth import CliContextObj, cli_context_obj, context_secret_vault, get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -118,7 +111,7 @@ def _usable_login(api_key: str | None, vault: SecretVault) -> bool:
     if api_key is None:
         return False
     token_data: Final = load_token(vault=vault)
-    return token_data is not None and not token_expired(token_data)
+    return token_data is not None and is_cli_token_fresh(token_data)
 
 
 def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: SecretVault) -> str | None:

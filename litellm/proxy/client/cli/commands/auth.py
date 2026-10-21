@@ -142,7 +142,7 @@ _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
-_PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 10
+_PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
 _PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403, 404})
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
