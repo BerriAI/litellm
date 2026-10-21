@@ -570,6 +570,39 @@ async def test_recovered_key_metadata_preserves_resolved_tags_after_user_details
 
 
 @pytest.mark.asyncio
+async def test_recovered_key_metadata_carries_the_user_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved: Final = KeyMetadataRow(
+        api_key="key-hash",
+        key_alias=None,
+        team_id=None,
+        user_id="user-id",
+        user_email=None,
+        key_exists=True,
+        tags=(),
+    )
+    attach_details: Final = AsyncMock(
+        return_value={
+            "key-hash": {
+                "key_alias": None,
+                "team_id": None,
+                "user_id": "user-id",
+                "user_email": "user@example.com",
+                "user_alias": "Alice A",
+                "key_exists": True,
+            }
+        }
+    )
+    monkeypatch.setattr(common_daily_activity_module, "attach_user_details", attach_details)
+    reads: Final = _ProxyDailyActivityReads(MagicMock())
+
+    result: Final = await reads.recover_key_metadata({"key-hash": resolved}, frozenset(("key-hash",)), None)
+
+    assert result["key-hash"].user_alias == "Alice A"
+
+
+@pytest.mark.asyncio
 async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     """Test that get_api_key_metadata should fall back to deleted keys table for missing keys."""
     mock_prisma = MagicMock()
@@ -924,6 +957,28 @@ def test_key_metadata_includes_user_id_without_user_email():
 
     assert meta.user_id == "user-123"
     assert meta.user_email is None
+
+
+def test_key_metadata_includes_recovered_user_alias():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": KeyMetadataRow(
+                api_key="dirty-key",
+                key_alias=None,
+                team_id="team-1",
+                user_id="user-123",
+                user_email=None,
+                key_exists=True,
+                tags=(),
+                user_alias="Alice A",
+            )
+        },
+        "dirty-key",
+    )
+
+    assert meta.user_alias == "Alice A"
 
 
 def test_update_breakdown_metrics_includes_user_email():

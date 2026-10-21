@@ -33781,6 +33781,8 @@ export interface components {
             key_exists?: boolean | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */

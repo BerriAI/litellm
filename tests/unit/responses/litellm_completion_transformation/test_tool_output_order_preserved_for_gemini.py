@@ -157,3 +157,39 @@ def test_assistant_message_before_function_call_keeps_one_assistant_turn():
     assistant_idx = msgs.index(assistant)
     assert msgs[assistant_idx + 1].get("role") == "tool"
     assert msgs[assistant_idx + 1].get("tool_call_id") == "call_1"
+
+
+def test_reasoning_replayed_after_the_tool_call_keeps_the_tool_output_adjacent():
+    """DeepSeek rejects a tool call whose turn replays its reasoning after the calls."""
+    msgs = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=[
+            {
+                "role": "user",
+                "type": "message",
+                "content": [{"type": "input_text", "text": "List the files."}],
+            },
+            {
+                "type": "function_call",
+                "name": "shell_command",
+                "call_id": "call_42",
+                "arguments": '{"command": "ls"}',
+            },
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "The user wants the files listed."}],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_42",
+                "output": "file1\nfile2",
+            },
+        ],
+        replay_reasoning=True,
+    )
+
+    assert [message["role"] for message in msgs] == ["user", "assistant", "tool"]
+    assistant = msgs[1]
+    assert [call["id"] for call in assistant["tool_calls"]] == ["call_42"]
+    assert assistant["reasoning_content"] == "The user wants the files listed."
+    assert msgs[2]["tool_call_id"] == "call_42"

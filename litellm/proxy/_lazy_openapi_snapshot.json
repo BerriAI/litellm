@@ -3914,6 +3914,17 @@
               ],
               "title": "Team Id"
             },
+            "user_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Alias"
+            },
             "user_email": {
               "anyOf": [
                 {

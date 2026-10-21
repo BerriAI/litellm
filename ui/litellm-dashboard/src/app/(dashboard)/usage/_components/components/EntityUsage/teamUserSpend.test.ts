@@ -54,7 +54,8 @@ describe("teamUserSpend", () => {
     expect(ids[0]).not.toBe(ids[1]);
   });
 
-  it("labels a user by email, then alias, then id, then a placeholder", () => {
+  it("labels a user by alias, then email, then id, then a placeholder", () => {
+    expect(userLabel(row({ user_alias: "Alice C" }))).toBe("Alice C");
     expect(userLabel(row({}))).toBe("alice@example.com");
     expect(userLabel(row({ user_email: null, user_alias: "Bob", user_id: "u1" }))).toBe("Bob");
     expect(userLabel(row({ user_email: null, user_alias: null, user_id: "u1" }))).toBe("u1");

@@ -116,6 +116,7 @@ class KeyMetadataDict(TypedDict, total=False):
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    user_alias: ReadOnly[str | None]
     key_exists: ReadOnly[bool]
 
 
@@ -249,6 +250,7 @@ async def recover_key_owner_from_daily_spend(
 @dataclass(frozen=True, slots=True)
 class _UserDetails:
     email: str | None
+    alias: str | None
     only_team: str | None
 
 
@@ -276,6 +278,7 @@ async def _details_for_user_ids(
         {
             user.user_id: _UserDetails(
                 email=getattr(user, "user_email", None) or None,
+                alias=getattr(user, "user_alias", None) or None,
                 only_team=_only_team(getattr(user, "teams", None)),
             )
             for user in users
@@ -303,10 +306,12 @@ def _meta_with_user_details(
         return meta
     user: Final = details[user_id]
     email: Final = meta.get("user_email") or user.email
+    alias: Final = meta.get("user_alias") or user.alias
     team_id: Final = meta.get("team_id") or (user.only_team if _is_cli_session_key(api_key) else None)
     updated: Final[KeyMetadataDict] = {
         **meta,
         **({"user_email": email} if email else {}),
+        **({"user_alias": alias} if alias else {}),
         **({"team_id": team_id} if team_id else {}),
     }
     return updated
