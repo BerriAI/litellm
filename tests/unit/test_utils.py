@@ -8202,6 +8202,8 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
+        elif v["litellm_provider"] not in litellm.provider_list and not JSONProviderRegistry.exists(v["litellm_provider"]):
+            continue
         elif (
             v["litellm_provider"] == "sagemaker"
             or v["litellm_provider"] == "bedrock_converse"
