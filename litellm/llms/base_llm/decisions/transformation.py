@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
@@ -394,7 +395,9 @@ _MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, ob
 _LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
-def _normalize_answer(value: object) -> Mapping[str, object]:
+def _normalize_answer(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
     answer: Final = _MAPPING.validate_python(value)
     legend: Final = answer.get("legend")
     if answer.get("type") != "score" or not isinstance(legend, list):
@@ -403,11 +406,36 @@ def _normalize_answer(value: object) -> Mapping[str, object]:
     return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
 
 
-def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+def _normalize_systemone_response(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
     response: Final = _MAPPING.validate_python(payload)
-    answers: Final = _MAPPING.validate_python(response.get("answers"))
-    normalized: Final = {**response, "answers": {name: _normalize_answer(answer) for name, answer in answers.items()}}
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
+    answers: Final = response.get("answers")
+    if not isinstance(answers, Mapping):
+        return response
+    return {
+        **response,
+        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+    }
+
+
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
+
+
+def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+    return systemone_response_to_ir(
+        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
+    )
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
@@ -627,9 +655,10 @@ class BaseDecisionsConfig(ABC):
         try:
             return self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
 
     def get_error_class(

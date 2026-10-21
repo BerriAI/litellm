@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient as _PrismaClient
     from litellm.router import Router as _Router
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
     Router = _Router

@@ -307,7 +307,7 @@ async def aresponses_api_with_mcp(
         joins_request_trace
         and not stream
         and previous_response_id is None
-        and not _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
+        and not provider_stores_the_conversation(model, custom_llm_provider, kwargs)
     )
 
     listing_trace_id: Final = (
@@ -464,7 +464,7 @@ async def aresponses_api_with_mcp(
                 if tool_results:
                     chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
                         call_params
-                    ) and _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
+                    ) and provider_stores_the_conversation(model, custom_llm_provider, kwargs)
 
                     follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                         response=response,
@@ -549,7 +549,7 @@ def _bridges_to_chat_completions(
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
-def _previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
+def previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
     """The forms of the previous response's id the client held, which its spend log row can be stored under."""
     if not previous_response_id:
         return ()
@@ -688,8 +688,12 @@ def _will_bridge_to_chat_completions(
     )
 
 
-def _provider_stores_the_first_round(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
-    """A bridged first MCP round runs as an internal call, so no spend log holds it for the follow-up to replay."""
+def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether the provider, not a LiteLLM spend log, holds this turn for a `previous_response_id` follow-up.
+
+    A bridged turn is replayed from its spend log, so the bridge needs that row in the DB, and a bridged
+    first MCP round runs as an internal call that writes no spend log at all.
+    """
     api_base: Final = _api_base_kwarg(kwargs)
     return not _will_bridge_to_chat_completions(
         model,
@@ -1623,7 +1627,7 @@ def responses(
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
-                _previous_response_client_ids(previous_response_id, kwargs),
+                previous_response_client_ids(previous_response_id, kwargs),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
