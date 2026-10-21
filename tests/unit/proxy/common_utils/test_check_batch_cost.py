@@ -3511,11 +3511,15 @@ class TestMultiPodBatchCostClaim:
         assert journal == ["fetch", "claim", "bill"]
         assert row.status == "complete"
         assert json.loads(row.file_object)["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": None,
+            "completion_tokens_details": None,
             "input_tokens": 10,
             "input_tokens_details": {"cached_tokens": 0},
             "output_tokens": 5,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 15,
         }
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True

@@ -1072,6 +1072,35 @@ def test_batch_usage_keeps_chat_shaped_usage_as_is() -> None:
 @pytest.mark.parametrize(
     "usage",
     (
+        pytest.param({"input_tokens": 10, "output_tokens": 5}, id="no_details_or_total"),
+        pytest.param(
+            {"input_tokens": 10, "input_tokens_details": None, "output_tokens": 5, "output_tokens_details": None},
+            id="null_details",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": None},
+                "output_tokens": 5,
+                "output_tokens_details": {"reasoning_tokens": None},
+                "total_tokens": 15,
+            },
+            id="null_detail_counts",
+        ),
+    ),
+)
+def test_batch_usage_reads_token_counts_from_partial_provider_batch_usage(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+    dumped_usage: Final = json.loads(batch.model_dump_json())["usage"]
+
+    assert batch.usage is not None
+    assert (batch.usage.prompt_tokens, batch.usage.completion_tokens, batch.usage.total_tokens) == (10, 5, 15)
+    assert (dumped_usage["input_tokens"], dumped_usage["output_tokens"], dumped_usage["total_tokens"]) == (10, 5, 15)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
         pytest.param(_PROVIDER_BATCH_USAGE, id="provider_batch_usage"),
         pytest.param(
             Usage(
@@ -1085,12 +1114,29 @@ def test_batch_usage_keeps_chat_shaped_usage_as_is() -> None:
         ),
     ),
 )
-def test_batch_json_carries_the_provider_batch_usage_shape(usage: dict[str, object] | Usage) -> None:
+def test_batch_dump_carries_the_chat_and_provider_batch_usage_fields(usage: dict[str, object] | Usage) -> None:
     batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
     dumped: Final = batch.model_dump_json()
+    dumped_usage: Final = json.loads(dumped)["usage"]
 
-    assert json.loads(dumped)["usage"] == _PROVIDER_BATCH_USAGE
+    assert {key: dumped_usage[key] for key in _PROVIDER_BATCH_USAGE} == _PROVIDER_BATCH_USAGE
+    assert (dumped_usage["prompt_tokens"], dumped_usage["completion_tokens"]) == (21, 543)
+    assert batch.model_dump()["usage"] == dumped_usage
     assert _batch_token_counts(LiteLLMBatch.model_validate_json(dumped)) == (21, 543, 564, 5, 448)
+
+
+def test_batch_dump_keeps_cache_write_tokens_from_billed_usage() -> None:
+    batch: Final = LiteLLMBatch.model_validate(_BATCH_FIELDS).model_copy(
+        update={"usage": Usage(prompt_tokens=30, completion_tokens=4, total_tokens=34, cache_creation_input_tokens=7)}
+    )
+    dumped: Final = batch.model_dump_json()
+    dumped_usage: Final = json.loads(dumped)["usage"]
+
+    assert (dumped_usage["prompt_tokens"], dumped_usage["input_tokens"]) == (30, 30)
+    assert (dumped_usage["completion_tokens"], dumped_usage["output_tokens"]) == (4, 4)
+    assert dumped_usage["prompt_tokens_details"]["cache_write_tokens"] == 7
+    assert None not in batch.model_dump(exclude_none=True)["usage"]["prompt_tokens_details"].values()
+    assert json.loads(LiteLLMBatch.model_validate_json(dumped).model_dump_json())["usage"] == dumped_usage
 
 
 def test_batch_json_keeps_usage_that_skipped_validation() -> None:
