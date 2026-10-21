@@ -256,6 +256,7 @@ def _langfuse_rig(
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-integration",
                 "LANGFUSE_SECRET_KEY": "sk-lf-integration",
                 "LANGFUSE_HOST": collector.url,
+                "LITELLM_OTEL_V2": "1",
                 **{
                     name: (collector.url if value == "__collector__" else value)
                     for name, value in dict(overrides or {}).items()
@@ -282,7 +283,7 @@ def _response_id(value: object) -> str | None:
 
 
 def _span_response_id(span: Mapping[str, object]) -> str | None:
-    return _response_id(span.get("llm.response.id"))
+    return _response_id(span.get("gen_ai.response.id"))
 
 
 def _watched_spans(collector: Wire) -> Callable[[], tuple[dict[str, object], ...]]:
@@ -305,32 +306,6 @@ def _v2_llm_span(collector: Wire, response_id: str) -> dict[str, object]:
         _watched_spans(collector), lambda spans: sum(matches(span) for span in spans) == 1, seconds=25
     )
     return next(span for span in observed if matches(span))
-
-
-def _observation_span(collector: Wire, response_id: str) -> dict[str, object]:
-    def spans() -> tuple[dict[str, object], ...]:
-        return tuple(
-            attributes
-            for batch in collector.drain()
-            for attributes in _span_attributes(batch.body)
-            if _span_response_id(attributes) == _response_id(response_id)
-        )
-
-    observed: Final = eventually(spans, lambda values: len(values) == 1, seconds=25)
-    return observed[0]
-
-
-def _marked_span(collector: Wire, marker: str, needle: str) -> dict[str, object]:
-    def spans() -> tuple[dict[str, object], ...]:
-        return tuple(
-            attributes
-            for batch in collector.drain()
-            for attributes in _span_attributes(batch.body)
-            if needle in json.dumps(attributes, default=str) and marker in json.dumps(attributes, default=str)
-        )
-
-    observed: Final = eventually(spans, lambda values: len(values) == 1, seconds=25)
-    return observed[0]
 
 
 def _scenario_identity(
@@ -360,7 +335,6 @@ def _scenario_identity(
 
 
 def _assert_identity(attrs: Mapping[str, object], expected: Mapping[str, object]) -> None:
-    assert "metadata" in attrs, sorted(attrs)
     assert "langfuse.observation.metadata" in attrs, sorted(attrs)
     observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
     assert {key: observation.get(key) for key in expected} == dict(expected), observation
@@ -381,63 +355,6 @@ def _chat_identity_fields(identity: Mapping[str, str | None]) -> dict[str, objec
         **({"user_api_key_team_alias": identity["team_alias"]} if identity["team_alias"] else {}),
         **({"user_api_key_end_user_id": identity["end_user"]} if identity["end_user"] else {}),
     }
-
-
-def test_langfuse_otel_emits_request_metadata_under_langfuse_observation_and_trace_keys(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    marker: Final = "lf-meta-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider)
-        response: Final = rig.candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": identity["model"],
-                "messages": [{"role": "user", "content": marker}],
-                "user": identity["end_user"],
-                "cache": {"no-cache": True},
-            },
-            key=key,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["choices"][0]["message"]["content"] == "langfuse-echo"
-
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        _assert_identity(attrs, _chat_identity_fields(identity))
-
-
-def test_langfuse_otel_metadata_redacts_user_api_key_fields_like_vanilla_langfuse(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    marker: Final = "lf-redact-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {"redact_user_api_key_info": True}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key: Final = scenario.key(
-            key_alias="lf-redact-" + uuid.uuid4().hex,
-            metadata={"spend_logs_metadata": {"ticket": "LIT-8283"}},
-        )
-        model: Final = scenario.model(api_base=rig.provider.url + "/v1")
-        response: Final = rig.candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": marker}],
-                "cache": {"no-cache": True},
-            },
-            key=key,
-        )
-        assert response.status_code == 200, response.text
-
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        assert "langfuse.observation.metadata" not in attrs, attrs["langfuse.observation.metadata"]
-        assert not [name for name in attrs if name.startswith("langfuse.trace.metadata.")], sorted(attrs)
 
 
 def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_stream(gateway: Gateway, tmp_path: Path) -> None:
@@ -463,7 +380,7 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_stream(gateway: 
             )
         assert chunks, "stream produced no chunks"
         response_id: Final = chunks[-1].id
-        attrs: Final = _observation_span(rig.collector, response_id)
+        attrs: Final = _v2_llm_span(rig.collector, response_id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -485,7 +402,7 @@ async def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_async(gate
                 user=identity["end_user"],
                 extra_body={"cache": {"no-cache": True}},
             )
-        attrs: Final = _observation_span(rig.collector, response.id)
+        attrs: Final = _v2_llm_span(rig.collector, response.id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -508,7 +425,7 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_messages(gate
                 messages=[{"role": "user", "content": marker}],
                 extra_body={"litellm_metadata": {"tags": ["lf8283"]}, "metadata": {"user_id": identity["end_user"]}},
             )
-        attrs: Final = _observation_span(rig.collector, message.id)
+        attrs: Final = _v2_llm_span(rig.collector, message.id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -536,7 +453,7 @@ async def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_stream(
             ) as stream,
         ):
             final: Final = await stream.get_final_message()
-        attrs: Final = _observation_span(rig.collector, final.id)
+        attrs: Final = _v2_llm_span(rig.collector, final.id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -558,7 +475,7 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_api(gateway: Gate
             user=identity["end_user"],
             extra_body={"cache": {"no-cache": True}},
         )
-        attrs: Final = _observation_span(rig.collector, response.id)
+        attrs: Final = _v2_llm_span(rig.collector, response.id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -589,32 +506,7 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream(gatewa
         response_id: Final = next(
             event["response_id"] for event in events if event.get("type") == "response.output_text.delta"
         )
-        attrs: Final = _observation_span(rig.collector, response_id)
-        _assert_identity(attrs, _chat_identity_fields(identity))
-
-
-def test_langfuse_otel_caller_trace_metadata_survives_flattened_identity(gateway: Gateway, tmp_path: Path) -> None:
-    marker: Final = "lf-deploy-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider)
-        response: Final = rig.candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": identity["model"],
-                "messages": [{"role": "user", "content": marker}],
-                "user": identity["end_user"],
-                "metadata": {"trace_metadata": {"deploy": "blue"}, "tags": ["lf8283"]},
-                "cache": {"no-cache": True},
-            },
-            key=key,
-        )
-        assert response.status_code == 200, response.text
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        assert json.loads(str(attrs["langfuse.trace.metadata"])) == {"deploy": "blue"}, attrs
+        attrs: Final = _v2_llm_span(rig.collector, response_id)
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
@@ -637,65 +529,19 @@ def test_langfuse_otel_failure_span_carries_request_metadata(gateway: Gateway, t
             key=key,
         )
         assert response.status_code >= 500, response.text
-        attrs: Final = _marked_span(rig.collector, marker, "langfuse.observation.")
-        _assert_identity(attrs, _chat_identity_fields(identity))
 
+        def failed_calls(spans: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+            return tuple(
+                span
+                for span in spans
+                if span.get("langfuse.trace.metadata.team_id") == identity["team_id"] and "error.type" in span
+            )
 
-def test_langfuse_otel_teamless_key_emits_no_team_identity(gateway: Gateway, tmp_path: Path) -> None:
-    marker: Final = "lf-noteam-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider, team=False)
-        response: Final = rig.candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": identity["model"],
-                "messages": [{"role": "user", "content": marker}],
-                "cache": {"no-cache": True},
-            },
-            key=key,
+        failed: Final = failed_calls(
+            eventually(_watched_spans(rig.collector), lambda spans: bool(failed_calls(spans)), seconds=25)
         )
-        assert response.status_code == 200, response.text
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        assert "langfuse.observation.metadata" in attrs, sorted(attrs)
-        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
-        for field in ("user_api_key_team_id", "user_api_key_team_alias", "user_api_key_end_user_id"):
-            assert field not in observation, observation
-        assert set(observation) <= _EXPORTED_FIELDS, observation
-        assert {
-            attribute: attrs.get(attribute)
-            for attribute in (f"langfuse.trace.metadata.{field}" for field in _IDENTITIES)
-            if attribute in attrs
-        } == {"langfuse.trace.metadata.user_api_key_alias": identity["key_alias"]}, attrs
-
-
-def test_langfuse_otel_teamless_key_keeps_caller_trace_metadata(gateway: Gateway, tmp_path: Path) -> None:
-    marker: Final = "lf-noteam-meta-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider, team=False)
-        response: Final = rig.candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": identity["model"],
-                "messages": [{"role": "user", "content": marker}],
-                "metadata": {"trace_metadata": {"deploy": "blue"}},
-                "cache": {"no-cache": True},
-            },
-            key=key,
-        )
-        assert response.status_code == 200, response.text
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        assert json.loads(str(attrs["langfuse.trace.metadata"])) == {"deploy": "blue"}, attrs
-        assert "langfuse.trace.metadata.user_api_key_team_id" not in attrs, attrs
-        assert "langfuse.trace.metadata.user_api_key_team_alias" not in attrs, attrs
-        assert attrs.get("langfuse.trace.metadata.user_api_key_alias") == identity["key_alias"], attrs
+        for attrs in failed:
+            _assert_identity(attrs, _chat_identity_fields(identity))
 
 
 def test_langfuse_otel_oversized_caller_metadata_is_not_copied_into_the_langfuse_keys(
@@ -727,11 +573,18 @@ def test_langfuse_otel_oversized_caller_metadata_is_not_copied_into_the_langfuse
             key=key,
         )
         assert response.status_code == 200, response.text
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
+        attrs: Final = _v2_llm_span(rig.collector, response.json()["id"])
         _assert_identity(attrs, _chat_identity_fields(identity))
         assert len(str(attrs["langfuse.observation.metadata"])) < 1000, len(str(attrs["langfuse.observation.metadata"]))
-        assert caller_note in str(attrs["metadata"]), "the bare metadata attribute keeps the caller metadata"
-        assert spend_logs_metadata["blob"] in str(attrs["metadata"]), "the bare metadata attribute keeps it"
+        langfuse_metadata: Final = json.dumps(
+            {
+                name: value
+                for name, value in attrs.items()
+                if name == "langfuse.observation.metadata" or name.startswith("langfuse.trace.metadata.")
+            }
+        )
+        assert caller_note not in langfuse_metadata, len(langfuse_metadata)
+        assert spend_logs_metadata["blob"] not in langfuse_metadata, len(langfuse_metadata)
 
 
 def test_langfuse_otel_unauthenticated_request_leaks_no_identity(gateway: Gateway, tmp_path: Path) -> None:
@@ -779,20 +632,13 @@ def test_langfuse_otel_unauthenticated_request_leaks_no_identity(gateway: Gatewa
         settled: Final = eventually(
             watch, lambda spans: sum(_span_response_id(s) == second_id for s in spans) == 1, seconds=25
         )
-        denied_spans: Final = tuple(span for span in settled if f"{marker}-denied" in json.dumps(span, default=str))
-        assert len(denied_spans) == 1, [s.get("llm.response.id") for s in settled]
-        denied_span: Final = denied_spans[0]
-        assert not [name for name in denied_span if name.startswith("langfuse.trace.metadata.user_api_key")], (
-            denied_span
+        carriers: Final = tuple(
+            _span_response_id(span)
+            for span in settled
+            if "langfuse.observation.metadata" in span
+            or any(name.startswith("langfuse.trace.metadata.user_api_key_") for name in span)
         )
-        leaked: Final = json.loads(str(denied_span.get("langfuse.observation.metadata", "{}")))
-        for field in (
-            "user_api_key_alias",
-            "user_api_key_team_id",
-            "user_api_key_team_alias",
-            "user_api_key_end_user_id",
-        ):
-            assert field not in leaked, leaked
+        assert sorted(carriers, key=str) == sorted((first_id, second_id)), carriers
 
 
 def test_langfuse_otel_repeated_identical_requests_emit_one_span_each(gateway: Gateway, tmp_path: Path) -> None:
@@ -903,10 +749,12 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
             watch,
             lambda spans: all(sum(_span_response_id(s) == rid for s in spans) == 1 for rid in response_ids),
             seconds=80,
+            return_last_on_timeout=True,
         )
-        assert sorted(_span_response_id(span) for span in settled if _span_response_id(span) in response_ids) == sorted(
-            response_ids
+        landed: Final = sorted(
+            str(_span_response_id(span)) for span in settled if _span_response_id(span) in response_ids
         )
+        assert landed == sorted(response_ids), sorted(set(response_ids) - set(landed))
         assert len(rejected) >= 1, "sink outage never served a 503"
 
 
@@ -1006,7 +854,6 @@ def test_langfuse_otel_v2_mapper_emits_request_metadata_and_identity(gateway: Ga
             tmp_path,
             {},
             marker,
-            overrides={"LITELLM_OTEL_V2": "1"},
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -1053,7 +900,6 @@ def test_langfuse_otel_v2_mapper_redacts_user_api_key_fields(gateway: Gateway, t
             tmp_path,
             {"redact_user_api_key_info": True},
             marker,
-            overrides={"LITELLM_OTEL_V2": "1"},
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -1092,7 +938,6 @@ def test_langfuse_otel_v2_mapper_teamless_key_emits_no_team_identity(gateway: Ga
             tmp_path,
             {},
             marker,
-            overrides={"LITELLM_OTEL_V2": "1"},
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -1154,7 +999,6 @@ def test_otel_v2_scalar_requester_metadata_keeps_the_llm_span(
             {"callbacks": [callback]},
             marker,
             overrides={
-                "LITELLM_OTEL_V2": "1",
                 **({"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": "__collector__"} if callback == "otel" else {}),
             },
         ) as rig,
@@ -1179,26 +1023,6 @@ def test_otel_v2_scalar_requester_metadata_keeps_the_llm_span(
             assert observation["user_api_key_alias"] == identity["key_alias"], observation
 
 
-def test_langfuse_otel_scalar_requester_metadata_keeps_the_observation_input(gateway: Gateway, tmp_path: Path) -> None:
-    marker: Final = "lf-scalar-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider)
-        model: Final = scenario.model(model="anthropic/claude-sonnet-4-6", api_base=rig.provider.url)
-        response: Final = rig.candidate.request(
-            "POST", "/v1/messages", _scalar_requester_metadata_request("/v1/messages", model, marker), key=key
-        )
-        assert response.status_code == 200, response.text
-
-        attrs: Final = _observation_span(rig.collector, response.json()["id"])
-        assert marker in str(attrs.get("langfuse.observation.input")), sorted(attrs)
-        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
-        assert "requester_metadata" not in observation, observation
-        assert observation["user_api_key_alias"] == identity["key_alias"], observation
-
-
 @pytest.mark.parametrize(
     "callbacks",
     [["langfuse_otel", "otel"], ["langfuse_otel"]],
@@ -1216,7 +1040,7 @@ def test_otel_v2_collector_beside_langfuse_gets_no_langfuse_request_metadata(
             tmp_path,
             {"callbacks": callbacks},
             marker,
-            overrides={"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
+            overrides={"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -1258,7 +1082,7 @@ def test_otel_v2_langfuse_gets_no_request_headers_or_caller_metadata(
     marker: Final = "lf-v2-probe-" + uuid.uuid4().hex
     probe: Final = "lf-probe-" + uuid.uuid4().hex
     with (
-        _langfuse_rig(gateway, tmp_path, {}, marker, overrides={"LITELLM_OTEL_V2": "1"}) as rig,
+        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
         rig.candidate.scenario() as scenario,
     ):
         key, identity = _scenario_identity(scenario, rig.provider)
@@ -1346,10 +1170,7 @@ def _keyword_router(router: str, keyword: str) -> Callable[[str], Sequence[Mappi
     return models
 
 
-@pytest.mark.parametrize("otel_v2", [False, True], ids=["v1", "v2"])
-def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
-    otel_v2: bool, gateway: Gateway, tmp_path: Path
-) -> None:
+def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-route-" + uuid.uuid4().hex
     router: Final = "lf-router-" + uuid.uuid4().hex[:8]
     keyword: Final = "acquire-globex-" + uuid.uuid4().hex[:8]
@@ -1359,11 +1180,7 @@ def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
             tmp_path,
             {},
             marker,
-            overrides=(
-                {"LITELLM_OTEL_V2": "1", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "no_content"}
-                if otel_v2
-                else None
-            ),
+            overrides={"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "no_content"},
             model_list=_keyword_router(router, keyword),
         ) as rig,
         rig.candidate.scenario() as scenario,
@@ -1381,11 +1198,7 @@ def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
         )
         assert response.status_code == 200, response.text
 
-        attrs: Final = (
-            _v2_llm_span(rig.collector, response.json()["id"])
-            if otel_v2
-            else _observation_span(rig.collector, response.json()["id"])
-        )
+        attrs: Final = _v2_llm_span(rig.collector, response.json()["id"])
         observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
         assert set(observation) <= _EXPORTED_FIELDS, observation
         langfuse_metadata: Final = {
@@ -1394,8 +1207,7 @@ def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
             if name == "langfuse.observation.metadata" or name.startswith("langfuse.trace.metadata.")
         }
         assert keyword not in json.dumps(langfuse_metadata, default=str), langfuse_metadata
-        if otel_v2:
-            assert keyword not in json.dumps(attrs, default=str), attrs
+        assert keyword not in json.dumps(attrs, default=str), attrs
 
 
 def _span_records(body: bytes) -> tuple[tuple[dict[str, object], int], ...]:
@@ -1451,59 +1263,6 @@ def _limit_sweep(
     return {size: record for size, record in observed.items() if record is not None}
 
 
-def test_langfuse_otel_identity_never_evicts_or_drops_another_attribute_of_a_full_span(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    marker: Final = "lf-limit-" + uuid.uuid4().hex
-    with (
-        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
-        rig.candidate.scenario() as scenario,
-    ):
-        key, identity = _scenario_identity(scenario, rig.provider)
-
-        def body(tool_count: int) -> dict[str, object]:
-            return {
-                "model": identity["model"],
-                "messages": [{"role": "user", "content": f"{marker}:{tool_count}:"}],
-                "user": identity["end_user"],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": f"tool_{n}",
-                            "description": f"looks up thing {n}",
-                            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
-                        },
-                    }
-                    for n in range(tool_count)
-                ],
-                "cache": {"no-cache": True},
-            }
-
-        spans: Final = _limit_sweep(
-            rig, key, marker, {tool_count: body(tool_count) for tool_count in (0, *range(30, 41))}
-        )
-
-        reference, reference_dropped = spans[0]
-        identity_count: Final = len(_identity_attributes(reference))
-        assert reference_dropped == 0, reference_dropped
-        assert identity_count == len(_chat_identity_fields(identity)) + 1, sorted(reference)
-        kept_by_size: Final[dict[int, tuple[int, int]]] = {}  # mutable-ok: filled once per swept span below
-        for tool_count, (attrs, dropped) in spans.items():
-            kept = len(_identity_attributes(attrs))
-            kept_by_size[tool_count] = (kept, dropped)
-            if kept:
-                assert dropped == 0, (tool_count, kept, dropped)
-                expected = {"openinference.span.kind", "metadata", "llm.model_name", "llm.request.type"}
-                assert expected <= set(attrs), (tool_count, sorted(expected - set(attrs)))
-                tools = {f"llm.tools.{n}.name" for n in range(tool_count)}
-                assert tools <= set(attrs), (tool_count, sorted(tools - set(attrs)))
-        assert [size for size, (kept, dropped) in kept_by_size.items() if kept < identity_count and not dropped], (
-            kept_by_size
-        )
-        assert [size for size, (_, dropped) in kept_by_size.items() if dropped], kept_by_size
-
-
 def test_otel_v2_langfuse_identity_sheds_before_any_message_attribute(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-v2-limit-" + uuid.uuid4().hex
     with (
@@ -1513,7 +1272,6 @@ def test_otel_v2_langfuse_identity_sheds_before_any_message_attribute(gateway: G
             {},
             marker,
             overrides={
-                "LITELLM_OTEL_V2": "1",
                 "MAPPER_NAMES": "genai,openinference",
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only",
             },
@@ -1589,7 +1347,7 @@ def test_otel_v2_span_another_tracer_wrote_keeps_its_langfuse_metadata_keys_at_t
             tmp_path,
             {"callbacks": ["langfuse_otel", "otel", "lit8283_app_span.instance"]},
             marker,
-            overrides={"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
+            overrides={"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -1647,7 +1405,6 @@ def test_otel_v2_collector_keeps_the_dropped_counts_of_a_span_without_langfuse_r
             {"callbacks": ["langfuse_otel", "otel"]},
             marker,
             overrides={
-                "LITELLM_OTEL_V2": "1",
                 "OTEL_EXPORTER": "otlp_http",
                 "OTEL_ENDPOINT": generic.url,
                 "OTEL_SPAN_EVENT_COUNT_LIMIT": "0",
@@ -1693,7 +1450,6 @@ def test_otel_v2_langfuse_mapper_sends_no_langfuse_request_metadata_to_a_plain_c
             {"callbacks": ["otel"]},
             marker,
             overrides={
-                "LITELLM_OTEL_V2": "1",
                 "MAPPER_NAMES": "genai,langfuse",
                 "OTEL_EXPORTER": "otlp_http",
                 "OTEL_ENDPOINT": "__collector__",

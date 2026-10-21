@@ -5,18 +5,13 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Optional
 
-from pydantic import TypeAdapter
-
 from litellm._logging import verbose_logger
-from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
     serialize_langfuse_datetime,
 )
-from litellm.integrations.opentelemetry import HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE, OpenTelemetry, OpenTelemetryConfig
-from litellm.integrations.otel.mappers.langfuse import TRACE_IDENTITY_FIELDS
-from litellm.integrations.otel.model.metadata import IDENTITY_METADATA_FIELDS, exported_request_metadata
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -30,19 +25,6 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-
-_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
-# The attributes ``OpenTelemetry._record_exception_on_span`` adds to a failed call's span after these.
-_ERROR_ATTRIBUTES: Final = frozenset(
-    {
-        ErrorAttributes.ERROR_CODE,
-        HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
-        ErrorAttributes.ERROR_TYPE,
-        ErrorAttributes.ERROR_MESSAGE,
-        ErrorAttributes.ERROR_LLM_PROVIDER,
-        ErrorAttributes.ERROR_STACK_TRACE,
-    }
-)
 
 LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
@@ -64,10 +46,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
-        from opentelemetry import trace
 
-        # The caller's active span, which LiteLLM writes onto instead of starting its own, gets no caller identity.
-        own_span: Final = span is not trace.get_current_span()
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
         span.set_attribute("langfuse.observation.type", "generation")
 
@@ -75,10 +54,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        if own_span:
-            LangfuseOtelLogger._set_request_metadata_attributes(
-                span=span, kwargs=_MAPPING_ADAPTER.validate_python(kwargs)
-            )
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
@@ -151,46 +126,6 @@ class LangfuseOtelLogger(OpenTelemetry):
                     except Exception:
                         value = str(value)
                 safe_set_attribute(span, enum_attr.value, value)
-
-    @staticmethod
-    def _set_request_metadata_attributes(
-        span: Span,
-        kwargs: Mapping[object, object],
-    ) -> None:
-        """Set the caller identity into the room ``span``'s attribute limit leaves next to the error attributes
-        a failed call adds after it, so the identity never evicts or drops another attribute."""
-        from litellm.integrations.otel.emitter import carried_keys, span_attribute_limit
-
-        raw_standard_logging_object: Final = kwargs.get("standard_logging_object")
-        if not isinstance(raw_standard_logging_object, dict):
-            return
-        raw_metadata: Final = _MAPPING_ADAPTER.validate_python(raw_standard_logging_object).get("metadata")
-        if not isinstance(raw_metadata, dict):
-            return
-        metadata: Final = _MAPPING_ADAPTER.validate_python(raw_metadata)
-        observation_metadata: Final = exported_request_metadata(
-            {field: metadata.get(field) for field in IDENTITY_METADATA_FIELDS}
-        )
-        trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
-        identity: Final = (
-            *(
-                ((LangfuseSpanAttributes.OBSERVATION_METADATA.value, json.dumps(dict(observation_metadata))),)
-                if observation_metadata
-                else ()
-            ),
-            *(
-                (f"{trace_prefix}.{field}", value)
-                for field in TRACE_IDENTITY_FIELDS
-                if (value := observation_metadata.get(field))
-            ),
-        )
-        limit: Final = span_attribute_limit(span)
-        carried: Final = carried_keys(span)
-        room: Final = (
-            len(identity) if limit is None else max(limit - len(carried) - len(_ERROR_ATTRIBUTES - carried), 0)
-        )
-        for key, value in identity[:room]:
-            _utils.safe_set_attribute(span, key, value)
 
     @staticmethod
     def _set_observation_output(span: Span, response_obj):
