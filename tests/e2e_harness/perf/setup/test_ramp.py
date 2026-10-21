@@ -104,9 +104,12 @@ def test_a_floor_fails_when_the_second_step_s_latency_breaks_it_and_the_properti
     assert exceeded == ["sustained_rps: observed 10.0000 < floor 20.0000"]
     assert {("perf_sustained_rps", 10.0), ("perf_sustained_rps_floor", 20.0)} <= set(junit_properties(rows))
     assert dict(step_properties((first, second))) == {
+        "perf_ramp_hold_p99_seconds": 2.0,
         "perf_ramp_step_10_gateway_added_p99": 0.5,
         "perf_ramp_step_10_completed_rps": first.completed_rps,
+        "perf_ramp_step_10_unexpected": 0.0,
         "perf_ramp_step_20_gateway_added_p99": 3.0,
         "perf_ramp_step_20_completed_rps": second.completed_rps,
+        "perf_ramp_step_20_unexpected": 0.0,
     }
     assert not evaluate(replace(case, limits=(Limit("sustained_rps", min=10),)), observation)[1]

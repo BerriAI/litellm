@@ -58,15 +58,17 @@ def sustained_rps(steps: Iterable[StepReading]) -> float:
 
 
 def step_properties(steps: Iterable[StepReading]) -> tuple[tuple[str, float], ...]:
-    """The per-step readings as JUnit properties, `perf_ramp_step_<rps>_gateway_added_p99` and
-    `perf_ramp_step_<rps>_completed_rps`, so the dashboard can draw the run's curve next to the sustained rate."""
-    return tuple(chain.from_iterable(_step_property_pair(step) for step in steps))
+    """The per-step readings as JUnit properties (`perf_ramp_step_<rps>_gateway_added_p99`, `_completed_rps` and
+    `_unexpected`) plus the hold bound, so the dashboard can draw the run's curve next to the sustained rate."""
+    rows: Final = tuple(steps)
+    hold: Final = (("perf_ramp_hold_p99_seconds", rows[0].held_p99_seconds),) if rows else ()
+    return (*hold, *chain.from_iterable(_step_property_pair(step) for step in rows))
 
 
 def _step_property_pair(step: StepReading) -> tuple[tuple[str, float], ...]:
     prefix: Final = f"perf_ramp_step_{step.rps:g}"
     p99: Final = () if step.gateway_added_p99 is None else ((f"{prefix}_gateway_added_p99", step.gateway_added_p99),)
-    return (*p99, (f"{prefix}_completed_rps", step.completed_rps))
+    return (*p99, (f"{prefix}_completed_rps", step.completed_rps), (f"{prefix}_unexpected", float(step.unexpected)))
 
 
 def render_steps(steps: Iterable[StepReading]) -> tuple[str, ...]:
