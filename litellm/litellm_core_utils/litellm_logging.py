@@ -6313,6 +6313,8 @@ def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
     any custom pricing or deployment-scoped pricing field (such as
     ``off_peak_pricing``) is present in the metadata ``model_info``
     """
+    if getattr(litellm, "custom_pricing", False) is True:
+        return True
     if litellm_params is None:
         return False
 
