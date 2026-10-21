@@ -3344,6 +3344,19 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         self.assertEqual(json.loads(attrs["gen_ai.input.messages"]), [])
         self.assertEqual(attrs["gen_ai.operation.name"], "aembedding")
 
+    def test_choice_message_objects_are_still_transformed(self):
+        """
+        Chat output reaches the message conversion as `Message` objects, not dicts, so
+        skipping token-array entries must not skip them.
+        """
+        from litellm.types.utils import Choices, Message
+
+        choices = [Choices(finish_reason="stop", index=0, message=Message(role="assistant", content="Hi"))]
+        self.assertEqual(
+            OpenTelemetry()._transform_choices_to_otel_semantic_conventions(choices),
+            [{"role": "assistant", "parts": [{"type": "text", "content": "Hi"}], "finish_reason": "stop"}],
+        )
+
     def test_output_messages_uses_parts_structure(self):
         """
         Test that gen_ai.output.messages uses the OTEL 1.38 parts array structure.
