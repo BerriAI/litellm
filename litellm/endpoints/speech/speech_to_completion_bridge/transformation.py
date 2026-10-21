@@ -102,7 +102,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         drop_params: bool,
         custom_llm_provider: str,
     ) -> ChatAudioParam | ChatSpeechConfigAudioParam | None:
-        if isinstance(voice, Mapping) and self._is_gemini_tts_model(model):
+        import litellm
+
+        if isinstance(voice, Mapping) and self._is_gemini_tts_model(litellm.model_alias_map.get(model, model)):
             from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 normalize_gemini_speech_config,
                 reject_unknown_gemini_tts_voice_keys,

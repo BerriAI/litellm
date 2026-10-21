@@ -90,6 +90,26 @@ def test_gemini_request_keeps_voice_beside_nested_speech_config() -> None:
     }
 
 
+def test_gemini_request_keeps_voice_object_for_a_model_alias_map_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", {"voice-alias": GEMINI_TTS_MODEL})
+
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model="voice-alias",
+        input="Hello there",
+        voice={"voice": "Puck"},
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"] == {
+        "speech_config": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+        "format": "pcm16",
+    }
+
+
 @pytest.mark.parametrize("wrapper", (None, "speech_config", "speechConfig"))
 def test_gemini_request_keeps_voice_and_language_without_audio_format(wrapper: str | None) -> None:
     voice: Final = {"language_code": "fr-FR", "voice": "Kore", "format": "pcm16"}
