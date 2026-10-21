@@ -2672,6 +2672,19 @@ def merge_consecutive_system_messages(
     ]
 
 
+_TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
+_ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Pattern[str]) -> str:
+    return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
+
+
+def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+    """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
+    return replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 
 

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
@@ -201,16 +202,20 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         return anthropic_tools
 
     def _extract_system_and_messages(
-        self, model: str, messages: list[AllMessageValues]
+        self, model: str, messages: list[AllMessageValues], drop_params: bool
     ) -> tuple[list[AnthropicSystemMessageContent] | None, list[AllAnthropicPassThroughMessageValues]]:
         """Cortex's /messages endpoint speaks Anthropic's dialect, so the shared translators own the shape."""
         conversation_messages: Final = list(messages)
         system: Final = AnthropicConfig().translate_system_message(messages=conversation_messages)
         try:
             conversation: Final = anthropic_messages_pt(
-                messages=conversation_messages, model=model, llm_provider="snowflake", force_base64=True
+                messages=conversation_messages,
+                model=model,
+                llm_provider="snowflake",
+                drop_params=drop_params,
+                force_base64=True,
             )
-        except (ValueError, LookupError, BadRequestError) as e:
+        except (ValueError, BadRequestError) as e:
             raise SnowflakeException(status_code=400, message=str(e)) from e
         return (system or None), conversation
 
@@ -226,7 +231,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         extra_body: Final = optional_params.pop("extra_body", {})
 
         if is_snowflake_claude_model(model):
-            return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
+            drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+            return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body, drop_params)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
     @property
@@ -301,10 +307,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         optional_params: dict,
         stream: bool,
         extra_body: dict,
+        drop_params: bool,
     ) -> dict:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
-        extracted_system, conversation = self._extract_system_and_messages(model, messages)
+        extracted_system, conversation = self._extract_system_and_messages(model, messages, drop_params)
         system: Final = passthrough_system if passthrough_system is not None else extracted_system
 
         if "tools" in optional_params:

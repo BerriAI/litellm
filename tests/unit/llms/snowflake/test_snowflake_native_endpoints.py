@@ -732,6 +732,32 @@ class TestAnthropicMultiTurnToolMessages:
             )
         assert excinfo.value.status_code == 400
 
+    def test_malformed_json_in_tool_arguments_is_dropped_under_drop_params(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {"name": "broken_tool", "arguments": "not valid json{{{"},
+                    }
+                ],
+            },
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+        assert body["messages"][1]["content"] == [
+            {"type": "tool_use", "id": "call_bad", "name": "broken_tool", "input": {}}
+        ]
+
     def test_non_string_tool_arguments_pass_through(self):
         messages = [
             {"role": "user", "content": "hi"},

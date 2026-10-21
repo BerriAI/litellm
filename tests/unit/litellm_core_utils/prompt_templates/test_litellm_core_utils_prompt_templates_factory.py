@@ -5044,6 +5044,7 @@ def test_group_tool_exchanges_is_linear_in_message_count():
 
 
 _PDF_DATA_URI = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 regression fixture").decode()
+_PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\n regression fixture").decode()
 _PNG_DATA_URI = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -8925,30 +8926,32 @@ def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
     ("url", "format_override", "expected"),
     [
         (
-            _PDF_DATA_URI,
+            "data:application/pdf;base64," + _PNG_B64,
             "image/png",
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": _PDF_DATA_URI.split(",", 1)[1],
-                },
-            },
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_B64}},
         ),
         (
             "data:image/png;base64,JVBERi0=",
             "application/pdf",
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
         ),
+        (
+            _PDF_DATA_URI,
+            "image/png",
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_DATA_URI.split(",", 1)[1]},
+            },
+        ),
     ],
-    ids=["pdf_uri_declared_png", "png_uri_declared_pdf"],
+    ids=["png_bytes_under_a_pdf_uri_declared_png", "png_uri_declared_pdf", "pdf_bytes_declared_png"],
 )
 def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url, format_override, expected):
     """
     `format` is how a caller corrects a media type the data URI got wrong, so the
     routing between image and document blocks has to read it before the URI's own
-    declared type.
+    declared type. Bytes that are a PDF stay a document whatever the labels say,
+    since Anthropic rejects a PDF sent as an image.
     """
     messages = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url, "format": format_override}}]}
@@ -8984,11 +8987,17 @@ def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
     ]
 
 
-def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block():
+@pytest.mark.parametrize(
+    "image_url",
+    [{"url": _PDF_DATA_URI}, {"url": _PDF_DATA_URI, "format": "image/png"}],
+    ids=["no-format", "declared-png"],
+)
+def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block(image_url):
     """
     A tool can answer with a PDF it just fetched, which arrives as an `image_url`
     entry inside the tool message's content list. Anthropic only accepts a PDF in a
-    document block, so the tool_result has to route it the same way user content does.
+    document block, so the tool_result has to route it the same way user content does,
+    whatever image format the tool labelled it with.
     """
     messages = [
         {"role": "user", "content": "fetch the invoice"},
@@ -8999,7 +9008,7 @@ def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block
         {
             "role": "tool",
             "tool_call_id": "toolu_01",
-            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+            "content": [{"type": "image_url", "image_url": image_url}],
         },
     ]
 
@@ -9046,24 +9055,6 @@ def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri
     ]
 
 
-def test_anthropic_messages_pt_rejects_unparseable_native_tool_use_input():
-    """
-    The same broken arguments already fail the request when they arrive under
-    `tool_calls`, so a native `tool_use` block must not quietly send `{}` to the
-    model and get a confident answer built on arguments the caller never sent.
-    """
-    messages = [
-        {"role": "user", "content": "what is the weather"},
-        {
-            "role": "assistant",
-            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "{not json"}],
-        },
-    ]
-
-    with pytest.raises(ValueError, match="get_weather"):
-        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
-
-
 def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
     """
     A guardrail replaces tool input with the redaction sentinel, which is not JSON.
@@ -9075,11 +9066,129 @@ def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redactio
             "role": "assistant",
             "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": REDACTED_BY_LITELLM}],
         },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
     ]
 
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
 
     assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_drops_a_native_tool_use_nobody_answered():
+    """
+    A stored conversation can leave a tool call without its result, the user moving
+    on with a plain message instead. Anthropic rejects a `tool_use` with no
+    `tool_result` right after it, and these replays were answered before native
+    blocks were kept, so an unanswered one is still left out.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
+            ],
+        },
+        {"role": "user", "content": "never mind, tell me a joke"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "text", "text": "checking"}]
+
+
+def _answered_native_tool_use(tool_use: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "what is the weather"},
+        {"role": "assistant", "content": [tool_use]},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_use",
+    [
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "[1, 2]"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": [1, 2]},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "{not json"},
+    ],
+    ids=["json-array-string", "list", "missing", "unparseable"],
+)
+def test_anthropic_messages_pt_native_tool_use_input_that_is_not_an_object_follows_drop_params(tool_use):
+    """
+    Anthropic only takes an object as tool input. Sending `{}` in place of what the
+    caller wrote changes the conversation, so that is only done when the caller asked
+    for unsupported values to be dropped, and is a client error otherwise.
+    """
+    messages: Final = _answered_native_tool_use(tool_use)
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+    dropped: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5", llm_provider="anthropic", drop_params=True
+    )
+
+    assert dropped[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_unparseable_tool_call_arguments_follow_drop_params():
+    """
+    Broken `tool_calls` arguments are a client error, unless the caller asked for
+    unsupported values to be dropped, in which case the call goes out with no input.
+    """
+    messages: Final = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{not json"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+    dropped: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5", llm_provider="anthropic", drop_params=True
+    )
+
+    assert dropped[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+_NAMED_PDF_DATA_URI = "data:application/pdf;name=report.pdf;base64," + base64.b64encode(b"%PDF-1.4 named").decode()
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "image_url", "image_url": {"url": _NAMED_PDF_DATA_URI}},
+        {"type": "file", "file": {"file_data": _NAMED_PDF_DATA_URI}},
+    ],
+    ids=["image_url", "file"],
+)
+def test_anthropic_messages_pt_sends_a_named_pdf_under_its_bare_media_type(block):
+    """
+    A data URI built from a file picker carries the file name in its media type, and
+    Anthropic's document media_type only takes `application/pdf` itself.
+    """
+    result = anthropic_messages_pt(
+        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5", llm_provider="anthropic"
+    )
+
+    assert result[0]["content"] == [
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": _NAMED_PDF_DATA_URI.split(",", 1)[1],
+            },
+        }
+    ]
 
 
 def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic():
