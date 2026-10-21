@@ -1005,6 +1005,27 @@ class TestUsageAiChatProviderRequest:
 
         assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
 
+    @pytest.mark.asyncio
+    async def test_team_owned_deployment_name_is_called_with_the_environment_key(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.router import Router
+
+        self._mock_openai(respx_mock)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "team-gpt-5",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-team-deployment"},
+                    "model_info": {"team_id": "team-1"},
+                }
+            ]
+        )
+
+        await self._ask("openai/gpt-5.6", monkeypatch, router)
+
+        assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
+
 
 class TestUsageAiChatKeepalive:
     async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:

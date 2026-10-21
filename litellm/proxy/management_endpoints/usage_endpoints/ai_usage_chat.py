@@ -474,14 +474,19 @@ def _resolve_model(model: str | None) -> str:
 _RouterRoute: TypeAlias = Literal["model_group", "deployment"]
 
 
-def _router_route(router: "Router", model: str, caller_is_proxy_admin: bool) -> _RouterRoute | None:
+def _router_route(
+    router: "Router", model: str, caller_is_proxy_admin: bool, request_team_id: str | None
+) -> _RouterRoute | None:
     if router.is_recognized_model(model) or (caller_is_proxy_admin and model in router.team_public_model_names):
         return "model_group"
     if router.router_general_settings.pass_through_all_models:
         return None
     if router.default_deployment is not None or router.pattern_router.route(model) is not None:  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
         return "model_group"
-    serves_model: Final = any(deployment["litellm_params"]["model"] == model for deployment in router.model_list)  # pyright: ignore[reportUnknownVariableType]  # Router.model_list is an untyped list
+    deployments: Final = router._get_deployment_by_litellm_model(model=model)  # pyright: ignore[reportPrivateUsage]  # the lookup the router's specific_deployment path runs
+    serves_model: Final = any(
+        router.deployment_usable_by_team(deployment, request_team_id) for deployment in deployments
+    )
     return "deployment" if serves_model else None
 
 
@@ -605,7 +610,7 @@ async def _acompletion(
     router_settings: Mapping[str, object] | None = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.proxy_server import llm_router
-    from litellm.router_utils.common_utils import is_proxy_admin_request
+    from litellm.router_utils.common_utils import get_request_team_id, is_proxy_admin_request
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
@@ -614,8 +619,9 @@ async def _acompletion(
     caller_metadata: Final[Mapping[str, object]] = (
         _caller_metadata(user_api_key_dict) if user_api_key_dict is not None else MappingProxyType({})
     )
+    router_request: Final = MappingProxyType({"metadata": caller_metadata})
     route: Final = (
-        _router_route(llm_router, model, is_proxy_admin_request({"metadata": caller_metadata}))
+        _router_route(llm_router, model, is_proxy_admin_request(router_request), get_request_team_id(router_request))
         if llm_router is not None
         else None
     )
