@@ -1,10 +1,10 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
@@ -12,7 +12,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
     _perform_health_check_and_save,
-    _save_background_health_checks_to_db,
+    save_background_health_checks_to_db,
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
     latest_health_checks_endpoint,
@@ -220,6 +220,44 @@ def test_aggregate_health_check_results_multiple_endpoints():
     assert result[key]["unhealthy_count"] == 0
 
 
+def test_aggregate_health_check_results_attributes_each_result_to_its_own_deployment():
+    deployments: Final = (("a", "qwen"), ("a", "qwen-alias"), ("b", "qwen"), ("b", "qwen-alias"))
+    model_list: Final = [
+        {
+            "model_name": name,
+            "litellm_params": {"model": "openai/qwen", "api_base": f"http://{host}:11434/v1"},
+            "model_info": {"id": f"{host}-{name}"},
+        }
+        for host, name in deployments
+    ]
+    healthy_endpoints: Final = [
+        {"model": "openai/qwen", "api_base": "http://a:11434/v1", "model_id": "a-qwen"},
+        {"model": "openai/qwen", "api_base": "http://a:11434/v1", "model_id": "a-qwen-alias"},
+    ]
+    unhealthy_endpoints: Final = [
+        {"model": "openai/qwen", "api_base": "http://b:11434/v1", "model_id": "b-qwen", "error": "Connection error."},
+        {
+            "model": "openai/qwen",
+            "api_base": "http://b:11434/v1",
+            "model_id": "b-qwen-alias",
+            "error": "Connection error.",
+        },
+    ]
+
+    result: Final = _aggregate_health_check_results(
+        _build_model_param_to_info_mapping(model_list), healthy_endpoints, unhealthy_endpoints
+    )
+
+    assert {
+        key: (value["healthy_count"], value["unhealthy_count"], value["error_message"]) for key, value in result.items()
+    } == {
+        ("a-qwen", "qwen"): (1, 0, None),
+        ("a-qwen-alias", "qwen-alias"): (1, 0, None),
+        ("b-qwen", "qwen"): (0, 1, "Connection error."),
+        ("b-qwen-alias", "qwen-alias"): (0, 1, "Connection error."),
+    }
+
+
 @pytest.mark.asyncio
 async def test_save_health_check_results_if_changed_status_changed():
     """Test saving when status changes"""
@@ -389,7 +427,7 @@ async def test_save_background_health_checks_to_db():
 
     start_time = 1234567890.0
 
-    persisted = await _save_background_health_checks_to_db(
+    persisted = await save_background_health_checks_to_db(
         mock_prisma,
         model_list,
         healthy_endpoints,
@@ -497,7 +535,7 @@ async def test_save_background_health_checks_to_db_returns_false_when_a_write_fa
     mock_prisma.save_health_check_result = AsyncMock(return_value=None)
     model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
 
-    persisted = await _save_background_health_checks_to_db(
+    persisted = await save_background_health_checks_to_db(
         mock_prisma, model_list, healthy_endpoints, unhealthy_endpoints, 1234567890.0, "background_health_check"
     )
 
@@ -514,7 +552,7 @@ async def test_save_background_health_checks_to_db_writes_nothing_when_the_lates
     mock_prisma.save_health_check_result = AsyncMock(return_value={"id": "row"})
     model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
 
-    persisted = await _save_background_health_checks_to_db(
+    persisted = await save_background_health_checks_to_db(
         mock_prisma, model_list, healthy_endpoints, unhealthy_endpoints, 1234567890.0, "background_health_check"
     )
 
@@ -524,7 +562,7 @@ async def test_save_background_health_checks_to_db_writes_nothing_when_the_lates
 @pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_no_prisma():
     """Test graceful handling when no prisma client"""
-    result = await _save_background_health_checks_to_db(None, [], [], [], 0.0, "background_health_check")
+    result = await save_background_health_checks_to_db(None, [], [], [], 0.0, "background_health_check")
     assert result is False
 
 
@@ -544,7 +582,7 @@ async def test_save_background_health_checks_to_db_exception_handling():
 
     # Must not raise (the health check loop has to survive a DB outage) but must report
     # the failure, so the window lock can be released for another pod to retry
-    persisted = await _save_background_health_checks_to_db(
+    persisted = await save_background_health_checks_to_db(
         mock_prisma, model_list, [], [], 0.0, "background_health_check"
     )
 
@@ -615,7 +653,7 @@ async def test_save_background_health_checks_compares_raw_checked_at_against_utc
         {"model_name": "fresh-model", "model_info": {"id": "fresh-id"}, "litellm_params": {"model": "openai/fresh"}},
     ]
 
-    await _save_background_health_checks_to_db(
+    await save_background_health_checks_to_db(
         mock_prisma,
         model_list,
         [{"model": "openai/stale"}, {"model": "openai/fresh"}],

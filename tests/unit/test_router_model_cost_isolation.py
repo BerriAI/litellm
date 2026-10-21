@@ -9,14 +9,23 @@ should still use the built-in pricing.
 
 import asyncio
 import copy
+import itertools
+import json
 import logging
 import os
+import pathlib
+import queue
 import re
-from typing import Final
+import sys
+import threading
+from pathlib import Path
+from types import MappingProxyType
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -26,11 +35,20 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import (
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    LiteLLMParamsTypedDict,
+    ModelInfo,
+)
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
 )
+
+
+_COPILOT_TOKEN_EXPIRES_AT: Final = 4_102_444_800
 
 
 def _simulate_price_data_reload(fetched_catalog):
@@ -113,27 +131,33 @@ async def test_discovered_limits_survive_deployment_growth_and_removal(
 
 async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
-    router: Final = Router(model_list=[{
-        "model_name": "local",
-        "litellm_params": {
-            "model": "hosted_vllm/local-model",
-            "api_base": "https://original.test/v1",
-            "api_key": "local-key",
-        },
-        "model_info": {"id": "replaced-deployment"},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": "https://original.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": "replaced-deployment"},
+            }
+        ]
+    )
 
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.host == "original.test":
-            router.upsert_deployment(Deployment(
-                model_name="local",
-                litellm_params=LiteLLM_Params(
-                    model="hosted_vllm/local-model",
-                    api_base="https://replacement.test/v1",
-                    api_key="local-key",
-                ),
-                model_info=ModelInfo(id="replaced-deployment"),
-            ))
+            router.upsert_deployment(
+                Deployment(
+                    model_name="local",
+                    litellm_params=LiteLLM_Params(
+                        model="hosted_vllm/local-model",
+                        api_base="https://replacement.test/v1",
+                        api_key="local-key",
+                    ),
+                    model_info=ModelInfo(id="replaced-deployment"),
+                )
+            )
             return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]})
         assert request.url.host == "replacement.test"
         return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 2048}]})
@@ -149,18 +173,51 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
     _invalidate_model_cost_lowercase_map()
 
 
+async def test_discovery_sends_the_secret_behind_an_oidc_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("local-secret")
+    router: Final = Router(model_list=[{
+        "model_name": "local",
+        "litellm_params": {
+            "model": "hosted_vllm/local-model",
+            "api_base": "https://discovery.test/v1",
+            "api_key": f"oidc/file/{token}",
+        },
+        "model_info": {"id": "oidc-deployment"},
+    }])
+    authorizations: Final[list[str | None]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+    assert authorizations == ["Bearer local-secret"]
+    _invalidate_model_cost_lowercase_map()
+
+
 async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     first, second = tuple(
-        Router(model_list=[{
-            "model_name": "local",
-            "litellm_params": {
-                "model": "hosted_vllm/local-model",
-                "api_base": f"https://{host}.test/v1",
-                "api_key": "local-key",
-            },
-            "model_info": {"id": "shared-discovery-id"},
-        }])
+        Router(
+            model_list=[
+                {
+                    "model_name": "local",
+                    "litellm_params": {
+                        "model": "hosted_vllm/local-model",
+                        "api_base": f"https://{host}.test/v1",
+                        "api_key": "local-key",
+                    },
+                    "model_info": {"id": "shared-discovery-id"},
+                }
+            ]
+        )
         for host in ("first", "second")
     )
 
@@ -181,15 +238,17 @@ async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: 
         assert first.get_configured_token_limits("local") == (8192, 8192)
         assert second.get_configured_token_limits("local") == (2048, 2048)
         assert litellm.model_cost["shared-discovery-id"].get("max_input_tokens") is None
-        first.upsert_deployment(Deployment(
-            model_name="local",
-            litellm_params=LiteLLM_Params(
-                model="hosted_vllm/local-model",
-                api_base="https://unavailable.test/v1",
-                api_key="local-key",
-            ),
-            model_info=ModelInfo(id="shared-discovery-id"),
-        ))
+        first.upsert_deployment(
+            Deployment(
+                model_name="local",
+                litellm_params=LiteLLM_Params(
+                    model="hosted_vllm/local-model",
+                    api_base="https://unavailable.test/v1",
+                    api_key="local-key",
+                ),
+                model_info=ModelInfo(id="shared-discovery-id"),
+            )
+        )
         assert first.get_configured_token_limits("local") == (None, None)
         await first.arefresh_model_info(client=handler)
         assert first.get_configured_token_limits("local") == (None, None)
@@ -200,17 +259,19 @@ async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: 
 async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     second_started: Final = asyncio.Event()
-    router: Final = Router(model_list=[
-        {
-            "model_name": host,
-            "litellm_params": {
-                "model": "hosted_vllm/local-model",
-                "api_base": f"https://{host}.test/v1",
-                "api_key": "local-key",
-            },
-        }
-        for host in ("first", "second", "third")
-    ])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": host,
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": f"https://{host}.test/v1",
+                    "api_key": "local-key",
+                },
+            }
+            for host in ("first", "second", "third")
+        ]
+    )
 
     async def respond(request: httpx.Request) -> httpx.Response:
         if request.url.host == "first.test":
@@ -234,21 +295,27 @@ async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypa
 async def test_discovered_limits_expire_after_the_last_successful_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     clock: Final = Mock(return_value=0.0)
-    router: Final = Router(model_list=[{
-        "model_name": "local",
-        "litellm_params": {
-            "model": "hosted_vllm/local-model",
-            "api_base": "https://expiry.test/v1",
-            "api_key": "local-key",
-        },
-        "model_info": {"id": "expiring-discovery"},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": "https://expiry.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": "expiring-discovery"},
+            }
+        ]
+    )
     router._discovered_model_info_cache = InMemoryCache(clock=clock, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS)
-    responses: Final = iter((
-        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
-        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
-        httpx.Response(503),
-    ))
+    responses: Final = iter(
+        (
+            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
+            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
+            httpx.Response(503),
+        )
+    )
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: next(responses))) as client:
@@ -337,10 +404,12 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
 
 async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
-    responses: Final = iter((
-        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
-        httpx.Response(503),
-    ))
+    responses: Final = iter(
+        (
+            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
+            httpx.Response(503),
+        )
+    )
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "backend.test"
@@ -348,27 +417,29 @@ async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypa
         assert request.headers["x-tenant"] == "tenant"
         return next(responses)
 
-    router: Final = Router(model_list=[
-        {
-            "model_name": "configured",
-            "litellm_params": {
-                "model": "hosted_vllm/local-model",
-                "api_base": "https://backend.test/v1",
-                "api_key": "unused-key",
-                "extra_headers": {"authorization": "Bearer local-key", "X-Tenant": "tenant"},
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "configured",
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": "https://backend.test/v1",
+                    "api_key": "unused-key",
+                    "extra_headers": {"authorization": "Bearer local-key", "X-Tenant": "tenant"},
+                },
+                "model_info": {"id": "configured", "max_input_tokens": 1024},
             },
-            "model_info": {"id": "configured", "max_input_tokens": 1024},
-        },
-        {
-            "model_name": "byok",
-            "litellm_params": {
-                "model": "openai/local-model",
-                "api_base": "https://caller.test/v1",
-                "use_clientside_credentials": True,
+            {
+                "model_name": "byok",
+                "litellm_params": {
+                    "model": "openai/local-model",
+                    "api_base": "https://caller.test/v1",
+                    "use_clientside_credentials": True,
+                },
             },
-        },
-        {"model_name": "default-openai", "litellm_params": {"model": "openai/local-model", "api_key": "unused"}},
-    ])
+            {"model_name": "default-openai", "litellm_params": {"model": "openai/local-model", "api_key": "unused"}},
+        ]
+    )
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
     responder: Final = Mock(side_effect=respond)
@@ -512,6 +583,69 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
         f"Standard deployment should use built-in pricing {builtin_input_cost}, "
         f"got {info_standard['input_cost_per_token']}"
     )
+
+
+@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"])
+def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
+    """A deployment's capability override must not land on the shared
+    ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
+    backend_model = "bedrock/us.xai.grok-4.6"
+    deploy_id = "grok-deploy-keep-regex"
+
+    builtin_flag = litellm.get_model_info(model=backend_model).get(flag)
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "grok-keep-regex",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": deploy_id, flag: not builtin_flag},
+                }
+            ],
+        )
+
+        assert litellm.model_cost[deploy_id][flag] is (not builtin_flag)
+        assert litellm.get_model_info(model=backend_model).get(flag) is builtin_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
+    """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
+    the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
+    from litellm.proxy.common_utils.token_count_settings import cost_map_entry
+
+    backend_model: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
+    deploy_id: Final = "sonnet-deploy-keep-token-count"
+    configured: Final = {
+        "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
+        "token_count_framing": 7,
+    }
+    builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
+    assert all(builtin[field] != value for field, value in configured.items()), builtin
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (deploy_id, backend_model, backend_model.removeprefix("bedrock/"))
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "sonnet-keep-token-count",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": deploy_id, **configured},
+                }
+            ],
+        )
+
+        assert {field: litellm.model_cost[deploy_id][field] for field in configured} == configured
+        assert {field: cost_map_entry(backend_model).get(field) for field in configured} == builtin
+    finally:
+        _restore_model_cost_entries(model_keys)
 
 
 def test_should_store_full_pricing_under_deployment_model_id():
@@ -728,6 +862,178 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _restore_model_cost_entries(model_keys)
 
 
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize(
+    "field",
+    ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost", "input_cost_per_token_priority"),
+)
+@pytest.mark.parametrize("rate", (0.0, 0.004))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("provider", (None, "bedrock"))
+@pytest.mark.parametrize("registration_path", ("direct", "startup", "reload"))
+def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    rate: float,
+    explicit_base: bool,
+    provider: str | None,
+    registration_path: str,
+    service_tier: str,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
+
+    model: Final = "openai.gpt-5.6-sol"
+    profile: Final = f"us.{model}"
+    base_model: Final = f"global.{model}"
+    profile_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
+    }
+    base_prices: Final = {**profile_prices, "input_cost_per_token": 0.03, "output_cost_per_token": 0.04}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, profile: dict(profile_prices), base_model: dict(base_prices)}
+    )
+    deployment: Final = Deployment(
+        model_name="profile-priced",
+        litellm_params=LiteLLM_Params(
+            model=f"converse/{model}" if provider else f"bedrock/converse/{model}",
+            model_id=profile,
+            custom_llm_provider=provider,
+        ),
+        model_info=ModelInfo(
+            **{
+                "id": "profile-priced-deployment",
+                field: rate,
+                **({"base_model": f"bedrock/{base_model}"} if explicit_base else {}),
+            }
+        ),
+    )
+    if registration_path == "direct":
+        Router._register_deployment_pricing(deployment)
+    else:
+        router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+        if registration_path == "reload":
+            router.replay_model_cost_registrations()
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=3,
+            total_tokens=103,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        ),
+    )
+    catalog: Final = base_prices if explicit_base else profile_prices
+    input_field: Final = "input_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    output_field: Final = "output_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    input_rate: Final = rate if field == input_field else catalog[input_field]
+    output_rate: Final = rate if field == output_field else catalog[output_field]
+    cache_rate: Final = rate if field == "cache_read_input_token_cost" else 0.001
+    assert completion_cost(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="profile-priced-deployment",
+        service_tier=service_tier,
+    ) == pytest.approx(95 * input_rate + 3 * output_rate + 5 * cache_rate)
+    assert litellm.model_cost[profile] == profile_prices
+
+
+@pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
+@pytest.mark.parametrize("known_model", (False, True))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize("override", (None, "cache_read_input_token_cost", "input_cost_per_token_priority"))
+@pytest.mark.parametrize("reload", (False, True))
+def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_entry: dict[str, object] | None,
+    known_model: bool,
+    explicit_base: bool,
+    service_tier: str,
+    override: str | None,
+    reload: bool,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
+
+    model: Final = "anthropic.unmapped-profile-pricing-test"
+    profile: Final = (
+        "us.anthropic.invalid-profile-pricing-test"
+        if catalog_entry is not None
+        else "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-test"
+    )
+    configured_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.03,
+        "output_cost_per_token": 0.04,
+        "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            **({model: dict(configured_prices)} if known_model else {}),
+            **({profile: catalog_entry} if catalog_entry is not None else {}),
+        },
+    )
+    deployment: Final = Deployment(
+        model_name="custom-priced",
+        litellm_params=LiteLLM_Params(model=f"bedrock/converse/{model}", model_id=profile),
+        model_info=ModelInfo(
+            id="unmapped-profile-deployment",
+            input_cost_per_token=0.01,
+            output_cost_per_token=0.02,
+            **({override: 0.0} if override else {}),
+            **({"base_model": f"bedrock/{profile}"} if explicit_base else {}),
+        ),
+    )
+    router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+    if reload:
+        router.replay_model_cost_registrations()
+    inherit_configured: Final = known_model and not explicit_base
+    tier_rates: Final = inherit_configured and service_tier != "default"
+    input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
+    output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
+    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="unmapped-profile-deployment",
+        service_tier=service_tier,
+    ) == pytest.approx(20 * effective_input + 80 * cache_rate + 3 * output_rate)
+    if known_model:
+        assert {
+            key: value for key, value in litellm.model_cost[model].items() if key in configured_prices
+        } == configured_prices
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the
@@ -815,6 +1121,67 @@ def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
         entry = litellm.model_cost[deploy_id]
         assert entry.get("cache_creation_input_token_cost") == explicit_cache_create
         assert entry.get("cache_read_input_token_cost") == explicit_cache_read
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize(
+    ("deployment_cache_prices", "billed_cache_read_rate"),
+    [({}, 2.5e-07), ({"cache_read_input_token_cost": 1e-07}, 1e-07)],
+    ids=["inherits-builtin-explicit-rate", "own-cache-read-price-wins"],
+)
+def test_partial_custom_pricing_bills_explicit_cache_hits(
+    deployment_cache_prices: dict[str, float], billed_cache_read_rate: float
+):
+    backend_model = "dashscope/qwen-explicit-cache-inherit-backend"
+    deploy_id = "qwen-deploy-partial-pricing"
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: litellm.model_cost.get(backend_model),
+    }
+    litellm.model_cost[backend_model] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_creation_input_token_cost": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "qwen-custom",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 2e-06,
+                        "output_cost_per_token": 6e-06,
+                        **deployment_cache_prices,
+                    },
+                    "model_info": {"id": deploy_id},
+                }
+            ],
+        )
+        response = litellm.ModelResponse(
+            model=backend_model,
+            usage=litellm.Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            ),
+        )
+
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=backend_model,
+            custom_pricing=True,
+            router_model_id=deploy_id,
+        )
+
+        assert cost == pytest.approx(1000 * billed_cache_read_rate)
     finally:
         _restore_model_cost_entries(model_keys)
 
@@ -910,8 +1277,7 @@ def _register_azure_tier_backend() -> None:
 
 def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> None:
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
     }
     try:
         _register_tier_backend()
@@ -940,9 +1306,7 @@ def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> Non
             "output_cost_per_token_flex": _TIER_BACKEND_ENTRY["output_cost_per_token_flex"],
             "input_cost_per_token_balanced": _TIER_BACKEND_ENTRY["input_cost_per_token_balanced"],
             "output_cost_per_token_balanced": _TIER_BACKEND_ENTRY["output_cost_per_token_balanced"],
-            "cache_read_input_token_cost_ultrafast": _TIER_BACKEND_ENTRY[
-                "cache_read_input_token_cost_ultrafast"
-            ],
+            "cache_read_input_token_cost_ultrafast": _TIER_BACKEND_ENTRY["cache_read_input_token_cost_ultrafast"],
             "input_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
                 "input_cost_per_token_above_272k_tokens_ultrafast"
             ],
@@ -957,8 +1321,7 @@ def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> Non
 
 def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend() -> None:
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
     }
     try:
         _register_tier_backend()
@@ -995,8 +1358,7 @@ def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend(
 def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:
     model_id: Final = "tier-priced-deployment"
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
     }
     try:
         _register_tier_backend()
@@ -1056,8 +1418,7 @@ def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() 
 def test_router_completion_uses_backend_ultrafast_long_context_rates() -> None:
     model_id: Final = "tier-priced-long-context-deployment"
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
     }
     try:
         _register_tier_backend()
@@ -1108,8 +1469,7 @@ def test_ptu_service_tier_pricing_is_disabled_only_when_attribution_is_enabled(
 ) -> None:
     model_id: Final = f"ptu-tier-deployment-{ptu_enabled}"
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, model_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, model_id)
     }
     try:
         _register_tier_backend()
@@ -1166,8 +1526,7 @@ def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_pay
     model_id: Final = "azure-tier-priced-alias"
     payload_id: Final = "azure-tier-priced-payload"
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_AZURE_TIER_BACKEND_KEY, model_id, payload_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_AZURE_TIER_BACKEND_KEY, model_id, payload_id)
     }
     try:
         _register_azure_tier_backend()
@@ -1223,12 +1582,8 @@ def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_pay
             )
         )
 
-        assert payload["input_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY[
-            "input_cost_per_token_priority"
-        ]
-        assert payload["output_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY[
-            "output_cost_per_token_priority"
-        ]
+        assert payload["input_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
+        assert payload["output_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
@@ -1330,12 +1685,10 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
 
     assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
     assert (
-        model_info["input_cost_per_token_above_200k_tokens"]
-        == builtin_info["input_cost_per_token_above_200k_tokens"]
+        model_info["input_cost_per_token_above_200k_tokens"] == builtin_info["input_cost_per_token_above_200k_tokens"]
     )
     assert (
-        model_info["output_cost_per_token_above_200k_tokens"]
-        == builtin_info["output_cost_per_token_above_200k_tokens"]
+        model_info["output_cost_per_token_above_200k_tokens"] == builtin_info["output_cost_per_token_above_200k_tokens"]
     )
 
 
@@ -2080,6 +2433,398 @@ def test_backend_cost_map_keys_matches_what_registration_writes(model, custom_ll
     assert keys[0] == (model if custom_llm_provider is None else f"{custom_llm_provider}/{model}")
 
 
+def test_mantle_chat_deployment_does_not_rewrite_the_shared_responses_row():
+    """
+    A Bedrock Mantle deployment that pins ``mode: chat`` routes its own chat
+    requests to Chat Completions, while the shared cost-map row keeps
+    ``mode: responses`` for every other deployment and plain SDK calls.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "bedrock_mantle/openai.gpt-5.6-sol"
+    cost_map: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
+    model_keys = {
+        key: copy.deepcopy(cost_map.get(key))
+        for key in (backend_model, f"bedrock_mantle/{backend_model}", "mantle-chat-pinned")
+    }
+
+    try:
+        litellm.model_cost[backend_model] = {
+            **(model_keys[backend_model] or {}),
+            "litellm_provider": "bedrock_mantle",
+            "mode": "responses",
+        }
+        _invalidate_model_cost_lowercase_map()
+
+        Router(
+            model_list=[
+                {
+                    "model_name": "mantle-chat",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "custom_llm_provider": "bedrock_mantle",
+                        "api_key": "test-bearer",
+                    },
+                    "model_info": {"id": "mantle-chat-pinned", "mode": "chat"},
+                }
+            ]
+        )
+
+        assert litellm.model_cost[backend_model]["mode"] == "responses"
+
+        shared_info, _ = responses_api_bridge_check(model=backend_model, custom_llm_provider="bedrock_mantle")
+        assert shared_info["mode"] == "responses"
+        pinned_info, _ = responses_api_bridge_check(
+            model=backend_model,
+            custom_llm_provider="bedrock_mantle",
+            deployment_model_info={"id": "mantle-chat-pinned", "mode": "chat"},
+        )
+        assert pinned_info["mode"] == "chat"
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def _register_routing_test_row(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["routing-test-model"] = {
+        "litellm_provider": "openai",
+        "mode": mode,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "max_input_tokens": 1000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 2e-06,
+    }
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize("registered_mode, pinned_mode", [("responses", "chat"), ("chat", "responses")])
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("openai/routing-test-model", "openai"),
+        ("openai/routing-test-model", None),
+        ("routing-test-model", "openai"),
+        ("openai/responses/routing-test-model", None),
+    ],
+)
+def test_a_deployment_mode_never_rewrites_the_shared_row(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_mode: str,
+    pinned_mode: str,
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    """A ``mode`` pin routes only its own deployment. Every key registration merges into the shared
+    ``<name>`` row, the ``responses/``-stripped twin included, has to keep the mode the SDK and the
+    sibling deployments route by, whichever way the pin points."""
+    from litellm.main import responses_api_bridge_check
+
+    _register_routing_test_row(monkeypatch, registered_mode)
+    litellm_params: Final = {"model": model, "api_key": "sk-test"} | (
+        {"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}
+    )
+
+    Router(
+        model_list=[
+            {
+                "model_name": "pinned",
+                "litellm_params": litellm_params,
+                "model_info": {"id": "pinned-id", "mode": pinned_mode},
+            },
+            {"model_name": "sibling", "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"}},
+        ]
+    )
+
+    assert litellm.model_cost["routing-test-model"]["mode"] == registered_mode
+    shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == registered_mode
+
+
+def test_a_custom_priced_chat_pin_request_leaves_its_unpinned_sibling_on_responses(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_routing_test_row(monkeypatch, "responses")
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "routing-test-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "routing-test-model",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "priced-chat-pin",
+                "litellm_params": {
+                    "model": "openai/routing-test-model",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 4e-06,
+                },
+                "model_info": {"id": "priced-chat-pin-id", "mode": "chat"},
+            },
+            {"model_name": "sibling", "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"}},
+        ]
+    )
+
+    router.completion(model="priced-chat-pin", messages=[{"role": "user", "content": "Say ok"}])
+    router.completion(model="sibling", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+
+
+def test_a_prefixed_deployment_override_leaves_the_shared_row_limits_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment that names its provider twice, in ``custom_llm_provider`` and in the model, registers
+    under its own key, so its ``max_input_tokens`` override stays off the row its siblings read."""
+    _register_routing_test_row(monkeypatch, "responses")
+    shared_before: Final = copy.deepcopy(litellm.model_cost["routing-test-model"])
+
+    Router(
+        model_list=[
+            {
+                "model_name": "small-window",
+                "litellm_params": {
+                    "model": "openai/routing-test-model",
+                    "custom_llm_provider": "openai",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "small-window-id", "max_input_tokens": 10},
+            }
+        ]
+    )
+
+    assert litellm.model_cost["routing-test-model"] == shared_before
+
+
+@pytest.mark.parametrize("pins", [("chat", "responses"), ("responses", "chat")], ids=["chat first", "responses first"])
+def test_an_unmapped_model_routes_the_same_whichever_pin_registers_first(
+    monkeypatch: pytest.MonkeyPatch, pins: tuple[str, str]
+) -> None:
+    """A model missing from the cost map gets its shared row from the router, so conflicting pins must not
+    leave a row that depends on deployment order, and a ``responses`` pin keeps opting the model in."""
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    Router(
+        model_list=[
+            {
+                "model_name": f"pinned-{mode}",
+                "litellm_params": {"model": "openai/unmapped-routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": f"pinned-{mode}", "mode": mode},
+            }
+            for mode in pins
+        ]
+    )
+
+    shared_info, _ = responses_api_bridge_check(model="unmapped-routing-test-model", custom_llm_provider="openai")
+    assert shared_info.get("mode") == "responses"
+
+
+_FINE_TUNE: Final = "openai/ft:gpt-4o-mini-2024-07-18:routing-test::abc123"
+
+
+def _fine_tune_routing(
+    monkeypatch: pytest.MonkeyPatch, pristine_cost_map: dict[str, object], order: tuple[str | None, ...]
+) -> tuple[object, ...]:
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(pristine_cost_map))
+    Router(
+        model_list=[
+            {
+                "model_name": f"ft-{mode}",
+                "litellm_params": {"model": _FINE_TUNE, "api_key": "sk-test"},
+                "model_info": {"id": f"ft-{mode}"} if mode is None else {"id": f"ft-{mode}", "mode": mode},
+            }
+            for mode in order
+        ]
+    )
+    return tuple(
+        responses_api_bridge_check(
+            model=_FINE_TUNE.removeprefix("openai/"),
+            custom_llm_provider="openai",
+            deployment_model_info=None if mode is None else {"mode": mode},
+        )[0].get("mode")
+        for mode in (None, "chat", "responses")
+    )
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(("chat", "responses", None))), ids=str)
+def test_a_fine_tune_routes_the_same_whichever_deployment_registers_first(
+    monkeypatch: pytest.MonkeyPatch, order: tuple[str | None, ...]
+) -> None:
+    """A fine-tune missing from the cost map inherits its base model's row on its first registration, so a
+    ``responses`` pin must not opt the shared row in only when it happens to register before its siblings."""
+    pristine_cost_map: Final = litellm.model_cost
+
+    assert _fine_tune_routing(monkeypatch, pristine_cost_map, order) == _fine_tune_routing(
+        monkeypatch, pristine_cost_map, ("responses", "chat", None)
+    )
+
+
+def test_a_non_routing_mode_pin_still_reaches_the_shared_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only ``chat`` and ``responses`` pins are per-deployment routing. Other modes, such as a realtime
+    model pinned to ``audio_transcription``, are still read from the shared row by name."""
+    _register_routing_test_row(monkeypatch, "chat")
+
+    Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "transcriber-id", "mode": "audio_transcription"},
+            }
+        ]
+    )
+
+    assert litellm.get_model_info(model="routing-test-model", custom_llm_provider="openai")["mode"] == (
+        "audio_transcription"
+    )
+
+
+def test_a_non_routing_mode_pin_leaves_a_responses_row_on_the_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    _register_routing_test_row(monkeypatch, "responses")
+
+    Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "transcriber-id", "mode": "audio_transcription"},
+            }
+        ]
+    )
+
+    shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == "responses"
+
+
+@pytest.mark.parametrize("registered_mode", ["responses", "chat"])
+@pytest.mark.parametrize("malformed_mode", [5, ["chat"], {"mode": "chat"}], ids=["int", "list", "object"])
+def test_a_malformed_mode_never_reaches_the_shared_row(
+    monkeypatch: pytest.MonkeyPatch, registered_mode: str, malformed_mode: object
+) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    _register_routing_test_row(monkeypatch, registered_mode)
+
+    Router(
+        model_list=[
+            {
+                "model_name": "malformed",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "malformed-id", "mode": malformed_mode},
+            }
+        ]
+    )
+
+    assert litellm.model_cost["routing-test-model"]["mode"] == registered_mode
+    shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == registered_mode
+
+
+def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """``github_copilot`` sends a model listing both endpoints to ``/v1/responses`` unless its row says ``chat``,
+    so a ``chat`` pin has to reach the row to keep that model on chat completions."""
+    from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
+
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": _COPILOT_TOKEN_EXPIRES_AT}))
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["github_copilot/routing-test-model"] = {
+        "litellm_provider": "github_copilot",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "max_input_tokens": 1000,
+    }
+    _invalidate_model_cost_lowercase_map()
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is True
+
+    Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {"model": "github_copilot/routing-test-model"},
+                "model_info": {"id": "copilot-chat-pinned", "mode": "chat"},
+            }
+        ]
+    )
+
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is False
+
+
+@pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
+@pytest.mark.parametrize(
+    "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]
+)
+def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    registered_mode: str,
+    pinned_mode: str,
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    """``github_copilot`` dispatches ``/v1/responses`` natively by the shared row's mode, and a ``responses``
+    pin is its documented opt-in, while a ``chat`` pin must not move a Responses-only row off it."""
+    from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
+
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": _COPILOT_TOKEN_EXPIRES_AT}))
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["github_copilot/routing-test-model"] = {
+        "litellm_provider": "github_copilot",
+        "mode": registered_mode,
+        "supported_endpoints": ["/v1/responses"] if registered_mode == "responses" else ["/v1/chat/completions"],
+        "max_input_tokens": 1000,
+    }
+    _invalidate_model_cost_lowercase_map()
+
+    Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {"model": model}
+                | ({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
+                "model_info": {"id": "copilot-pinned", "mode": pinned_mode},
+            }
+        ]
+    )
+
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is True
+
+
 def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):
     """
     `_route_user_config_request` builds a Router per request from caller-supplied
@@ -2157,14 +2902,7 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
         )
 
         rebuilt = litellm.model_cost["priced-id"]
-        assert at_boot.items() <= rebuilt.items(), (
-            f"the rebuild changed or dropped a field the boot registration wrote: "
-            f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
-        )
-        assert {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)} == {
-            "db_model": False,
-            "member_auto_router": False,
-        }
+        assert at_boot == rebuilt
         assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
         assert router.model_list
     finally:
@@ -2192,7 +2930,7 @@ def test_replay_model_cost_registrations_survives_a_malformed_deployment():
 
         litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
         _invalidate_model_cost_lowercase_map()
-        router._replay_model_cost_registrations()
+        router.replay_model_cost_registrations()
 
         assert litellm.model_cost["healthy-id"]["max_input_tokens"] == 777
     finally:
@@ -2226,8 +2964,7 @@ def test_deployment_model_cost_payload_folds_in_litellm_params_pricing():
 def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -> None:
     model_id: Final = "tier-priced-payload"
     model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
     }
     try:
         _register_tier_backend()
@@ -2244,12 +2981,8 @@ def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -
             )
         )
 
-        assert (
-            payload["input_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
-        )
-        assert (
-            payload["output_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
-        )
+        assert payload["input_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
+        assert payload["output_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
         assert payload["input_cost_per_token_balanced"] == _TIER_BACKEND_ENTRY["input_cost_per_token_balanced"]
         assert payload["input_cost_per_token"] == _CUSTOM_STANDARD_INPUT_RATE
         assert payload["output_cost_per_token"] == _CUSTOM_STANDARD_OUTPUT_RATE
@@ -2625,7 +3358,7 @@ def test_an_incomplete_reservation_is_refused_rather_than_served(dropped):
 @pytest.mark.parametrize(
     "dropped, expected",
     [
-        ("team_id", "team_id is required when PTU fields are set (one model maps to one team)"),
+        ("team_id", "team_id or ptu_shares is required when PTU fields are set"),
         ("cost_per_ptu_per_hour", "ptu_count and cost_per_ptu_per_hour must be set together"),
     ],
     ids=["no team_id", "count without rate"],
@@ -3199,3 +3932,486 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    catalog: Final = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+    _invalidate_model_cost_lowercase_map()
+    backends: Final = tuple(
+        f"bedrock/au.anthropic.{model}"
+        for model in ("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001-v1:0", "claude-sonnet-4-6")
+    )
+    canonical_prices: Final = MappingProxyType(
+        {backend: catalog[backend.removeprefix("bedrock/")]["input_cost_per_token"] for backend in backends}
+    )
+    assert all(price > 0 for price in canonical_prices.values())
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": backend.rsplit(".", 1)[-1],
+                "litellm_params": {"model": backend, "aws_region_name": "ap-southeast-2"},
+                "model_info": {"id": f"lit-5853-dep-{index}"},
+            }
+            for index, backend in enumerate(backends)
+        ]
+    )
+    stop: Final = threading.Event()
+    writer_outcome: Final[queue.SimpleQueue[int | Exception]] = queue.SimpleQueue()
+
+    def register_until_stopped() -> None:
+        try:
+            for i in itertools.count():
+                if stop.is_set():
+                    writer_outcome.put(i)
+                    return
+                litellm.register_model(
+                    {
+                        f"lit-5853-writer-{i}": {
+                            "litellm_provider": "lit-5853-writer",
+                            "mode": "chat",
+                            "input_cost_per_token": 1e-07,
+                            "output_cost_per_token": 4e-07,
+                            "cache_read_input_token_cost": 1e-08,
+                        }
+                    },
+                    persist_across_reloads=False,
+                )
+        except Exception as failure:
+            writer_outcome.put(failure)
+
+    writer: Final = threading.Thread(target=register_until_stopped, daemon=True)
+    saved_switch_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-4)
+    writer.start()
+    try:
+        for _ in range(10):
+            _simulate_price_data_reload_with_provider_sets(monkeypatch, dict(catalog))
+    finally:
+        stop.set()
+        writer.join()
+        sys.setswitchinterval(saved_switch_interval)
+
+    registrations_landed: Final = writer_outcome.get(timeout=5)
+    try:
+        assert isinstance(registrations_landed, int) and registrations_landed > 0, registrations_landed
+        assert tuple(backend for backend in backends if backend in litellm.model_cost) == ()
+        for backend in backends:
+            assert litellm.get_model_info(backend)["input_cost_per_token"] == canonical_prices[backend]
+        assert tuple(router.get_model_names()) == tuple(backend.rsplit(".", 1)[-1] for backend in backends)
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+_COLLIDING_BUILTIN_KEY: Final = "baseten/zai-org/GLM-5.2"
+_COLLIDING_SHARED_OPENAI_KEY: Final = "openai/zai-org/GLM-5.2"
+_COLLIDING_MODEL_INFO: Final = {
+    "input_cost_per_token": 0.00000096,
+    "output_cost_per_token": 0.00000302,
+    "cache_read_input_token_cost": 0.00000010,
+    "mode": "chat",
+}
+
+
+def _colliding_id_deployment(model_id: str, custom_llm_provider: str) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider=custom_llm_provider,
+    )
+    model_info: Final[dict] = {"id": model_id, **_COLLIDING_MODEL_INFO}
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info=model_info,
+    )
+
+
+@pytest.mark.parametrize("model_id", ("baseten/zai-org/glm-5.2",))
+def test_deployment_id_colliding_with_another_providers_catalog_key_keeps_its_own_pricing(model_id: str) -> None:
+    """A deployment id equal to another provider's catalog key must not merge
+    into that row: the merge leaves litellm_provider=baseten on the entry, which
+    _check_provider_match then rejects for the openai request, billing $0."""
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[_COLLIDING_BUILTIN_KEY])
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "openai")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "colliding id pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 0.00000096 + 500 * 0.00000302)
+        assert litellm.model_cost[_COLLIDING_BUILTIN_KEY] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> None:
+    """Same-provider collision keeps today's merge behavior: the deployment's
+    custom prices land on the baseten row the openai-compatible baseten request
+    matches against."""
+    model_id: Final = "baseten/zai-org/glm-5.2"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (model_id, _COLLIDING_BUILTIN_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "baseten")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "same provider pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 0.00000096 + 500 * 0.00000302)
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+_CAPACITY_TEST_DEPLOYMENTS: Final = (
+    (
+        "bedrock",
+        "bedrock/converse/anthropic.claude-router-capacity-test",
+        "bedrock/us-east-1/anthropic.claude-router-capacity-test",
+    ),
+    (
+        "bedrock_mantle",
+        "bedrock_mantle/openai.router-capacity-test",
+        "bedrock_mantle/us-east-1/openai.router-capacity-test",
+    ),
+    ("openai", "openai/router-capacity-test", "openai/us/router-capacity-test"),
+)
+
+
+def _capacity_test_metadata(provider: str, max_input_tokens: int) -> dict[str, object]:
+    return {
+        "litellm_provider": provider,
+        "mode": "chat",
+        "max_input_tokens": max_input_tokens,
+        "max_output_tokens": 512,
+        "max_tokens": 512,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+    }
+
+
+def _capacity_test_router(route: str, base: str, base_location: str | None, explicit_limit: int | None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "capacity-test",
+                "litellm_params": {
+                    "model": route,
+                    **({"base_model": base} if base_location == "litellm_params" else {}),
+                },
+                "model_info": {
+                    "id": "capacity-test",
+                    **({"base_model": base} if base_location == "model_info" else {}),
+                    **({"max_input_tokens": explicit_limit} if explicit_limit is not None else {}),
+                },
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def _deployments_allowed_for_2048_input_tokens(router: Router) -> int:
+    try:
+        return len(
+            router._pre_call_checks(
+                model="capacity-test",
+                healthy_deployments=router.model_list,
+                input="synthetic input",
+                input_token_count=2048,
+            )
+        )
+    except litellm.ContextWindowExceededError:
+        return 0
+
+
+def _effective_max_input_tokens(router: Router) -> object:
+    return router.get_router_model_info(id="capacity-test", deployment=None, received_model_name="capacity-test")[
+        "max_input_tokens"
+    ]
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+@pytest.mark.parametrize("base_location", ("model_info", "litellm_params", None))
+@pytest.mark.parametrize("explicit_limit", (None, 4096))
+def test_router_capacity_widens_to_a_larger_base_model_window(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    route: str,
+    base: str,
+    base_location: str | None,
+    explicit_limit: int | None,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            route: _capacity_test_metadata(provider, 1024),
+            base: _capacity_test_metadata(provider, 8192),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
+    expected: Final = explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
+    assert _effective_max_input_tokens(router) == expected
+    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+@pytest.mark.parametrize("base_location", ("model_info", "litellm_params"))
+def test_router_capacity_never_narrows_to_a_smaller_base_model_window(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str, base_location: str
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            route: _capacity_test_metadata(provider, 8192),
+            base: _capacity_test_metadata(provider, 1024),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, base_location, None)
+    assert _effective_max_input_tokens(router) == 8192
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_is_unmapped(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, base: _capacity_test_metadata(provider, 1024)})
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(f"{route}-not-in-cost-map", base, "model_info", None)
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_declares_none(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
+) -> None:
+    route_without_window: Final = {
+        key: value
+        for key, value in _capacity_test_metadata(provider, 0).items()
+        if key not in ("max_input_tokens", "max_tokens")
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**litellm.model_cost, route: route_without_window, base: _capacity_test_metadata(provider, 1024)},
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, "model_info", None)
+    assert _effective_max_input_tokens(router) is None
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+_SAME_MODEL_ROUTE: Final = "bedrock/converse/anthropic.claude-routercapacitytest-9-9"
+_SAME_MODEL_GLOBAL_ROUTE: Final = "bedrock/converse/global.anthropic.claude-routercapacitytest-9-9"
+_SAME_MODEL_QUALIFIED_ROUTE: Final = "bedrock/converse/anthropic.claude-routercapacitytest-9-9@first"
+
+
+@pytest.mark.parametrize(
+    ("route", "base_model", "expected"),
+    (
+        (_SAME_MODEL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
+        (_SAME_MODEL_ROUTE, "us-east-1/anthropic.claude-routercapacitytest-9-9", 1024),
+        (_SAME_MODEL_ROUTE, "anthropic.claude-routercapacitytest-9-9", 1024),
+        (_SAME_MODEL_GLOBAL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
+        (_SAME_MODEL_ROUTE, "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1", 8192),
+        (_SAME_MODEL_GLOBAL_ROUTE, "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1", 8192),
+        (_SAME_MODEL_QUALIFIED_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@first", 8192),
+        (_SAME_MODEL_QUALIFIED_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@second", 1024),
+        (_SAME_MODEL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-*", 1024),
+        (_SAME_MODEL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9", 1024),
+        (_SAME_MODEL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9-extended", 1024),
+        (_SAME_MODEL_ROUTE, "bedrock/eu-west-1/anthropic.claude-routercapacitytest-9-9", 1024),
+    ),
+)
+def test_router_capacity_widens_only_for_an_exact_base_model_entry_of_the_same_model(
+    monkeypatch: pytest.MonkeyPatch, route: str, base_model: str, expected: int
+) -> None:
+    larger_window: Final = _capacity_test_metadata("bedrock", 8192)
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            _SAME_MODEL_ROUTE: _capacity_test_metadata("bedrock", 1024),
+            _SAME_MODEL_GLOBAL_ROUTE: _capacity_test_metadata("bedrock", 1024),
+            _SAME_MODEL_QUALIFIED_ROUTE: _capacity_test_metadata("bedrock", 1024),
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@first": larger_window,
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@second": larger_window,
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9": larger_window,
+            "anthropic.claude-routercapacitytest-9-9": _capacity_test_metadata("bedrock", 1024),
+            "bedrock/anthropic.claude-routercapacitytest-9-9": larger_window,
+            "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1": larger_window,
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-*": larger_window,
+            "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9": larger_window,
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9-extended": larger_window,
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base_model, "model_info", None)
+    assert _effective_max_input_tokens(router) == expected
+    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_router_capacity_reads_a_model_info_base_model_before_a_litellm_params_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            _SAME_MODEL_ROUTE: _capacity_test_metadata("bedrock", 1024),
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9": _capacity_test_metadata("bedrock", 8192),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "capacity-test",
+                "litellm_params": {
+                    "model": _SAME_MODEL_ROUTE,
+                    "base_model": "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9",
+                },
+                "model_info": {
+                    "id": "capacity-test",
+                    "base_model": "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9",
+                },
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    assert _effective_max_input_tokens(router) == 1024
+    assert _deployments_allowed_for_2048_input_tokens(router) == 0
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_deployment_id_equal_to_another_providers_catalog_key_bills_its_own_prices_under_pricing_provider() -> None:
+    """Resolving the id by name under the routing provider lands on the other provider's row and the
+    provider check rejects it, billing $0. ``pricing_provider`` names the row's provider, so the
+    deployment's own prices (merged into that row) bill."""
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        router: Final = Router(
+            model_list=[
+                _pricing_provider_deployment(
+                    _COLLIDING_BUILTIN_KEY,
+                    {"input_cost_per_token": 0.00000096, "output_cost_per_token": 0.00000302},
+                )
+            ]
+        )
+
+        response: Final = _glm_completion(router)
+
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 0.00000096 + 500 * 0.00000302)
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def _pricing_provider_deployment(model_id: str, model_info: dict) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider="openai",
+    )
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info={"id": model_id, "pricing_provider": "baseten", **model_info},
+    )
+
+
+def _glm_completion(router: Router) -> litellm.ModelResponse:
+    response: Final = router.completion(
+        model="nvidia/zai-org/glm-5.2",
+        messages=[{"role": "user", "content": "priced under another provider"}],
+        mock_response=litellm.ModelResponse(
+            model="zai-org/GLM-5.2",
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    return response
+
+
+def test_pricing_provider_without_custom_prices_bills_that_providers_catalog_rate() -> None:
+    """An openai-compatible deployment pointed at another provider's host can name that provider for
+    pricing: the request is priced from its catalog row, where the routing provider has none."""
+    model_id: Final = "glm52-priced-as-baseten"
+    catalog_row: Final = litellm.model_cost[_COLLIDING_BUILTIN_KEY]
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        response: Final = _glm_completion(Router(model_list=[_pricing_provider_deployment(model_id, {})]))
+
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * catalog_row["input_cost_per_token"] + 500 * catalog_row["output_cost_per_token"]
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() -> None:
+    """Rates the deployment sets win, rates it leaves out come from the pricing provider's row for the
+    backend model rather than defaulting to 0 because the routing provider has no row."""
+    model_id: Final = "glm52-priced-as-baseten-custom"
+    catalog_row: Final = copy.deepcopy(litellm.model_cost[_COLLIDING_BUILTIN_KEY])
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    rates: Final = {"input_cost_per_token": 0.00000096, "output_cost_per_token": 0.00000302}
+    try:
+        router: Final = Router(model_list=[_pricing_provider_deployment(model_id, rates)])
+
+        registered: Final = litellm.model_cost[model_id]
+        assert {key: registered[key] for key in rates} == rates
+        assert registered["cache_read_input_token_cost"] == catalog_row["cache_read_input_token_cost"]
+        assert _glm_completion(router)._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+        assert litellm.model_cost[_COLLIDING_BUILTIN_KEY] == catalog_row
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()

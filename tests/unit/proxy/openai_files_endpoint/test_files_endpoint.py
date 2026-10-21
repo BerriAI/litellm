@@ -1,5 +1,6 @@
 import json
 from typing import Final, List, Optional
+from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +13,7 @@ from pytest_mock import MockerFixture
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
@@ -235,23 +236,112 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert error["param"] == "purpose"
 
 
-def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
-    """A raw s3:// file id must be rejected on the proxy content endpoint.
+RAW_GCS_OUTPUT_FILE_ID: Final = (
+    "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/"
+    "prediction-model-2026-09-10T20:27:18.178864Z/predictions.jsonl"
+)
+RAW_S3_OUTPUT_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
 
-    Such an id is not a managed unified id, so it would otherwise skip the
-    owner/team access check and let a caller read another tenant's batch output
-    object by its key. Callers must use the managed unified file id.
-    """
-    from urllib.parse import quote
 
-    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
-    response = client.get(
-        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
-        headers={"Authorization": "Bearer test-key"},
+def _ids_a_server_hands_the_route_for(raw_id: str, provider: str) -> tuple[tuple[str, str], ...]:
+    encoded_once: Final = quote(raw_id, safe="")
+    return ((raw_id, provider), (encoded_once, provider), (quote(encoded_once, safe=""), provider))
+
+
+RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM: Final = _ids_a_server_hands_the_route_for(
+    RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"
+) + _ids_a_server_hands_the_route_for(RAW_S3_OUTPUT_FILE_ID, "bedrock")
+
+
+def _testclient_path_segment_delivering(route_file_id: str) -> str:
+    return quote(quote(route_file_id, safe=""), safe="")
+
+
+def _override_auth(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, llm_router: Router, user_role: LitellmUserRoles
+) -> ProxyLogging:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=user_role, user_id="test-user"
     )
+    return proxy_logging_obj
 
-    assert response.status_code == 400
-    assert "managed file id" in response.json()["error"]["message"].lower()
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
+    afile_content: Final = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_content.assert_not_called()
+
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
+    content: Final = b'{"custom_id": "request-1"}\n'
+
+    async def _stream():
+        yield content
+
+    async def _provider_file_content(**kwargs: object) -> FileContentStreamingResult | HttpxBinaryResponseContent:
+        if kwargs.get("stream"):
+            return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": str(len(content))})
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200, content=content, headers={"content-type": "application/octet-stream"}
+            )
+        )
+
+    afile_content: Final = mocker.AsyncMock(side_effect=_provider_file_content)
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == content
+    afile_content.assert_called_once()
+    assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
+    assert afile_content.call_args.kwargs["file_id"] == route_file_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
@@ -2143,6 +2233,54 @@ def test_get_file_content_streams_openai_direct_path(
     assert captured_kwargs["stream"] is True
     proxy_logging_obj.update_request_status.assert_awaited_once()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@respx.mock
+def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    body: Final = b'{"prompt": "Hello", "completion": "Hi"}'
+    upstream_filename: Final = "mydata.jsonl"
+    upstream_request_id: Final = "req_upstream_123"
+    upstream_route: Final = respx.get("https://api.openai.com/v1/files/file-abc123/content").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            content=body,
+            headers={
+                "content-type": "application/octet-stream",
+                "content-length": str(len(body)),
+                "content-disposition": f'attachment; filename="{upstream_filename}"',
+                "x-request-id": upstream_request_id,
+            },
+        )
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    try:
+        response: Final = client.get(
+            "/v1/files/file-abc123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert upstream_route.call_count == 1
+    assert response.content == body
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert int(response.headers["content-length"]) == len(response.content)
+    assert upstream_filename in response.headers["content-disposition"]
+    assert response.headers["x-request-id"] == upstream_request_id
 
 
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(
@@ -4224,6 +4362,181 @@ def test_create_file_batch_under_max_batch_file_size_mb_forwards(monkeypatch, ll
     assert len(forwarded_calls) == 1
 
 
+FIXED_NOW: Final = 20_000 * 86400 + 3600 + 15
+
+
+def _pin_file_usage_clock(monkeypatch) -> None:
+    from functools import partial
+
+    from litellm.proxy.openai_files_endpoints import file_usage_caps
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr(
+        fe,
+        "enforce_batch_file_upload_limit",
+        partial(file_usage_caps.enforce_batch_file_upload_limit, clock=lambda: FIXED_NOW),
+    )
+    monkeypatch.setattr(
+        fe,
+        "enforce_file_download_limit",
+        partial(file_usage_caps.enforce_file_download_limit, clock=lambda: FIXED_NOW),
+    )
+
+
+def _upload_batch(content: bytes):
+    return client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+def test_create_file_batch_over_max_batch_file_records_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_batch_file_records", 2)
+
+    try:
+        over = _upload_batch(VALID_BATCH_LINE * 3)
+        at_limit = _upload_batch(VALID_BATCH_LINE * 2)
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert over.status_code == 413, over.text
+    error = over.json()["error"]
+    assert error["param"] == "file"
+    assert "max_batch_file_records of 2 set in general_settings" in error["message"]
+    assert at_limit.status_code == 200, at_limit.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_batch_uploads_over_daily_limit_get_429_and_only_valid_files_count(
+    monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    _pin_file_usage_clock(monkeypatch)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-caller-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        metadata={"max_batch_file_uploads_per_day": 2},
+    )
+
+    try:
+        invalid = _upload_batch(b"not json\n")
+        malformed_expiry = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch", "expires_after[anchor]": "created_at"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        allowed = [_upload_batch(VALID_BATCH_LINE) for _ in range(2)]
+        rejected = _upload_batch(VALID_BATCH_LINE)
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert invalid.status_code == 400, invalid.text
+    assert malformed_expiry.status_code == 400, malformed_expiry.text
+    assert [response.status_code for response in allowed] == [200, 200]
+    assert rejected.status_code == 429, rejected.text
+    assert rejected.headers["retry-after"] == str(86400 - 3615)
+    error = rejected.json()["error"]
+    assert error["type"] == "rate_limit_error"
+    assert "max_batch_file_uploads_per_day is 2 for this key (set in this key's metadata)" in error["message"]
+    assert len(forwarded_calls) == 2
+
+
+def test_get_file_content_over_per_minute_download_limit_gets_429_per_file(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setitem(ps.general_settings, "max_file_downloads_per_minute", 2)
+    _pin_file_usage_clock(monkeypatch)
+    provider_calls: list = []
+
+    async def _mock_afile_content(**kwargs):
+        provider_calls.append(kwargs["file_id"])
+
+        async def _stream():
+            yield b"output"
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": "6"})
+
+    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        AsyncMock(return_value=(False, None, None, None)),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-caller-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user"
+    )
+
+    try:
+        same_file = [
+            client.get("/v1/files/file-out/content", headers={"Authorization": "Bearer test-key"}) for _ in range(3)
+        ]
+        other_file = client.get("/v1/files/file-other/content", headers={"Authorization": "Bearer test-key"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert [response.status_code for response in same_file] == [200, 200, 429]
+    assert same_file[2].headers["retry-after"] == "45"
+    error = same_file[2].json()["error"]
+    assert error["type"] == "rate_limit_error"
+    assert "Download limit reached for file file-out" in error["message"]
+    assert other_file.status_code == 200, other_file.text
+    assert provider_calls == ["file-out", "file-out", "file-other"]
+
+
+def test_download_counters_for_many_files_do_not_evict_rate_limit_state(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setitem(ps.general_settings, "max_file_downloads_per_minute", 1000)
+    _pin_file_usage_clock(monkeypatch)
+
+    async def _mock_afile_content(**kwargs):
+        async def _stream():
+            yield b"output"
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": "6"})
+
+    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        AsyncMock(return_value=(False, None, None, None)),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-caller-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user"
+    )
+    rate_limit_cache: Final = proxy_logging.internal_usage_cache.dual_cache
+    rate_limit_window_key: Final = "{api_key:hashed-caller-key}:window"
+    rate_limit_cache.set_cache(key=rate_limit_window_key, value=12345, local_only=True, ttl=60)
+    distinct_files: Final = rate_limit_cache.in_memory_cache.max_size_in_memory + 1
+
+    try:
+        statuses = [
+            client.get(f"/v1/files/file-{index}/content", headers={"Authorization": "Bearer test-key"}).status_code
+            for index in range(distinct_files)
+        ]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert set(statuses) == {200}
+    assert rate_limit_cache.get_cache(key=rate_limit_window_key, local_only=True) == 12345
+
+
 def test_create_file_batch_wrong_extension_rejected_before_forwarding(monkeypatch, llm_router: Router):
     forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
 
@@ -4674,7 +4987,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     for env_var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_ORGANIZATION"):
@@ -4682,7 +4995,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     monkeypatch.setattr(litellm, "api_key", None, raising=False)
     monkeypatch.setattr(litellm, "openai_key", None, raising=False)
 
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
     managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)

@@ -5,20 +5,26 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import Any
 
 import pytest
 from redis.exceptions import NoScriptError
 
+from litellm._internal_context import current_service_target, service_target
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_batch import (
+    MIXED_PIPELINE_TARGET,
     RedisBatch,
     active_request_redis_batch,
     request_redis_batch_scope,
 )
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+from litellm.caching.redis_cache import (
+    RedisCache,
+    RedisCircuitBreaker,
+    _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
+)
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
@@ -148,6 +154,30 @@ def make(fail: Exception | None = None, namespace: str | None = None) -> tuple[F
 
 async def run_alone_script(keys: Sequence[str], args: Sequence[Any]) -> object:
     return ["alone", *keys, *args]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_flush_reports_its_name_as_the_call_type_and_the_op_count_as_metadata() -> None:
+    """The service event is ``request_redis_batch`` with ``op_count`` on the metadata, not
+    ``request_redis_batch[3]``: the span renders as ``redis.pipeline`` and the metrics label
+    stays one value per batch name instead of one per batch size."""
+    cache, _client = make()
+    events: list[dict[str, Any]] = []
+
+    async def record(**kwargs: Any) -> None:
+        events.append(kwargs)
+
+    cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+    batch = RedisBatch(cache, name="request_redis_batch")
+    got = batch.mget(["a:hit"])
+    incr = batch.increment("cnt", 1)
+    await got
+    await incr
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    (event,) = events
+    assert event["call_type"] == "request_redis_batch"
+    assert event["event_metadata"] == {"op_count": 2}
 
 
 @pytest.mark.asyncio
@@ -359,3 +389,122 @@ async def test_a_failed_mget_marks_nothing_as_missing() -> None:
     with pytest.raises(ConnectionError):
         await batch.mget(["b-miss"])
     assert batch.read_as_missing("b-miss") is False
+
+
+@pytest.mark.asyncio
+async def test_an_operation_retried_alone_keeps_the_target_it_was_declared_under() -> None:
+    """The retry runs on the flush, outside the declaring caller's block, so the op carries
+    the target it was declared under and the retried call is still named by its purpose."""
+    seen: list[str | None] = []
+
+    async def record_target(keys: Sequence[str], args: Sequence[Any]) -> object:
+        seen.append(current_service_target())
+        return ["alone", *keys]
+
+    def reply_for(command: tuple[Any, ...]) -> Any:
+        if command[0] == "EVALSHA":
+            return NoScriptError("NOSCRIPT")
+        return replies(command)
+
+    cache = FakeRedisCache(FakeClient(reply_for))
+    batch = RedisBatch(cache)
+    with service_target("spend_counters"):
+        script = batch.script(SCRIPT, record_target, ["w"], [])
+    assert current_service_target() is None
+    assert await script == ["alone", "w"]
+    assert seen == ["spend_counters"]
+    assert current_service_target() is None
+
+
+class CallerRecordingClusterCache(FakeClusterCache):
+    def __init__(self, client: FakeClient) -> None:
+        super().__init__(client)
+        self.callers: list[str] = []
+
+    async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleMethodOverride]  # records what the service hook would report
+        self.callers.append(_get_call_stack_info())
+        return await super().async_batch_get_cache(key_list, **kwargs)
+
+
+def _prefetch_auth_objects(batch: RedisBatch) -> Awaitable[Sequence[Any]]:
+    return batch.mget(["team", "user"])
+
+
+@pytest.mark.asyncio
+async def test_a_cluster_op_names_the_code_that_declared_it_not_its_wrappers() -> None:
+    """On a cluster client every op runs alone, in a task driven by the flush, so above its
+    wrappers there is only the event loop. Production reported ``_run_under_circuit_breaker <-
+    wrapper``; the op carries the chain captured where it was declared and reports that."""
+    cache = CallerRecordingClusterCache(FakeClient(replies))
+    batch = RedisBatch(cache)
+    with service_target("auth_objects"):
+        pending = _prefetch_auth_objects(batch)
+    assert await pending == {"team": None, "user": None}
+    assert cache.callers == [
+        "_prefetch_auth_objects <- test_a_cluster_op_names_the_code_that_declared_it_not_its_wrappers"
+    ]
+
+
+async def _flush_and_record_service_events(
+    cache: FakeRedisCache, *results: Awaitable[object]
+) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []  # mutable-ok: filled by the recording hooks
+
+    async def record(**kwargs: object) -> None:
+        events.append({**kwargs, "target": current_service_target()})
+
+    cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+    cache.service_logger_obj.async_service_failure_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+    await asyncio.gather(*results, return_exceptions=True)
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_pipeline_of_one_key_family_is_targeted_by_that_family() -> None:
+    """Every op in the flush was declared under ``auth_objects``, so the span is
+    ``redis.pipeline auth_objects`` and carries only the op count."""
+    cache, _client = make()
+    batch = RedisBatch(cache, name="request_redis_batch")
+    with service_target("auth_objects"):
+        first = batch.mget(["a:hit"])
+        second = batch.mget(["b:hit"])
+
+    (event,) = await _flush_and_record_service_events(cache, first, second)
+    assert (event["target"], event["event_metadata"]) == ("auth_objects", {"op_count": 2})
+
+
+@pytest.mark.asyncio
+async def test_pipeline_of_several_key_families_is_mixed_and_lists_the_families_sorted() -> None:
+    """Owners of different families sharing one round trip render as ``redis.pipeline mixed``
+    with the sorted family list beside the op count, never as a bare ``redis.pipeline``."""
+    cache, _client = make()
+    batch = RedisBatch(cache, name="request_redis_batch")
+    with service_target("spend_counters"):
+        incr = batch.increment("cnt", 1)
+    with service_target("auth_objects"):
+        auth = batch.mget(["a:hit"])
+    with service_target("router_cooldowns"):
+        cooldown = batch.mget(["c:hit"])
+
+    (event,) = await _flush_and_record_service_events(cache, incr, auth, cooldown)
+    assert event["target"] == MIXED_PIPELINE_TARGET
+    assert event["event_metadata"] == {"op_count": 3, "families": "auth_objects,router_cooldowns,spend_counters"}
+    assert current_service_target() is None
+
+
+@pytest.mark.asyncio
+async def test_failed_pipeline_reports_the_same_family_target_as_a_successful_one() -> None:
+    """The failure event names the pipeline the same way, so the error span lines up with the
+    success spans of the same flush shape in a trace search."""
+    cache, _client = make(fail=ConnectionError("redis down"))
+    batch = RedisBatch(cache, name="post_call_redis_batch")
+    with service_target("spend_counters"):
+        incr = batch.increment("cnt", 1)
+    with service_target("auth_objects"):
+        auth = batch.mget(["a:hit"])
+
+    (event,) = await _flush_and_record_service_events(cache, incr, auth)
+    assert isinstance(event["error"], ConnectionError)
+    assert (event["call_type"], event["target"]) == ("post_call_redis_batch", MIXED_PIPELINE_TARGET)
+    assert event["event_metadata"] == {"op_count": 2, "families": "auth_objects,spend_counters"}

@@ -2,8 +2,11 @@
 Unit tests for prometheus metric labels configuration
 """
 
+from typing import Final, Literal
+
 import pytest
 
+import litellm
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -581,9 +584,9 @@ def test_prometheus_label_value_sanitization():
 
 def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
     """Test that U+2029 (Paragraph Separator) is also stripped."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    result = _sanitize_prometheus_label_value("model\u2029name")
+    result = sanitize_prometheus_label_value("model\u2029name")
     assert result == "modelname"
     assert "\u2029" not in result
 
@@ -592,26 +595,35 @@ def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
 
 def test_prometheus_label_value_sanitization_none():
     """Test that None values pass through unchanged."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(None) is None
+    assert sanitize_prometheus_label_value(None) is None
 
     print("✅ None values pass through unchanged")
 
 
 def test_prometheus_label_value_sanitization_non_string_types():
     """Test that non-string values (int, bool, etc.) are coerced to str."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(200) == "200"
-    assert _sanitize_prometheus_label_value(True) == "True"
-    assert _sanitize_prometheus_label_value(3.14) == "3.14"
+    assert sanitize_prometheus_label_value(200) == "200"
+    assert sanitize_prometheus_label_value(True) == "True"
+    assert sanitize_prometheus_label_value(3.14) == "3.14"
 
     print("✅ Non-string values are coerced to str")
 
 
 @pytest.mark.asyncio
-async def test_success_hook_emits_api_provider_value_on_token_metric():
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("populate_other_bucket", (False, True))
+@pytest.mark.parametrize("original_model_group", (None, "", 123, "requested-source"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_success_hook_preserves_requested_model_and_deployment_labels(
+    metadata_bucket: Literal["metadata", "litellm_metadata"],
+    populate_other_bucket: bool,
+    original_model_group: str | int | None,
+    stream: bool,
+) -> None:
     """
     End-to-end emit wiring for the success path.
 
@@ -627,11 +639,12 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
 
     from litellm.integrations.prometheus import PrometheusLogger
 
-    payload = {
+    payload: Final = {
         "id": "t",
         "call_type": "completion",
         "response_cost": 0.001,
         "status": "success",
+        "stream": stream,
         "total_tokens": 30,
         "prompt_tokens": 20,
         "completion_tokens": 10,
@@ -661,26 +674,52 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
         "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
     }
 
+    other_bucket: Final = "litellm_metadata" if metadata_bucket == "metadata" else "metadata"
+    litellm_params: Final = {
+        metadata_bucket: {
+            "request_tag": "router",
+            **({"original_model_group": original_model_group} if original_model_group is not None else {}),
+        },
+        **({other_bucket: {"request_tag": "client"}} if populate_other_bucket else {}),
+    }
     _clear_prometheus_registry()
     try:
-        logger = PrometheusLogger()
-        now = datetime.datetime.now()
+        logger: Final = PrometheusLogger()
+        now: Final = datetime.datetime.fromtimestamp(1, tz=datetime.timezone.utc)
         await logger.async_log_success_event(
             {
                 "model": "gpt-4o-mini",
-                "litellm_params": {"metadata": {}},
+                "litellm_params": litellm_params,
                 "standard_logging_object": payload,
             },
             None,
             now,
             now,
         )
-        samples = _collected_samples("litellm_total_tokens_metric_total")
+        request_samples: Final = _collected_samples("litellm_proxy_total_requests_metric_total")
+        assert len(request_samples) == 1
+        assert request_samples[0].value == 1
+        expected_requested_model: Final = (
+            original_model_group
+            if isinstance(original_model_group, str) and original_model_group
+            else payload["model_group"]
+        )
+        assert request_samples[0].labels["requested_model"] == expected_requested_model
+        assert request_samples[0].labels["model_id"] == payload["model_id"]
+        assert request_samples[0].labels["api_provider"] == payload["custom_llm_provider"]
+        assert request_samples[0].labels["status_code"] == "200"
+        samples: Final = _collected_samples("litellm_total_tokens_metric_total")
         assert samples, "expected litellm_total_tokens_metric to be emitted"
         assert all(s.labels.get("api_provider") == "openai" for s in samples), (
             "collected token metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
+        assert all(sample.labels["requested_model"] == payload["model_group"] for sample in samples)
+        spend_samples: Final = _collected_samples("litellm_spend_metric_total")
+        assert len(spend_samples) == 1
+        assert spend_samples[0].value == payload["response_cost"]
+        assert spend_samples[0].labels["requested_model"] == payload["model_group"]
+        assert spend_samples[0].labels["model"] == payload["model"]
     finally:
         _clear_prometheus_registry()
 
@@ -928,6 +967,117 @@ def test_deployment_failure_metrics_emit_model_group_from_standard_logging_paylo
         _clear_prometheus_registry()
 
 
+def _routed(deployment: object) -> dict[str, object]:
+    return {"deployment": deployment, "model_info": {"id": "model-123"}}
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "logged_provider", "expected"),
+    [
+        pytest.param(
+            {"custom_llm_provider": "bedrock", "metadata": _routed("azure/gpt-4o")},
+            "vertex_ai",
+            "bedrock",
+            id="resolved-provider-wins",
+        ),
+        pytest.param(
+            {"custom_llm_provider": None, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            "openai",
+            "openai",
+            id="provider-on-the-payload-wins",
+        ),
+        pytest.param({"metadata": _routed("azure/limited-azure")}, None, "azure", id="deployment-prefix"),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": {}},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment",
+        ),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": _routed("bedrock/converse/model")},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment-wins",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"deployment": "bedrock/forged"}, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            None,
+            "anthropic",
+            id="routed-bucket-wins-over-a-bare-deployment",
+        ),
+        pytest.param({"metadata": _routed("abliteration/model")}, None, "abliteration", id="json-configured-provider"),
+        pytest.param({"metadata": _routed("langfuse/my-prompt")}, None, "", id="prompt-management-deployment"),
+        pytest.param({"metadata": _routed("gpt-4o")}, None, "", id="unprefixed-deployment"),
+        pytest.param({"metadata": _routed("meta-llama/Llama-3")}, None, "", id="prefix-is-not-a-provider"),
+        pytest.param({"metadata": _routed(5)}, None, "", id="non-string-deployment"),
+        pytest.param({"metadata": {}}, None, "", id="nothing-known"),
+    ],
+)
+def test_deployment_failure_metrics_label_the_selected_deployment_provider(litellm_params, logged_provider, expected):
+    """
+    A failure on a selected deployment labels api_provider with that
+    deployment's provider, never the string "None" and never a guess from the
+    requested model name (gpt-4o-mini here would read openai).
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": litellm_params,
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://example.openai.azure.com",
+                    "custom_llm_provider": logged_provider,
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        for metric in (
+            logger.litellm_deployment_failure_responses,
+            logger.litellm_deployment_total_requests,
+        ):
+            index = metric._labelnames.index("api_provider")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {expected}, f"expected api_provider={expected!r} on {metric._name}, got {values}"
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_failure_metrics_label_a_custom_provider_deployment(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "in-house", "custom_handler": object()}])
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": _routed("in-house/model")},
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://in-house.example",
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        index = logger.litellm_deployment_failure_responses._labelnames.index("api_provider")
+        values = {sample_key[index] for sample_key in logger.litellm_deployment_failure_responses._metrics}
+        assert values == {"in-house"}
+    finally:
+        _clear_prometheus_registry()
+
+
 def test_deployment_tpm_rpm_limit_metrics_emit_model_group_from_enum_values():
     """
     End-to-end emit wiring for the tpm/rpm limit gauges.
@@ -976,6 +1126,193 @@ def test_deployment_tpm_rpm_limit_metrics_emit_model_group_from_enum_values():
             assert values == {"example-model-group"}, (
                 f"expected model_group=example-model-group on {metric._name}, got {values}"
             )
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_model_group_in_latency_metrics():
+    """
+    Test that model_group label is present on the end-to-end / per-call
+    latency metrics needed to build model-group latency dashboards. These
+    metrics previously only carried requested_model, litellm_model_name and
+    model_id, none of which identify the model_group a pooled deployment
+    belongs to -- only the proxy-overhead-only latency metrics
+    (litellm_overhead_latency_metric and friends) carried model_group.
+    """
+    model_group_label = UserAPIKeyLabelNames.MODEL_GROUP.value
+
+    metrics_with_model_group = [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_deployment_latency_per_output_token",
+    ]
+
+    for metric_name in metrics_with_model_group:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            model_group_label in labels
+        ), f"Metric {metric_name} should contain model_group label"
+        print(f"✅ {metric_name} contains model_group label")
+
+
+def test_model_group_value_flows_through_latency_metrics_label_factory():
+    """
+    The label being in the allow-list is necessary but not sufficient: the
+    factory must also carry the value from the enum through to the emitted
+    label. This would fail if the label were dropped from a metric's list or
+    if the value plumbing regressed, which the allow-list assertion above
+    cannot catch on its own.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        model_group="example-model-group",
+        litellm_model_name="gpt-4o-mini",
+        requested_model="example-model-group",
+        status_code="200",
+    )
+
+    for metric_name in [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_deployment_latency_per_output_token",
+    ]:
+        labels = prometheus_label_factory(
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        assert (
+            labels.get("model_group") == "example-model-group"
+        ), f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+
+
+def test_latency_metrics_emit_model_group_from_set_latency_metrics():
+    """
+    End-to-end emit wiring for _set_latency_metrics.
+
+    The label-list and factory tests above prove the label exists and that
+    the factory carries a value handed to it, but neither drives the real
+    _set_latency_metrics code path, so deleting the production model_group
+    plumbing there would still pass them. This calls it directly with a
+    streaming request (so the time-to-first-token branch also fires) and
+    asserts the real litellm_llm_api_latency_metric,
+    litellm_llm_api_time_to_first_token_metric and
+    litellm_request_total_latency_metric Histogram series actually carry it.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        start_time = datetime.datetime(2024, 1, 1, 0, 0, 0)
+        api_call_start_time = datetime.datetime(2024, 1, 1, 0, 0, 1)
+        completion_start_time = datetime.datetime(2024, 1, 1, 0, 0, 2)
+        end_time = datetime.datetime(2024, 1, 1, 0, 0, 3)
+
+        enum_values = UserAPIKeyLabelValues(
+            model_group="example-model-group",
+            litellm_model_name="gpt-4o-mini",
+            requested_model="example-model-group",
+            status_code="200",
+        )
+
+        logger._set_latency_metrics(
+            kwargs={
+                "start_time": start_time,
+                "end_time": end_time,
+                "api_call_start_time": api_call_start_time,
+                "completion_start_time": completion_start_time,
+                "stream": True,
+                "litellm_params": {"metadata": {}},
+            },
+            model="gpt-4o-mini",
+            user_api_key=None,
+            user_api_key_alias=None,
+            user_api_team=None,
+            user_api_team_alias=None,
+            enum_values=enum_values,
+        )
+
+        for metric in (
+            logger.litellm_llm_api_latency_metric,
+            logger.litellm_llm_api_time_to_first_token_metric,
+            logger.litellm_request_total_latency_metric,
+        ):
+            index = metric._labelnames.index("model_group")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {"example-model-group"}, (
+                f"expected model_group=example-model-group on {metric._name}, got {values}"
+            )
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_latency_per_output_token_emits_model_group_from_enum_values():
+    """
+    End-to-end emit wiring for litellm_deployment_latency_per_output_token.
+
+    Drives set_llm_deployment_success_metrics directly (its only caller) with
+    output_tokens > 0 so the latency-per-token branch fires, and asserts the
+    real Histogram series carries model_group; fails if that label-list
+    addition or the enum_values plumbing is removed.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        start_time = datetime.datetime(2024, 1, 1, 0, 0, 0)
+        end_time = datetime.datetime(2024, 1, 1, 0, 0, 2)
+        enum_values = UserAPIKeyLabelValues(
+            model_group="example-model-group",
+            litellm_model_name="gpt-4o-mini",
+            requested_model="example-model-group",
+            status_code="200",
+        )
+        logger.set_llm_deployment_success_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {"model_info": {"id": "model-123"}}},
+                "standard_logging_object": {
+                    "model_group": "example-model-group",
+                    "model_id": "model-123",
+                    "api_base": "https://api.openai.com",
+                    "hidden_params": {"additional_headers": None, "litellm_overhead_time_ms": None},
+                },
+            },
+            start_time=start_time,
+            end_time=end_time,
+            enum_values=enum_values,
+            output_tokens=10.0,
+        )
+
+        metric = logger.litellm_deployment_latency_per_output_token
+        index = metric._labelnames.index("model_group")
+        values = {sample_key[index] for sample_key in metric._metrics}
+        assert values == {"example-model-group"}, (
+            f"expected model_group=example-model-group on {metric._name}, got {values}"
+        )
     finally:
         _clear_prometheus_registry()
 

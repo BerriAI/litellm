@@ -50,7 +50,9 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
     BedrockError,
+    bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -74,6 +76,10 @@ BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
 IMAGE_BLOCK_KEYS: Final = ("content", "output")
 IMAGE_BLOCK_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
+
+
+def _without_chat_completions_route(model: str) -> str:
+    return model.removeprefix(BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX)
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -149,6 +155,29 @@ def inline_remote_image_urls(
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
 
 
+def _without_disabled_reasoning_effort(
+    params: Mapping[str, object], model: str, drop_params: bool
+) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
+    reasoning: Final = params.get("reasoning")
+    effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+    if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
+        return dict(params)
+    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
+        return dict(params)
+    if not (drop_params or litellm.drop_params):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{model} does not support reasoning.effort={effort}. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    verbose_logger.debug("Dropping unsupported `reasoning.effort=%s` for Bedrock model=%s.", effort, model)
+    rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+    without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
+    return {**without_reasoning, "reasoning": rest} if rest else without_reasoning
+
+
 class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     """Responses API config for the OpenAI models on the bedrock-runtime endpoint."""
 
@@ -168,9 +197,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         The capability decision lives here rather than in the shared dispatch so that
         onboarding a model, or changing how the signal is read, stays inside the
         Bedrock adapter. ``None`` leaves the caller's existing behaviour untouched --
-        chat-only Bedrock models keep the Chat Completions bridge.
+        chat-only Bedrock models keep the Chat Completions bridge. The ``chat_completions/``
+        opt-in only moves Chat Completions calls off Converse, so a Responses call on such a
+        deployment still takes this surface instead of being bridged.
         """
-        if not bedrock_supports_openai_responses(model, litellm.model_cost):
+        if not model or not bedrock_supports_openai_responses(
+            _without_chat_completions_route(model), litellm.model_cost
+        ):
             return None
         return cls()
 
@@ -261,7 +294,8 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
                 unsupported,
             )
-        params: Final = {key: value for key, value in mapped.items() if key not in unsupported}
+        supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
+        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params
@@ -328,7 +362,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 rewritten_types,
             )
         return super().transform_responses_api_request(
-            model=model,
+            model=_without_chat_completions_route(model),
             input=normalized_input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,

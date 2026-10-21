@@ -87,7 +87,7 @@ class MockPrismaClient:
 def mock_auth():
     """Mock admin user authentication"""
     return UserAPIKeyAuth(
-        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
     )
 
 

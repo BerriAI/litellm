@@ -8,15 +8,17 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
 LATEST_RELEASE_URL: Final = "https://api.github.com/repos/BerriAI/litellm/releases/latest"
+RELEASE_BY_TAG_URL: Final = "https://api.github.com/repos/BerriAI/litellm/releases/tags/{tag}"
 LATEST_RELEASE_FETCH_TIMEOUT_SECONDS: Final = 5
 LATEST_RELEASE_CACHE_TTL_SECONDS: Final = 60 * 60
 LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS: Final = 5 * 60
@@ -24,12 +26,13 @@ LATEST_RELEASE_CACHE_KEY: Final = "latest_release_info"
 
 _RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+(?:([A-Za-z]+)(?:\([^)]*\))?!?:\s)?\S")
 _NEW_CONTRIBUTOR_PATTERN: Final = re.compile(r"^\*\s+@\S+ made their first contribution\b")
+_STABLE_TAG_PATTERN: Final = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 _Bucket: TypeAlias = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
 
 
-class LatestReleaseInfo(BaseModel):
+class LatestReleaseInfo(LiteLLMBaseModel):
     version: str
     new_features: int
     bug_fixes: int
@@ -42,10 +45,12 @@ class LatestReleaseUnavailable:
     reason: str
 
 
-class _GitHubRelease(BaseModel):
+class _GitHubRelease(LiteLLMBaseModel):
     tag_name: str
     html_url: str
-    body: str
+    body: str | None
+    prerelease: bool = False
+    draft: bool = False
 
 
 class _AsyncGetClient(Protocol):
@@ -86,29 +91,71 @@ def count_release_bullets(body: str) -> Mapping[_Bucket, int]:
     return MappingProxyType(Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None))
 
 
-def parse_latest_release(response: httpx.Response) -> LatestReleaseInfo | LatestReleaseUnavailable:
-    if response.status_code != 200:
-        return LatestReleaseUnavailable(reason=f"GitHub responded with status {response.status_code}")
-    try:
-        release: Final = _GitHubRelease.model_validate_json(response.content)
-    except ValidationError as e:
-        return LatestReleaseUnavailable(reason=f"GitHub release payload was not the expected shape: {e}")
-    counts: Final = count_release_bullets(release.body)
+def _stable_version(tag_name: str) -> tuple[int, int, int] | None:
+    match: Final = _STABLE_TAG_PATTERN.match(tag_name)
+    return None if match is None else (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def earlier_patch_tags(version: tuple[int, int, int]) -> tuple[str, ...]:
+    """Tags of the patches that precede ``version`` on its minor line (v1.105.0 for v1.105.1)."""
+    major, minor, patch = version
+    return tuple(f"v{major}.{minor}.{earlier}" for earlier in range(patch))
+
+
+def summarize_release_line(latest: _GitHubRelease, earlier: tuple[_GitHubRelease, ...]) -> LatestReleaseInfo:
+    """A patch release's notes only list its backports, so count the whole minor line it belongs to."""
+    counts: Final = sum(
+        (Counter[_Bucket](count_release_bullets(release.body or "")) for release in (latest, *earlier)),
+        Counter[_Bucket](),
+    )
     return LatestReleaseInfo(
-        version=release.tag_name.removeprefix("v"),
+        version=latest.tag_name.removeprefix("v"),
         new_features=counts.get("new_features", 0),
         bug_fixes=counts.get("bug_fixes", 0),
         other_updates=counts.get("other_updates", 0),
-        release_url=release.html_url,
+        release_url=latest.html_url,
     )
+
+
+def parse_github_release(response: httpx.Response) -> _GitHubRelease | LatestReleaseUnavailable:
+    if response.status_code != 200:
+        return LatestReleaseUnavailable(reason=f"GitHub responded with status {response.status_code}")
+    try:
+        return _GitHubRelease.model_validate_json(response.content)
+    except ValidationError as e:
+        return LatestReleaseUnavailable(reason=f"GitHub release payload was not the expected shape: {e}")
+
+
+async def _fetch_earlier_release(client: _AsyncGetClient, tag: str) -> _GitHubRelease | LatestReleaseUnavailable | None:
+    """The stable release for ``tag``, or None when that patch was never published as one."""
+    response: Final = await client.get(RELEASE_BY_TAG_URL.format(tag=tag), timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
+    if response.status_code == 404:
+        return None
+    release: Final = parse_github_release(response)
+    if isinstance(release, _GitHubRelease) and (release.prerelease or release.draft):
+        return None
+    return release
 
 
 async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | LatestReleaseUnavailable:
     try:
-        response: Final = await client.get(LATEST_RELEASE_URL, timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
+        latest: Final = parse_github_release(
+            await client.get(LATEST_RELEASE_URL, timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
+        )
+        if isinstance(latest, LatestReleaseUnavailable):
+            return latest
+        version: Final = _stable_version(latest.tag_name)
+        if version is None:
+            return summarize_release_line(latest, ())
+        earlier: Final = await asyncio.gather(
+            *(_fetch_earlier_release(client, tag) for tag in earlier_patch_tags(version))
+        )
     except httpx.HTTPError as e:
         return LatestReleaseUnavailable(reason=f"{type(e).__name__}: {e}")
-    return parse_latest_release(response)
+    unavailable: Final = next((release for release in earlier if isinstance(release, LatestReleaseUnavailable)), None)
+    if unavailable is not None:
+        return unavailable
+    return summarize_release_line(latest, tuple(release for release in earlier if isinstance(release, _GitHubRelease)))
 
 
 async def get_latest_release_info(
@@ -143,7 +190,8 @@ async def latest_release_info(
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
 ) -> LatestReleaseInfo | None:
     """
-    Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+    Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
+    split into new features, bug fixes and other updates.
     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
     """
     result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)

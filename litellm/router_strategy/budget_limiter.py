@@ -21,13 +21,17 @@ anthropic:
 import asyncio
 import builtins
 import logging
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
@@ -35,10 +39,11 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
+from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.router_utils.cooldown_callbacks import (
-    _get_prometheus_logger_from_callbacks,
+    get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
@@ -46,6 +51,8 @@ from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardL
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
+_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
+_BATCH_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
 
 
 class _LiteLLMParamsDictView:
@@ -103,14 +110,20 @@ def _sum_increments_by_key(operations: Sequence[RedisPipelineIncrementOperation]
     return MappingProxyType({key: sum(operation["increment_value"] for operation in group) for key, group in by_key})
 
 
+def budget_window_seconds(started_at: float, budget_duration: str) -> int:
+    return duration_in_seconds_from(start=datetime.fromtimestamp(started_at, tz=timezone.utc), duration=budget_duration)
+
+
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
         dual_cache: DualCache,
         provider_budget_config: dict | None,
         model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
+        clock: Callable[[], float] = time.time,
     ):
         self.dual_cache = dual_cache
+        self._clock = clock
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
@@ -127,6 +140,7 @@ class RouterBudgetLimiting(CustomLogger):
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
 
+    @with_service_target("router_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -188,7 +202,7 @@ class RouterBudgetLimiting(CustomLogger):
                 deployment_providers=deployment_providers,
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
-                request_tags=_get_tags_from_request_kwargs(
+                request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
                     metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
@@ -205,14 +219,14 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _filter_out_deployments_above_budget(
         self,
-        potential_deployments: list[dict[str, Any]],
+        potential_deployments: list[dict[str, object]],
         healthy_deployments: list[dict[str, Any]],
         provider_configs: dict[str, GenericBudgetInfo],
         deployment_configs: dict[str, GenericBudgetInfo],
         deployment_providers: list[str | None],
         spend_map: dict[str, float],
         request_tags: list[str],
-    ) -> tuple[list[dict[str, Any]], str]:
+    ) -> tuple[list[dict[str, object]], str]:
         """
         Filter out deployments that have exceeded their budget limit.
         Follow budget checks are run here:
@@ -315,7 +329,7 @@ class RouterBudgetLimiting(CustomLogger):
         # Resolve tags once before the loop (loop-invariant)
         _request_tags: list[str] = []
         if self.tag_budget_config:
-            _request_tags = _get_tags_from_request_kwargs(
+            _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
                 metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
@@ -396,7 +410,8 @@ class RouterBudgetLimiting(CustomLogger):
         Runs once the budget start time exists in Redis Cache (on the 2nd and subsequent requests to the same provider)
 
         - Increments the spend in memory cache (so spend instantly updated in memory)
-        - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
+        - Queues the increment for the batched Redis pipeline when Redis is configured, since only a multi instance
+          deployment has anything to sync
         """
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
@@ -409,6 +424,8 @@ class RouterBudgetLimiting(CustomLogger):
                 value=response_cost,
                 ttl=ttl,
             )
+            if self.dual_cache.redis_cache is None:
+                return
             self.redis_increment_operation_queue.append(increment_op)
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
@@ -468,6 +485,7 @@ class RouterBudgetLimiting(CustomLogger):
             flush_task.result()
             raise
 
+    @with_service_target("router_budgets")
     async def _write_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
         if len(increment_operations_to_flush) == 0:
@@ -488,19 +506,24 @@ class RouterBudgetLimiting(CustomLogger):
         await self._clear_detached_increment_operations()
         return True
 
+    @with_service_target("router_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
-        if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+        callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
+        if callback_fields.get("call_type") == "_arealtime":
             return
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        batch_response, response_cost = _BATCH_CHARGE_VALUES.validate_python(
+            (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
+        )
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
+
+        batch_id: Final = batch_id_to_charge_once(callback_fields.get("call_type"), batch_response, response_cost)
 
         budget_config: Final = (
             self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
@@ -514,6 +537,7 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_key=spend_key,
                 start_time_key=start_time_key,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
         deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id)
@@ -526,11 +550,12 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_key=deployment_spend_key,
                 start_time_key=deployment_start_time_key,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
-        request_tags: Final = _get_tags_from_request_kwargs(
-            kwargs,
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
+        request_tags: Final = get_tags_from_request_kwargs(
+            callback_fields,
+            metadata_variable_name=get_metadata_variable_name_from_kwargs(callback_fields),
         )
         if len(request_tags) > 0:
             for _tag in request_tags:
@@ -543,6 +568,7 @@ class RouterBudgetLimiting(CustomLogger):
                         spend_key=_tag_spend_key,
                         start_time_key=_tag_start_time_key,
                         response_cost=response_cost,
+                        batch_id=batch_id,
                     )
 
     async def _increment_spend_for_key(
@@ -551,49 +577,52 @@ class RouterBudgetLimiting(CustomLogger):
         spend_key: str,
         start_time_key: str,
         response_cost: float,
+        batch_id: str | None = None,
     ):
         if budget_config.budget_duration is None:
             return
 
-        current_time: Final = datetime.now(timezone.utc).timestamp()
-        ttl_seconds: Final = duration_in_seconds(budget_config.budget_duration)
+        current_time: Final = self._clock()
+        new_window_seconds: Final = budget_window_seconds(current_time, budget_config.budget_duration)
+        if batch_id is not None and not await self._claim_batch_charge(spend_key, batch_id, new_window_seconds):
+            return
 
-        budget_start = await self._get_or_set_budget_start_time(
+        budget_start: Final = await self._get_or_set_budget_start_time(
             start_time_key=start_time_key,
             current_time=current_time,
-            ttl_seconds=ttl_seconds,
+            ttl_seconds=new_window_seconds,
         )
+        open_window_seconds: Final = budget_window_seconds(budget_start, budget_config.budget_duration)
+        elapsed: Final = current_time - budget_start
 
-        if budget_start is None:
-            # First spend for this provider
-            budget_start = await self._handle_new_budget_window(
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                current_time=current_time,
-                response_cost=response_cost,
-                ttl_seconds=ttl_seconds,
-            )
-        elif (current_time - budget_start) > ttl_seconds:
-            # Budget window expired - reset everything
+        if elapsed > open_window_seconds:
             verbose_router_logger.debug("Budget window expired - resetting everything")
-            budget_start = await self._handle_new_budget_window(
+            await self._handle_new_budget_window(
                 spend_key=spend_key,
                 start_time_key=start_time_key,
                 current_time=current_time,
                 response_cost=response_cost,
-                ttl_seconds=ttl_seconds,
+                ttl_seconds=new_window_seconds,
             )
         else:
-            # Within existing window - increment spend
-            remaining_time: Final = ttl_seconds - (current_time - budget_start)
-            ttl_for_increment: Final = int(remaining_time)
-
             await self._increment_spend_in_current_window(
-                spend_key=spend_key, response_cost=response_cost, ttl=ttl_for_increment
+                spend_key=spend_key, response_cost=response_cost, ttl=int(open_window_seconds - elapsed)
             )
 
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
+    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
+        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is not None:
+            polls: Final = await redis_cache.async_increment(key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True)
+            return polls == 1
+        local_polls: Final = await self.dual_cache.in_memory_cache.async_increment(
+            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+        )
+        return local_polls == 1
+
+    @with_service_target("router_budgets")
     async def periodic_sync_in_memory_spend_with_redis(self):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
@@ -742,7 +771,7 @@ class RouterBudgetLimiting(CustomLogger):
         This is helpful for debugging and monitoring provider budget limits.
         """
 
-        prometheus_logger: Final = _get_prometheus_logger_from_callbacks()
+        prometheus_logger: Final = get_prometheus_logger_from_callbacks()
         if prometheus_logger:
             prometheus_logger.track_provider_remaining_budget(
                 provider=provider,
@@ -750,6 +779,7 @@ class RouterBudgetLimiting(CustomLogger):
                 budget_limit=budget_limit,
             )
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_spend(self, provider: str) -> float | None:
         """
         GET the current spend for a provider from cache
@@ -776,6 +806,7 @@ class RouterBudgetLimiting(CustomLogger):
             current_spend = await self.dual_cache.async_get_cache(spend_key)
         return float(current_spend) if current_spend is not None else 0.0
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_budget_reset_at(self, provider: str) -> str | None:
         budget_config: Final = self._get_budget_config_for_provider(provider)
         if budget_config is None:
@@ -802,14 +833,15 @@ class RouterBudgetLimiting(CustomLogger):
 
         spend_key: Final = f"provider_spend:{provider}:{budget_config.budget_duration}"
         start_time_key: Final = f"provider_budget_start_time:{provider}"
-        ttl_seconds: int | None = None
-        if budget_config.budget_duration is not None:
-            ttl_seconds = duration_in_seconds(budget_config.budget_duration)
+        current_time: Final = self._clock()
+        ttl_seconds: Final = (
+            budget_window_seconds(current_time, budget_config.budget_duration)
+            if budget_config.budget_duration is not None
+            else None
+        )
 
-        budget_start = await self.dual_cache.async_get_cache(start_time_key)
-        if budget_start is None:
-            budget_start = datetime.now(timezone.utc).timestamp()
-            await self.dual_cache.async_set_cache(key=start_time_key, value=budget_start, ttl=ttl_seconds)
+        if await self.dual_cache.async_get_cache(start_time_key) is None:
+            await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
 
         _spend_key: Final = await self.dual_cache.async_get_cache(spend_key)
         if _spend_key is None:

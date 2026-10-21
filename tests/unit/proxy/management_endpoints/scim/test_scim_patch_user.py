@@ -1,11 +1,17 @@
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLM_UserTable
 from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ENTERPRISE_METADATA_KEY,
+    SCIM_ENTERPRISE_USER_SCHEMA,
+    SCIMEnterpriseUser,
     SCIMPatchOp,
     SCIMPatchOperation,
     SCIMUser,
@@ -536,3 +542,553 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
     _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == set()
+
+
+@pytest.mark.asyncio
+async def test_patch_user_pathless_enterprise_extension_merges_existing_metadata():
+    mock_user: Final = _user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: {"employeeNumber": "42"}})
+    mock_client: Final = MagicMock()
+    mock_db: Final = MagicMock()
+    mock_client.db = mock_db
+    mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+
+    async def mock_update(*, where: Mapping[str, object], data: Mapping[str, object]) -> LiteLLM_UserTable:
+        assert where == {"user_id": "user-mva"}
+        metadata_json: Final = data["metadata"]
+        assert isinstance(metadata_json, str)
+        metadata: Final = TypeAdapter(dict[str, object]).validate_json(metadata_json)
+        return _user_with_metadata(metadata)
+
+    mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+    mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={
+                    SCIM_ENTERPRISE_USER_SCHEMA: {
+                        "department": "Eng",
+                        "costCenter": "CC-10",
+                    }
+                },
+            )
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+    ):
+        result: Final = await patch_user(user_id="user-mva", patch_ops=patch_ops)
+
+    update_data: Final = mock_db.litellm_usertable.update.call_args.kwargs["data"]
+    metadata_json: Final = update_data["metadata"]
+    assert isinstance(metadata_json, str)
+    metadata: Final = TypeAdapter(dict[str, object]).validate_json(metadata_json)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "department": "Eng",
+        "costCenter": "CC-10",
+    }
+    assert not any(isinstance(key, str) and key.casefold().startswith("urn:") for key in metadata)
+    assert result.enterprise_user == SCIMEnterpriseUser(
+        employeeNumber="42",
+        department="Eng",
+        costCenter="CC-10",
+    )
+
+
+def test_apply_patch_ops_replace_enterprise_urn_path_from_idp():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path="urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department",
+                value="Eng",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {"department": "Eng"}
+    assert not any(isinstance(key, str) and key.casefold().startswith("urn:") for key in metadata)
+
+
+def test_apply_patch_ops_pathless_enterprise_manager_sub_attribute_merges():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={
+                    f"{SCIM_ENTERPRISE_USER_SCHEMA.upper()}:MANAGER.VALUE": "manager-1",
+                },
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {SCIM_ENTERPRISE_METADATA_KEY: {"manager": {"displayName": "Engineering Manager"}}}
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "manager": {"value": "manager-1", "displayName": "Engineering Manager"}
+    }
+
+
+def test_apply_patch_ops_replace_enterprise_manager_normalizes_case_insensitive_keys():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+                value={"VALUE": "mgr-2"},
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {"value": "mgr-1", "displayName": "Boss"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {"value": "mgr-2", "displayName": "Boss"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    (
+        pytest.param(
+            f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+            {"displayName": "Q"},
+            id="pathed",
+        ),
+        pytest.param(
+            None,
+            {SCIM_ENTERPRISE_USER_SCHEMA: {"manager": {"displayName": "Q"}}},
+            id="pathless",
+        ),
+        pytest.param(
+            None,
+            {SCIM_ENTERPRISE_USER_SCHEMA: {"MANAGER": {"displayName": "Q"}}},
+            id="pathless-uppercase-key",
+        ),
+    ),
+)
+def test_apply_patch_ops_replace_manager_object_preserves_unspecified_sub_attributes(
+    path: str | None,
+    value: object,
+) -> None:
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="replace", path=path, value=value)]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "department": "A",
+                    "manager": {"value": "m", "displayName": "B"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "department": "A",
+        "manager": {"value": "m", "displayName": "Q"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("manager_path", "manager_value"),
+    (
+        pytest.param(
+            f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+            {"$ref": "new"},
+            id="pathed",
+        ),
+        pytest.param(
+            None,
+            {SCIM_ENTERPRISE_USER_SCHEMA: {"manager": {"$ref": "new"}}},
+            id="pathless",
+        ),
+    ),
+)
+def test_apply_patch_ops_batched_manager_ref_update_replaces_previous_link(
+    manager_path: str | None,
+    manager_value: object,
+) -> None:
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:department",
+                value="B",
+            ),
+            SCIMPatchOperation(
+                op="replace",
+                path=manager_path,
+                value=manager_value,
+            ),
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "department": "A",
+                    "manager": {"value": "m", "$ref": "old"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "department": "B",
+        "manager": {"value": "m", "$ref": "new"},
+    }
+
+
+def test_apply_patch_ops_add_enterprise_manager_merges_existing_sub_attributes():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="add",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+                value={"displayName": "New Boss"},
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {
+                        "value": "mgr-1",
+                        "$ref": "https://idp.example/Users/mgr-1",
+                    },
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {
+            "value": "mgr-1",
+            "$ref": "https://idp.example/Users/mgr-1",
+            "displayName": "New Boss",
+        },
+    }
+
+
+def test_apply_patch_ops_pathless_add_enterprise_manager_merges_existing_sub_attributes():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="add",
+                value={
+                    SCIM_ENTERPRISE_USER_SCHEMA: {
+                        "manager": {"displayName": "New Boss"},
+                    }
+                },
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {
+                        "value": "mgr-1",
+                        "$ref": "https://idp.example/Users/mgr-1",
+                    },
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {
+            "value": "mgr-1",
+            "$ref": "https://idp.example/Users/mgr-1",
+            "displayName": "New Boss",
+        },
+    }
+
+
+def test_apply_patch_ops_remove_enterprise_manager_sub_attribute_preserves_other_fields():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager.value",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {"value": "mgr-1", "displayName": "Boss"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {"displayName": "Boss"},
+    }
+
+
+def test_apply_patch_ops_remove_enterprise_attribute_preserves_other_attributes():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:costCenter",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: {"costCenter": "CC-10", "department": "Eng"}}),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {"department": "Eng"}
+
+
+def test_apply_patch_ops_remove_last_enterprise_attribute_drops_metadata_key():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:employeeNumber",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: {"employeeNumber": "42"}}),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert SCIM_ENTERPRISE_METADATA_KEY not in metadata
+
+
+def test_apply_patch_ops_unknown_enterprise_attribute_preserves_existing_and_applies_other_ops() -> None:
+    existing_enterprise: Final = {
+        "employeeNumber": "42",
+        "manager": {"value": "mgr-1", "displayName": "Boss"},
+    }
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:shoeSize",
+                value="10",
+            ),
+            SCIMPatchOperation(op="replace", path="displayName", value="Updated User"),
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: existing_enterprise}),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == existing_enterprise
+    assert not any(isinstance(key, str) and key.casefold().startswith("urn:") for key in metadata)
+    assert update_data["user_alias"] == "Updated User"
+
+
+def test_apply_patch_ops_display_name_only_preserves_enterprise_value_unchanged() -> None:
+    existing_enterprise: Final = {"Department": "Eng", "manager": "mgr-1"}
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="Ada")]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: existing_enterprise}),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {"Department": "Eng", "manager": "mgr-1"}
+
+
+@pytest.mark.parametrize("path", ("manager.foo", "manager.a.b", "department.x"))
+def test_apply_patch_ops_unknown_enterprise_nested_attribute_preserves_existing(path: str) -> None:
+    existing_enterprise: Final = {
+        "department": "Engineering",
+        "manager": {"value": "mgr-1", "displayName": "Boss"},
+    }
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:{path}",
+                value="ignored",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({SCIM_ENTERPRISE_METADATA_KEY: existing_enterprise}),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == existing_enterprise
+
+
+@pytest.mark.parametrize("manager_id", ("mgr-id", ""))
+def test_apply_patch_ops_add_enterprise_manager_string_replaces_existing_manager(manager_id: str) -> None:
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="add",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+                value=manager_id,
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {"value": "old", "displayName": "Old Boss"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {"value": manager_id},
+    }
+
+
+def test_apply_patch_ops_pathless_add_enterprise_manager_string_replaces_existing_manager() -> None:
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="add",
+                value={SCIM_ENTERPRISE_USER_SCHEMA: {"manager": "mgr-id"}},
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {
+                SCIM_ENTERPRISE_METADATA_KEY: {
+                    "employeeNumber": "42",
+                    "manager": {"value": "old", "displayName": "Old Boss"},
+                }
+            }
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "employeeNumber": "42",
+        "manager": {"value": "mgr-id"},
+    }
+
+
+def test_apply_patch_ops_remove_enterprise_manager_drops_manager() -> None:
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove",
+                path=f"{SCIM_ENTERPRISE_USER_SCHEMA}:manager",
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {SCIM_ENTERPRISE_METADATA_KEY: {"manager": {"value": "mgr-1", "displayName": "Boss"}}}
+        ),
+        patch_ops=patch_ops,
+    )
+
+    metadata: Final = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert SCIM_ENTERPRISE_METADATA_KEY not in metadata
+
+
+def test_apply_patch_ops_pathless_enterprise_value_must_be_a_dict():
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={SCIM_ENTERPRISE_USER_SCHEMA: "not-a-dict"},
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+
+    assert exc_info.value.status_code == 400

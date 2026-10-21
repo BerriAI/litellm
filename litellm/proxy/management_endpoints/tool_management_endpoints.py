@@ -15,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Annotated, Final, Protocol, TypeAlias, TypeVar, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import Field, TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_DailyToolSpend as PrismaDailyToolSpendRow
@@ -216,13 +218,13 @@ def _parse_day_start(value: str | None) -> datetime | None:
         )
 
 
-class _ToolSpendSums(BaseModel):
+class _ToolSpendSums(LiteLLMBaseModel):
     spend: float = 0.0
     total_tokens: int = 0
     request_count: int = 0
 
 
-class _TopToolRow(BaseModel):
+class _TopToolRow(LiteLLMBaseModel):
     tool_name: str
     sums: _ToolSpendSums = Field(alias="_sum")
 

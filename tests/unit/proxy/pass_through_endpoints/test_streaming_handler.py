@@ -1,6 +1,8 @@
 import json
+import logging
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,6 +14,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrou
     VertexPassthroughLoggingHandler,
 )
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
+    PassThroughStreamContext,
     PassThroughStreamingHandler,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -158,7 +161,7 @@ def _interrupted_anthropic_stream(model: str, output_text: str) -> list[bytes]:
 
 
 @pytest.mark.asyncio
-async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event_loop():
+async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
     from tests.large_text import text
@@ -168,6 +171,8 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
         warm_tokenizer,
     )
 
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     model = "claude-fable-5"
     warm_tokenizer(model)
     logging_obj = _logging_obj()
@@ -197,7 +202,7 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
 
 
 @pytest.mark.asyncio
-async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop():
+async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
     from tests.large_text import text
@@ -207,6 +212,8 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
         warm_tokenizer,
     )
 
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     model = "claude-fable-5"
     warm_tokenizer(model)
     logging_obj = _logging_obj()
@@ -230,3 +237,40 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     partial_usage = logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"]
     assert partial_usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    deployment_id: Final = "vertex-custom-priced-deployment"
+    custom_rates: Final = {"input_cost_per_token": 2e-09, "output_cost_per_token": 3e-09}
+    monkeypatch.setitem(
+        litellm.model_cost, deployment_id, {**custom_rates, "litellm_provider": "vertex_ai", "mode": "chat"}
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="interrupted-stream",
+        function_id="interrupted-stream",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {"metadata": {"model_info": {"id": deployment_id, **custom_rates}}}
+    url_route: Final = (
+        f"https://aiplatform.googleapis.com/v1/projects/p/locations/us"
+        f"/publishers/google/models/{MODEL}:streamGenerateContent?alt=sse"
+    )
+
+    await PassThroughStreamingHandler.schedule_stream_failure_logging(
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.VERTEX_AI,
+        request_body={},
+        raw_bytes=[chunk.encode("utf-8") for chunk in _chunks()],
+        exception=RuntimeError("upstream closed the stream"),
+        stream_context=PassThroughStreamContext(PassThroughEndpointLogging(), url_route, datetime.now()),
+    )
+    recorded: Final = logging_obj.model_call_details["response_cost"]
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert recorded == pytest.approx(PROMPT_TOKENS * 2e-09 + COMPLETION_TOKENS * 3e-09)

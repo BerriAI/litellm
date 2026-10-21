@@ -37,6 +37,13 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         user_api_key = api_key or get_secret_str("VERCEL_AI_GATEWAY_API_KEY") or get_secret_str("VERCEL_OIDC_TOKEN")
         return api_base, user_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def map_openai_params(
         self,
         non_default_params: dict,

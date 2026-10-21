@@ -6,11 +6,12 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -28,7 +29,7 @@ class XAIAudioTranscriptionError(BaseLLMException):
     pass
 
 
-class _XAISttWord(BaseModel):
+class _XAISttWord(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
     text: str = ""
     start: float = 0.0
@@ -36,7 +37,7 @@ class _XAISttWord(BaseModel):
     speaker: int | None = None
 
 
-class _XAISttResponse(BaseModel):
+class _XAISttResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
     text: str = ""
     language: str = "unknown"

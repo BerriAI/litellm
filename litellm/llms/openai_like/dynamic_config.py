@@ -3,7 +3,7 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -30,7 +30,7 @@ def create_config_class(provider: SimpleProviderConfig):
         @overload
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
@@ -42,7 +42,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: bool = False
-        ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
@@ -70,6 +70,13 @@ def create_config_class(provider: SimpleProviderConfig):
             resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
 
             return resolved_base, resolved_key
+
+        def get_openai_compatible_provider_info(
+            self,
+            api_base: str | None,
+            api_key: str | None,
+        ) -> tuple[str | None, str | None]:
+            return self._get_openai_compatible_provider_info(api_base, api_key)
 
         def get_complete_url(
             self,
