@@ -1,8 +1,11 @@
+import copy
 import json
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -16,7 +19,28 @@ from litellm.llms.databricks.chat.transformation import (
     DatabricksConfig,
     _sanitize_empty_content,
 )
+from litellm.types.llms.openai import AllMessageValues
 
+
+JSON_SCHEMA_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "P",
+        "strict": True,
+        "schema": {
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                }
+            },
+            "type": "object",
+            "properties": {"p": {"$ref": "#/$defs/Person"}},
+            "required": ["p"],
+        },
+    },
+}
 
 @pytest.fixture()
 def _use_local_model_cost_map(monkeypatch):
@@ -278,6 +302,119 @@ def test_transform_request_preserves_unity_model_service_name():
     )
 
     assert result["model"] == "system.ai.kimi-k3"
+
+
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_content",
+    [
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="user",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "system", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="system",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "assistant", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="assistant",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "text", "text": "Reply in JSON"}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="tool",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            id="cache-control",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
+            id="multiple-text-blocks",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reply in JSON"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    ],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [
+                {"type": "text", "text": "Reply in JSON"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ],
+            id="text-and-image",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": "Reply in JSON"}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="plain-string",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON"}],
+            id="claude",
+        ),
+    ],
+)
+def test_transform_request_collapses_single_plain_text_block_for_non_claude_models(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_content: object,
+) -> None:
+    config: Final[DatabricksConfig] = DatabricksConfig()
+    result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+    )
+    outgoing_messages: Final[list[dict[str, object]]] = TypeAdapter(list[dict[str, object]]).validate_python(
+        result["messages"]
+    )
+
+    assert outgoing_messages == [{**messages[0], "content": expected_content}]
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
@@ -808,3 +945,69 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> 
 
     assert parsed.choices[0].delta.reasoning_content == "We need answer"
     assert parsed.choices[0].delta.content is None
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "databricks-meta-llama-3-3-70b-instruct",
+        "databricks-qwen35-122b-a10b",
+        "databricks-gpt-oss-120b",
+        "system.ai.deepseek-v4-1-flash",
+    ),
+)
+def test_databricks_non_claude_json_schema_preserves_refs(model: str) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert optional_params["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+
+
+def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-haiku-4-5",
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert "response_format" not in optional_params
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_tool_call",
+                "parameters": JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"],
+            },
+        }
+    ]
+
+
+def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
+    class Person(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        name: str
+
+    class Order(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        person: Person
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-meta-llama-3-3-70b-instruct",
+        custom_llm_provider="databricks",
+        response_format=Order,
+    )
+    schema: Final = optional_params["response_format"]["json_schema"]["schema"]
+
+    assert schema["properties"]["person"] == {"$ref": "#/$defs/Person"}
+    assert schema["$defs"]["Person"] == {
+        "additionalProperties": False,
+        "properties": {"name": {"title": "Name", "type": "string"}},
+        "required": ["name"],
+        "title": "Person",
+        "type": "object",
+    }

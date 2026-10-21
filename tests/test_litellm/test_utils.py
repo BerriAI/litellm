@@ -720,9 +720,71 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "output_cost_per_image_0.5K": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+                "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
+                "cost_per_second": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
+                "output_cost_per_image_1024": {"type": "number"},
+                "output_cost_per_image_1536": {"type": "number"},
+                "output_cost_per_image_1K": {"type": "number"},
+                "output_cost_per_image_2K": {"type": "number"},
+                "output_cost_per_image_4K": {"type": "number"},
+                "output_cost_per_image_512": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
+                "output_cost_per_second_2k": {"type": "number"},
+                "output_cost_per_second_768p": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
+                "supports_regex_lookaround": {"type": "boolean"},
+                "token_count_framing": {"type": "integer"},
+                "token_count_model": {
+                    "type": "object",
+                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                    "required": ["model"],
+                },
+                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
@@ -731,13 +793,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
+                "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
@@ -752,6 +819,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -783,6 +852,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_token_batches": {"type": "number"},
                 "input_cost_per_image_token_batches": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "input_cost_per_video_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
@@ -814,6 +887,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -839,6 +913,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
@@ -896,6 +972,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 },
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_anthropic_thinking_payload": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
@@ -941,8 +1018,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
+                            "/v1/systemone",
+                            "/v1/decisions",
                             "/v1beta/interactions",
                         ],
                     },
@@ -969,16 +1049,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "web_search_billing_unit": {
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
-                },
-                "search_free_requests": {
-                    "type": "object",
-                    "properties": {
-                        "count": {"type": "integer", "minimum": 1},
-                        "period": {"type": "string", "enum": ["day", "month"]},
-                        "shared_group": {"type": "string"},
-                    },
-                    "required": ["count", "period", "shared_group"],
-                    "additionalProperties": False,
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -1080,6 +1150,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -5770,6 +5843,8 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "3.8-flash-tts" not in model
+            and "3.8-flash-lite-tts" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -5866,6 +5941,26 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
+
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, key: {"litellm_provider": "bedrock_converse", "mode": "chat"}}
+    )
+    monkeypatch.setattr(model_utils, "_runtime_registered_fields", {})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
 
 
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():

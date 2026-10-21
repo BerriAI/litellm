@@ -973,6 +973,50 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, reasoning_effort",
+    [
+        ("gpt-6.1-sol", "openai", "none"),
+        ("gpt-6.1-sol", "openai", {"effort": "none"}),
+        ("gpt-6-astra", "azure", "none"),
+    ],
+)
+def test_responses_api_bridge_check_tools_with_a_none_the_row_refuses_routes_to_responses(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, reasoning_effort: object
+) -> None:
+    """The ``none`` escape hatch only holds when the chat gate forwards it. These rows refuse
+    ``none``, so the gate drops it (or refuses the call) and the provider runs its default effort,
+    under which Chat Completions rejects function tools; the bridge has to fire the way it does
+    for an unset effort. Row-derived: the test follows the flag, never the vendor's answer."""
+    from litellm.main import responses_api_bridge_check
+
+    row_key: Final = model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"
+    assert litellm.model_cost[row_key]["supports_none_reasoning_effort"] is False
+
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_a_none_the_row_refuses_stays_chat_without_tools(
+    local_model_cost_map: None,
+) -> None:
+    """Without function tools nothing forces the Responses route: the dropped ``none`` leaves a
+    plain chat call at the default effort, as for any other dropped level."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, _ = responses_api_bridge_check(
+        model="gpt-6.1-sol", custom_llm_provider="openai", reasoning_effort="none"
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
     """A reasoning summary is Responses-only regardless of effort value."""
     from litellm.main import responses_api_bridge_check
@@ -1306,6 +1350,43 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
 
     assert model == "gpt-5.4"
     assert model_info.get("mode") == "responses"
+
+
+
+
+
+_FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
+_FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_weather"}},)
+
+
+@pytest.mark.parametrize(
+    "model_name, api_base, reasoning_effort",
+    [
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
+        pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, None, id="gpt-5.4-mini-unset-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, "low", id="gpt-5.4-mini-explicit-effort-stays-chat"),
+        pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
+        pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
+        pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
+    model_name, api_base, reasoning_effort
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
 
 
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
@@ -3981,3 +4062,98 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
         )
     assert exc_info.value.status_code == 400
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("profile,custom_price", ((None, False), ("eu.amazon.nova-pro-v1:0", False), (None, True)))
+@pytest.mark.asyncio
+async def test_converse_fallback_prices_the_current_attempt(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, asynchronous: bool, profile: str | None, custom_price: bool
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.rust_bridge import configuration
+
+    CONVERSE_ANSWER: Final = json.dumps(
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            "metrics": {"latencyMs": 1},
+        }
+    ).encode()
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    failed_profile: Final = "us.amazon.nova-micro-v1:0"
+    model: Final = "amazon.nova-pro-v1:0"
+    logging_obj: Final = LiteLLMLogging(
+        model="amazon.nova-micro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="acompletion" if asynchronous else "completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="bedrock-fallback-pricing",
+        function_id="bedrock-fallback-pricing",
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if failed_profile in request.url.path:
+            return httpx.Response(400, json={"message": "Input is too long for requested model."})
+        assert request.url.path == f"/model/{profile or model}/converse"
+        return httpx.Response(200, content=CONVERSE_ANSWER)
+
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client: Final = (
+        async_client if asynchronous else HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    )
+    kwargs: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "test-bearer",
+        "aws_region_name": "us-east-1",
+        "client": client,
+        "litellm_logging_obj": logging_obj,
+        "num_retries": 0,
+        "stream": stream,
+        "fake_stream": stream,
+    }
+    if asynchronous:
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.acompletion(model="bedrock/converse/amazon.nova-micro-v1:0", model_id=failed_profile, **kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(model="bedrock/converse/amazon.nova-micro-v1:0", model_id=failed_profile, **kwargs)
+
+    overrides: Final = {
+        **({"model_id": profile} if profile is not None else {}),
+        **({"input_cost_per_token": 0.001, "output_cost_per_token": 0.002} if custom_price else {}),
+    }
+    response: Final = (
+        await litellm.acompletion(model=f"bedrock/converse/{model}", **kwargs, **overrides)
+        if asynchronous
+        else litellm.completion(model=f"bedrock/converse/{model}", **kwargs, **overrides)
+    )
+    result: Final = (
+        litellm.stream_chunk_builder(
+            [chunk async for chunk in response] if asynchronous else list(response), logging_obj=response.logging_obj
+        )
+        if stream
+        else response
+    )
+    assert result is not None
+    prices: Final = litellm.get_model_info(profile or model, custom_llm_provider="bedrock")
+    expected: Final = (
+        0.001 + 0.002
+        if custom_price
+        else prices["input_cost_per_token"] + prices["output_cost_per_token"]
+    )
+    active_logging: Final = response.logging_obj if stream else logging_obj
+    assert active_logging._response_cost_calculator(result) == pytest.approx(expected)
+    if asynchronous:
+        await client.close()
+    else:
+        client.close()
+    configuration.reset_rust_configuration()

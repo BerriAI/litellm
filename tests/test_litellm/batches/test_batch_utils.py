@@ -17,6 +17,7 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 import json
 import logging
 from types import MappingProxyType
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -2001,3 +2002,30 @@ def test_chat_rows_from_mistral_still_use_token_pricing(monkeypatch):
     )
     assert result.cost == pytest.approx((10 * 0.001 + 5 * 0.002) / 2)
     assert result.usage.total_tokens == 15
+
+
+@pytest.mark.parametrize("provider", ("openai", "anthropic"))
+@pytest.mark.parametrize("envelope", (1, "invalid", [1], None, {}))
+@pytest.mark.parametrize("include_valid", (True, False))
+def test_invalid_batch_envelopes_preserve_recoverable_cost(
+    provider: Literal["openai", "anthropic"], envelope: object, include_valid: bool
+) -> None:
+    invalid: Final[dict[str, object]] = {"response" if provider == "openai" else "result": envelope}
+    valid: Final[dict[str, object]] = (
+        _success_row(model="batch-accounting-control", usage=_usage(100, 20))
+        if provider == "openai"
+        else {
+            "result": {
+                "type": "succeeded",
+                "message": {"model": "batch-accounting-control", "usage": {"input_tokens": 100, "output_tokens": 20}},
+            }
+        }
+    )
+    entries: Final = (valid, invalid, valid) if include_valid else (invalid,)
+    result: Final = bu._aggregate_batch_cost_usage_models(
+        entries, provider, model_info={"input_cost_per_token_batches": 0.001, "output_cost_per_token_batches": 0.002}
+    )
+    assert result.cost == pytest.approx(0.28 if include_valid else 0)
+    assert result.usage.prompt_tokens == (200 if include_valid else 0)
+    assert result.usage.completion_tokens == (40 if include_valid else 0)
+    assert (result.successful_requests, result.failed_requests) == (2 if include_valid else 0, 1)

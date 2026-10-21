@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -35,6 +37,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
@@ -44,6 +47,8 @@ from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardL
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
+_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
+_BATCH_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
 
 
 class _LiteLLMParamsDictView:
@@ -414,14 +419,18 @@ class RouterBudgetLimiting(CustomLogger):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        batch_response, response_cost = _BATCH_CHARGE_VALUES.validate_python(
+            (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
+        )
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: Final[str] = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required")
+        custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
-        budget_config: Final = self._get_budget_config_for_provider(custom_llm_provider)
-        if budget_config:
+        batch_id: Final = batch_id_to_charge_once(kwargs.get("call_type"), batch_response, response_cost)
+
+        budget_config: Final = (
+            self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
+        )
+        if custom_llm_provider is not None and budget_config is not None:
             # increment spend for provider
             spend_key: Final = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
             start_time_key: Final = f"provider_budget_start_time:{custom_llm_provider}"
@@ -430,6 +439,7 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_key=spend_key,
                 start_time_key=start_time_key,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
         deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id)
@@ -442,6 +452,7 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_key=deployment_spend_key,
                 start_time_key=deployment_start_time_key,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
         request_tags: Final = _get_tags_from_request_kwargs(
@@ -459,6 +470,7 @@ class RouterBudgetLimiting(CustomLogger):
                         spend_key=_tag_spend_key,
                         start_time_key=_tag_start_time_key,
                         response_cost=response_cost,
+                        batch_id=batch_id,
                     )
 
     async def _increment_spend_for_key(
@@ -467,12 +479,15 @@ class RouterBudgetLimiting(CustomLogger):
         spend_key: str,
         start_time_key: str,
         response_cost: float,
+        batch_id: str | None = None,
     ):
         if budget_config.budget_duration is None:
             return
 
         current_time: Final = datetime.now(timezone.utc).timestamp()
         ttl_seconds: Final = duration_in_seconds(budget_config.budget_duration)
+        if batch_id is not None and not await self._claim_batch_charge(spend_key, batch_id, ttl_seconds):
+            return
 
         budget_start = await self._get_or_set_budget_start_time(
             start_time_key=start_time_key,
@@ -509,6 +524,17 @@ class RouterBudgetLimiting(CustomLogger):
             )
 
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
+
+    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
+        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is not None:
+            polls: Final = await redis_cache.async_increment(key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True)
+            return polls == 1
+        local_polls: Final = await self.dual_cache.in_memory_cache.async_increment(
+            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+        )
+        return local_polls == 1
 
     async def periodic_sync_in_memory_spend_with_redis(self):
         """

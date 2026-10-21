@@ -146,17 +146,6 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
 
-def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
-    optional_params = AzureAIStudioConfig().map_openai_params(
-        non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
-        optional_params={},
-        model="gpt-6-astra",
-        drop_params=False,
-    )
-
-    assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
-
-
 def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     monkeypatch: pytest.MonkeyPatch, _local_model_cost_map
 ):
@@ -168,7 +157,7 @@ def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
 
     optional_params = litellm.utils.get_optional_params(
-        model="gpt-5.1-chat-latest",
+        model="gpt-5.1",
         custom_llm_provider="azure_ai",
         temperature=0.2,
         top_p=0.9,
@@ -178,6 +167,18 @@ def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     assert optional_params["temperature"] == 0.2
     assert optional_params["top_p"] == 0.9
     assert optional_params["logprobs"] is True
+
+
+def test_foundry_gpt_6_astra_refuses_reasoning_effort_none_before_the_call(_local_model_cost_map):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="gpt-6-astra",
+            drop_params=False,
+        )
+
+
 
 
 def test_azure_ai_grok_stop_parameter_handling():
