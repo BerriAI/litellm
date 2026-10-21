@@ -436,7 +436,7 @@ def apply_bedrock_invoke_structured_output(
         else:
             request_body["output_config"] = {  # mutable-ok: wire request JSON object
                 "format": native_format
-            }  # rebind-ok: out-param
+            }
         return
 
     verbose_logger.warning(

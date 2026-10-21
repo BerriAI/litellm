@@ -1,4 +1,3 @@
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import asyncio
 import base64
 import copy
@@ -10,7 +9,6 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
-from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import Mock
 
@@ -18,15 +16,6 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
-# Ensure the project root is on the import path so `litellm` can be imported when
-# tests are executed from any working directory.
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import (
-    ensure_bedrock_anthropic_messages_tool_names,
-    normalize_custom_field_on_tools,
-    normalize_tool_input_schema_types_for_bedrock_invoke,
-)
 import litellm
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -34,13 +23,23 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+
+# Ensure the project root is on the import path so `litellm` can be imported when
+# tests are executed from any working directory.
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
     as_system_content_blocks,
+)
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
 )
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -3008,7 +3007,6 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
     explicitly set to ``false`` on the entry."""
     import litellm
-
     from litellm.types.router import GenericLiteLLMParams
 
     model = "global.anthropic.claude-opus-4-8"

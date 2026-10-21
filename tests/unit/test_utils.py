@@ -614,7 +614,6 @@ def test_all_model_configs():
 
 
 def test_cohere_embedding_optional_params():
-    from litellm import get_optional_params_embeddings
 
     optional_params = get_optional_params_embeddings(
         model="embed-v4.0",

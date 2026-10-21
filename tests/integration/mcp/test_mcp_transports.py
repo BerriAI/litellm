@@ -1,12 +1,11 @@
-from integration._support.process import owned_proxy
-import yaml
-from pathlib import Path
 import json
 import uuid
+from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
+import yaml
 from integration._support.client import Gateway
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -25,6 +24,7 @@ from integration._support.mcp import (
     text_result,
     tool_calls,
 )
+from integration._support.process import owned_proxy
 
 ADD: Final = {"http": "add", "sse": "add", "stdio": "add", "openapi": "getpet"}
 ARGUMENTS: Final = {"add": {"a": 3, "b": 4}, "getpet": {"petId": "7"}}
