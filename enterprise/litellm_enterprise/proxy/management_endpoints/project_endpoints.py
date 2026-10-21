@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
-    ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
     describe_missing_quota,
     missing_project_model_quota,
 )
@@ -33,6 +32,7 @@ from litellm.proxy.management.users.service import org_admin_org_ids
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.model_quota_policy import (
+    ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
     REQUIRE_BOTH_LIMITS,
     ModelQuotaPolicy,
     RouteOf,

@@ -11,7 +11,6 @@ from litellm.proxy.management_helpers.model_quota_policy import (
     unmet_limits,
 )
 
-ENFORCE_PROJECT_MODEL_QUOTA_SETTING: Final = "enforce_project_model_quota"
 _NO_LIMITS_SET: Final[Mapping[str, object]] = MappingProxyType({})
 
 

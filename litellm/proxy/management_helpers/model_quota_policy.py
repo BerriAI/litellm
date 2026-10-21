@@ -3,12 +3,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider, is_openai_compatible_endpoint
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.common_utils import provider_for_generic_call
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 
@@ -17,8 +18,14 @@ if TYPE_CHECKING:
 
 QuotaLimit: TypeAlias = Literal["rpm", "tpm"]
 
+ENFORCE_PROJECT_MODEL_QUOTA_SETTING: Final = "enforce_project_model_quota"
+
 _LIMITS: Final[tuple[QuotaLimit, ...]] = ("rpm", "tpm")
 _ROUTER_PATTERNS: Final = PatternMatchRouter()
+
+
+def _is_known_provider(provider: str) -> bool:
+    return provider in litellm.provider_list or JSONProviderRegistry.exists(provider)
 
 
 class ModelQuotaPolicy(BaseModel):
@@ -27,6 +34,14 @@ class ModelQuotaPolicy(BaseModel):
     default: frozenset[QuotaLimit] = frozenset(_LIMITS)
     providers: Mapping[str, frozenset[QuotaLimit]] = Field(default_factory=dict)
     models: Mapping[str, frozenset[QuotaLimit]] = Field(default_factory=dict)
+
+    @field_validator("providers")
+    @classmethod
+    def _known_providers(cls, providers: Mapping[str, frozenset[QuotaLimit]]) -> Mapping[str, frozenset[QuotaLimit]]:
+        unknown: Final = sorted(provider for provider in providers if not _is_known_provider(provider))
+        if unknown:
+            raise ValueError(f"unknown provider ids {unknown}")
+        return providers
 
 
 REQUIRE_BOTH_LIMITS: Final = ModelQuotaPolicy()
@@ -154,3 +169,45 @@ def router_model_routes(llm_router: "Router | None", team_id: str | None) -> Rou
         )
 
     return route_of
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("id") if is_str_keyed_mapping(model_info) else None
+
+
+def team_route_after_write(
+    llm_router: "Router | None",
+    team_id: str,
+    public_name: str,
+    replaced_id: str | None,
+    written_params: Mapping[str, object] | None,
+) -> ModelRoute:
+    deployments: Final = () if llm_router is None else llm_router.get_all_deployments(public_name, team_id=team_id)
+    kept: Final = tuple(
+        deployment.get("litellm_params")
+        for deployment in deployments
+        if _is_team_deployment(deployment) and _deployment_id(deployment) != replaced_id
+    )
+    team_params: Final = kept if written_params is None else (*kept, written_params)
+    if not team_params:
+        return router_model_routes(llm_router, None)(public_name)
+    return ModelRoute(
+        providers=frozenset(
+            provider for litellm_params in team_params if (provider := deployment_provider(litellm_params)) is not None
+        ),
+        team_named=True,
+    )
+
+
+def limits_added_by_team_write(
+    policy: ModelQuotaPolicy,
+    llm_router: "Router | None",
+    team_id: str,
+    public_name: str,
+    replaced_id: str | None,
+    written_params: Mapping[str, object] | None,
+) -> frozenset[QuotaLimit]:
+    after: Final = team_route_after_write(llm_router, team_id, public_name, replaced_id, written_params)
+    now: Final = router_model_routes(llm_router, team_id)(public_name)
+    return required_limits(policy, public_name, after) - required_limits(policy, public_name, now)

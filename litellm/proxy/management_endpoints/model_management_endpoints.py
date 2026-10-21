@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     ptu_config_error,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -103,9 +104,11 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 )
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.management_helpers.model_quota_policy import (
+    ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
     ModelQuotaPolicy,
     ModelRoute,
     deployment_provider,
+    limits_added_by_team_write,
     parse_model_quota_setting,
     required_limits,
     unmet_limits,
@@ -119,6 +122,7 @@ from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
@@ -769,12 +773,24 @@ async def _auto_router_capability_slot(
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
 
 
-def _model_add_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
+_ROUTING_KEYS: Final = ("model", "custom_llm_provider", "api_base")
+_NOTHING_SENT: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _written_routing_params(
+    incoming: GenericLiteLLMParams | None, existing: GenericLiteLLMParams | None
+) -> Mapping[str, object]:
+    sent: Final = _NOTHING_SENT if incoming is None else _dump_without_none(incoming)
+    stored: Final = _NOTHING_SENT if existing is None else _decrypted_litellm_params(existing)
+    return MappingProxyType({key: sent.get(key, stored.get(key)) for key in _ROUTING_KEYS})
+
+
+def _quota_policy(general_settings: Mapping[str, object], setting: str) -> ModelQuotaPolicy | None:
     try:
-        return parse_model_quota_setting(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING))
+        return parse_model_quota_setting(general_settings.get(setting))
     except ValidationError as e:
         raise ProxyException(
-            message=f"general_settings.{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING} is invalid: {e}",
+            message=f"general_settings.{setting} is invalid: {e}",
             type=ProxyErrorTypes.internal_server_error.value,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -790,15 +806,7 @@ def _raise_if_rate_limits_required_but_missing(
     (or effectively excluded from routing)."""
     if policy is None:
         return
-    provider: Final = deployment_provider(
-        MappingProxyType(
-            {
-                "model": litellm_params.model,
-                "custom_llm_provider": litellm_params.custom_llm_provider,
-                "api_base": litellm_params.api_base,
-            }
-        )
-    )
+    provider: Final = deployment_provider(_written_routing_params(litellm_params, None))
     missing: Final = unmet_limits(
         required_limits(
             policy,
@@ -817,6 +825,94 @@ def _raise_if_rate_limits_required_but_missing(
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
         param=f"litellm_params.{missing[0]}",
+    )
+
+
+def _project_limit(metadata: object, limits_key: str, model: str) -> object:
+    limits: Final = metadata.get(limits_key) if is_str_keyed_mapping(metadata) else None
+    return limits.get(model) if is_str_keyed_mapping(limits) else None
+
+
+async def _raise_if_team_write_leaves_projects_short(
+    *,
+    prisma_client: PrismaClient,
+    general_settings: Mapping[str, object],
+    llm_router: Router | None,
+    team_id: str | None,
+    public_name: str,
+    replaced_id: str | None,
+    written_params: Mapping[str, object] | None,
+) -> None:
+    if team_id is None:
+        return
+    policy: Final = _quota_policy(general_settings, ENFORCE_PROJECT_MODEL_QUOTA_SETTING)
+    if policy is None:
+        return
+    added: Final = limits_added_by_team_write(policy, llm_router, team_id, public_name, replaced_id, written_params)
+    if not added:
+        return
+    projects: Final = await ProjectRepository(prisma_client).table.find_many(
+        where={"team_id": team_id, "models": {"has": public_name}}
+    )
+    short: Final = tuple(
+        project.project_alias or project.project_id
+        for project in projects
+        if unmet_limits(
+            added,
+            MappingProxyType(
+                {
+                    "rpm": _project_limit(project.metadata, "model_rpm_limit", public_name),
+                    "tpm": _project_limit(project.metadata, "model_tpm_limit", public_name),
+                }
+            ),
+        )
+    )
+    if not short:
+        return
+    raise ProxyException(
+        message=(
+            f"projects {', '.join(short)} list '{public_name}' without a positive {' and '.join(sorted(added))} "
+            f"quota, which '{ENFORCE_PROJECT_MODEL_QUOTA_SETTING}' requires once this team model change applies. "
+            "Set those limits on the projects first"
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param=None,
+    )
+
+
+async def _raise_if_team_update_leaves_projects_short(
+    *,
+    prisma_client: PrismaClient,
+    general_settings: Mapping[str, object],
+    llm_router: Router | None,
+    existing: Deployment,
+    written_team_id: str | None,
+    written_name: str,
+    incoming_params: GenericLiteLLMParams | None,
+) -> None:
+    if written_team_id is None and existing.model_info.team_id is None:
+        return
+    stored_name: Final = existing.model_info.team_public_model_name or existing.model_name
+    await _raise_if_team_write_leaves_projects_short(
+        prisma_client=prisma_client,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        team_id=written_team_id,
+        public_name=written_name,
+        replaced_id=existing.model_info.id,
+        written_params=_written_routing_params(incoming_params, existing.litellm_params),
+    )
+    if (written_team_id, written_name) == (existing.model_info.team_id, stored_name):
+        return
+    await _raise_if_team_write_leaves_projects_short(
+        prisma_client=prisma_client,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        team_id=existing.model_info.team_id,
+        public_name=stored_name,
+        replaced_id=existing.model_info.id,
+        written_params=None,
     )
 
 
@@ -1308,6 +1404,7 @@ async def patch_model(
         ProxyException: For various error conditions including authentication and database errors
     """
     from litellm.proxy.proxy_server import (
+        general_settings_view,
         litellm_proxy_admin_name,
         llm_router,
         premium_user,
@@ -1415,6 +1512,17 @@ async def patch_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
+        )
+
+        await _raise_if_team_update_leaves_projects_short(
+            prisma_client=prisma_client,
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            existing=db_model,
+            written_team_id=(patch_data.model_info.team_id if patch_data.model_info else None)
+            or db_model.model_info.team_id,
+            written_name=_get_public_model_name(effective_patch, db_model),
+            incoming_params=patch_data.litellm_params,
         )
 
         effective_params: Final = _effective_complexity_router_params(
@@ -2492,6 +2600,7 @@ async def delete_model(
 
         from litellm.proxy.proxy_server import (
             MODEL_RECONCILE_LOCK,
+            general_settings_view,
             llm_router,
             premium_user,
             prisma_client,
@@ -2524,6 +2633,15 @@ async def delete_model(
             premium_user=premium_user,
             incoming_params=None,
             allow_missing_team=True,
+        )
+        await _raise_if_team_write_leaves_projects_short(
+            prisma_client=prisma_client,
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            team_id=model_params.model_info.team_id,
+            public_name=model_params.model_info.team_public_model_name or model_params.model_name,
+            replaced_id=model_params.model_info.id,
+            written_params=None,
         )
 
         # update DB
@@ -2691,6 +2809,8 @@ async def add_new_model(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
+        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -2752,7 +2872,16 @@ async def add_new_model(
             model_name=model_params.model_name,
             litellm_params=model_params.litellm_params,
             team_model=model_params.model_info.team_id is not None,
-            policy=_model_add_quota_policy(general_settings),
+            policy=_quota_policy(general_settings_view(), ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING),
+        )
+        await _raise_if_team_write_leaves_projects_short(
+            prisma_client=prisma_client,
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            team_id=model_params.model_info.team_id,
+            public_name=model_params.model_name,
+            replaced_id=None,
+            written_params=_written_routing_params(model_params.litellm_params, None),
         )
 
         clean_model_info: Final = ModelInfo.model_validate(
@@ -2891,6 +3020,7 @@ async def update_model(
     """
     from litellm.proxy.proxy_server import (
         LITELLM_PROXY_ADMIN_NAME,
+        general_settings_view,
         llm_router,
         premium_user,
         prisma_client,
@@ -2954,6 +3084,15 @@ async def update_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
+        )
+        await _raise_if_team_update_leaves_projects_short(
+            prisma_client=prisma_client,
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            existing=deployment,
+            written_team_id=deployment.model_info.team_id,
+            written_name=deployment.model_info.team_public_model_name or deployment.model_name,
+            incoming_params=model_params.litellm_params,
         )
         effective_params: Final = _effective_complexity_router_params(
             model_params.litellm_params, deployment.litellm_params
