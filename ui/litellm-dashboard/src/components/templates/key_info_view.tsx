@@ -240,6 +240,10 @@ export default function KeyInfoView({
         delete formValues.disable_global_guardrails;
       }
 
+      if ((formValues.organization_id || null) === keyOrganizationId(currentKeyData)) {
+        delete formValues.organization_id;
+      }
+
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
