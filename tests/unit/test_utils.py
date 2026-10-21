@@ -8202,7 +8202,9 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] not in litellm.provider_list and not JSONProviderRegistry.exists(v["litellm_provider"]):
+        elif v["litellm_provider"] in (
+            "coralbricks", "inferenceapis", "microsoft_365_copilot", "openinfer", "scaledown"
+        ):
             continue
         elif (
             v["litellm_provider"] == "sagemaker"
