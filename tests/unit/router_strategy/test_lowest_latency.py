@@ -17,8 +17,10 @@ from pydantic import ValidationError
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 DEPLOYMENT_ID = "9876"
 KWARGS = {
@@ -1461,3 +1463,99 @@ async def test_router_model_group_usage_increases_by_logged_tokens() -> None:
     updated_usage: Final = await router.get_model_group_usage(model_group=model_group)
 
     assert updated_usage[0] == initial_usage[0] + 15
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_callback", [False, True])
+@pytest.mark.parametrize("normalized_usage", [False, True])
+@pytest.mark.parametrize("native_seconds", [2, 3])
+async def test_responses_and_chat_latency_use_comparable_token_units(
+    async_callback: bool, normalized_usage: bool, native_seconds: int
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    usage: Final = ResponseAPIUsage(input_tokens=10, output_tokens=100, total_tokens=110)
+    native: Final = ResponsesAPIResponse(id="resp-latency", created_at=0, output=[], usage=usage)
+    logged_native: Final = (
+        native.model_copy(update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)})
+        if normalized_usage
+        else native
+    )
+    original_usage: Final = logged_native.usage
+    assert original_usage is not None
+    original_fields: Final = original_usage.model_dump()
+    start: Final = datetime(2026, 1, 1)
+    for deployment_id, response, seconds in (
+        ("native", logged_native, native_seconds),
+        ("bridge", _chat_response(100), 3),
+    ):
+        kwargs: Final = {
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": deployment_id}},
+        }
+        if async_callback:
+            await handler.async_log_success_event(kwargs, response, start, start + timedelta(seconds=seconds))
+        else:
+            handler.log_success_event(kwargs, response, start, start + timedelta(seconds=seconds))
+    recorded: Final = cache.get_cache(key="mixed_map")
+    assert recorded["native"]["latency"] == pytest.approx([native_seconds / 100])
+    assert recorded["bridge"]["latency"] == pytest.approx([3 / 100])
+    assert logged_native.usage is original_usage
+    assert logged_native.usage.model_dump() == original_fields
+    assert native.usage is usage
+    deployments: Final = [
+        {"model_name": "mixed", "model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")
+    ]
+    picked: Final = handler.get_available_deployments(
+        model_group="mixed", healthy_deployments=deployments, request_kwargs={"stream": False, "metadata": {}}
+    )
+    assert picked["model_info"]["id"] in ({"native"} if native_seconds < 3 else {"native", "bridge"})
+    native_counts: Final = tuple(value for key, value in recorded["native"].items() if key != "latency")
+    assert native_counts == ({"tpm": 0, "rpm": 1},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_callback", [False, True])
+@pytest.mark.parametrize(
+    "response",
+    [
+        litellm.ModelResponse(),
+        ResponsesAPIResponse(id="resp-missing", created_at=0, output=[], usage=None),
+        ResponsesAPIResponse(
+            id="resp-zero", created_at=0, output=[],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=0, total_tokens=10),
+        ),
+    ],
+)
+async def test_responses_without_output_tokens_keep_elapsed_seconds(
+    async_callback: bool, response: litellm.ModelResponse | ResponsesAPIResponse
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    original_usage: Final = getattr(response, "usage", None)
+    if async_callback:
+        await handler.async_log_success_event(KWARGS, response, 1.0, 3.0)
+    else:
+        handler.log_success_event(KWARGS, response, 1.0, 3.0)
+    assert _recorded_latencies(cache) == [2.0]
+    assert getattr(response, "usage", None) is original_usage
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_callback", [False, True])
+async def test_responses_legacy_latency_samples_age_out_without_rewriting_cache(async_callback: bool) -> None:
+    cache: Final = DualCache()
+    cache.set_cache(key="gemini-embedding-001_map", value={DEPLOYMENT_ID: {"latency": [2.0]}})
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"max_latency_list_size": 2})
+    response: Final = ResponsesAPIResponse(
+        id="resp-window",
+        created_at=0,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=100, total_tokens=110),
+    )
+    for expected in ([2.0, 0.02], [0.02, 0.02]):
+        if async_callback:
+            await handler.async_log_success_event(KWARGS, response, 1.0, 3.0)
+        else:
+            handler.log_success_event(KWARGS, response, 1.0, 3.0)
+        assert _recorded_latencies(cache) == pytest.approx(expected)

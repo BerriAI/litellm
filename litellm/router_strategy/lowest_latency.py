@@ -14,7 +14,9 @@ from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -116,11 +118,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 final_value: float = response_ms
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
-                    _usage: Final = getattr(response_obj, "usage", None)
+                if isinstance(response_obj, (ModelResponse, ResponsesAPIResponse)):
+                    _usage: Final = (
+                        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_obj.usage)
+                        if isinstance(response_obj, ResponsesAPIResponse)
+                        else getattr(response_obj, "usage", None)
+                    )
                     if _usage is not None:
                         completion_tokens: Final = _usage.completion_tokens
-                        total_tokens = _usage.total_tokens
+                        if isinstance(response_obj, ModelResponse):
+                            total_tokens = _usage.total_tokens
 
                         # response_ms is already normalized to float seconds above
                         response_seconds: Final = response_ms
@@ -300,11 +307,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 final_value: float = response_ms
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
-                    _usage: Final = getattr(response_obj, "usage", None)
+                if isinstance(response_obj, (ModelResponse, ResponsesAPIResponse)):
+                    _usage: Final = (
+                        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_obj.usage)
+                        if isinstance(response_obj, ResponsesAPIResponse)
+                        else getattr(response_obj, "usage", None)
+                    )
                     if _usage is not None:
                         completion_tokens: Final = _usage.completion_tokens
-                        total_tokens = _usage.total_tokens
+                        if isinstance(response_obj, ModelResponse):
+                            total_tokens = _usage.total_tokens
 
                         # response_ms is already normalized to float seconds above
                         response_seconds: Final = response_ms
