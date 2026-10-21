@@ -327,6 +327,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     otpm: int | None = None
     timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -503,6 +506,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_version: str | None
     timeout: float | str | httpx.Timeout | None
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     configurable_clientside_auth_params: (
@@ -923,6 +928,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]

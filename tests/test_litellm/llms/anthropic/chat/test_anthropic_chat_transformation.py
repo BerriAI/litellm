@@ -1,3 +1,4 @@
+import copy
 
 import pytest
 
@@ -17,7 +18,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.utils import ServerToolUse, Usage
 
 
@@ -6451,3 +6452,91 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict:
+    return AnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+
+def _two_function_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": f"tool_{i}", "description": f"Tool {i}", "parameters": {"type": "object"}},
+        }
+        for i in range(2)
+    ]
+
+
+@pytest.mark.parametrize(
+    "control, expected_control",
+    [
+        (None, {"type": "ephemeral"}),
+        ({"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"}),
+    ],
+)
+def test_transform_request_tool_config_point_marks_last_tool_and_drops_the_key(control, expected_control):
+    """LIT-9880: a tool_config injection point used to be spread into the Anthropic body, which
+    Anthropic rejected with 400 Extra inputs are not permitted."""
+    tools = _two_function_tools()
+    tools_before = copy.deepcopy(tools)
+    point = {"location": "tool_config", **({"control": control} if control is not None else {})}
+    litellm_params = {"metadata": {}, "model_info": {"id": "deployment-1"}}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [point]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][-1]["cache_control"] == expected_control
+    assert "cache_control" not in data["tools"][0]
+    assert tools == tools_before
+    assert litellm_params["metadata"]["litellm_gateway_injected_cache"] == "deployment-1"
+
+
+def test_transform_request_tool_config_point_keeps_the_clients_tool_marker():
+    tools = _two_function_tools()
+    tools[0]["cache_control"] = {"type": "ephemeral"}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][1]
+
+
+def test_transform_request_tool_config_point_skips_tool_search_tools():
+    tool_search_type = next(iter(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+    tools = [*_two_function_tools(), {"type": tool_search_type, "name": "tool_search"}]
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert data["tools"][1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][2]
+    assert "cache_control" not in data["tools"][0]
+
+
+def test_transform_request_tool_config_point_without_tools_drops_the_key():
+    litellm_params = {"metadata": {}}
+
+    data = _make_transform_request(
+        optional_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert "tools" not in data
+    assert litellm_params["metadata"] == {}

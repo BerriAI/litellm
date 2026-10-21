@@ -436,27 +436,27 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
     )
 
 
-def test_stamp_responses_usage_cost_stamps_computed_cost():
-    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+def teststamp_responses_usage_cost_stamps_computed_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _responses_api_response_with_usage()
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj._response_cost_calculator.return_value = 0.000704
 
-    _stamp_responses_usage_cost(response, logging_obj)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
     logging_obj._response_cost_calculator.assert_called_once_with(result=response)
 
 
-def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
-    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+def teststamp_responses_usage_cost_keeps_provider_reported_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _responses_api_response_with_usage()
     setattr(response.usage, "cost", 0.5)
     logging_obj = Mock(spec=LiteLLMLoggingObj)
 
-    _stamp_responses_usage_cost(response, logging_obj)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
     logging_obj._response_cost_calculator.assert_not_called()
@@ -475,8 +475,8 @@ def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
     )
 
 
-def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
-    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+def teststamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
     response = _unvalidated_response_with_dict_usage(
         {
             "input_tokens": 29,
@@ -488,7 +488,7 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     )
     logging_obj = Mock(spec=LiteLLMLoggingObj)
 
-    _stamp_responses_usage_cost(response, logging_obj)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(3e-05)
@@ -496,27 +496,27 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     logging_obj._response_cost_calculator.assert_not_called()
 
 
-def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
-    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+def teststamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
     response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj._response_cost_calculator.return_value = 0.000704
 
-    _stamp_responses_usage_cost(response, logging_obj)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(0.000704)
     logging_obj._response_cost_calculator.assert_called_once_with(result=response)
 
 
-def test_stamp_responses_usage_cost_survives_calculator_failure():
-    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+def teststamp_responses_usage_cost_survives_calculator_failure():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _responses_api_response_with_usage()
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj._response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
 
-    _stamp_responses_usage_cost(response, logging_obj)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) is None
 

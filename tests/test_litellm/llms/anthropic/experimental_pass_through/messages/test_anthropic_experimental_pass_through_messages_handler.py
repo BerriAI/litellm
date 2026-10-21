@@ -1,3 +1,4 @@
+import copy
 import asyncio
 import json
 import os
@@ -1554,7 +1555,9 @@ def _claude_code_auto_mode_request() -> tuple[list[dict[str, object]], list[dict
     return safeguards, safeguard_results
 
 
-def _upstream_answering_with(safeguard_results: list[dict[str, object]], captured: dict[str, object]) -> AsyncHTTPHandler:
+def _upstream_answering_with(
+    safeguard_results: list[dict[str, object]], captured: dict[str, object]
+) -> AsyncHTTPHandler:
     def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         captured["anthropic-beta"] = request.headers.get("anthropic-beta")
@@ -1580,7 +1583,9 @@ def _upstream_answering_with(safeguard_results: list[dict[str, object]], capture
 
 
 _CLIENT_BETA_HEADERS: Final = (
-    pytest.param({"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"),
+    pytest.param(
+        {"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"
+    ),
     pytest.param({"anthropic-beta": "interleaved-thinking-2025-05-14"}, id="client_omits_beta"),
     pytest.param({}, id="client_sends_no_beta_header"),
 )
@@ -1698,3 +1703,42 @@ async def test_anthropic_messages_adds_no_dangerous_tool_use_beta_to_azure_ai_fo
 
     assert "safeguards" not in captured["body"]
     assert "dangerous-tool-use-2026-09-03" not in (captured["anthropic-beta"] or "").split(",")
+
+
+def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(monkeypatch):
+    """LIT-9880 on /v1/messages: the hook wrote the tool_config point back into kwargs and the
+    native path dropped it silently, so the tools went out without any cache breakpoint."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_native(**kwargs):
+        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
+        captured["kwargs"] = kwargs["kwargs"]
+        captured["messages"] = kwargs["messages"]
+        return "native-passthrough"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    tools = [{"name": f"tool_{i}", "description": f"Tool {i}", "input_schema": {"type": "object"}} for i in range(2)]
+    tools_before = copy.deepcopy(tools)
+
+    result = handler.anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-opus-4-6",
+        api_key="sk-test",
+        tools=tools,
+        litellm_metadata={},
+        cache_control_injection_points=[
+            {"location": "message", "role": "user"},
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    )
+
+    assert result == "native-passthrough"
+    assert "cache_control_injection_points" not in captured["params"]
+    assert "cache_control_injection_points" not in captured["kwargs"]
+    assert captured["params"]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in captured["params"]["tools"][0]
+    assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert tools == tools_before

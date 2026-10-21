@@ -5961,3 +5961,33 @@ def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: p
     )
     assert registrations[key] == rates
     assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
+
+
+def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
+    """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
+    step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-4.1",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True}
+    assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
