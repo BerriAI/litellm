@@ -2575,9 +2575,14 @@ def _scanned_while_upstream_is_held(
         rig.gate.set()
 
 
-def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+def _post_call_statuses(
+    rig: _DisconnectRig, model: str, rows: int = 1, call_type: str | None = None
+) -> tuple[tuple[str, ...], ...]:
     found: Final = eventually(
-        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda: read_rows(
+            'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s AND call_type=coalesce(%s, call_type)',
+            (model, call_type),
+        ),
         lambda values: len(values) == rows,
         seconds=70,
     )
@@ -3181,10 +3186,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
             seconds=20,
         )
         assert scanned == (1,) * 30, scanned
-        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10)
-        assert sorted(chat_rows) == sorted(
-            ("guardrail_failed_to_respond",) if index % 3 == 0 else ("success",) for index in range(0, 30, 3)
-        ), chat_rows
+        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10, call_type="acompletion")
+        assert chat_rows == (("guardrail_failed_to_respond",),) * 10, chat_rows
+        responses_rows: Final = _post_call_statuses(rig, rig.model, rows=10, call_type="aresponses")
+        assert responses_rows == (("success",),) * 10, responses_rows
 
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:

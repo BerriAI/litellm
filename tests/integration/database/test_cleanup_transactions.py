@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -237,8 +239,12 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             )
             assert "target_reached=true" in summary
             assert f"allocated_before={allocated_before}" in summary
+            storage: Final = MappingProxyType(dict(re.findall(r"(\w+)=(\d+)\b", summary)))
             # the file did not shrink: that is the whole reason the reclaimable count exists
-            assert f"allocated_after={allocated_before}" in summary
+            assert int(storage["allocated_after"]) >= allocated_before, summary
+            row_bytes: Final = int(storage["estimated_live_before"]) / (seeded + index_rows)
+            kept_bytes: Final = (len(remaining) + int(str(kept_index["n"]))) * row_bytes
+            assert abs(int(storage["estimated_live_after"]) - kept_bytes) <= row_bytes, summary
             assert "VACUUM FULL or pg_repack" in summary
 
             deletes_deadline: Final = time.monotonic() + 10
