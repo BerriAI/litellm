@@ -471,7 +471,7 @@ def normalize_gemini_speech_config(
     return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
 
 
-def merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object]:
+def _merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object]:
     nested_config: Final = _gemini_speech_config_wrapper(value)
     if nested_config is None:
         return value
@@ -484,7 +484,7 @@ def merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[s
 def mapped_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    normalized: Final = _normalize_gemini_speech_config_item(merge_gemini_speech_config_wrapper(value))
+    normalized: Final = _normalize_gemini_speech_config_item(_merge_gemini_speech_config_wrapper(value))
     speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
     voice_name: Final = next(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),

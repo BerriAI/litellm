@@ -328,6 +328,76 @@ class TestVertexAITextToSpeechConfig:
         assert voice_name is None
         assert optional_params["vertex_voice_dict"] == expected_voice
 
+    @pytest.mark.parametrize(
+        ("voice", "expected_language", "expected_voices"),
+        [
+            (
+                {
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}},
+                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}},
+                        ],
+                    },
+                    "speech_config": {
+                        "multi_speaker_voice_config": {
+                            "speaker_voice_configs": [
+                                {"speaker": "Ana", "voice_config": {"prebuilt_voice_config": {"voice_name": "Kore"}}},
+                                {"speaker": "Ben", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck"}}},
+                            ],
+                        },
+                    },
+                },
+                None,
+                (("Ana", "Kore"), ("Ben", "Puck")),
+            ),
+            (
+                {"name": "Puck", "languageCode": "fr-FR", "speech_config": {"language_code": "de-DE"}},
+                "de-DE",
+                ((None, "Puck"),),
+            ),
+            (
+                {"name": "Puck", "voice_config": {"prebuilt_voice_config": {"voice_name": "Charon"}}},
+                None,
+                ((None, "Charon"),),
+            ),
+        ],
+    )
+    def test_gemini_tts_cloud_tts_speaks_the_voice_wav_sends_to_gemini(
+        self,
+        voice: dict[str, object],
+        expected_language: str | None,
+        expected_voices: tuple[tuple[str | None, str], ...],
+    ):
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import normalize_gemini_speech_config
+
+        _, optional_params = VertexAITextToSpeechConfig().map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+        cloud_tts_voice: Final = optional_params["vertex_voice_dict"]
+        cloud_tts_speakers: Final = cloud_tts_voice.get("multiSpeakerVoiceConfig", {}).get("speakerVoiceConfigs")
+        cloud_tts_voices: Final = (
+            tuple((speaker["speakerAlias"], speaker["speakerId"]) for speaker in cloud_tts_speakers)
+            if cloud_tts_speakers is not None
+            else ((None, cloud_tts_voice["name"]),)
+        )
+        wav_config: Final = normalize_gemini_speech_config(voice, drop_unknown_fields=True)
+        wav_speakers: Final = wav_config.get("multiSpeakerVoiceConfig", {}).get("speakerVoiceConfigs")
+        wav_voices: Final = (
+            tuple(
+                (speaker["speaker"], speaker["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"])
+                for speaker in wav_speakers
+            )
+            if wav_speakers is not None
+            else ((None, wav_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]),)
+        )
+
+        assert cloud_tts_voices == wav_voices == expected_voices
+        assert cloud_tts_voice["languageCode"] == (expected_language or "en-US")
+        assert wav_config.get("languageCode") == expected_language
+
     def test_gemini_tts_string_voice_reaches_cloud_tts(self):
         config: Final = VertexAITextToSpeechConfig()
 

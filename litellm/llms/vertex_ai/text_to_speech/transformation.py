@@ -427,20 +427,10 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         speech_config: Mapping[str, object],
         drop_params: bool,
     ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
-        multi_speaker_config: Final = self._get_dict_value(
-            speech_config,
-            "multiSpeakerVoiceConfig",
-            "multi_speaker_voice_config",
-        )
+        multi_speaker_config: Final = self._get_dict_value(speech_config, "multiSpeakerVoiceConfig")
         if multi_speaker_config is None:
             return []
-        raw_speaker_configs: Final = multi_speaker_config.get(
-            "speakerVoiceConfigs",
-            multi_speaker_config.get(
-                "speaker_voice_configs",
-                [],
-            ),
-        )
+        raw_speaker_configs: Final = multi_speaker_config.get("speakerVoiceConfigs", [])
         try:
             validated_speaker_configs: Final = _SPEAKER_CONFIG_ITEMS.validate_python(raw_speaker_configs, strict=True)
         except ValidationError:
@@ -453,27 +443,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             if (raw_config := as_str_mapping(raw_item)) is None:
                 self._reject_malformed_gemini_tts_speaker(model, drop_params)
                 continue
-            speaker_alias = self._get_str_value(
-                raw_config,
-                "speakerAlias",
-                "speaker_alias",
-                "speaker",
-            )
-            speaker_id = self._get_str_value(raw_config, "speakerId", "speaker_id")
-            if speaker_id is None:
-                voice_config = self._get_dict_value(raw_config, "voiceConfig", "voice_config")
-                if voice_config is not None:
-                    prebuilt_voice_config = self._get_dict_value(
-                        voice_config,
-                        "prebuiltVoiceConfig",
-                        "prebuilt_voice_config",
-                    )
-                    if prebuilt_voice_config is not None:
-                        speaker_id = self._get_str_value(
-                            prebuilt_voice_config,
-                            "voiceName",
-                            "voice_name",
-                        )
+            speaker_alias = self._get_str_value(raw_config, "speakerAlias", "speaker")
+            speaker_id = self._get_str_value(raw_config, "speakerId") or self._prebuilt_voice_name(raw_config)
             if speaker_alias is None or speaker_id is None:
                 self._reject_malformed_gemini_tts_speaker(model, drop_params)
                 continue
@@ -485,28 +456,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             )
         return speaker_configs
 
-    def _extract_gemini_tts_voice_name(
-        self,
-        voice: Mapping[str, object],
-        speech_config: Mapping[str, object],
-    ) -> str | None:
-        voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name", "voice")
-        if voice_name is not None:
-            return voice_name
-        nested_voice_name: Final = self._get_str_value(speech_config, "name", "voiceName", "voice_name", "voice")
-        if nested_voice_name is not None:
-            return nested_voice_name
-        voice_config: Final = self._get_dict_value(speech_config, "voiceConfig", "voice_config")
-        if voice_config is None:
-            return None
-        prebuilt_voice_config: Final = self._get_dict_value(
-            voice_config,
-            "prebuiltVoiceConfig",
-            "prebuilt_voice_config",
+    def _prebuilt_voice_name(self, config: Mapping[str, object]) -> str | None:
+        voice_config: Final = self._get_dict_value(config, "voiceConfig")
+        prebuilt_voice_config: Final = (
+            self._get_dict_value(voice_config, "prebuiltVoiceConfig") if voice_config is not None else None
         )
         if prebuilt_voice_config is None:
             return None
-        return self._get_str_value(prebuilt_voice_config, "voiceName", "voice_name")
+        return self._get_str_value(prebuilt_voice_config, "voiceName")
 
     def _map_gemini_tts_voice_to_vertex_format(
         self,
@@ -515,7 +472,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         drop_params: bool = False,
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-            merge_gemini_speech_config_wrapper,
+            mapped_gemini_speech_config,
             reject_unknown_gemini_tts_voice_keys,
         )
 
@@ -540,12 +497,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             return None, default_voice
         reject_unknown_gemini_tts_voice_keys(model, voice_config, drop_params, "vertex_ai")
 
-        speech_config: Final = merge_gemini_speech_config_wrapper(voice_config)
-        language_code: Final = (
-            self._get_str_value(voice_config, "languageCode", "language_code")
-            or self._get_str_value(speech_config, "languageCode", "language_code")
-            or self.DEFAULT_LANGUAGE_CODE
-        )
+        speech_config: Final = mapped_gemini_speech_config(voice_config)
+        language_code: Final = self._get_str_value(speech_config, "languageCode") or self.DEFAULT_LANGUAGE_CODE
         model_name: Final = model
         speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, speech_config, drop_params)
         self._reject_voice_fields_cloud_tts_cannot_send(model, voice_config, drop_params)
@@ -557,7 +510,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                     "speakerVoiceConfigs": speaker_configs,
                 },
             }
-        voice_name: Final = self._extract_gemini_tts_voice_name(voice_config, speech_config)
+        voice_name: Final = self._prebuilt_voice_name(speech_config)
         if voice_name is not None:
             return None, {
                 "languageCode": language_code,
