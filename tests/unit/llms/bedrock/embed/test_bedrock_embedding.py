@@ -331,8 +331,16 @@ def test_bedrock_embedding_explicit_region_outside_the_known_list_returns_the_ve
     )
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us-gov-west-1/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+        "bedrock/async_invoke/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0",
+    ],
+)
 def test_bedrock_async_invoke_embedding_with_a_region_path_posts_the_bare_id_to_that_region(
     respx_mock: respx.MockRouter,
+    model: str,
 ) -> None:
     route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/async-invoke").mock(
         return_value=httpx.Response(
@@ -341,7 +349,7 @@ def test_bedrock_async_invoke_embedding_with_a_region_path_posts_the_bare_id_to_
     )
 
     litellm.embedding(
-        model="bedrock/us-gov-west-1/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+        model=model,
         input=[test_input],
         api_key="test-bearer-token",
         output_s3_uri="s3://test-bucket/async-invoke-output/",
