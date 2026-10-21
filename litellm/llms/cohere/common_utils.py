@@ -234,20 +234,21 @@ class CohereV2ModelResponseIterator:
             return content
         return ""
 
-    def _parse_tool_call_delta(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
-        """Parse tool-call-delta chunks to extract tool calls."""
-        delta: Final = chunk.get("delta", {})
-        tool_calls: Final = delta.get("tool_calls", [])
-        if tool_calls:
-            return {
-                "id": tool_calls[0].get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": tool_calls[0].get("name", ""),
-                    "arguments": tool_calls[0].get("arguments", ""),
-                },
-            }
-        return None
+    def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk | None:
+        """Parse tool-call-start and tool-call-delta chunks to extract tool calls."""
+        tool_call: Final = chunk.get("delta", {}).get("message", {}).get("tool_calls") or {}
+        if isinstance(tool_call, list):
+            tool_call = tool_call[0] if tool_call else {}
+        function: Final = tool_call.get("function") or {}
+        return {
+            "id": tool_call.get("id"),
+            "type": "function",
+            "function": {
+                "name": function.get("name"),
+                "arguments": function.get("arguments", ""),
+            },
+            "index": index,
+        }
 
     def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
         """Parse tool-plan-delta events to extract tool plan."""
@@ -301,7 +302,7 @@ class CohereV2ModelResponseIterator:
 
         v2 format:
         - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text
-        - Tool calls: chunk.type == "tool-call-delta" -> chunk.delta.tool_calls
+        - Tool calls: chunk.type in ("tool-call-start", "tool-call-delta") -> chunk.delta.message.tool_calls
         - Tool plan: chunk.event == "tool-plan-delta" -> chunk.data.delta.message.tool_plan
         - Citations: chunk.event == "citation-start" -> chunk.data.delta.message.citations
         - Finish: chunk.event == "message-end" -> chunk.data.delta.finish_reason
@@ -321,8 +322,8 @@ class CohereV2ModelResponseIterator:
             # Handle different chunk types
             if chunk_type == "content-delta":
                 text = self._parse_content_delta(chunk)
-            elif chunk_type == "tool-call-delta":
-                tool_use = self._parse_tool_call_delta(chunk)
+            elif chunk_type in ("tool-call-start", "tool-call-delta"):
+                tool_use = self._parse_tool_call_delta(chunk, index)
             elif event_type == "tool-plan-delta":
                 provider_specific_fields = self._parse_tool_plan_delta(chunk)
             elif event_type == "citation-start":
