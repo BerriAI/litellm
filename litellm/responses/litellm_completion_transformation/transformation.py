@@ -45,7 +45,7 @@ from litellm.constants import (
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -252,8 +252,9 @@ class _ResponsesToolCallItem(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
-class _MarkedToolCallChunk(ChatCompletionToolCallChunk):
+class _ReplayedToolCallChunk(ChatCompletionToolCallChunk, total=False):
     cache_control: ReadOnly[ChatCompletionCachedContent]
+    provider_specific_fields: ReadOnly[Mapping[str, object]]
 
 
 class _MarkedToolMessage(ChatCompletionToolMessage):
@@ -2231,7 +2232,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call: Final = (
             ChatCompletionToolCallChunk(id=tool_call_id, type="function", function=tool_call_function, index=0)
             if function_call_cache_control is None
-            else _MarkedToolCallChunk(
+            else _ReplayedToolCallChunk(
                 id=tool_call_id,
                 type="function",
                 function=tool_call_function,
@@ -2239,9 +2240,17 @@ class LiteLLMCompletionResponsesConfig:
                 cache_control=function_call_cache_control,
             )
         )
+        provider_specific_fields: Final = as_str_mapping(function_call.get("provider_specific_fields"))
+        replayed_tool_call: Final = (
+            tool_call
+            if provider_specific_fields is None
+            else cast(  # cast-ok: the same tool call plus the provider_specific_fields the client sent back
+                _ReplayedToolCallChunk, {**tool_call, "provider_specific_fields": provider_specific_fields}
+            )
+        )
 
         # Create an assistant message with the tool call
-        return [ChatCompletionResponseMessage(tool_calls=[tool_call], role="assistant", content=None)]
+        return [ChatCompletionResponseMessage(tool_calls=[replayed_tool_call], role="assistant", content=None)]
 
     @staticmethod
     def _resolve_file_id(item: Mapping[str, object]) -> object:
