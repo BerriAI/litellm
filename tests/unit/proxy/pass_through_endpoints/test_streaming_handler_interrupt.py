@@ -775,7 +775,7 @@ def _anthropic_messages_attempt(
         request_body={"model": "claude-sonnet-5", "stream": True},
         litellm_logging_obj=logging_obj,
         endpoint_type=EndpointType.ANTHROPIC,
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         passthrough_success_handler_obj=MagicMock(),
         url_route="/v1/messages",
     )
@@ -787,7 +787,7 @@ def _anthropic_messages_logging_obj(recorder: _EventRecorder, call_id: str) -> L
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id=call_id,
         function_id=call_id,
         dynamic_async_success_callbacks=[recorder],
