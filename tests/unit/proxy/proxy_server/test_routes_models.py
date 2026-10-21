@@ -607,3 +607,59 @@ async def test_default_model_list_does_not_offer_typesafe_models(
     response: Final = await proxy_server.model_list(user_api_key_dict=admin)
 
     assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+async def _key_dialog_models(user_role: LitellmUserRoles, team_id: str | None) -> set[str]:
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=user_role)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=caller, return_wildcard_routes=True, include_model_access_groups=True, team_id=team_id
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_without_a_team_offers_typesafe_models_to_an_admin(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id=None)
+
+    assert {"gpt-4", "typesafe/*", *_priced_jev_models()} <= dialog_models
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_offers_no_typesafe_models_to_an_internal_user(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.INTERNAL_USER, team_id=None)
+
+    assert "gpt-4" in dialog_models
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_for_a_team_offers_no_typesafe_models_the_team_lacks(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id="team-without-typesafe")
+
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_lists_no_typesafe_models_to_a_client_not_asking_for_allowlist_names(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin, scope="expand")
+
+    listed: Final = {model["id"] for model in response["data"]}
+    assert "gpt-4" in listed
+    assert listed.isdisjoint({"typesafe/*", *_priced_jev_models()})

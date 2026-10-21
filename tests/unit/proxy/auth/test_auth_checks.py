@@ -746,6 +746,7 @@ def shipped_routing_rules() -> Iterator[None]:
         (["typesafe/*"], "foo/jev-latest", False),
         (["typesafe/*"], "jev-internal-router", False),
         (["typesafe/*"], "jev-2.0-internal", False),
+        (["typesafe/*"], "jev-1.0", False),
     ],
 )
 def test_typesafe_provider_wildcard_covers_bare_jev_model(
