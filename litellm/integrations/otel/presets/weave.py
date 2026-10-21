@@ -12,7 +12,7 @@ from litellm.integrations.otel.presets.utils import (
     ensure_mappers,
 )
 from litellm.integrations.weave.weave_otel import (
-    _get_weave_authorization_header,
+    get_weave_authorization_header,
     get_weave_otel_config,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -58,7 +58,7 @@ def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, st
     headers: Final[dict[str, str]] = {}
     api_key: Final = params.get("wandb_api_key")
     if api_key:
-        headers["Authorization"] = _get_weave_authorization_header(api_key=api_key)
+        headers["Authorization"] = get_weave_authorization_header(api_key=api_key)
     project_id: Final = params.get("weave_project_id")
     if project_id:
         headers["project_id"] = project_id

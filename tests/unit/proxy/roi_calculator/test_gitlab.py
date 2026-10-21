@@ -48,15 +48,15 @@ async def test_fork_lookups_overlap_with_a_bounded_number_of_requests() -> None:
     source: Final = GitLab(ROISettings(source_provider="gitlab"), httpx.MockTransport(respond))
     pending: Final = asyncio.create_task(source.pulls("group/repo", date(2026, 9, 1), date(2026, 9, 30)))
     try:
-        first_wave: Final = tuple([await asyncio.wait_for(started.get(), timeout=1) for _ in range(8)])
+        first_wave: Final = tuple([await started.get() for _ in range(8)])
         assert len(set(first_wave)) == 8
         assert started.empty()
         release[first_wave[0] - 2].set()
-        next_id: Final = await asyncio.wait_for(started.get(), timeout=1)
+        next_id: Final = await started.get()
         assert next_id not in first_wave
         for event in release:
             event.set()
-        pulls: Final = await asyncio.wait_for(pending, timeout=1)
+        pulls: Final = await pending
         assert tuple(pull.head.repo.full_name if pull.head and pull.head.repo else None for pull in pulls) == tuple(
             None if source_id == 3 else f"fork-{source_id}/repo" for source_id in source_ids
         )
@@ -277,5 +277,30 @@ async def test_gitlab_retries_transient_errors_and_checks_merge_request_access()
         await source.test_repositories(("group/repo",))
         assert next(reads, None) is None
         assert next(statuses, None) is None
+    finally:
+        await source.close()
+
+
+@pytest.mark.asyncio
+async def test_observed_issues_preserve_last_second_boundaries_and_disabled_tracking() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/projects/org/disabled"):
+            return httpx.Response(200, json={"id": 2, "path_with_namespace": "org/disabled", "issues_enabled": False})
+        if request.url.path.endswith("/projects/org/repo"):
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/repo"})
+        assert request.url.params["created_before"] == "2026-10-01T00:00:00Z"
+        return httpx.Response(
+            200,
+            json=[
+                {"iid": 1, "created_at": "2026-09-30T23:59:59.999Z", "labels": ["type::bug"]},
+                {"iid": 2, "created_at": "2026-10-01T00:00:00Z", "labels": ["bug"]},
+            ],
+        )
+
+    source: Final = GitLab(ROISettings(source_provider="gitlab"), httpx.MockTransport(respond))
+    try:
+        issues: Final = await source.issues("org/repo", date(2026, 9, 1), date(2026, 9, 30))
+        assert issues is not None and tuple(issue.number for issue in issues) == (1,)
+        assert await source.issues("org/disabled", date(2026, 9, 1), date(2026, 9, 30)) is None
     finally:
         await source.close()

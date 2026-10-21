@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
@@ -78,6 +79,7 @@ class SemanticMCPToolFilter:
         self._tool_map: dict[str, object] = {}  # MCPTool objects or OpenAI function dicts
         self._index_sync_lock = asyncio.Lock()
 
+    @catalog_operation(global_manager)
     async def build_router_from_mcp_registry(self) -> None:
         """Build semantic router from all MCP tools in the registry (no auth checks)."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -115,7 +117,7 @@ class SemanticMCPToolFilter:
             self.tool_router = None
             raise
 
-    def _extract_tool_info(self, tool) -> tuple[str, str]:
+    def extract_tool_info(self, tool) -> tuple[str, str]:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
@@ -130,6 +132,8 @@ class SemanticMCPToolFilter:
             description = str(tool.description) if tool.description else str(tool.name)
 
         return name, description
+
+    _extract_tool_info = extract_tool_info
 
     def _build_router(self, tools: list) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
@@ -151,7 +155,7 @@ class SemanticMCPToolFilter:
             self._tool_map = {}
 
             for tool in tools:
-                name, description = self._extract_tool_info(tool)
+                name, description = self.extract_tool_info(tool)
                 self._tool_map[name] = tool
 
                 routes.append(
@@ -185,13 +189,13 @@ class SemanticMCPToolFilter:
 
     def _has_tools_missing_from_index(self, tools: Sequence[object]) -> bool:
         """Allocation-free check for any named tool not yet in the semantic index."""
-        return any(name and name not in self._tool_map for name in (self._extract_tool_info(t)[0] for t in tools))
+        return any(name and name not in self._tool_map for name in (self.extract_tool_info(t)[0] for t in tools))
 
     def _tools_missing_from_index(self, tools: Sequence[object]) -> Mapping[str, object]:
         """Map name -> tool for every named tool not yet in the semantic index."""
         return {
             name: tool
-            for name, tool in ((self._extract_tool_info(t)[0], t) for t in tools)
+            for name, tool in ((self.extract_tool_info(t)[0], t) for t in tools)
             if name and name not in self._tool_map
         }
 
@@ -226,7 +230,7 @@ class SemanticMCPToolFilter:
             if not missing:
                 return
 
-            descriptions: Final = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
+            descriptions: Final = {name: self.extract_tool_info(tool)[1] for name, tool in missing.items()}
             routes: Final = [
                 Route(
                     name=name,
@@ -300,7 +304,7 @@ class SemanticMCPToolFilter:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
                 return available_tools
 
-            available_names: Final = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            available_names: Final = [name for name in (self.extract_tool_info(t)[0] for t in available_tools) if name]
             if not available_names:
                 return available_tools
 
@@ -404,7 +408,7 @@ class SemanticMCPToolFilter:
         # names happen to be tail-compatible with the same incoming name.
         available_by_name: Final[dict[str, object]] = {}
         for tool in available_tools:
-            client_name, _ = self._extract_tool_info(tool)
+            client_name, _ = self.extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 

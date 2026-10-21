@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 import respx
@@ -18,9 +18,7 @@ MODELS: Final = (MODEL, "zai-org/GLM-5.2", "deepseek-ai/DeepSeek-V4-Flash")
 @pytest.mark.parametrize("api_key", (None, "explicit-key"))
 @pytest.mark.parametrize("api_base", (BASE_URL, BASE_URL + "/"))
 @pytest.mark.parametrize("routing", ("prefix", "provider", "url"))
-def test_bitdeer_credentials(
-    monkeypatch: pytest.MonkeyPatch, api_key: str | None, api_base: str, routing: str
-) -> None:
+def test_bitdeer_credentials(monkeypatch: pytest.MonkeyPatch, api_key: str | None, api_base: str, routing: str) -> None:
     monkeypatch.setenv("BITDEER_API_KEY", "environment-key")
 
     result: Final = get_llm_provider(
@@ -68,9 +66,7 @@ def test_bitdeer_custom_base_requires_explicit_key(
 @pytest.mark.parametrize(
     "api_base", ("http://api-inference.bitdeer.ai/v1", "https://api-inference.bitdeer.ai:8443/v1", BASE_URL + "/other")
 )
-def test_bitdeer_url_autodetection_rejects_unsafe_key_fallback(
-    monkeypatch: pytest.MonkeyPatch, api_base: str
-) -> None:
+def test_bitdeer_url_autodetection_rejects_unsafe_key_fallback(monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
     monkeypatch.setenv("BITDEER_API_KEY", "server-secret")
     with pytest.raises(litellm.BadRequestError, match="explicit api_key is required"):
         get_llm_provider(model=MODEL, api_base=api_base)
@@ -86,7 +82,8 @@ def test_bitdeer_dynamic_config_checks_custom_base(monkeypatch: pytest.MonkeyPat
         config._get_openai_compatible_provider_info("https://custom.example/v1", None)
 
     assert config._get_openai_compatible_provider_info("https://custom.example/v1", "explicit-key") == (
-        "https://custom.example/v1", "explicit-key"
+        "https://custom.example/v1",
+        "explicit-key",
     )
 
 
@@ -104,7 +101,9 @@ def test_bitdeer_completion_sends_selected_key(
                 "object": "chat.completion",
                 "created": 0,
                 "model": MODEL,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
             },
         )
@@ -142,6 +141,57 @@ def test_bitdeer_completion_rejects_custom_base_before_sending(monkeypatch: pyte
         assert len(upstream.calls) == 0
 
 
+@pytest.mark.parametrize("routing", ("prefix", "provider", "url"))
+@pytest.mark.parametrize("endpoint", ("chat", "image"))
+def test_bitdeer_missing_credentials_never_send_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+    routing: Literal["prefix", "provider", "url"],
+    endpoint: Literal["chat", "image"],
+) -> None:
+    monkeypatch.delenv("BITDEER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setattr(litellm, "api_key", "global-secret")
+    monkeypatch.setattr(litellm, "openai_key", "global-openai-secret")
+    model: Final = f"bitdeer-ai/{MODEL}" if routing == "prefix" else MODEL
+    provider: Final = "bitdeer-ai" if routing == "provider" else None
+    api_base: Final = BASE_URL if routing == "url" else None
+
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.AuthenticationError, match="BITDEER_API_KEY") as error:
+            if endpoint == "chat":
+                litellm.completion(
+                    model=model,
+                    custom_llm_provider=provider,
+                    api_base=api_base,
+                    messages=[{"role": "user", "content": "Hi"}],
+                )
+            else:
+                litellm.image_generation(model=model, custom_llm_provider=provider, api_base=api_base, prompt="A tree")
+        assert len(upstream.calls) == 0
+        assert "secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ("chat", "image"))
+async def test_bitdeer_async_missing_credentials_never_send_openai_key(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Literal["chat", "image"]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("BITDEER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setattr(litellm, "api_key", "global-secret")
+    monkeypatch.setattr(litellm, "openai_key", "global-openai-secret")
+
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.AuthenticationError, match="BITDEER_API_KEY") as error:
+            if endpoint == "chat":
+                await litellm.acompletion(model=f"bitdeer-ai/{MODEL}", messages=[{"role": "user", "content": "Hi"}])
+            else:
+                await litellm.aimage_generation(model=f"bitdeer-ai/{MODEL}", prompt="A tree")
+        assert len(upstream.calls) == 0
+        assert "secret" not in str(error.value)
+
+
 def _unique_entries(pairs: list[tuple[str, object]]) -> dict[str, object]:
     keys: Final = tuple(key for key, _ in pairs)
     assert len(keys) == len(set(keys)), "Duplicate JSON key"
@@ -150,7 +200,9 @@ def _unique_entries(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def test_bitdeer_pricing_and_packaged_registry() -> None:
     root: Final = Path(litellm.__file__).parent.parent
-    prices: Final = json.loads((root / "model_prices_and_context_window.json").read_text(), object_pairs_hook=_unique_entries)
+    prices: Final = json.loads(
+        (root / "model_prices_and_context_window.json").read_text(), object_pairs_hook=_unique_entries
+    )
     backup: Final = json.loads((root / "litellm/model_prices_and_context_window_backup.json").read_text())
 
     for model in MODELS:

@@ -10,10 +10,10 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from datetime import datetime, timezone
 from functools import partial
 from itertools import groupby
-from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 _UPSERT_RETRY_TIMES: Final = 3
 _MAX_PENDING_ROWS: Final = 10_000
+_DECODED_METADATA: Final = TypeAdapter(object)
 
 _RowKey = TypeVar("_RowKey")
 _RowValue = TypeVar("_RowValue")
@@ -53,6 +54,10 @@ class _UsageUnitIncrement(NamedTuple):
     """USD for the priced share of units."""
     untracked_units: int
     """Units recorded with no known price, the share cost leaves out."""
+
+
+def _usage_unit_key(entry: tuple[_UsageUnitKey, _UsageUnitIncrement]) -> _UsageUnitKey:
+    return entry[0]
 
 
 def _usage_unit_increment(units: int, cost: float | None) -> _UsageUnitIncrement:
@@ -188,7 +193,7 @@ async def _upsert_rows_with_retry(
                 outcomes[key],
             )
         return retryable
-    await sleep(2 ** (_UPSERT_RETRY_TIMES - retries_left))
+    await sleep(2.0 ** (_UPSERT_RETRY_TIMES - retries_left))
     return await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
@@ -213,7 +218,7 @@ def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequenc
         return []
     if isinstance(meta, str):
         try:
-            meta = json.loads(meta)
+            meta = _DECODED_METADATA.validate_python(json.loads(meta))
         except (json.JSONDecodeError, TypeError):
             return []
     if not isinstance(meta, dict):
@@ -269,11 +274,11 @@ def _iter_usage_unit_increments(
 def _sum_usage_unit_increments(
     logs_to_process: Sequence[Mapping[str, object]],
 ) -> Mapping[_UsageUnitKey, _UsageUnitIncrement]:
-    ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=itemgetter(0))
+    ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=_usage_unit_key)
     return MappingProxyType(
         {
             key: _summed_increments(increment for _, increment in group)
-            for key, group in groupby(ordered, key=itemgetter(0))
+            for key, group in groupby(ordered, key=_usage_unit_key)
         }
     )
 

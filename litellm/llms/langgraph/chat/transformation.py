@@ -10,7 +10,7 @@ Non-streaming endpoint: POST /runs/wait
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
 
@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
 from litellm.types.llms.openai import AllMessageValues
@@ -71,6 +72,13 @@ class LangGraphConfig(BaseConfig):
 
         return api_base, api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
         LangGraph supports minimal OpenAI params since it's an agent runtime.
@@ -109,14 +117,11 @@ class LangGraphConfig(BaseConfig):
                 "api_base is required for LangGraph. Set it via LANGGRAPH_API_BASE env var or api_base parameter."
             )
 
-        # Remove trailing slash if present
-        api_base = api_base.rstrip("/")
-
         # Choose endpoint based on streaming mode
         if stream:
-            return f"{api_base}/runs/stream"
+            return join_api_base(api_base, "runs/stream")
         else:
-            return f"{api_base}/runs/wait"
+            return join_api_base(api_base, "runs/wait")
 
     def _get_assistant_id(self, model: str, optional_params: dict) -> str:
         """
@@ -135,7 +140,7 @@ class LangGraphConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
+    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, object]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
@@ -144,7 +149,7 @@ class LangGraphConfig(BaseConfig):
 
         Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: Final[list[dict[str, Any]]] = []
+        langgraph_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -167,7 +172,7 @@ class LangGraphConfig(BaseConfig):
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_message: dict[str, Any] = {
+            langgraph_message: dict[str, object] = {
                 "role": langgraph_role,
                 "content": content,
             }
@@ -202,7 +207,7 @@ class LangGraphConfig(BaseConfig):
         assistant_id: Final = self._get_assistant_id(model, optional_params)
         langgraph_messages: Final = self._convert_messages_to_langgraph_format(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "assistant_id": assistant_id,
             "input": {"messages": langgraph_messages},
         }
@@ -295,12 +300,12 @@ class LangGraphConfig(BaseConfig):
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
@@ -362,7 +367,7 @@ class LangGraphConfig(BaseConfig):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "langgraph"), params={})
+            client = get_async_httpx_client(llm_provider="langgraph", params={})
 
         verbose_logger.debug("Making async streaming request to: %s", api_base)
 

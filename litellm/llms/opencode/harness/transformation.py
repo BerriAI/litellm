@@ -8,16 +8,30 @@ repo's own opencode.json cannot redirect model calls. The token is never in argv
 the config references it with `{file:<private_dir>/token}`. XDG dirs point at a persisted
 LiteLLM-owned root so the user's opencode config and auth are never read, and the session
 DB outlives a session for resume. Verified against opencode 1.14.41.
+
+opencode files each session under the folder it ran in and only streams a resumed session's
+events from that folder, so resuming one filed elsewhere (by an older LiteLLM that left PWD
+unset, or from another sandbox) hangs. The first turn after a resume runs `opencode export` in
+the sandbox, and when the session is filed elsewhere it imports a copy under fresh ids, filed
+under the sandbox folder, and continues the copy. Import overwrites the folder of a session id it
+already has, so reusing the ids would break the original wherever it was saved. Before 1.15.6,
+import files a session under the folder named in its JSON, so the copy names the sandbox folder.
+A failed or timed-out export or import fails that turn instead of hanging, and the next turn
+tries again. Verified against opencode 1.14.41, 1.15.5, 1.15.6 and 1.19.3.
 """
 
 from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Mapping, Sequence
+import secrets
+import string
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import OpenCodeOptions
@@ -33,6 +47,7 @@ from litellm.harness.types import (
 )
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
+    HarnessSessionCopy,
     HarnessSessionSetup,
     HarnessTurnError,
     HarnessTurnRequest,
@@ -40,11 +55,12 @@ from litellm.llms.base_llm.harness.transformation import (
     event_list,
 )
 from litellm.llms.base_llm.harness.utils import (
+    build_instructions,
     last_json_object,
     native_tool_names,
     normalize_tool_name,
     stderr_tail_text,
-    structured_output_instruction,
+    turn_prompt,
 )
 
 if TYPE_CHECKING:
@@ -56,6 +72,10 @@ OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 # A fixed title skips opencode's extra title-generation model call on the first turn.
 OPENCODE_SESSION_TITLE: Final = "litellm-harness"
 TOKEN_FILENAME: Final = "token"
+RESUME_COPY_FILENAME: Final = "resume-session.json"
+ID_ORDERED_PREFIX_LENGTH: Final = 16
+ID_RANDOM_LENGTH: Final = 14
+ID_RANDOM_ALPHABET: Final = string.ascii_letters + string.digits
 INSTRUCTIONS_FILENAME: Final = "instructions.md"
 XDG_DIRNAME: Final = "xdg"
 XDG_SUBDIRS: Final = ("config", "data", "state", "cache")
@@ -161,11 +181,99 @@ class OpenCodeStreamState:
     step_texts: Sequence[str] = ()
 
 
+class ExportedPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class ExportedMessageInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class ExportedMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    info: ExportedMessageInfo
+    parts: tuple[ExportedPart, ...]
+
+
+class ExportedSessionInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    directory: str
+
+
+class ExportedSession(BaseModel):
+    """The ids and folder of an `opencode export`; every other field is copied as is."""
+
+    model_config = ConfigDict(frozen=True)
+
+    info: ExportedSessionInfo
+    messages: tuple[ExportedMessage, ...]
+
+    def ids(self) -> Iterator[str]:
+        yield self.info.id
+        for message in self.messages:
+            yield message.info.id
+            yield from (part.id for part in message.parts)
+
+
+EXPORT_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def fresh_id(old: str) -> str:
+    """Keeps the type prefix and time-ordered part of an opencode id, so the copy sorts like the original."""
+    suffix: Final = "".join(secrets.choice(ID_RANDOM_ALPHABET) for _ in range(ID_RANDOM_LENGTH))
+    return f"{old[:ID_ORDERED_PREFIX_LENGTH]}{suffix}"
+
+
+def with_id_fields_replaced(value: JsonValue, fresh: Mapping[str, str], key: str = "") -> JsonValue:
+    match value:
+        case str() if key == "id" or key.endswith("ID"):
+            return fresh.get(value, value)
+        case list():
+            return [with_id_fields_replaced(item, fresh, key) for item in value]
+        case dict():
+            return {name: with_id_fields_replaced(item, fresh, name) for name, item in value.items()}
+        case _:
+            return value
+
+
+def filed_under(exported: JsonValue, workdir: str) -> JsonValue:
+    match exported:
+        case {"info": dict() as info}:
+            return {**exported, "info": {**info, "directory": workdir}}
+        case _:
+            return exported
+
+
+def session_copy(exported: str, path: str, workdir: str) -> HarnessSessionCopy | None:
+    """A copy of an exported session filed under workdir, or None when the session is already filed there."""
+    try:
+        raw: Final = EXPORT_JSON.validate_json(exported)
+        session: Final = ExportedSession.model_validate(raw)
+    except ValidationError as exc:
+        raise HarnessError(f"opencode export did not print a session: {exc.errors()[0]['msg']}") from exc
+    if session.info.directory == workdir:
+        return None
+    fresh: Final = MappingProxyType({old: fresh_id(old) for old in session.ids()})
+    return HarnessSessionCopy(
+        session_id=fresh[session.info.id],
+        path=path,
+        data=json.dumps(filed_under(with_id_fields_replaced(raw, fresh), workdir)).encode("utf-8"),
+        import_command=(OPENCODE_BINARY, "--pure", "import", path),
+    )
+
+
 def _as_dict(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else MappingProxyType({})
 
 
-def _tool_events(part: Mapping[str, Any]) -> Sequence[Event]:
+def _tool_events(part: Mapping[str, object]) -> Sequence[Event]:
     native = str(part.get("tool") or "")
     call_id = str(part.get("callID") or part.get("id") or "")
     state = _as_dict(part.get("state"))
@@ -195,7 +303,7 @@ def _error_message(error: object) -> str:
     return str(error.get("name") or "opencode reported an error")
 
 
-def validate_user_config(config: Mapping[str, Any]) -> None:
+def validate_user_config(config: Mapping[str, object]) -> None:
     """Reject OpenCodeOptions.config keys LiteLLM manages (or that bypass permissions)."""
     for key in config:
         if key in MANAGED_CONFIG_KEYS:
@@ -241,7 +349,7 @@ def build_opencode_config(
     user_config: Mapping[str, Any] | None = None,
     instructions_path: str | None = None,
     skills_path: str | None = None,
-) -> Mapping[str, Any]:
+) -> Mapping[str, object]:
     """The full opencode config: user config underneath, LiteLLM-managed keys on top."""
     user: Final = user_config or MappingProxyType({})
     validate_user_config(user)
@@ -252,7 +360,7 @@ def build_opencode_config(
     extra_skills: Final = (skills_path,) if skills_path else ()
     skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
     options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
-    models: Final[dict[str, Any]] = {model: {}}  # mutable-ok: opencode config JSON
+    models: Final[dict[str, Mapping[str, object]]] = {model: {}}  # mutable-ok: opencode config JSON
     provider: Final = {  # mutable-ok: opencode config JSON
         "npm": OPENCODE_PROVIDER_NPM,
         "name": "LiteLLM",
@@ -272,21 +380,6 @@ def build_opencode_config(
     optional: Final = (("instructions", instructions), ("skills", skills if skill_paths else None))
     present: Final = ((key, value) for key, value in optional if value)
     return {**user, **managed, **dict(present)}  # mutable-ok: opencode config JSON
-
-
-def build_instructions(ctx: SessionContext) -> str | None:
-    schema_part: Final = (
-        structured_output_instruction(ctx.output.model_json_schema()) if ctx.output is not None else None
-    )
-    sections: Final = tuple(section for section in (ctx.instructions, schema_part) if section)
-    return "\n\n".join(sections) if sections else None
-
-
-def turn_prompt(ctx: SessionContext, prompt: str) -> str:
-    """Repeat the schema instruction in the user turn; system instructions alone are too weak."""
-    if ctx.output is None:
-        return prompt
-    return f"{prompt}\n\n{structured_output_instruction(ctx.output.model_json_schema())}"
 
 
 class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
@@ -376,10 +469,16 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         # The prompt goes on stdin; opencode appends non-TTY stdin to the message.
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=turn_prompt(ctx, prompt), cwd=ctx.sandbox.workdir)
 
+    def transform_resume_export_command(self, native_session_id: str) -> Sequence[str]:
+        return (OPENCODE_BINARY, "--pure", "export", native_session_id)
+
+    def transform_resume_copy(self, exported: str, private_dir: str, workdir: str) -> HarnessSessionCopy | None:
+        return session_copy(exported, f"{private_dir}/{RESUME_COPY_FILENAME}", workdir)
+
     def create_stream_state(self) -> OpenCodeStreamState:
         return OpenCodeStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: OpenCodeStreamState) -> Sequence[Event]:
+    def transform_stream_line(self, line: Mapping[str, object], state: OpenCodeStreamState) -> Sequence[Event]:
         """step_finish token counts are ignored on purpose: the session endpoint accounts usage."""
         session_id = line.get("sessionID")
         if session_id and state.session_id is None:

@@ -10,6 +10,7 @@ from urllib.parse import quote
 import pytest
 import yaml
 from e2e_http import ExternalWrite, Headers, send_text_external
+from e2e_metadata import step
 from pydantic import Field
 
 from secret_store import SecretBackend
@@ -94,6 +95,7 @@ class Conjur:
         if not result.ok:
             pytest.fail(f"Conjur refused to {action}: HTTP {result.status_code} {result.body[:300]}")
 
+    @step("Write the secret {name} to CyberArk Conjur")
     def write(self, name: str, value: str) -> None:
         self._update_root_policy("POST", f"- !variable {_policy_scalar(name)}\n", f"declare {name}")
         result: Final = send_text_external("POST", self._secret_url(name), headers=self._headers(), content=value)
@@ -101,6 +103,7 @@ class Conjur:
         if not result.ok:
             pytest.fail(f"Conjur refused to write {name}: HTTP {result.status_code} {result.body[:300]}")
 
+    @step("Read the secret {name} from CyberArk Conjur")
     def read(self, name: str) -> str | None:
         result: Final = send_text_external("GET", self._secret_url(name), headers=self._headers())
         self._fail_unless_reached(result, f"read {name}")
@@ -110,6 +113,7 @@ class Conjur:
             pytest.fail(f"Conjur refused to read {name}: HTTP {result.status_code} {result.body[:300]}")
         return result.body
 
+    @step("Delete the secret {name} from CyberArk Conjur")
     def destroy(self, name: str) -> None:
         self._update_root_policy("PATCH", f"- !delete\n  record: !variable {_policy_scalar(name)}\n", f"destroy {name}")
 

@@ -1,0 +1,3 @@
+{{- if eq (include "litellm.lens.mode" .) "bundled" }}
+{{ include "litellm.lens.render" (dict "root" . "resource" "clickhouse") }}
+{{- end }}

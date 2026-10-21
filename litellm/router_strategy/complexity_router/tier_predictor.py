@@ -7,12 +7,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import RequestType
 
 
-class TierGlobalStatistic(BaseModel):
+class TierGlobalStatistic(LiteLLMBaseModel):
     tier: int = Field(ge=1, le=4)
     successes: float = Field(ge=0.0)
     observations: float = Field(gt=0.0)
@@ -32,7 +33,7 @@ class TierCohortStatistic(TierGlobalStatistic):
     cohort: str = Field(min_length=1)
 
 
-class TierDataset(BaseModel):
+class TierDataset(LiteLLMBaseModel):
     name: str = Field(min_length=1)
     url: str = Field(min_length=1)
     license: str = Field(min_length=1)
@@ -40,7 +41,7 @@ class TierDataset(BaseModel):
     success_definition: str = Field(default="quality score meets the dataset success threshold", min_length=1)
 
 
-class TrainedTierArtifact(BaseModel):
+class TrainedTierArtifact(LiteLLMBaseModel):
     schema_version: Literal[1] = 1
     global_statistics: tuple[TierGlobalStatistic, ...]
     domain_statistics: tuple[TierDomainStatistic, ...] = ()

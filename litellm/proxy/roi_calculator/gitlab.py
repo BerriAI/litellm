@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime, timedelta
 from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import quote
@@ -14,25 +14,30 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.roi_calculator.analytics import normalize_email
 from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.source import repository_tag
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
+from litellm.types.roi_observed import ObservedIssue
 
 _T: Final = TypeVar("_T", bound=BaseModel)
 
 
-class _User(BaseModel):
+class _User(LiteLLMBaseModel):
     username: str
     public_email: str | None = None
+    bot: bool = False
 
 
-class _Project(BaseModel):
+class _Project(LiteLLMBaseModel):
     id: int
     path_with_namespace: str
     visibility: str = "private"
     archived: bool = False
+    issues_enabled: bool = True
+    issues_access_level: str = "enabled"
 
 
-class _MergeRequest(BaseModel):
+class _MergeRequest(LiteLLMBaseModel):
     iid: int
     title: str
     description: str | None = None
@@ -40,6 +45,7 @@ class _MergeRequest(BaseModel):
     author: _User
     merged_at: str | None
     updated_at: str
+    created_at: datetime | None = None
     sha: str | None = None
     source_branch: str
     source_project_id: int | None
@@ -52,7 +58,8 @@ class _MergeRequest(BaseModel):
                 "title": self.title,
                 "body": self.description or "",
                 "html_url": self.web_url,
-                "user": {"login": self.author.username},
+                "user": {"login": self.author.username, "type": "Bot" if self.author.bot else "User"},
+                "created_at": self.created_at,
                 "merged_at": self.merged_at,
                 "updated_at": self.updated_at,
                 "head": {
@@ -64,7 +71,7 @@ class _MergeRequest(BaseModel):
         )
 
 
-class _Diff(BaseModel):
+class _Diff(LiteLLMBaseModel):
     new_path: str
     old_path: str
     diff: str = ""
@@ -89,16 +96,25 @@ class _Diff(BaseModel):
         )
 
 
-class _Commit(BaseModel):
+class _Commit(LiteLLMBaseModel):
     id: str
     message: str
+
+
+class _Issue(LiteLLMBaseModel):
+    iid: int
+    created_at: datetime
+    labels: tuple[str, ...] = ()
 
 
 class GitLab:
     def __init__(self, settings: ROISettings, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.settings: Final = settings
         token: Final = settings.gitlab_token.get_secret_value()
-        self.headers: Final = {"Accept": "application/json", **({"PRIVATE-TOKEN": token} if token else {})}
+        authorization: Final = (
+            {"Authorization": f"Bearer {token}"} if settings.connection_type == "app" else {"PRIVATE-TOKEN": token}
+        )
+        self.headers: Final = {"Accept": "application/json", **(authorization if token else {})}
         self.client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.ROICalculator,
             params={"timeout": 45, "follow_redirects": False, "transport": transport},
@@ -171,7 +187,9 @@ class GitLab:
         params: Final = {
             "simple": "true",
             "search": query,
-            **({"membership": "true"} if self.headers.get("PRIVATE-TOKEN") else {}),
+            **(
+                {"membership": "true"} if self.headers.get("PRIVATE-TOKEN") or self.headers.get("Authorization") else {}
+            ),
         }
         items, more = await self._page("projects", _Project, params, page)
         return tuple((item.path_with_namespace, item.visibility, item.archived) for item in items), more
@@ -193,6 +211,8 @@ class GitLab:
                 "state": "merged",
                 "scope": "all",
                 "updated_after": start.isoformat() + "T00:00:00Z",
+                "merged_after": start.isoformat() + "T00:00:00Z",
+                "merged_before": (end + timedelta(days=1)).isoformat() + "T00:00:00Z",
                 "order_by": "updated_at",
                 "sort": "desc",
             },
@@ -217,6 +237,26 @@ class GitLab:
         )
         self.profiles = MappingProxyType({**self.profiles, login.casefold(): email})
         return email
+
+    async def issues(self, repo: str, start: date, end: date) -> tuple[ObservedIssue, ...] | None:
+        project: Final = await self._project(repo)
+        if not project.issues_enabled or project.issues_access_level == "disabled":
+            return None
+        issues: Final = await self._all(
+            f"projects/{project.id}/issues",
+            _Issue,
+            {
+                "scope": "all",
+                "state": "all",
+                "created_after": f"{start}T00:00:00Z",
+                "created_before": f"{end + timedelta(days=1)}T00:00:00Z",
+            },
+        )
+        return tuple(
+            ObservedIssue(repo=repo, number=issue.iid, created_at=issue.created_at, labels=issue.labels)
+            for issue in issues
+            if start <= issue.created_at.date() <= end
+        )
 
     async def evidence(self, repo: str, pull: GitHubPullListItem) -> ROIPullEvidence:
         project: Final = await self._project(repo)

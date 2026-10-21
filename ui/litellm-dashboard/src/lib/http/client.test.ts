@@ -35,6 +35,7 @@ describe("createApiClient", () => {
     expect(url).toBe("https://proxy.example/models?team=t1&page=2");
     expect(init).toMatchObject({ method: "GET" });
     expect(init.headers).toEqual({
+      Accept: "application/json",
       "Content-Type": "application/json",
       "x-litellm-key": "Bearer sk-123",
     });
@@ -59,6 +60,16 @@ describe("createApiClient", () => {
     const [, init] = fetchImpl.mock.calls[0];
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ model_name: "gpt" }));
+  });
+
+  it("reports a non-JSON success body as an ApiError naming the path instead of a parse error", async () => {
+    const html = new Response("<!DOCTYPE html><html></html>", { headers: { "Content-Type": "text/html" } });
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl: vi.fn(async () => html) });
+
+    const error = await client.get("/lens").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe("Expected JSON from /lens but the server returned text/html");
   });
 
   it("throws ApiError with the derived message and invokes onError on a non-2xx response", async () => {
@@ -110,7 +121,7 @@ describe("createApiClient", () => {
     await client.get("/public/info");
 
     const [, init] = fetchImpl.mock.calls[0];
-    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(init.headers).toEqual({ Accept: "application/json", "Content-Type": "application/json" });
   });
 
   it("getBlob returns the response body as a Blob on success", async () => {

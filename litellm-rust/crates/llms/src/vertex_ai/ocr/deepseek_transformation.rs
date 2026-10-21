@@ -16,10 +16,9 @@ use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
     OcrUsageInfo,
 };
+use litellm_llms_types::providers::vertex_ai::{DEFAULT_LOCATION, GLOBAL_API_BASE};
 
-const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_PREFIX: &str = "deepseek-ai/";
-const DEFAULT_LOCATION: &str = "us-central1";
 const DEEPSEEK_OCR_PARAMS: &[&str] = &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
 
 /// DeepSeek-OCR is a transcription model: at the endpoint's default sampling temperature it
@@ -396,7 +395,7 @@ impl VertexAIDeepSeekOCRConfig {
         let base = api_base
             .map(str::trim)
             .filter(|base| !base.is_empty())
-            .unwrap_or(DEFAULT_API_BASE);
+            .unwrap_or(GLOBAL_API_BASE);
         ApiUrl::parse(base)
             .and_then(|url| {
                 url.complete_path(&[

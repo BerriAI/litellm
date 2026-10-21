@@ -22,11 +22,14 @@ Supported models:
 Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/latest/EmbedTextResult/EmbedText
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.oci.common_utils import (
@@ -51,6 +54,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 # OCI sends up to 96 texts per embedText request (Cohere limit).
 OCI_EMBED_BATCH_LIMIT: Final = 96
@@ -152,7 +157,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/embedText"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/embedText")
 
     def sign_request(
         self,
@@ -275,7 +280,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            parsed: Final = OCIEmbedResponse(**json_response)
+            parsed: Final = OCIEmbedResponse.model_validate(_JSON_OBJECT.validate_python(json_response))
         except Exception as e:
             raise OCIError(
                 status_code=500,
