@@ -192,9 +192,6 @@ def provider_block(
     breaks compaction thresholds and over-asks models with smaller output caps.
     pi sniffs compat from the base URL, and one gateway URL fronts models with
     different capabilities, so the store and long-cache flags are pinned off.
-    The compat also turns on pi's session-affinity header in the x-session-id
-    format the proxy reads, so a pi session groups in logs and sticks to one
-    deployment.
     """
     return {
         "baseUrl": base_url.rstrip("/") + "/v1",
