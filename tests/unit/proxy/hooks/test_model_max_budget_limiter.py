@@ -1,4 +1,6 @@
 import asyncio
+import functools
+import re
 import time
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
@@ -333,18 +335,37 @@ def _model_access_groups(groups_by_model: Mapping[str, frozenset[str]]) -> Calla
 class _SharedWindowsDouble:
     def __init__(self) -> None:
         self.rows: Mapping[str, SharedWindow] = MappingProxyType({})
+        self.queued: tuple[tuple[str, float, float], ...] = ()
 
     async def read(self, spend_key: str, budget_duration: str) -> SharedWindow | None:
         return self.rows.get(spend_key)
 
-    async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None:
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float:
         stored: Final = self.rows.get(spend_key)
-        row: Final = (
-            SharedWindow(started_at=stored.started_at, spend=stored.spend + spend)
-            if stored is not None and stored.started_at >= started_at
-            else SharedWindow(started_at=started_at, spend=spend)
-        )
-        self.rows = MappingProxyType({**self.rows, spend_key: row})
+        if stored is not None and stored.is_open(budget_duration=budget_duration, now=now):
+            return stored.started_at
+        self.rows = MappingProxyType({**self.rows, spend_key: SharedWindow(started_at=now, spend=0.0)})
+        return now
+
+    async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None:
+        self.queued = (*self.queued, (spend_key, started_at, spend))
+
+    def flush(self) -> None:
+        self.rows = functools.reduce(_upsert_window_spend, self.queued, self.rows)
+        self.queued = ()
+
+
+def _upsert_window_spend(
+    rows: Mapping[str, SharedWindow], queued: tuple[str, float, float]
+) -> Mapping[str, SharedWindow]:
+    spend_key, started_at, spend = queued
+    stored: Final = rows.get(spend_key)
+    row: Final = (
+        SharedWindow(started_at=stored.started_at, spend=stored.spend + spend)
+        if stored is not None and stored.started_at >= started_at
+        else SharedWindow(started_at=started_at, spend=spend)
+    )
+    return MappingProxyType({**rows, spend_key: row})
 
 
 def _family_limiter(
@@ -393,7 +414,9 @@ async def test_every_opus_version_draws_from_one_family_entry(family_entry: str)
 
     await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
 
-    with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
+    with pytest.raises(
+        litellm.BudgetExceededError, match=rf"model=claude-opus-5-5, budget_model={re.escape(family_entry)}$"
+    ):
         await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
     assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-sonnet-5")
 
@@ -488,6 +511,7 @@ async def test_replicas_without_redis_enforce_one_family_cap_together():
     replica_b: Final = _family_limiter(shared_windows=table)
 
     await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
 
     with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
         await replica_b.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
@@ -509,6 +533,7 @@ async def test_replicas_sharing_redis_enforce_the_family_cap_without_the_databas
 
     await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
     await _drain_redis_pushes()
+    table.flush()
 
     with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
         await replica_b.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
@@ -525,8 +550,10 @@ async def test_a_replica_charges_the_open_shared_window_instead_of_restarting_it
     replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
 
     await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
     clock.advance(3600)
     await _spend_on(replica_b, model="claude-opus-5-5", model_max_budget=budget)
+    table.flush()
 
     for replica in (replica_a, replica_b):
         with pytest.raises(litellm.BudgetExceededError):
@@ -542,6 +569,7 @@ async def test_key_info_on_one_replica_reports_spend_from_every_replica():
 
     await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
     await _spend_on(replica_b, model="claude-opus-5-5", model_max_budget=budget)
+    table.flush()
 
     usage: Final = await build_model_max_budget_usage(
         entity_type=Litellm_EntityType.KEY,
@@ -552,3 +580,28 @@ async def test_key_info_on_one_replica_reports_spend_from_every_replica():
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
     assert usage["claude-opus*"]["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_model", ["claude-opus*", "claude-opus-4-8"])
+async def test_replicas_starting_a_window_moments_apart_keep_each_others_spend(budget_model: str):
+    budget: Final = {budget_model: ROOMY_CAP}
+    table: Final = _SharedWindowsDouble()
+    clock: Final = _Clock()
+    clock.advance(time.time())
+    replica_a: Final = _family_limiter(shared_windows=table, clock=clock.now)
+    replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    clock.advance(1)
+    await _spend_on(replica_b, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=DualCache(),
+        shared_windows=table,
+    )
+    assert usage[budget_model]["current_spend"] == round(CHAT_COST * 2, 4)

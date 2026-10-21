@@ -16582,6 +16582,7 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     }
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
     monkeypatch.setattr(
@@ -16705,6 +16706,7 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
     model_max_budget = {"gpt-4o": {"budget_limit": 1.00, "time_period": "7d"}}
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
     monkeypatch.setattr(
@@ -16769,6 +16771,7 @@ async def test_info_key_fn_budget_table_fallback(monkeypatch):
     }
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
     monkeypatch.setattr(
@@ -16842,6 +16845,7 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
     }
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
     monkeypatch.setattr(
@@ -17217,6 +17221,7 @@ async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
     }
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
     monkeypatch.setattr(

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.db.budget_window_spend_writer import open_window_spend_row
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     build_window_spend_transaction,
@@ -36,6 +37,8 @@ class LocalTTLCache(Protocol):
 
 class SharedWindows(Protocol):
     async def read(self, spend_key: str, budget_duration: str) -> SharedWindow | None: ...
+
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float: ...
 
     async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None: ...
 
@@ -83,6 +86,40 @@ class DatabaseSharedWindows:
         self._readings.set_cache(key=spend_key, value=_Reading(window=window), ttl=self._read_ttl_seconds)
         return window
 
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float:
+        """When the window every replica shares started, opening one at `now` if none is open.
+
+        Falls back to `now`, this replica's own window, when the database cannot answer.
+        """
+        prisma_client: Final = self._prisma_client_source()
+        if prisma_client is None:
+            return now
+        try:
+            seen: Final = await _fetch_row(
+                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration
+            )
+            if seen is not None and seen.is_open(budget_duration=budget_duration, now=now):
+                return seen.started_at
+            await open_window_spend_row(
+                prisma_client=prisma_client,
+                entity_type=MODEL_BUDGET_WINDOW_ENTITY_TYPE,
+                entity_id=spend_key,
+                window_duration=budget_duration,
+                window_start=datetime.fromtimestamp(now, tz=timezone.utc),
+                replaces_window_start=None
+                if seen is None
+                else datetime.fromtimestamp(seen.started_at, tz=timezone.utc),
+            )
+            opened: Final = await _fetch_row(
+                prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration
+            )
+        except Exception:  # noqa: BLE001  # an unreachable database leaves this replica on its own window
+            verbose_proxy_logger.exception("Unable to open the shared model budget window")
+            return now
+        if opened is None or not opened.is_open(budget_duration=budget_duration, now=now):
+            return now
+        return opened.started_at
+
     async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None:
         if self._prisma_client_source() is None:
             return
@@ -97,32 +134,36 @@ class DatabaseSharedWindows:
                 )
             )
         except Exception:  # noqa: BLE001  # spend tracking must never fail the success callback
-            verbose_proxy_logger.debug("Unable to queue shared model budget spend for %s", spend_key, exc_info=True)
+            verbose_proxy_logger.debug("Unable to queue shared model budget spend", exc_info=True)
 
     async def _read_row(self, spend_key: str, budget_duration: str) -> SharedWindow | None:
         prisma_client: Final = self._prisma_client_source()
         if prisma_client is None:
             return None
         try:
-            row: Final = await BudgetWindowSpendRepository(prisma_client).table.find_unique(
-                where={
-                    "entity_type_entity_id_window_duration": {
-                        "entity_type": MODEL_BUDGET_WINDOW_ENTITY_TYPE,
-                        "entity_id": spend_key,
-                        "window_duration": budget_duration,
-                    }
-                }
-            )
+            return await _fetch_row(prisma_client=prisma_client, spend_key=spend_key, budget_duration=budget_duration)
         except Exception:  # noqa: BLE001  # an unreadable row leaves enforcement on this replica's own counter
-            verbose_proxy_logger.exception("Unable to read shared model budget spend for %s", spend_key)
+            verbose_proxy_logger.exception("Unable to read shared model budget spend")
             return None
-        if row is None:
-            return None
-        window_start: Final = row.window_start
-        started_at: Final = (
-            window_start if window_start.tzinfo is not None else window_start.replace(tzinfo=timezone.utc)
-        ).timestamp()
-        return SharedWindow(started_at=started_at, spend=float(row.spend or 0.0))
+
+
+async def _fetch_row(prisma_client: "PrismaClient", spend_key: str, budget_duration: str) -> SharedWindow | None:
+    row: Final = await BudgetWindowSpendRepository(prisma_client).table.find_unique(
+        where={
+            "entity_type_entity_id_window_duration": {
+                "entity_type": MODEL_BUDGET_WINDOW_ENTITY_TYPE,
+                "entity_id": spend_key,
+                "window_duration": budget_duration,
+            }
+        }
+    )
+    if row is None:
+        return None
+    window_start: Final = row.window_start
+    started_at: Final = (
+        window_start if window_start.tzinfo is not None else window_start.replace(tzinfo=timezone.utc)
+    ).timestamp()
+    return SharedWindow(started_at=started_at, spend=float(row.spend or 0.0))
 
 
 PROXY_SHARED_WINDOWS: Final = DatabaseSharedWindows()

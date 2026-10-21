@@ -30,6 +30,7 @@ interface SearchSelectProps {
   inputId?: string;
   allowClear?: boolean;
   customValueHint?: string;
+  reservedValues?: readonly string[];
   "aria-label"?: string;
   id?: string;
 }
@@ -51,6 +52,7 @@ export function SearchSelect({
   inputId,
   allowClear = true,
   customValueHint,
+  reservedValues = [],
   "aria-label": ariaLabel,
   id,
 }: SearchSelectProps) {
@@ -60,8 +62,9 @@ export function SearchSelect({
   const known =
     selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
   const typed = query.trim();
+  const isNewValue = typed !== "" && !reservedValues.includes(typed) && !known.some((option) => option.value === typed);
   const items =
-    customValueHint !== undefined && typed !== "" && !known.some((option) => option.value === typed)
+    customValueHint !== undefined && isNewValue
       ? [...known, { label: typed, value: typed, sublabel: customValueHint }]
       : known;
 

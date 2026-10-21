@@ -1,7 +1,6 @@
 import asyncio
 import functools
 import json
-import re
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -195,13 +194,29 @@ def _governing_entry_names(
 
 
 def _glob_matches(pattern: str, names: Iterable[str]) -> bool:
-    regex: Final = _glob_regex(pattern)
-    return any(regex.fullmatch(name) for name in names)
+    return any(_glob_matches_name(pattern=pattern, name=name) for name in names)
 
 
-@functools.lru_cache(maxsize=1024)
-def _glob_regex(pattern: str) -> re.Pattern[str]:
-    return re.compile(re.escape(pattern).replace(re.escape(_GLOB_WILDCARD), ".*"))
+def _glob_matches_name(pattern: str, name: str) -> bool:
+    """Whole-name match where `*` is the only wildcard, in linear time whatever the pattern holds.
+
+    Taking each literal piece between two wildcards at its first occurrence is
+    always safe, since a later occurrence only leaves less room for the rest, so
+    the match never needs to backtrack the way a `.*` regex does.
+    """
+    head, *middle, tail = pattern.split(_GLOB_WILDCARD)
+    middle_end: Final = len(name) - len(tail)
+    if middle_end < len(head) or not name.startswith(head) or not name.endswith(tail):
+        return False
+    return functools.reduce(_after_piece(name=name, end=middle_end), middle, len(head)) >= 0
+
+
+def _after_piece(name: str, end: int) -> Callable[[int, str], int]:
+    def step(position: int, piece: str) -> int:
+        found: Final = name.find(piece, position, end) if position >= 0 else -1
+        return found + len(piece) if found >= 0 else -1
+
+    return step
 
 
 def _glob_precedence(pattern: str) -> tuple[tuple[int, int], str]:
@@ -650,16 +665,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if max_budget is None or max_budget < 0:
             return True
 
-        current_spend: Final = await self._get_spend_for_model_budget(
+        local_spend: Final = await self._get_spend_for_model_budget(
             entity_type=entity_type,
             entity_id=entity_id,
             model=model,
             resolved=resolved,
-            max_budget=max_budget,
+        )
+        current_spend: Final = (
+            local_spend
+            if local_spend >= max_budget
+            else await self._with_shared_spend(
+                entity_type=entity_type, entity_id=entity_id, resolved=resolved, local_spend=local_spend
+            )
         )
         if current_spend >= max_budget:
             raise litellm.BudgetExceededError(
-                message=exceeded_message,
+                message=(
+                    exceeded_message
+                    if resolved.budget_model == model
+                    else f"{exceeded_message}, budget_model={resolved.budget_model}"
+                ),
                 current_cost=current_spend,
                 max_budget=max_budget,
                 entity_type=entity_type.value,
@@ -673,16 +698,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         entity_id: str | None,
         model: str,
         resolved: ResolvedModelBudget,
-        max_budget: float,
     ) -> float:
         """Spend charged to this budget in the current window, legacy counter included.
 
         A counter that was never written is zero spend, not unknown spend. The
         distinction only shows up at a zero-dollar cap, where skipping the
         comparison would let the strictest possible limit admit every request.
-
-        Without Redis each replica's counter holds only its own share, so the
-        window every replica adds to in the database is the floor.
         """
         spend_key: Final = model_budget_spend_cache_key(
             entity_type=entity_type,
@@ -696,17 +717,30 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model,
             resolved=resolved,
         )
-        counted: Final = _as_spend(await self._cached_spend(spend_key))
-        local_spend: Final = (
-            counted
-            if legacy_spend_key is None or legacy_spend_key == spend_key
-            else counted + _as_spend(await self._cached_spend(legacy_spend_key))
-        )
-        if local_spend >= max_budget or self.dual_cache.redis_cache is not None:
+        current_spend: Final = _as_spend(await self._cached_spend(spend_key))
+        if legacy_spend_key is None or legacy_spend_key == spend_key:
+            return current_spend
+        return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
+
+    async def _with_shared_spend(
+        self,
+        entity_type: Litellm_EntityType,
+        entity_id: str | None,
+        resolved: ResolvedModelBudget,
+        local_spend: float,
+    ) -> float:
+        """Without Redis each replica's counter holds only its own share, so the window every replica adds to
+        in the database is the floor."""
+        if self.dual_cache.redis_cache is not None:
             return local_spend
         shared: Final = await _open_shared_window(
             shared_windows=self._shared_windows,
-            spend_key=spend_key,
+            spend_key=model_budget_spend_cache_key(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                budget_model=resolved.budget_model,
+                budget_duration=resolved.budget_config.budget_duration,
+            ),
             budget_duration=resolved.budget_config.budget_duration,
             now=self._clock(),
         )
@@ -878,6 +912,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             budget_model=resolved.budget_model,
             budget_duration=budget_duration,
         )
+        await self._join_shared_window(
+            spend_key=spend_key, start_time_key=start_time_key, budget_duration=budget_duration
+        )
         await self._increment_spend_for_key(
             budget_config=resolved.budget_config,
             spend_key=spend_key,
@@ -891,32 +928,35 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_cost=response_cost,
         )
 
-    async def _share_spend(
-        self, spend_key: str, start_time_key: str, budget_duration: str, response_cost: float
-    ) -> None:
-        """Without Redis, add this charge to the window every replica reads.
+    async def _join_shared_window(self, spend_key: str, start_time_key: str, budget_duration: str) -> None:
+        """Without Redis, start this replica's window where the database says every replica's window starts.
 
-        A replica joins the window that is already open rather than its own, so
-        all of them roll over together and none resets the others' spend.
+        Every replica then sends the same window start with its spend, so no flush reads as a newer window that
+        replaces the spend the others already added.
         """
         if self.dual_cache.redis_cache is not None:
             return
         now: Final = self._clock()
-        shared: Final = await _open_shared_window(
-            shared_windows=self._shared_windows,
+        local: Final = self.dual_cache.in_memory_cache
+        if _open_local_window_start(
+            local=local, start_time_key=start_time_key, budget_duration=budget_duration, now=now
+        ):
+            return
+        _start_local_window(
+            local=local,
             spend_key=spend_key,
+            start_time_key=start_time_key,
+            started_at=await self._shared_windows.open(spend_key=spend_key, budget_duration=budget_duration, now=now),
             budget_duration=budget_duration,
             now=now,
         )
-        if shared is not None:
-            _join_window(
-                local=self.dual_cache.in_memory_cache,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                window=shared,
-                budget_duration=budget_duration,
-                now=now,
-            )
+
+    async def _share_spend(
+        self, spend_key: str, start_time_key: str, budget_duration: str, response_cost: float
+    ) -> None:
+        if self.dual_cache.redis_cache is not None:
+            return
+        now: Final = self._clock()
         await self._shared_windows.add(
             spend_key=spend_key,
             budget_duration=budget_duration,
@@ -936,14 +976,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return polls == 1
 
 
-def _join_window(
-    local: LocalTTLCache, spend_key: str, start_time_key: str, window: SharedWindow, budget_duration: str, now: float
+def _open_local_window_start(local: LocalTTLCache, start_time_key: str, budget_duration: str, now: float) -> bool:
+    started_at: Final = _as_float(local.get_cache(key=start_time_key))
+    return started_at is not None and now - started_at <= budget_window_seconds(started_at, budget_duration)
+
+
+def _start_local_window(
+    local: LocalTTLCache, spend_key: str, start_time_key: str, started_at: float, budget_duration: str, now: float
 ) -> None:
-    remaining: Final = window.started_at + budget_window_seconds(window.started_at, budget_duration) - now
-    local.set_cache(key=start_time_key, value=window.started_at, ttl=remaining)
-    counted: Final = local.get_cache(key=spend_key)
-    if counted is not None:
-        local.set_cache(key=spend_key, value=counted, ttl=remaining)
+    ttl: Final = started_at + budget_window_seconds(started_at, budget_duration) - now
+    local.set_cache(key=spend_key, value=0.0, ttl=ttl)
+    local.set_cache(key=start_time_key, value=started_at, ttl=ttl)
 
 
 PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

@@ -83,11 +83,32 @@ describe("ModelMaxBudgetEditor model families", () => {
     );
 
     await user.click(addButton());
-    const modelField = screen.getByPlaceholderText("Select a model or type a pattern");
+    const modelField = screen.getByPlaceholderText("Select model");
     await user.type(modelField, "claude-opus*");
     await user.click(await screen.findByRole("option", { name: /claude-opus\*/ }));
     fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "10" } });
 
     expect(onChange).toHaveBeenLastCalledWith({ "claude-opus*": { budget_limit: 10, time_period: "30d" } });
+  });
+
+  it("does not offer a typed pattern that another row already budgets", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{ "claude-opus*": { budget_limit: 10, time_period: "1d" } }}
+        onChange={vi.fn()}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    const [, newRowModelField] = screen.getAllByPlaceholderText("Select model");
+    await user.type(newRowModelField, "claude-opus*");
+
+    expect(screen.queryByRole("option", { name: /claude-opus\*/ })).not.toBeInTheDocument();
+    await user.clear(newRowModelField);
+    await user.type(newRowModelField, "claude-sonnet*");
+    expect(await screen.findByRole("option", { name: /claude-sonnet\*/ })).toBeInTheDocument();
   });
 });

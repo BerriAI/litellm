@@ -163,9 +163,10 @@ export function ModelMaxBudgetEditor({
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
                 value={entry.model}
                 onValueChange={(model) => updateEntry(entry.id, { model })}
-                placeholder="Select a model or type a pattern"
+                placeholder="Select model"
                 emptyText="No models found"
                 customValueHint="Access group or model pattern"
+                reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />
             </div>

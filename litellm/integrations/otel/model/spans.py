@@ -434,6 +434,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
         "reset_budget_windows": PostgresOperation("select", None),
         "write_budget_windows": PostgresOperation("update", None),
         "roll_window_spend_row": PostgresOperation("update", None),
+        "open_window_spend_row": PostgresOperation("upsert", None),
         "seed_window_spend": PostgresOperation("select", None),
         "select_window_spend_rows": PostgresOperation("select", None),
         "commit_window_spend_updates": PostgresOperation("upsert", None),

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 
@@ -24,6 +24,17 @@ class _Table:
         return self.row
 
 
+class _Database:
+    def __init__(self, table: _Table) -> None:
+        self.litellm_budgetwindowspend = table
+        self.opened_with: tuple[object, ...] = ()
+
+    async def execute_raw(self, query: str, *params: object) -> int:
+        self.opened_with = params
+        self.litellm_budgetwindowspend.row = SimpleNamespace(window_start=params[3], spend=0.0)
+        return 1
+
+
 class _Sink:
     def __init__(self) -> None:
         self.transactions: tuple[WindowSpendTransaction, ...] = ()
@@ -33,7 +44,7 @@ class _Sink:
 
 
 def _database_windows(table: _Table | None, sink: _Sink) -> DatabaseSharedWindows:
-    prisma: Final = None if table is None else SimpleNamespace(db=SimpleNamespace(litellm_budgetwindowspend=table))
+    prisma: Final = None if table is None else SimpleNamespace(db=_Database(table))
     return DatabaseSharedWindows(
         prisma_client_source=lambda: prisma,  # pyright: ignore[reportArgumentType]  # duck-typed prisma double
         sink=sink,
@@ -91,3 +102,42 @@ async def test_nothing_is_queued_without_a_database():
 
     assert sink.transactions == ()
     assert await windows.read(spend_key=SPEND_KEY, budget_duration="1d") is None
+
+
+@pytest.mark.asyncio
+async def test_open_joins_the_window_another_replica_already_started():
+    table: Final = _Table(row=SimpleNamespace(window_start=WINDOW_START.replace(tzinfo=None), spend=2.5))
+    windows: Final = _database_windows(table, _Sink())
+
+    started_at: Final = await windows.open(
+        spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp() + 3600
+    )
+
+    assert started_at == WINDOW_START.timestamp()
+    assert table.row.spend == 2.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_start", [None, WINDOW_START - timedelta(days=2)])
+async def test_open_starts_a_window_at_now_when_none_is_open(stored_start: datetime | None):
+    table: Final = _Table(
+        row=None if stored_start is None else SimpleNamespace(window_start=stored_start.replace(tzinfo=None), spend=9.0)
+    )
+    windows: Final = _database_windows(table, _Sink())
+
+    started_at: Final = await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp())
+
+    assert started_at == WINDOW_START.timestamp()
+    assert await windows.read(spend_key=SPEND_KEY, budget_duration="1d") == SharedWindow(
+        started_at=WINDOW_START.timestamp(), spend=0.0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("table", [None, _Table(error=RuntimeError("database is down"))])
+async def test_open_falls_back_to_this_replicas_own_window_without_a_database(table: _Table | None):
+    windows: Final = _database_windows(table, _Sink())
+
+    assert await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp()) == (
+        WINDOW_START.timestamp()
+    )
