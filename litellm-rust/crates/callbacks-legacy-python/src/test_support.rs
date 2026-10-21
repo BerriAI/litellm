@@ -6,7 +6,7 @@ use pyo3::types::{PyDict, PyTuple};
 use crate::{LegacyLogging, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
-/// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
+/// `tests/unit/rust_bridge/host/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
@@ -23,10 +23,10 @@ import sys
 import traceback
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.callbacks_legacy_python'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+legacy = sys.modules['litellm.rust_bridge.host.callbacks_legacy_python']
 CONTRACT = json.loads(python_contract)
 
 
@@ -173,21 +173,23 @@ pub(crate) fn local<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, 
     locals.get_item(name).unwrap().unwrap()
 }
 
-/// A legacy call over the namespace's `kwargs` (or none) and `request` (or `None`).
+pub(crate) fn local_dict<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, PyDict> {
+    local(locals, name).cast_into().unwrap()
+}
+
+/// A legacy call over the namespace's `kwargs` and `bound` dicts, each empty when absent.
 pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> LegacyLogging {
-    let request = locals
-        .get_item("request")
-        .unwrap()
-        .unwrap_or_else(|| py.None().into_bound(py));
-    let kwargs = locals
-        .get_item("kwargs")
-        .unwrap()
-        .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
-        .unwrap_or_else(|| PyDict::new(py));
-    let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
+    let dict = |name: &str| {
+        locals
+            .get_item(name)
+            .unwrap()
+            .map(|value| value.cast_into::<PyDict>().unwrap())
+            .unwrap_or_else(|| PyDict::new(py))
+    };
+    let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
     LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
 }

@@ -16,12 +16,14 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     LATEST_RELEASE_CACHE_TTL_SECONDS,
     LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS,
     LATEST_RELEASE_URL,
+    RELEASE_BY_TAG_URL,
     LatestReleaseInfo,
     LatestReleaseUnavailable,
     _default_cache,
     _default_client,
     _default_fetch_lock,
     count_release_bullets,
+    earlier_patch_tags,
     get_latest_release_info,
 )
 from tests._master_key import MASTER_KEY
@@ -231,6 +233,124 @@ class TestGetLatestReleaseInfo:
         results = await asyncio.gather(*tasks)
         assert all(isinstance(result, LatestReleaseUnavailable) for result in results)
         assert len(client.calls) == 1
+
+
+def _release(tag: str, body: str | None, *, prerelease: bool = False) -> dict[str, object]:
+    return {
+        "tag_name": tag,
+        "html_url": f"https://github.com/BerriAI/litellm/releases/tag/{tag}",
+        "body": body,
+        "prerelease": prerelease,
+        "draft": False,
+    }
+
+
+def _tag_url(tag: str) -> str:
+    return RELEASE_BY_TAG_URL.format(tag=tag)
+
+
+class _GitHubByUrl:
+    """Answers each GitHub URL from a fixed map; unknown URLs are 404, like a tag with no release."""
+
+    def __init__(self, routes: dict[str, httpx.Response | Exception]) -> None:
+        self._routes = routes
+        self.urls: list[str] = []
+
+    async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+        self.urls.append(url)
+        outcome = self._routes.get(url, httpx.Response(404, content=b"{}"))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+PATCH_RELEASE: Final = _release("v1.102.2", "* fix(proxy): second backport by @k in https://x/pull/10\n")
+FIRST_PATCH: Final = _release("v1.102.1", "* fix(proxy): first backport by @k in https://x/pull/9\n")
+
+
+def _minor_line(**overrides: httpx.Response | Exception) -> dict[str, httpx.Response | Exception]:
+    routes: dict[str, httpx.Response | Exception] = {
+        LATEST_RELEASE_URL: _github_response(payload=PATCH_RELEASE),
+        _tag_url("v1.102.0"): _github_response(payload=SAMPLE_RELEASE),
+        _tag_url("v1.102.1"): _github_response(payload=FIRST_PATCH),
+    }
+    routes.update({_tag_url(tag): outcome for tag, outcome in overrides.items()})
+    return routes
+
+
+async def _info(client: _GitHubByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable:
+    return await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
+
+
+class TestPatchReleaseAggregatesMinorLine:
+    def test_earlier_patch_tags_cover_the_whole_line(self):
+        assert earlier_patch_tags((1, 105, 2)) == ("v1.105.0", "v1.105.1")
+        assert earlier_patch_tags((1, 105, 0)) == ()
+
+    @pytest.mark.asyncio
+    async def test_patch_release_counts_include_every_earlier_patch_on_its_line(self):
+        client = _GitHubByUrl(_minor_line())
+        result = await _info(client)
+        assert isinstance(result, LatestReleaseInfo)
+        assert result.model_dump() == {
+            "version": "1.102.2",
+            "new_features": 2,
+            "bug_fixes": 4,
+            "other_updates": 4,
+            "release_url": PATCH_RELEASE["html_url"],
+        }
+        assert sorted(client.urls) == sorted([LATEST_RELEASE_URL, _tag_url("v1.102.0"), _tag_url("v1.102.1")])
+
+    @pytest.mark.asyncio
+    async def test_minor_release_makes_a_single_request(self):
+        client = _RecordingClient([_github_response()])
+        await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
+        assert client.calls == [(LATEST_RELEASE_URL, 5)]
+
+    @pytest.mark.asyncio
+    async def test_non_semver_latest_tag_counts_only_its_own_notes(self):
+        client = _GitHubByUrl({LATEST_RELEASE_URL: _github_response(payload=_release("v1.102.1-hotfix", "* fix: x\n"))})
+        result = await _info(client)
+        assert isinstance(result, LatestReleaseInfo)
+        assert (result.new_features, result.bug_fixes, result.other_updates) == (0, 1, 0)
+        assert client.urls == [LATEST_RELEASE_URL]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "skipped",
+        [
+            httpx.Response(404, content=b"{}"),
+            _github_response(payload=_release("v1.102.1", "* feat: rc only\n", prerelease=True)),
+            _github_response(payload=_release("v1.102.1", None)),
+        ],
+        ids=["never_published", "prerelease", "null_body"],
+    )
+    async def test_missing_prerelease_or_empty_patch_adds_nothing(self, skipped: httpx.Response):
+        result = await _info(_GitHubByUrl(_minor_line(**{"v1.102.1": skipped})))
+        assert isinstance(result, LatestReleaseInfo)
+        assert (result.new_features, result.bug_fixes, result.other_updates) == (2, 3, 4)
+
+    @pytest.mark.asyncio
+    async def test_latest_release_with_null_body_still_counts_its_line(self):
+        routes = _minor_line()
+        routes[LATEST_RELEASE_URL] = _github_response(payload=_release("v1.102.2", None))
+        result = await _info(_GitHubByUrl(routes))
+        assert isinstance(result, LatestReleaseInfo)
+        assert (result.new_features, result.bug_fixes, result.other_updates) == (2, 3, 4)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            httpx.ConnectError("boom"),
+            _github_response(status=403, payload={"message": "rate limited"}),
+            httpx.Response(200, content=b"not json"),
+        ],
+        ids=["unreachable", "rate_limited", "not_json"],
+    )
+    async def test_earlier_patch_failure_is_unavailable(self, outcome: httpx.Response | Exception):
+        result = await _info(_GitHubByUrl(_minor_line(**{"v1.102.0": outcome})))
+        assert isinstance(result, LatestReleaseUnavailable)
 
 
 class TestLatestReleaseInfoEndpoint:

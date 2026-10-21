@@ -10,7 +10,7 @@ Non-streaming endpoint: POST /runs/wait
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
 
@@ -369,7 +369,7 @@ class LangGraphConfig(BaseConfig):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "langgraph"), params={})
+            client = get_async_httpx_client(llm_provider="langgraph", params={})
 
         verbose_logger.debug("Making async streaming request to: %s", api_base)
 

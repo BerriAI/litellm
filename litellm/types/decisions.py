@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
+from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -11,12 +11,18 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
 MAX_DECISION_QUESTIONS: Final = 128
+MAX_ASSET_REFERENCE_BYTES: Final = 1024
 
 
 class NoulQuestion(LiteLLMPydanticObjectBase):
     type: Literal["noul"]
-    instructions: DecisionsJSON | None = None
-    criteria: NoulCriteria | None = None
+    instructions: Annotated[DecisionsJSON | None, Field(description="The yes/no question to ask about the state")] = (
+        None
+    )
+    criteria: Annotated[
+        NoulCriteria | None,
+        Field(description="Optional descriptions of what makes the answer true and what makes it false"),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -29,22 +35,39 @@ class NoulQuestion(LiteLLMPydanticObjectBase):
 
 class ChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Mapping[str, DecisionsJSON | None], Field(min_length=1, max_length=255)]
+    instructions: Annotated[DecisionsJSON | None, Field(description="The question to ask about the state")] = None
+    criteria: Annotated[
+        Mapping[str, DecisionsJSON | None],
+        Field(min_length=1, max_length=255, description="Candidate labels mapped to an optional description of each"),
+    ]
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Sequence[DecisionsJSON], Field(min_length=1, max_length=10)]
+    instructions: Annotated[DecisionsJSON | None, Field(description="The question to ask about the state")] = None
+    criteria: Annotated[
+        Sequence[DecisionsJSON],
+        Field(
+            min_length=1, max_length=10, description="Scale levels from lowest to highest. The score is a level index"
+        ),
+    ]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class BoxQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    instructions: Annotated[
+        DecisionsJSON, Field(description="What to find, and in which image, such as 'the coffee mug in `photo`'")
+    ]
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 DecisionQuestion: TypeAlias = Annotated[
-    NoulQuestion | ChoiceQuestion | ScoreQuestion,
+    NoulQuestion | ChoiceQuestion | ScoreQuestion | BoxQuestion,
     Field(discriminator="type"),
 ]
 
@@ -54,15 +77,111 @@ DecisionQuestionMap: TypeAlias = Annotated[
 ]
 
 
-class DecisionsRequestBody(LiteLLMPydanticObjectBase):
-    state: DecisionsJSON
-    questions: DecisionQuestionMap
+class DecisionsBase64Image(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^image/\S+$", description="An image/* media type, such as image/png")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsImage: TypeAlias = (
+    Annotated[
+        str, Field(pattern=r"^(?i:data:image/[^;,\s]+(?:;[^;,\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\S+)$")
+    ]
+    | DecisionsBase64Image
+)
+
+
+class DecisionsAsset(LiteLLMPydanticObjectBase):
+    type: Literal["image"] | None = None
+    format: Annotated[Literal["png", "jpg", "jpeg"], Field(description="The image's format, in lowercase")]
+    data_base64: Annotated[
+        str, Field(pattern=r"^[A-Za-z0-9+/]+={0,2}$", description="Base64-encoded image bytes, no data: prefix")
+    ]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def _fits_reference_limit(reference: str) -> str:
+    if len(reference.encode()) > MAX_ASSET_REFERENCE_BYTES:
+        raise ValueError(f"an asset reference can be at most {MAX_ASSET_REFERENCE_BYTES} bytes of UTF-8")
+    return reference
+
+
+DecisionsAssetReference: TypeAlias = Annotated[str, Field(pattern=r"\S"), AfterValidator(_fits_reference_limit)]
+DecisionsAssets: TypeAlias = Mapping[DecisionsAssetReference, DecisionsAsset]
+
+
+class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^audio/\S+$", description="An audio/* media type, such as audio/wav")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded audio bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class DecisionsBase64Video(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^video/\S+$", description="A video/* media type, such as video/mp4")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded video bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^;,\s]+;base64,.+$")] | DecisionsBase64Audio
+DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^;,\s]+;base64,.+$")] | DecisionsBase64Video
+
+
+class DecisionsMediaBody(LiteLLMPydanticObjectBase):
+    audio: Annotated[
+        tuple[DecisionsAudio, ...],
+        Field(
+            max_length=4,
+            description="Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+        ),
+    ] = ()
+    videos: Annotated[
+        tuple[DecisionsVideo, ...],
+        Field(
+            max_length=2,
+            description="Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+        ),
+    ] = ()
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    @field_validator("audio", "videos", mode="before")
+    @classmethod
+    def _null_means_no_clips(cls, value: object) -> object:
+        return () if value is None else value
+
+
+class DecisionsRequestBody(DecisionsMediaBody):
+    state: Annotated[
+        DecisionsJSON,
+        Field(description="The thing being judged, such as a support ticket, a document or a chat transcript"),
+    ]
+    questions: Annotated[
+        DecisionQuestionMap,
+        Field(description="Named noul, choice and score questions. Each key becomes a key in the answers"),
+    ]
+    images: Annotated[
+        Sequence[DecisionsImage] | None,
+        Field(description="Images as data URLs or content_type plus base64, for providers that look at images"),
+    ] = None
+    assets: Annotated[
+        DecisionsAssets | None,
+        Field(
+            description=(
+                "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions "
+                "or criteria where the image belongs"
+            )
+        ),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class DecisionsRequest(DecisionsRequestBody):
-    model: str
+    model: Annotated[str, Field(description="A decision model from the proxy model_list")]
 
 
 @with_config(ConfigDict(extra="allow"))
@@ -70,6 +189,10 @@ class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
+    images: ReadOnly[Sequence[DecisionsImage] | None]
+    assets: ReadOnly[DecisionsAssets | None]
+    audio: ReadOnly[Sequence[DecisionsAudio]]
+    videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
@@ -103,8 +226,25 @@ class ScoreAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class DecisionsBox(LiteLLMPydanticObjectBase):
+    top: float
+    bottom: float
+    left: float
+    right: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class BoxAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    box: DecisionsBox
+    confidence: float | None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 DecisionAnswer: TypeAlias = Annotated[
-    NoulAnswer | ChoiceAnswer | ScoreAnswer,
+    NoulAnswer | ChoiceAnswer | ScoreAnswer | BoxAnswer,
     Field(discriminator="type"),
 ]
 
@@ -171,8 +311,8 @@ OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
 
 class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
     type: Literal["predicate"]
-    name: str | None = None
-    instructions: str
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The yes/no question to ask about the input")]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -192,9 +332,12 @@ def systemone_choice_key(value: str | bool) -> str:
 
 class OpenAIChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    name: str | None = None
-    instructions: str
-    choices: Annotated[Sequence[OpenAIChoiceOption], Field(min_length=2, max_length=255)]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    choices: Annotated[
+        Sequence[OpenAIChoiceOption],
+        Field(min_length=2, max_length=255, description="The options the model picks from. Values must be unique"),
+    ]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -215,25 +358,57 @@ class OpenAIScoreLevel(LiteLLMPydanticObjectBase):
 
 class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
-    name: str | None = None
-    instructions: str
-    levels: Annotated[Sequence[OpenAIScoreLevel], Field(min_length=2, max_length=10)]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    levels: Annotated[
+        Sequence[OpenAIScoreLevel],
+        Field(
+            min_length=2, max_length=10, description="Scale levels from lowest to highest. The score is a level index"
+        ),
+    ]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIBoxQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="What to find in the input's image")]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 OpenAIDecisionQuestion: TypeAlias = Annotated[
-    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion,
+    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion | OpenAIBoxQuestion,
     Field(discriminator="type"),
 ]
 
 
-class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
-    input: OpenAIDecisionInput
-    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=MAX_DECISION_QUESTIONS)]
-    safety_identifier: str | None = None
+class OpenAIDecisionRequestBody(DecisionsMediaBody):
+    input: Annotated[
+        OpenAIDecisionInput,
+        Field(
+            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+        ),
+    ]
+    questions: Annotated[
+        Sequence[OpenAIDecisionQuestion],
+        Field(
+            min_length=1,
+            max_length=MAX_DECISION_QUESTIONS,
+            description="Predicate, choice and score questions. Answers come back in the same order",
+        ),
+    ]
+    safety_identifier: Annotated[
+        str | None,
+        Field(description="A stable id for your end user. Sent to OpenAI and dropped for other providers"),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIDecisionRequest(OpenAIDecisionRequestBody):
+    model: Annotated[str, Field(description="A decision model from the proxy model_list")]
 
 
 class OpenAIPredicateAnswer(LiteLLMPydanticObjectBase):
@@ -286,8 +461,17 @@ class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
 
+class OpenAIBoxAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["box"] = "box"
+    name: str | None
+    box: DecisionsBox
+    confidence: float | None
+
+    model_config = ConfigDict(frozen=True)
+
+
 OpenAIDecisionAnswer: TypeAlias = Annotated[
-    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer,
+    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIBoxAnswer | OpenAIRefusalAnswer,
     Field(discriminator="type"),
 ]
 
@@ -324,11 +508,13 @@ class OpenAIDecisionResponse(_HiddenParamsResponse):
 
 
 _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_ASSETS: Final[Mapping[str, DecisionsAsset]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionsIRState:
     state: DecisionsJSON
+    images: tuple[DecisionsImage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,7 +558,16 @@ class DecisionsIRScoreQuestion:
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
-DecisionsIRQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
+@dataclass(frozen=True, slots=True)
+class DecisionsIRBoxQuestion:
+    name: str | None
+    instructions: DecisionsJSON
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+DecisionsIRQuestion: TypeAlias = (
+    DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion | DecisionsIRBoxQuestion
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +575,9 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
+    audio: tuple[DecisionsAudio, ...] = ()
+    videos: tuple[DecisionsVideo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,12 +616,23 @@ class DecisionsIRScoreAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionsIRBoxAnswer:
+    box: DecisionsBox
+    confidence: float | None
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionsIRRefusal:
     pass
 
 
 DecisionsIRAnswer: TypeAlias = (
-    DecisionsIRPredicateAnswer | DecisionsIRChoiceAnswer | DecisionsIRScoreAnswer | DecisionsIRRefusal
+    DecisionsIRPredicateAnswer
+    | DecisionsIRChoiceAnswer
+    | DecisionsIRScoreAnswer
+    | DecisionsIRBoxAnswer
+    | DecisionsIRRefusal
 )
 
 

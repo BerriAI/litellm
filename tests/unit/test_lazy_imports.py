@@ -47,7 +47,7 @@ def test_import_litellm_does_not_load_fastapi_or_bpe_table():
         [
             sys.executable,
             "-c",
-            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
+            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.proxy.proxy_cli','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
         ],
         check=True,
         capture_output=True,

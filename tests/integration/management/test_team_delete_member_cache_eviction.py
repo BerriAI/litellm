@@ -1,6 +1,7 @@
 """
 `/team/delete` cache eviction across both proxies: member user objects, the team object and the
-team's keys must stop being served by every worker once the team rows are gone.
+team's keys must stop being served by every worker once the team rows are gone. A SCIM group push
+that removes a member deletes that member's team keys, which must stop the same way.
 
 Auth caches the user object under the Redis key `<user_id>`, the team under `team_id:<team_id>`
 and the key under its sha256; `enable_redis_auth_cache` is on, so Redis is the observable and
@@ -36,6 +37,8 @@ from tests.integration._support.wire import Reply, Request, wire_server
 
 _USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}
 _CACHE_KEY_HEADER: Final = "x-litellm-cache-key"
+_GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"
+_PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 
 def _redis() -> Redis:
@@ -444,3 +447,111 @@ def test_team_delete_evicts_team_object_and_key_on_both_proxies(gateway: Gateway
             assert refused.status_code == 401 and "token_not_found_in_db" in refused.text, refused.text
         assert cache.exists(f"team_id:{team}") == 0, cache.keys(f"*{team}*")
         assert cache.exists(hashed) == 0, cache.keys(f"*{hashed}*")
+
+
+def _scim_group(gateway: Gateway, scenario: Scenario, members: Sequence[str]) -> str:
+    created: Final = gateway.request(
+        "POST",
+        "/scim/v2/Groups",
+        {
+            "schemas": [_GROUP_SCHEMA],
+            "displayName": f"integration-{uuid.uuid4().hex}",
+            "members": [{"value": member} for member in members],
+        },
+    )
+    assert created.status_code == 201, created.text
+    team_id: Final = string_value(JSON_OBJECT.validate_json(created.content)["id"])
+    scenario.cleanups.callback(_delete_team_if_present, gateway, team_id)
+    return team_id
+
+
+def _scim_replace_members(gateway: Gateway, team_id: str, members: Sequence[str]) -> None:
+    replaced: Final = gateway.request(
+        "PUT",
+        f"/scim/v2/Groups/{team_id}",
+        {
+            "schemas": [_GROUP_SCHEMA],
+            "id": team_id,
+            "displayName": f"integration-{uuid.uuid4().hex}",
+            "members": [{"value": member} for member in members],
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+
+
+def _scim_remove_member(gateway: Gateway, team_id: str, member: str) -> None:
+    patched: Final = gateway.request(
+        "PATCH",
+        f"/scim/v2/Groups/{team_id}",
+        {"schemas": [_PATCH_OP_SCHEMA], "Operations": [{"op": "remove", "path": f'members[value eq "{member}"]'}]},
+    )
+    assert patched.status_code == 200, patched.text
+
+
+def _member_team_key(gateway: Gateway, scenario: Scenario, team_id: str, user_id: str, model: str) -> str:
+    created: Final = gateway.post("/key/generate", {"team_id": team_id, "user_id": user_id, "models": [model]})
+    token: Final = string_value(created["key"])
+    scenario.cleanups.callback(delete_key_if_present, gateway, token)
+    return token
+
+
+def _refused_on_peer(peer: Gateway, model: str, key: str) -> None:
+    _ = eventually(
+        lambda: _httpx_chat(peer, model, key, False, "removed member key on peer " + uuid.uuid4().hex),
+        lambda status: status == 401,
+        seconds=10,
+    )
+
+
+def test_scim_removal_refuses_the_removed_members_team_key_for_every_client_on_both_proxies(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    proxies: Final = {"primary": gateway, "peer": peer}
+    with wire_server(_upstream) as upstream, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=upstream.url + "/v1")
+        alice: Final = scenario.user(user_role="internal_user")
+        bob: Final = scenario.user(user_role="internal_user")
+        team: Final = _scim_group(gateway, scenario, (alice, bob))
+        alice_key: Final = _member_team_key(gateway, scenario, team, alice, model)
+        bob_key: Final = _member_team_key(gateway, scenario, team, bob, model)
+        warmed: Final = {**_observe(proxies, model, alice_key), **_observe(proxies, model, bob_key)}
+        assert _off(warmed, 200) == {}, _off(warmed, 200)
+
+        _scim_replace_members(gateway, team, (alice,))
+
+        _refused_on_peer(peer, model, bob_key)
+        removed: Final = _observe(proxies, model, bob_key)
+        assert _off(removed, 401) == {}, _off(removed, 401)
+        kept: Final = _observe(proxies, model, alice_key)
+        assert _off(kept, 200) == {}, _off(kept, 200)
+
+        _scim_remove_member(gateway, team, alice)
+
+        _refused_on_peer(peer, model, alice_key)
+        patched_out: Final = _observe(proxies, model, alice_key)
+        assert _off(patched_out, 401) == {}, _off(patched_out, 401)
+
+
+def test_scim_removal_refuses_a_cached_response_for_the_removed_members_key(gateway: Gateway) -> None:
+    with wire_server(_upstream) as upstream, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=upstream.url + "/v1")
+        member: Final = scenario.user(user_role="internal_user")
+        team: Final = _scim_group(gateway, scenario, (member,))
+        key: Final = _member_team_key(gateway, scenario, team, member, model)
+        marker: Final = "scim cache twin " + uuid.uuid4().hex
+        body: Final = _chat_body(model, marker)
+        first: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert first.status_code == 200, first.text
+        second: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert second.status_code == 200, second.text
+        assert second.headers.get(_CACHE_KEY_HEADER), dict(second.headers)
+        assert second.json()["id"] == first.json()["id"], (first.text, second.text)
+        received: Final = upstream.drain()
+        assert len(received) == 1 and marker.encode() in received[0].body, received
+
+        _scim_replace_members(gateway, team, ())
+
+        third: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert third.status_code == 401, third.text
+        assert "token_not_found_in_db" in third.text, third.text
+        assert upstream.drain() == (), "upstream saw a request for the removed member's key"

@@ -9,6 +9,8 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
+const TIMEOUTS_MODULE: &str = "litellm.rust_bridge.host.timeouts";
+
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
     pub(crate) model: String,
@@ -17,13 +19,6 @@ pub(crate) struct RouteOptions {
     pub(crate) custom_llm_provider: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) timeout: Option<Duration>,
-}
-
-pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
-    match from_py_argument(value)? {
-        Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err("messages must be a list")),
-    }
 }
 
 fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
@@ -54,7 +49,7 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
 }
 
 pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {
-    py.import("litellm.rust_bridge.timeouts")?
+    py.import(TIMEOUTS_MODULE)?
         .getattr("timeout_to_seconds")?
         .call1((timeout,))?
         .extract()
@@ -449,18 +444,6 @@ module.__getattr__ = fail
     fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
         Python::attach(|py| {
-            let messages = py
-                .eval(
-                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Array(messages_argument(&messages).unwrap()),
-                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
             assert_eq!(
                 optional_object("optional_params", &params).unwrap(),

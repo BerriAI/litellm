@@ -68,6 +68,62 @@ describe("CustomCodeModal", () => {
     expect(screen.getByRole("button", { name: /update guardrail/i })).toBeInTheDocument();
   });
 
+  it("should open without crashing for a tag-scoped mode and show it read-only", async () => {
+    renderModal({
+      editData: {
+        guardrail_id: "g-tag",
+        guardrail_name: "tag-mode-guardrail",
+        litellm_params: {
+          mode: { tags: { "team-a": "pre_call" }, default: "post_call" },
+          default_on: true,
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    expect(await screen.findByText("Edit Custom Guardrail")).toBeInTheDocument();
+    const modeInput = screen.getByLabelText("Mode (tag-scoped)");
+    expect(modeInput).toBeDisabled();
+    expect(modeInput).toHaveValue("post_call, pre_call (tag-based)");
+    expect(screen.getByText("Mode (tag-scoped, read-only)")).toBeInTheDocument();
+    expect(screen.queryByText(/applies to/)).not.toBeInTheDocument();
+  });
+
+  it("should omit mode and stream_scope from the update payload for a tag-scoped guardrail", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      editData: {
+        guardrail_id: "g-tag",
+        guardrail_name: "tag-mode-guardrail",
+        litellm_params: {
+          mode: { tags: { "team-a": "pre_call" }, default: "post_call" },
+          default_on: true,
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    const nameInput = await screen.findByDisplayValue("tag-mode-guardrail");
+    await user.clear(nameInput);
+    await user.type(nameInput, "renamed-guardrail");
+    await user.click(screen.getByRole("button", { name: /update guardrail/i }));
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
+    });
+    const [token, guardrailId, payload] = mockUpdate.mock.calls[0] as [
+      string,
+      string,
+      Record<string, Record<string, unknown>>,
+    ];
+    expect(token).toBe("test-token");
+    expect(guardrailId).toBe("g-tag");
+    expect(payload.guardrail_name).toBe("renamed-guardrail");
+    expect(payload.litellm_params.custom_code).toBe("def apply_guardrail(): pass");
+    expect(payload.litellm_params).not.toHaveProperty("mode");
+    expect(payload.litellm_params).not.toHaveProperty("stream_scope");
+  });
+
   it("should keep save disabled until a guardrail name is entered", async () => {
     const user = userEvent.setup();
     renderModal();
@@ -111,8 +167,7 @@ describe("CustomCodeModal", () => {
 
     expect(await screen.findByDisplayValue(/async def apply_guardrail/)).toBeInTheDocument();
 
-    const comboboxes = screen.getAllByRole("combobox");
-    await user.click(comboboxes[comboboxes.length - 1]);
+    await user.click(screen.getByRole("combobox", { name: "Template" }));
     const options = await screen.findAllByText("Block SSN");
     await user.click(options[options.length - 1]);
 
@@ -153,7 +208,7 @@ describe("CustomCodeModal", () => {
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     expect(mockUpdate.mock.calls[0][2]).toMatchObject({
-      litellm_params: { logging_only_scope: "output" },
+      litellm_params: { logging_only_scope: "output", logging_only_continue_on_input_failure: false },
     });
   });
 
@@ -177,6 +232,7 @@ describe("CustomCodeModal", () => {
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     expect(mockUpdate.mock.calls[0][2]).toHaveProperty("litellm_params.logging_only_scope", null);
+    expect(mockUpdate.mock.calls[0][2]).toHaveProperty("litellm_params.logging_only_continue_on_input_failure", false);
   });
 
   it("should omit an unchanged logging-only scope from the edit payload", async () => {
@@ -231,6 +287,54 @@ describe("CustomCodeModal", () => {
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(mockCreate.mock.calls[0][1]).toMatchObject({
       litellm_params: { logging_only_scope: "input" },
+    });
+    expect(mockCreate.mock.calls[0][1]).not.toHaveProperty("litellm_params.logging_only_continue_on_input_failure");
+  });
+
+  it("disables and unchecks the continue toggle under a directional scope", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("logging_only");
+    await user.click(await screen.findByRole("option", { name: "logging_only" }));
+    await user.click(await screen.findByRole("combobox", { name: "Logging only scope" }));
+    await user.click(await screen.findByRole("option", { name: "Input only (request)" }));
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("should load and turn off a stored continue flag in edit mode", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      editData: {
+        guardrail_id: "g-1",
+        guardrail_name: "existing-guardrail",
+        litellm_params: {
+          mode: ["logging_only"],
+          logging_only_continue_on_input_failure: true,
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    const scopeSelect = await screen.findByRole("combobox", { name: "Logging only scope" });
+    expect(scopeSelect).toHaveTextContent("Default (request and response)");
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: /update guardrail/i }));
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(mockUpdate.mock.calls[0][2]).toMatchObject({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: false },
     });
   });
 

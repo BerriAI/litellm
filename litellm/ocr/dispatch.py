@@ -9,7 +9,14 @@ from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
-from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str
+from litellm.rust_bridge.public_call import (
+    AsyncFlag,
+    NativeCall,
+    native_call,
+    native_call_hook,
+    optional_str,
+    signature,
+)
 
 __all__ = ("aocr", "ocr")
 
@@ -38,25 +45,28 @@ def _bind_request(
     )
 
 
+_OCR: Final = signature(_bind_request)
+_FLAG: Final = AsyncFlag("aocr", sync=_OCR)
+
+
 def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
     try:
-        fields: Final = _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
-        return native_call(args, kwargs, fields)
+        _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
     except TypeError as error:
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
+    return native_call(_OCR, args, kwargs)
 
 
 def _context(request: NativeCall) -> RouteContext:
-    prefix, separator, _ = str(request.bound["model"]).partition("/")
-    provider: Final = optional_str(request.bound.get("custom_llm_provider")) or (prefix if separator else None)
-    return RouteContext(Route.OCR, provider=provider, model=str(request.bound["model"]))
+    prefix, separator, _ = str(request.resolved["model"]).partition("/")
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider")) or (prefix if separator else None)
+    return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("ocr", args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -70,9 +80,11 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    if _FLAG.requested(kwargs):
+        return aocr(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
         native=native_call_hook,
@@ -82,7 +94,7 @@ def ocr(
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
         native=native_call_hook,

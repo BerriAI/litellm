@@ -247,6 +247,7 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     const topLevelLabels = [
+      "Home",
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
@@ -660,10 +661,10 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
-  it("marks Virtual Keys active at the dashboard root", () => {
+  it("marks Home active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -745,8 +746,8 @@ describe("getBreadcrumb", () => {
     expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
   });
 
-  it("titles the dashboard root as Virtual Keys", () => {
-    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+  it("titles the dashboard root as Home", () => {
+    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Home" });
   });
 
   it("resolves a nested child route to its parent section", () => {

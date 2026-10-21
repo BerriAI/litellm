@@ -102,7 +102,7 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     raise_upload_validation_failure,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
@@ -1102,14 +1102,10 @@ async def get_file_content(
                     }
                 )
         else:
-            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
-            # managed-file owner/team check that only runs for unified ids, letting
-            # a caller read another tenant's object by its key. Such objects are only
-            # reachable through their managed unified id.
-            if is_managed_cloud_storage_uri(file_id):
+            if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                    status_code=403,
+                    detail="Raw cloud storage file ids can only be retrieved by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
                 )
             # Check for model-based credential routing
             (

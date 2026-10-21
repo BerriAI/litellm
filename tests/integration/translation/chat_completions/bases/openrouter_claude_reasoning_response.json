@@ -1,0 +1,55 @@
+{
+  "id": "gen-1791609229-WpnW70pHKiPTu3s3QugG",
+  "object": "chat.completion",
+  "created": 1791609229,
+  "model": "anthropic/claude-sonnet-4",
+  "provider": "Amazon Bedrock",
+  "system_fingerprint": null,
+  "service_tier": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "end_turn",
+      "message": {
+        "role": "assistant",
+        "content": "Hello! Nice to meet you. How are you doing today? Is there anything I can help you with?",
+        "refusal": null,
+        "reasoning": "The user has just said \"Hello world\" which is a classic greeting, often used as the first program people write when learning a new programming language. They're simply greeting me, so I should respond in a friendly and welcoming way.",
+        "reasoning_details": [
+          {
+            "type": "reasoning.text",
+            "text": "The user has just said \"Hello world\" which is a classic greeting, often used as the first program people write when learning a new programming language. They're simply greeting me, so I should respond in a friendly and welcoming way.",
+            "format": "anthropic-claude-v1",
+            "index": 0,
+            "signature": "EpQDCkgIEhABGAIqQAVfsNK+CpI8VVV9QHuwaxVcbVQ3X9PVHVuriphXxf7o5ScqJuyRrLmclG5X0UtR8uXuWNftoIN4Jr8LrDtgGaISDGtmH9HlePM65EAvDhoMI/ErOdLdZ2YQXOPPIjDnD/vKsmhqYYOFNk3+Y26sZUUydL8jVnJrKkKyGNKRWYoE5dWsxHO/a/UPDV2ku3Qq+QEqOXXoMSMeTs28hekzdrRQ6QSOjAAbyKzRxUJKjw75+pFmv/qXqWVV6LqkPHtvAEGdlQ5Qc3ZH2ddLmTHAYKcjH6UXKCHFwFUwjH/EoDMmo8xVrHwBRphCMkE3+k7QbitfhSEDtNvGR/LJdCQ2A1pMFLxbbsYcBUsKsr9RujUrQ8et94x0n/f0gLyQOWLRbJ6wGZfSMMzdIEC5xfV1H+qtb3rY4zfyN2FKMI83G/zs6lq5RvlTY9n+1C/OaLqLlb1UIimEh8m8fsJgtCnO5dkHqC/l4Vz0ob+TdnpjCMBBBsItZ3XVPP1Xi5h8T0RknwqCzRvUyMcqNmwYAQ==.eyJlbmRwb2ludF9zbHVnIjoiYW50aHJvcGljL2NsYXVkZS00LXNvbm5ldC0yMDI1MDUyMnxhbWF6b24tYmVkcm9jayJ9"
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 38,
+    "completion_tokens": 81,
+    "total_tokens": 119,
+    "cost": 0.001329,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001329,
+      "upstream_inference_prompt_cost": 0.000114,
+      "upstream_inference_completions_cost": 0.001215
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 59,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

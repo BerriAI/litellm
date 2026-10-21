@@ -24,6 +24,7 @@ mod request;
 mod response;
 mod secrets;
 mod stream;
+mod tencent;
 
 const MODEL: &str = "claude-sonnet-4-5";
 
@@ -81,6 +82,7 @@ fn call() -> MessagesCall {
         api_key: None,
         api_base: None,
         custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(),
         extra_headers: None,
         provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),

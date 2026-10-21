@@ -5,6 +5,8 @@ use litellm_inference_transcription::{
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
+use super::NativeCall;
+
 use crate::{
     errors::route_error_to_pyerr,
     marshal::{RouteOptions, optional_object_field, required_field, value_route_options},
@@ -40,13 +42,12 @@ async fn execute(
 }
 
 #[pyfunction]
-pub(crate) fn transcription(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let call = super::NativeCall::extract(&call)?;
+pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    let arguments = call.resolved()?;
     let audio: Value =
-        litellm_host_python::from_py_argument(&required_field(&call.bound, "audio")?)?;
-    let options = value_route_options(&call.bound)?;
-    let optional_params =
-        optional_object_field(&call.bound, "optional_params")?.unwrap_or_default();
+        litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
+    let options = value_route_options(&arguments)?;
+    let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, &call.kwargs, false)?;
     let secrets = crate::secrets::source(py)?;
     run_sync(
@@ -59,14 +60,13 @@ pub(crate) fn transcription(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<
 #[pyfunction]
 pub(crate) fn atranscription<'py>(
     py: Python<'py>,
-    call: Bound<'py, PyAny>,
+    call: NativeCall<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let call = super::NativeCall::extract(&call)?;
+    let arguments = call.resolved()?;
     let audio: Value =
-        litellm_host_python::from_py_argument(&required_field(&call.bound, "audio")?)?;
-    let options = value_route_options(&call.bound)?;
-    let optional_params =
-        optional_object_field(&call.bound, "optional_params")?.unwrap_or_default();
+        litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
+    let options = value_route_options(&arguments)?;
+    let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, &call.kwargs, true)?;
     let secrets = crate::secrets::source(py)?;
     run_async(
