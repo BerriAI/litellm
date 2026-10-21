@@ -84,7 +84,8 @@ const saveChanges = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByText("Save Changes"));
 };
 
-const renderView = () => render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin />);
+const renderView = () =>
+  render(<GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin />);
 
 const lastPayload = () => vi.mocked(networking.updateGuardrailCall).mock.calls.at(-1)?.[2];
 
