@@ -129,6 +129,7 @@ def get_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_assistants=aget_assistants,
         )
@@ -312,6 +313,7 @@ def create_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             create_assistant_data=create_assistant_data,
             client=client,
             async_create_assistants=async_create_assistants,
@@ -461,6 +463,7 @@ def delete_assistant(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             assistant_id=assistant_id,
             client=client,
             async_delete_assistants=async_delete_assistants,
@@ -637,6 +640,7 @@ def create_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             acreate_thread=acreate_thread,
         )
@@ -783,6 +787,7 @@ def get_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_thread=aget_thread,
         )
@@ -960,6 +965,7 @@ def add_message(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             a_add_message=a_add_message,
         )
@@ -1111,6 +1117,7 @@ def get_messages(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_messages=aget_messages,
         )
@@ -1308,6 +1315,7 @@ def run_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             arun_thread=arun_thread,
             event_handler=event_handler,

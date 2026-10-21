@@ -1,3 +1,36 @@
+{{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
+{{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
+{{- if $hasComponentHosts }}
+{{- if not (and $componentHosts.ui $componentHosts.backend $componentHosts.gateway) }}
+{{- fail "ingress.componentHosts.ui, backend, and gateway must all be set together" }}
+{{- end }}
+{{- if not .Values.gateway.enabled }}
+{{- fail "ingress.componentHosts requires gateway.enabled=true" }}
+{{- end }}
+{{- if not .Values.backend.enabled }}
+{{- fail "ingress.componentHosts requires backend.enabled=true" }}
+{{- end }}
+{{- if not .Values.ui.enabled }}
+{{- fail "ingress.componentHosts requires ui.enabled=true" }}
+{{- end }}
+{{- if .Values.ingress.host }}
+{{- fail "ingress.host must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if .Values.ingress.extraPaths }}
+{{- fail "ingress.extraPaths must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if not (trim .Values.ui.backendUrl) }}
+{{- fail "ui.backendUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.ui.backendOrigin" . }}
+{{- if not (trim .Values.backend.gatewayUrl) }}
+{{- fail "backend.gatewayUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.backend.gatewayOrigin" . }}
+{{- if not (trim .Values.ui.publicUrl) }}
+{{- fail "ui.publicUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- end }}
 {{- if .Values.ingress.enabled -}}
 {{- $gatewayName := include "litellm.gateway.fullname" . -}}
 {{- $backendName := include "litellm.backend.fullname" . -}}
@@ -90,6 +123,66 @@
   adding to it.
 */}}
 {{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix" -}}
+{{- if $hasComponentHosts }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $componentHosts.ui | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+    - host: {{ $componentHosts.backend | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backendName }}
+                port:
+                  number: {{ $backendPort }}
+    - host: {{ $componentHosts.gateway | quote }}
+      http:
+        paths:
+          {{- if or (eq (include "litellm.lens.mode" .) "bundled") (and (eq (include "litellm.lens.mode" .) "external") .Values.lensWorker.externalServiceName) }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" (include "litellm.fullname" .)) }}
+                port:
+                  number: {{ .Values.lensWorker.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+{{- else }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -156,13 +249,13 @@ spec:
                 port:
                   number: {{ $gatewayPort }}
           {{- end }}
-          {{- if .Values.lensWorker.enabled }}
+          {{- if or (eq (include "litellm.lens.mode" .) "bundled") (and (eq (include "litellm.lens.mode" .) "external") .Values.lensWorker.externalServiceName) }}
           {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
           - path: /lens-ingest
             pathType: Prefix
             backend:
               service:
-                name: {{ include "litellm.fullname" . }}-lens-worker
+                name: {{ .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" (include "litellm.fullname" .)) }}
                 port:
                   number: {{ .Values.lensWorker.service.port }}
           {{- end }}
@@ -216,4 +309,5 @@ spec:
                 name: {{ $backendName }}
                 port:
                   number: {{ $backendPort }}
+{{- end }}
 {{- end }}

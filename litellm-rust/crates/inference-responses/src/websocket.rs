@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use litellm_http::websocket::{UpstreamWebSocket, connect_upstream};
-use litellm_llms_types::formats::responses::streaming_websocket::ResponsesWsEventType;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
     Message,
@@ -11,17 +10,6 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use super::Error;
-
-pub fn is_terminal_event(event_type: &ResponsesWsEventType) -> bool {
-    matches!(
-        event_type,
-        ResponsesWsEventType::ResponseCreated
-            | ResponsesWsEventType::ResponseCompleted
-            | ResponsesWsEventType::ResponseFailed
-            | ResponsesWsEventType::ResponseIncomplete
-            | ResponsesWsEventType::Error
-    )
-}
 
 #[derive(Clone)]
 pub struct ResponsesWebSocketConnection {

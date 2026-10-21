@@ -7,6 +7,7 @@ mock_provider "google-beta" {}
 mock_provider "random" {}
 
 variables {
+  image_tag          = "v9.9.9"
   project_id         = "acme-test"
   region             = "us-central1"
   tenant             = "acme"

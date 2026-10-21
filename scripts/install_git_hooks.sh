@@ -31,7 +31,7 @@ cat <<EOF
   core.hooksPath = .githooks
   active hooks:  $(ls "$hooks_dir" | tr '\n' ' ')
 
-These hooks enforce Conventional Commits and Conventional Branches.
+These hooks enforce Conventional Commits.
 Bypass with --no-verify when you need to (e.g. for emergency hotfixes).
 
 The CI-equivalent lint is deliberately not installed as an auto-firing hook
