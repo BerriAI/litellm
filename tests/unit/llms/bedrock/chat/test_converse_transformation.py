@@ -4459,12 +4459,17 @@ _OPUS_4_8_INVOKE_RESPONSE: Final = {
 
 
 def _routed_request_body(router: Router, model_name: str, route: str) -> Mapping[str, object]:
-    response: Final = _mock_converse_response()
-    if route == "invoke":
-        response.json.return_value = _OPUS_4_8_INVOKE_RESPONSE
-        response.text = json.dumps(_OPUS_4_8_INVOKE_RESPONSE)
-    client: Final = HTTPHandler()
-    with patch.object(client, "post", return_value=response) as mock_post:
+    from queue import SimpleQueue
+
+    response_body: Final = _OPUS_4_8_INVOKE_RESPONSE if route == "invoke" else _mock_converse_response().json()
+    requests: Final = SimpleQueue[httpx.Request]()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put(request)
+        return httpx.Response(200, json=response_body)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = HTTPHandler(client=http_client)
         router.completion(
             model=model_name,
             messages=[{"role": "user", "content": "Name the capital of France."}],
@@ -4472,7 +4477,8 @@ def _routed_request_body(router: Router, model_name: str, route: str) -> Mapping
             thinking=ADAPTIVE_THINKING,
             client=client,
         )
-    return json.loads(mock_post.call_args.kwargs["data"])
+    assert requests.qsize() == 1
+    return json.loads(requests.get_nowait().content)
 
 
 def _sends_native_output(body: Mapping[str, object], route: str) -> bool:
