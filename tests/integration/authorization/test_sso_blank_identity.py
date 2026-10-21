@@ -30,7 +30,7 @@ from tests.integration._support.database_relay import dropped_connection_relay
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 CLIENT_ID: Final = "integration-entra-client"
 CLIENT_SECRET: Final = "integration-entra-secret"

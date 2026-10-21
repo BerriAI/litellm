@@ -695,9 +695,7 @@ class CustomGuardrail(CustomLogger):
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
         allowed_hooks: Final = frozenset(supported_event_hooks) | (
-            frozenset((GuardrailEventHooks.logging_only,))
-            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
-            else frozenset()
+            frozenset((GuardrailEventHooks.logging_only,)) if self.accepts_logging_only_mode() else frozenset()
         )
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
@@ -869,8 +867,13 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
-    def uses_apply_guardrail_interface(self) -> bool:
-        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+    @classmethod
+    def uses_apply_guardrail_interface(cls) -> bool:
+        return cls.apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    @classmethod
+    def accepts_logging_only_mode(cls) -> bool:
+        return cls.uses_apply_guardrail_interface() and not cls.use_native_lifecycle_hooks
 
     @classmethod
     def supports_logging_only_scope(cls) -> bool:
@@ -1029,7 +1032,7 @@ class CustomGuardrail(CustomLogger):
             )
             return kwargs, result
         litellm_params: Final = kwargs.get("litellm_params") or {}
-        scratch_metadata: Final = {
+        scratch_metadata: Final[dict[str, object]] = {  # mutable-ok: apply_guardrail records its verdict here
             key: value
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
@@ -1083,11 +1086,11 @@ class CustomGuardrail(CustomLogger):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
         scratch_input, scratch_tools = scratch_fields or (None, None)
@@ -1135,6 +1138,17 @@ class CustomGuardrail(CustomLogger):
         duplicate the out-of-scope messages.
         """
         return False
+
+    def supports_structured_messages(self) -> bool:
+        """Whether this guardrail scans every row of ``structured_messages`` and returns texts that agree with them.
+
+        Guardrails that scan only part of the rows (the latest user turn, the
+        last row, the turns after the last assistant turn, or no tool results),
+        derive their returned texts from the rows, or cannot rewrite rows whose
+        content is a list of parts, override this to return False. Translation handlers that can rewrite the request from ``texts``
+        alone, like Bedrock Converse, then hand them only ``texts``.
+        """
+        return True
 
     def _suppressed_by_auto_router_compression(self) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail.

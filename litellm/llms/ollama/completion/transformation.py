@@ -16,8 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
-    custom_prompt,
     ollama_pt,
+    render_custom_prompt_template,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
@@ -437,11 +437,8 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
             )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)

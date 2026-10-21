@@ -14,9 +14,9 @@ from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
-    custom_prompt,
     deepseek_r1_pt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
@@ -60,7 +60,7 @@ def _response_header(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name, None)
 
 
-def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
     except ValidationError as e:
@@ -440,7 +440,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         guardrail_headers: Final = (
             ()
             if raw_guardrail_config is None
-            else tuple(_bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
+            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
@@ -601,7 +601,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
-    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None
@@ -609,11 +609,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="bedrock"
             )
             return prompt, None
         ## ELSE

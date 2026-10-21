@@ -3,14 +3,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeVar
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BeforeValidator, TypeAdapter, ValidationError
 from typing_extensions import Never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
 
@@ -40,6 +41,21 @@ else:
     LitellmRouter = Any
 
 _T: Final = TypeVar("_T")
+
+
+_PER_REQUEST_ROUTER_SETTINGS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "timeout",
+    "model_group_retry_policy",
+    "routing_strategy",
+    "enable_tag_filtering",
+)
+_ROUTER_ONLY_SETTINGS: Final = frozenset(
+    ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
+)
 
 
 def _route_user_config_request(data: dict, route_type: str):
@@ -99,6 +115,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "asearch": "/search",
     "adecisions": "/decisions",
     "asystemone": "/systemone",
+    "aextraction": "/extraction",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -208,6 +225,18 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
+
+
+def _none_unless_json_object(value: object) -> object:
+    return value if isinstance(value, Mapping) else None
+
+
+_JSON_OBJECT_OR_DROPPED_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Annotated[Mapping[str, object] | None, BeforeValidator(_none_unless_json_object)]
+)
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -549,6 +578,7 @@ RouteType = Literal[
     "asearch",
     "adecisions",
     "asystemone",
+    "aextraction",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -600,6 +630,43 @@ RouteType = Literal[
 ]
 
 
+def _merge_router_settings_override(
+    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+) -> frozenset[str]:
+    data.pop("enable_tag_filtering", None)
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
+    router_settings_override_adapter: Final = (
+        _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
+    )
+    try:
+        router_settings_override: Final = router_settings_override_adapter.validate_python(
+            data.pop("router_settings_override", None)
+        )
+    except ValidationError:
+        raise ProxyException(
+            message="router_settings_override must be a JSON object.",
+            type="invalid_request_error",
+            param="router_settings_override",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")
+    user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
+    router_settings_from_override: Final = MappingProxyType(
+        {
+            key: router_settings_override[key]
+            for key in _PER_REQUEST_ROUTER_SETTINGS
+            if router_settings_override.get(key) is not None
+            and key not in data
+            and (user_config is None or key not in user_config)
+        }
+        if router_settings_override is not None
+        else {}
+    )
+    data.update(router_settings_from_override)
+    return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -610,6 +677,7 @@ async def route_request(
     """
     Common helper to route the request
     """
+    router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     return await _retry_once_after_model_read_through(
         data,
         llm_router,
@@ -618,6 +686,7 @@ async def route_request(
             llm_router=router,
             user_model=user_model,
             route_type=route_type,
+            router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         ),
     )
@@ -630,6 +699,8 @@ async def raise_if_model_not_routable(
     route_type: str,
 ) -> None:
     """Raise the error route_request would raise before sending this request, without sending it."""
+
+    _merge_router_settings_override(dict(data))
 
     async def check(router: LitellmRouter | None) -> None:
         raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
@@ -684,7 +755,6 @@ class _Dispatch(Enum):
     LITELLM = auto()
     BATCH_COMPLETION = auto()
     USER_CONFIG = auto()
-    ROUTER_SETTINGS_OVERRIDE = auto()
     EVAL = auto()
     A2A_AGENT = auto()
     MISSING_MODEL = auto()
@@ -725,8 +795,6 @@ def _decide_dispatch(  # noqa: C901  # one branch per dispatch target, moved out
     elif data.get("user_config") is not None:
         return _Dispatch.USER_CONFIG
 
-    elif "router_settings_override" in data:
-        return _Dispatch.ROUTER_SETTINGS_OVERRIDE
     elif llm_router is not None:
         _raise_if_model_fully_blocked(llm_router=llm_router, model_name=model, team_id=team_id)
         # Evals API: always route to litellm directly (not through router)
@@ -799,8 +867,20 @@ def _decide_dispatch(  # noqa: C901  # one branch per dispatch target, moved out
 
         if "model" not in data:
             return _Dispatch.MISSING_MODEL
+        custom_llm_provider: Final = (
+            data.get("custom_llm_provider")
+            if route_type
+            in (
+                "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_update",
+                "avector_store_delete",
+            )
+            else None
+        )
+        team_model_provider: Final[str | None] = custom_llm_provider if isinstance(custom_llm_provider, str) else None
         team_model_name: Final = (
-            llm_router.map_team_model(model, team_id)
+            llm_router.map_team_model(model, team_id, custom_llm_provider=team_model_provider)
             if team_id is not None and (model is None or isinstance(model, str))
             else None
         )
@@ -903,6 +983,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,
+    router_only_settings_from_override: frozenset[str],
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
@@ -911,9 +992,14 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
-    data.pop("enable_tag_filtering", None)
-    if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
+    def direct_litellm_kwargs() -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in JSON_OBJECT_ADAPTER.validate_python(data).items()
+                if key not in router_only_settings_from_override
+            }
+        )
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -931,9 +1017,9 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 return getattr(llm_router, f"{route_type}")(**data)
             except Exception:
                 # If router fails (e.g., model not found in router), fall back to direct call
-                return getattr(litellm, f"{route_type}")(**data)
+                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
         case _Dispatch.LITELLM:
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
         case _Dispatch.BATCH_COMPLETION if llm_router is not None:
             if data.get("fastest_response", False):
                 return llm_router.abatch_completion_fastest_response(**data)
@@ -941,34 +1027,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return llm_router.abatch_completion(models=models, **data)
         case _Dispatch.USER_CONFIG:
             return _route_user_config_request(data, route_type)
-        case _Dispatch.ROUTER_SETTINGS_OVERRIDE:
-            # Apply per-request router settings overrides from key/team config
-            # Instead of creating a new Router (expensive), merge settings into kwargs
-            # The Router already supports per-request overrides for these settings
-            override_settings: Final = data.pop("router_settings_override")
-
-            # Settings that the Router accepts as per-request kwargs
-            # These override the global router settings for this specific request
-            per_request_settings: Final = [
-                "fallbacks",
-                "context_window_fallbacks",
-                "content_policy_fallbacks",
-                "num_retries",
-                "timeout",
-                "model_group_retry_policy",
-                "routing_strategy",
-                "enable_tag_filtering",
-            ]
-
-            for key in per_request_settings:
-                if override_settings.get(key) is not None and key not in data:
-                    data[key] = override_settings[key]
-
-            # Use main router with overridden kwargs
-            if llm_router is not None:
-                return getattr(llm_router, f"{route_type}")(**data)
-            else:
-                return getattr(litellm, f"{route_type}")(**data)
         case _Dispatch.EVAL:
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
@@ -993,7 +1051,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     # If we can't get deployment creds, continue without them
                     pass
 
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
         case _TeamModel(name=team_model_name):
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)

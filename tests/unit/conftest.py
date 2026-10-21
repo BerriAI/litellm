@@ -2,11 +2,11 @@ import asyncio
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 import boto3
 import httpx
@@ -93,7 +93,15 @@ CALLBACK_LISTS: Final = (
     "_async_failure_callback",
     "_async_input_callback",
 )
-RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
+RESET_TO_NONE_GLOBALS: Final = (
+    "model_fallbacks",
+    "cache",
+    "max_fallbacks",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 RESTORED_GLOBALS: Final = (
     "disable_aiohttp_transport",
     "force_ipv4",
@@ -299,6 +307,30 @@ def isolate_router_model_cost_state() -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
+def _provider_model_sets() -> tuple[set[str], ...]:
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -306,6 +338,22 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, NativeStructuredOutputKey], None]:
+    def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
+        entry: Final = litellm.model_cost[model_cost_key]
+        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        litellm.get_model_info.cache_clear()
+
+    return set_flags
 
 
 @pytest.fixture

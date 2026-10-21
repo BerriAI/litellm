@@ -3,10 +3,11 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -27,6 +28,8 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -94,6 +97,13 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
+)
+from ..context_caching.known_cached_contents import known_cached_contents
+from ..context_caching.rejected_cache_retry import (
+    cache_rebuild,
+    post_with_fresh_cache_async,
+    post_with_fresh_cache_sync,
 )
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
@@ -186,6 +196,29 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
         ),
         status_code=400,
     )
+
+
+_SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_sampling_deprecation_lock: Final = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def _log_gemini_sampling_params_deprecated(model: str) -> None:
+    verbose_logger.warning(
+        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+        model,
+    )
+
+
+def _sampling_deprecation_notice_key(model: str) -> str:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    is_cataloged: Final = any(name in catalog for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))
+    return model if is_cataloged else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
+
+
+def _warn_gemini_sampling_params_deprecated(model: str) -> None:
+    with _sampling_deprecation_lock:
+        _log_gemini_sampling_params_deprecated(_sampling_deprecation_notice_key(model))
 
 
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
@@ -396,11 +429,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         return True
 
+    @staticmethod
+    def supports_sampling_params(model: str) -> bool:
+        """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
+
+        Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
+        and later accept the fields but ignore them, and a later generation will 400 on them.
+        A model the map says nothing about keeps forwarding them. ``temperature`` and ``top_p``
+        leave ``get_supported_openai_params`` when the flag is off, so the shared unsupported-param
+        check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
+        ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
+        request body is built."""
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        bare: Final = model.split("/")[-1]
+        for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
+            if isinstance(flag := rows.get(candidate, {}).get("supports_sampling_params"), bool):
+                return flag
+        return True
+
+    @staticmethod
+    def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
+        """Return under ``drop_params`` so the caller drops ``param``, else raise the client-side 400
+        that names the escape hatch."""
+        if litellm.drop_params or drop_params:
+            return
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} does not support {param}: the model map flags it `supports_sampling_params: false` "
+                "because Google ignores sampling params on this model. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+
     def get_supported_openai_params(self, model: str) -> list[str]:
+        sampling_params: Final = ("temperature", "top_p", "top_k") if self.supports_sampling_params(model) else ()
         supported_params: Final = [
-            "temperature",
-            "top_p",
-            "top_k",
+            *sampling_params,
             "max_tokens",
             "max_completion_tokens",
             "stream",
@@ -685,13 +750,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
+    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
+            send_integer_enums: Whether to send integer enums with string values
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -704,18 +770,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleSearch: dict | None = None
         googleSearchRetrieval: dict | None = None
         enterpriseWebSearch: dict | None = None
-        urlContext: dict | None = None
+        urlContext: dict[str, object] | None = None
         code_execution: dict | None = None
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        for tool in value:
+        for tool in cast(list[dict], schema_value):  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
@@ -725,7 +791,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"] = build_vertex_schema(
+                        _openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                    )
 
                 openai_function_object = _openai_function_object
 
@@ -868,21 +936,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params)
+        return self._map_function(value, optional_params, send_integer_enums)
 
-    def _map_response_schema(self, value: dict) -> dict:
+    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = build_vertex_schema(parameters=item, add_property_ordering=True)
+                    item = build_vertex_schema(
+                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
+                    )
 
         elif isinstance(old_schema, dict):
-            old_schema = build_vertex_schema(parameters=old_schema, add_property_ordering=True)
+            old_schema = build_vertex_schema(
+                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
+            )
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str, allow_integer_enums: bool = True
+    ):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = remove_strict_from_schema(new_value)
@@ -924,13 +999,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = self._map_response_schema(value=schema)
+                optional_params["response_schema"] = with_integer_enums_that_fit(
+                    partial(self._map_response_schema, schema),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
+
+    @property
+    def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return True
+
+    @staticmethod
+    def _include_thoughts(requested: bool | None) -> bool:
+        if requested is not None:
+            return requested
+        return normalize_drop_params(litellm.gemini_include_thoughts_default) is not False
+
+    @staticmethod
+    def _include_thoughts_requested_by_reasoning_effort(reasoning_effort: object) -> bool | None:
+        match reasoning_effort:
+            case {"summary": str()}:
+                return True
+            case _:
+                return None
+
+    @staticmethod
+    def _map_reasoning_effort(effort: str, model: str, reasoning_effort: object) -> GeminiThinkingConfig:
+        include_thoughts: Final = VertexGeminiConfig._include_thoughts_requested_by_reasoning_effort(reasoning_effort)
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return VertexGeminiConfig._map_reasoning_effort_to_thinking_level(effort, model, include_thoughts)
+        return VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(effort, model, include_thoughts)
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: str | None = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
             # Check for exact matches first, then partial matches
@@ -945,22 +1050,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             return {
                 "thinkingBudget": budget,
-                "includeThoughts": True,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "disable":
             return {
@@ -987,6 +1092,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_level(
         reasoning_effort: str,
         model: str | None = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
         """
         Map reasoning_effort to thinking_level for Gemini 3+ models.
@@ -998,17 +1104,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
             if supports_minimal:
-                return {"thinkingLevel": "minimal", "includeThoughts": True}
+                return {"thinkingLevel": "minimal", "includeThoughts": sends_thoughts}
             else:
-                return {"thinkingLevel": "low", "includeThoughts": True}
+                return {"thinkingLevel": "low", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "low":
-            return {"thinkingLevel": "low", "includeThoughts": True}
+            return {"thinkingLevel": "low", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "medium":
-            return {"thinkingLevel": "medium", "includeThoughts": True}
+            return {"thinkingLevel": "medium", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "high":
-            return {"thinkingLevel": "high", "includeThoughts": True}
+            return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
         elif reasoning_effort in ("disable", "none"):
             return {
                 "thinkingLevel": "minimal" if supports_minimal else "low",
@@ -1062,12 +1169,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
     @staticmethod
+    def _thinking_asks_for_thoughts(thinking_param: Mapping[str, object]) -> bool:
+        display: Final = thinking_param.get("display")
+        return isinstance(thinking_param.get("summary"), str) or (display is not None and display != "omitted")
+
+    @staticmethod
     def _map_thinking_param(
         thinking_param: AnthropicThinkingParam,
         model: str | None = None,
     ) -> GeminiThinkingConfig:
         thinking_enabled: Final = thinking_param.get("type") == "enabled"
         thinking_budget: Final = thinking_param.get("budget_tokens")
+        asks_for_thoughts: Final = VertexGeminiConfig._thinking_asks_for_thoughts(thinking_param)
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(True if asks_for_thoughts else None)
 
         params: Final[GeminiThinkingConfig] = {}
 
@@ -1077,7 +1191,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
-                    params["includeThoughts"] = True
+                    params["includeThoughts"] = sends_thoughts
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
@@ -1089,7 +1203,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
-                params["includeThoughts"] = True
+                params["includeThoughts"] = sends_thoughts
             if thinking_budget is not None and isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
 
@@ -1206,10 +1320,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        gemini_sampling_params_warned: bool = False
+        supports_sampling_params: Final = self.supports_sampling_params(model)
         for param, value in non_default_params.items():
+            if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
+                continue
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     if value is not None and value < 1.0:
@@ -1217,28 +1334,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
                             model,
                         )
-                    if not gemini_sampling_params_warned:
-                        verbose_logger.warning(
-                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                            model,
-                        )
-                        gemini_sampling_params_warned = True
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["temperature"] = value
             elif param == "top_p":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_p"] = value
             elif param == "top_k":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
@@ -1256,7 +1360,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
+                self.apply_response_schema_transformation(
+                    value=value, optional_params=optional_params, model=model, allow_integer_enums=allow_integer_enums
+                )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1269,7 +1375,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = self._map_function(value=value, optional_params=optional_params)
+                mapped_tools = with_integer_enums_that_fit(
+                    partial(self._map_function, value, optional_params),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
@@ -1304,14 +1413,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
-                        )
-                    else:
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
-                        )
+                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
+                        effort=effort_value, model=model, reasoning_effort=value
+                    )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
@@ -2754,7 +2858,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         litellm_params: dict,
         api_key: str | dict | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
@@ -2766,6 +2870,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(headers)
 
         return default_headers
+
+
+def _log_generate_request(
+    logging_obj: LoggingClass,
+    messages: Sequence[AllMessageValues],
+    api_base: str,
+    headers: Mapping[str, str],
+    body: RequestBody,
+) -> None:
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
 
 
 async def make_call(
@@ -2800,6 +2918,7 @@ async def make_call(
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
@@ -2813,14 +2932,18 @@ async def make_call(
         )
 
     async def open_hop(body: RequestBody) -> httpx.Response:
-        return await client.post(
-            url_for(api_base, body),
-            headers=dict(await hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return await client.post(
+                url_for(api_base, body),
+                headers=dict(await hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
@@ -2859,14 +2982,18 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(
-        url_for(api_base, request_body),
-        headers=headers,
-        data=data,
-        stream=True,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = client.post(
+            url_for(api_base, request_body),
+            headers=headers,
+            data=data,
+            stream=True,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+    except httpx.HTTPStatusError as e:
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
+        raise
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2876,14 +3003,18 @@ def make_sync_call(
         )
 
     def open_hop(body: RequestBody) -> httpx.Response:
-        return client.post(
-            url_for(api_base, body),
-            headers=dict(hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return client.post(
+                url_for(api_base, body),
+                headers=dict(hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.iter_lines(),
@@ -2951,14 +3082,14 @@ class VertexLLM(VertexBase):
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
         timeout: float | httpx.Timeout | None,
         encoding: object,
-        logging_obj,
-        stream,
+        logging_obj: LoggingClass,
+        stream: bool | None,
         optional_params: dict,
         litellm_params: dict,
         logger_fn=None,
@@ -3001,6 +3132,17 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
+        rebuild: Final = cache_rebuild(
+            partial(
+                async_transform_request_body,
+                **data,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         request_body: Final = await async_transform_request_body(
             **data,
             vertex_project=vertex_project,
@@ -3009,39 +3151,37 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
+
+        open_stream: Final = partial(
+            make_call,
+            gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            hop_headers=partial(
+                self._fresh_headers_async,
+                headers,
+                extra_headers,
+                vertex_credentials,
+                vertex_project,
+                custom_llm_provider,
+            ),
+            timeout=timeout,
         )
 
-        request_body_str: Final = json.dumps(request_body)
+        async def open_with_fresh_cache(client: AsyncHTTPHandler | None) -> ModelResponseIterator:
+            async def post(body: RequestBody) -> ModelResponseIterator:
+                return await open_stream(client=client, data=json.dumps(body), request_body=body)
+
+            return (await post_with_fresh_cache_async(request_body, rebuild, post, log_request))[1]
+
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
-            make_call=partial(
-                make_call,
-                gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                api_base=api_base,
-                headers=headers,
-                data=request_body_str,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                request_body=request_body,
-                hop_headers=partial(
-                    self._fresh_headers_async,
-                    headers,
-                    extra_headers,
-                    vertex_credentials,
-                    vertex_project,
-                    custom_llm_provider,
-                ),
-                timeout=timeout,
-            ),
+            make_call=open_with_fresh_cache,
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
@@ -3051,7 +3191,7 @@ class VertexLLM(VertexBase):
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
@@ -3061,7 +3201,7 @@ class VertexLLM(VertexBase):
         timeout: float | httpx.Timeout | None,
         encoding: object,
         logging_obj: LoggingClass,
-        stream,
+        stream: bool | None,
         optional_params: dict,
         litellm_params: dict,
         logger_fn=None,
@@ -3104,6 +3244,17 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
+        rebuild: Final = cache_rebuild(
+            partial(
+                async_transform_request_body,
+                **data,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         request_body: Final = await async_transform_request_body(
             **data,
             vertex_project=vertex_project,
@@ -3119,15 +3270,8 @@ class VertexLLM(VertexBase):
         else:
             client = client
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         fresh_headers: Final = partial(
             self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3143,6 +3287,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3156,14 +3301,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = await post(request_body)
+        sent_body, first_response = await post_with_fresh_cache_async(request_body, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=await collect_hops_async(parse_body(first_response), request_body, post),
+            hops=await collect_hops_async(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=request_body,
+            request_body=sent_body,
             messages=messages,
         )
 
@@ -3288,6 +3433,17 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
+        rebuild: Final = cache_rebuild(
+            partial(
+                sync_transform_request_body,
+                **transform_request_params,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            ),
+            messages,
+            optional_params,
+        )
         data: Final = sync_transform_request_body(
             **transform_request_params,
             vertex_project=vertex_project,
@@ -3296,15 +3452,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)
+        log_request(data)
 
         fresh_headers: Final = partial(
             self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3312,22 +3461,27 @@ class VertexLLM(VertexBase):
 
         ## SYNC STREAMING CALL ##
         if stream is True:
-            request_data_str: Final = json.dumps(data)
+            open_stream: Final = partial(
+                make_sync_call,
+                gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
+                api_base=url,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                headers=headers,
+                hop_headers=fresh_headers,
+                timeout=timeout,
+            )
+
+            def open_with_fresh_cache(client: HTTPHandler | None) -> ModelResponseIterator:
+                def post(body: RequestBody) -> ModelResponseIterator:
+                    return open_stream(client=client, data=json.dumps(body), request_body=body)
+
+                return post_with_fresh_cache_sync(data, rebuild, post, log_request)[1]
+
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
-                make_call=partial(
-                    make_sync_call,
-                    gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                    api_base=url,
-                    data=request_data_str,
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                    request_body=data,
-                    hop_headers=fresh_headers,
-                    timeout=timeout,
-                ),
+                make_call=open_with_fresh_cache,
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
@@ -3353,6 +3507,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3366,14 +3521,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = post(data)
+        sent_body, first_response = post_with_fresh_cache_sync(data, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=collect_hops_sync(parse_body(first_response), data, post),
+            hops=collect_hops_sync(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=data,
+            request_body=sent_body,
             messages=messages,
         )
 

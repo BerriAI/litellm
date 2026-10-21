@@ -112,7 +112,7 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
         assert float(str(_token_spend(key_b)[0]["spend"])) == pytest.approx(0.06), _token_spend(key_b)
         assert float(str(_team_spend(team_id)[0]["spend"])) == pytest.approx(0.12), _team_spend(team_id)
 
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = _chat(gateway, model, key_a)
         assert denied.status_code == 422, denied.text
         assert object_value(denied.json()["error"])["type"] == "budget_exceeded", denied.text
@@ -153,7 +153,7 @@ def test_reset_exhausted_key_is_served_again(gateway: Gateway) -> None:
         reset: Final = gateway.request("POST", "/global/spend/reset")
         assert reset.status_code == 200, reset.text
         content: Final = f"restored {uuid.uuid4().hex}"
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         restored: Final = _chat(gateway, model, key, content)
         assert restored.status_code == 200, restored.text
         assert _observed(upstream) == [_upstream_chat(content)], restored.text
