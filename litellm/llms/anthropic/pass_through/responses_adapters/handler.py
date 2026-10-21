@@ -5,7 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
-from typing import Final, TypeAlias, cast
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -449,22 +449,21 @@ class LiteLLMMessagesToResponsesAPIHandler:
 
         # Sync path
         native_context_management, polyfilled_edits = _split_context_management(context_management, kwargs)
-        polyfill_result: Final = (
-            cast(  # cast-ok: run_async_function is untyped; it returns _polyfilled's result
-                "PolyfillResult | None",
-                run_async_function(
-                    _polyfilled,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    system=system,
-                    edits=polyfilled_edits,
-                    kwargs=kwargs,
-                ),
+        ran: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # run_async_function is untyped
+            run_async_function(
+                _polyfilled,
+                model=model,
+                messages=messages,
+                tools=tools,
+                system=system,
+                edits=polyfilled_edits,
+                kwargs=kwargs,
             )
             if polyfilled_edits
             else None
         )
+        # run_async_function is untyped: check what it returned rather than assume it
+        polyfill_result: Final = ran if isinstance(ran, PolyfillResult) else None
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
             # clear_tool_uses edits only rewrite messages; system stays as sent
