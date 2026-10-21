@@ -4,6 +4,7 @@ from functools import reduce
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
@@ -71,7 +72,7 @@ def response_timing_metrics(
     receive_anchored: Final = timing_window[1]
     total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
-        return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
+        return {"_response_ms": total_response_time_ms}
     caching_details: Final = logging_obj.caching_details
     cache_duration_ms: Final = (
         caching_details.get("cache_duration_ms")
@@ -101,6 +102,32 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+_HIDDEN_PARAMS_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _hidden_params_mapping(hidden_params: object) -> Mapping[str, object]:
+    try:
+        return _HIDDEN_PARAMS_DICT.validate_python(hidden_params)
+    except ValidationError:
+        return {}
+
+
+def _existing_provider_response_model(result: object) -> str | None:
+    """The pricing model a response already carries, like the decisions path sets, wins over the response model."""
+    hidden_params: Final[object] = getattr(result, "_hidden_params", None)
+    carried: Final[object] = _hidden_params_mapping(hidden_params).get("provider_response_model") or getattr(
+        hidden_params, "provider_response_model", None
+    )
+    return carried if isinstance(carried, str) and carried else None
+
+
+def _provider_response_model(result: object) -> str | None:
+    """The model the provider answered with, kept because the proxy later rewrites ``result.model`` to the alias the
+    client asked for and cost-map lookups for the standard logging payload would otherwise miss."""
+    model: Final = getattr(result, "model", None) if isinstance(result, ModelResponse) else None
+    return model if isinstance(model, str) and model else None
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -115,8 +142,19 @@ class ResponseMetadata:
         """Check if response type supports timing metrics"""
         return isinstance(self.result, (ModelResponse, EmbeddingResponse, TranscriptionResponse))
 
-    def set_hidden_params(self, logging_obj: LiteLLMLoggingObject, model: str | None, kwargs: dict) -> None:
-        """Set hidden parameters on the response"""
+    def set_hidden_params(
+        self,
+        logging_obj: LiteLLMLoggingObject,
+        model: str | None,
+        kwargs: dict,
+        cache_hit: bool | None = None,
+    ) -> None:
+        """Set hidden parameters on the response.
+
+        ``cache_hit`` is passed for a response served from the cache: ``logging_obj`` only
+        learns of the hit later, in the success handler, so its cost calculator would
+        otherwise price the cached response as a fresh call.
+        """
 
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
@@ -125,14 +163,19 @@ class ResponseMetadata:
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj._response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
+            "response_cost": logging_obj.response_cost_calculator(
+                result=self.result,
+                litellm_model_name=model,
+                router_model_id=model_id,
+                cache_hit=cache_hit,
             ),
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
+            "provider_response_model": _existing_provider_response_model(self.result)
+            or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
 
@@ -190,7 +233,7 @@ class ResponseMetadata:
         #########################################################
         # 3. Detailed per-phase timing (opt-in via env var)
         #########################################################
-        llm_api_duration_ms: Final = logging_obj.model_call_details.get("llm_api_duration_ms")
+        llm_api_duration_ms: Final[float | None] = logging_obj.model_call_details.get("llm_api_duration_ms")
         if LITELLM_DETAILED_TIMING and llm_api_duration_ms is not None:
             detailed: Final[dict[str, float]] = {
                 "timing_llm_api_ms": round(llm_api_duration_ms, 4),
@@ -228,6 +271,7 @@ def update_response_metadata(
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     include_overhead: bool = True,
+    cache_hit: bool | None = None,
 ) -> None:
     """
     Updates response metadata including hidden params and timing metrics
@@ -252,5 +296,5 @@ def update_response_metadata(
 
     metadata: Final = ResponseMetadata(result)
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
-    metadata.set_hidden_params(logging_obj, model, kwargs)
+    metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()

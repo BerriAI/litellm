@@ -1,9 +1,11 @@
+import base64
 import copy
 import functools
 import json
 import os
 import sys
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 
 import pytest
 
@@ -12,24 +14,36 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
+    cache_control_as_prompt_cache_breakpoint,
+    converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
+    get_semantic_cache_prompt_from_messages,
+    get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    native_redacted_thinking_data,
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
+    schema_grammar_branch_count,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_property_count,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    strip_litellm_response_only_fields,
     system_messages_first,
     update_messages_with_model_file_ids,
+    with_prompt_cache_breakpoint,
 )
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
+_ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
 
 
 def test_get_format_from_file_id():
@@ -1071,6 +1085,30 @@ def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id(
     assert updated[0]["content"][1]["file_id"] == raw_id
 
 
+
+@pytest.mark.parametrize("unusable_file_id", [[1], {"a": 1}])
+def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id):
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+
+    encoded_id = _xlitellm_encoded("file-ExTuCawUqxEMjVFK6xwR9B", "gpt-5.1")
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": encoded_id},
+                {"type": "input_file", "file_id": unusable_file_id},
+            ],
+        }
+    ]
+
+    updated = update_responses_input_with_model_file_ids(
+        input_items, "model-A", {encoded_id: {"model-A": "file-on-a"}}
+    )
+
+    assert [item["file_id"] for item in updated[0]["content"]] == ["file-on-a", unusable_file_id]
+
 def test_update_messages_xlitellm_decode_does_not_override_mapping():
     """If the call-site already resolved a provider id via the mapping, that
     wins. The new decode fallback runs only when no mapping match."""
@@ -1620,39 +1658,74 @@ class TestToolWithSanitizedParameters:
 
         assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
 
+    def test_sanitizes_the_input_schema_of_an_anthropic_tool(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {
+                "type": "object",
+                "properties": {"doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN}},
+            },
+        }
+
+        result = tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns)
+
+        assert result == {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+        assert tool["input_schema"]["properties"]["doc_id"]["pattern"] == _ARTIFACT_DATA_ID_PATTERN
+
+    def test_returns_the_same_anthropic_tool_when_its_schema_has_nothing_to_drop(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {"name": "Read", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+
+        assert tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) is tool
+
+
+def _regex_schema(pattern):
+    return {
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "pattern": pattern},
+            "writes": {
+                "type": "array",
+                "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
+            },
+            "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
+            "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
+            "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
+            "tagged": {
+                "type": "object",
+                "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
+            },
+        },
+        "$defs": {"segment": {"type": "string", "pattern": pattern}},
+        "required": ["field"],
+    }
+
 
 class TestDropNonPythonRegexPatterns:
     """Claude Code's Artifact tool declares ECMA-262 ``\\p{..}`` escapes that OpenAI's
     validator, which compiles ``pattern`` values and ``patternProperties`` keys with
     Python ``re``, refuses as "not a 'regex'"."""
 
-    def _schema(self, pattern):
-        return {
-            "type": "object",
-            "properties": {
-                "field": {"type": "string", "pattern": pattern},
-                "writes": {
-                    "type": "array",
-                    "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
-                },
-                "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
-                "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
-                "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
-                "tagged": {
-                    "type": "object",
-                    "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
-                },
-            },
-            "$defs": {"segment": {"type": "string", "pattern": pattern}},
-            "required": ["field"],
-        }
-
     def test_drops_every_regex_python_re_rejects_from_every_schema_position(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = self._schema(_ARTIFACT_FIELD_PATTERN)
+        schema = _regex_schema(_ARTIFACT_FIELD_PATTERN)
 
         result = drop_non_python_regex_patterns(schema)
 
@@ -1666,14 +1739,14 @@ class TestDropNonPythonRegexPatterns:
         assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
         assert result["$defs"]["segment"] == {"type": "string"}
         assert result["required"] == ["field"]
-        assert schema == self._schema(_ARTIFACT_FIELD_PATTERN)
+        assert schema == _regex_schema(_ARTIFACT_FIELD_PATTERN)
 
     def test_keeps_regexes_python_re_compiles_and_returns_the_same_object(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = self._schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
+        schema = _regex_schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
 
         assert drop_non_python_regex_patterns(schema) is schema
 
@@ -1735,6 +1808,137 @@ class TestDropNonPythonRegexPatterns:
         )
 
         assert drop_non_python_regex_patterns(schema) is schema
+
+
+class TestDropLookaroundRegexPatterns:
+    """Kimi K3 and Grok 4.6/4.7 on Bedrock Converse reject every tool schema regex that
+    uses a lookaround assertion, Claude Code's ``ArtifactData`` ``pattern`` included."""
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [r"^(?!x).*$", r"^(?=.*a).*$", r"^.*(?<!x)$", r"^.*(?<=a)$", _ARTIFACT_DATA_ID_PATTERN],
+        ids=["negative-lookahead", "positive-lookahead", "negative-lookbehind", "positive-lookbehind", "ArtifactData"],
+    )
+    def test_drops_every_lookaround_regex_from_every_schema_position(self, pattern):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = _regex_schema(pattern)
+
+        result = drop_lookaround_regex_patterns(schema)
+
+        assert '"pattern"' not in json.dumps(result)
+        properties = result["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
+        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
+        assert properties["extra"]["additionalProperties"] == {"type": "string"}
+        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
+        assert result["$defs"]["segment"] == {"type": "string"}
+        assert result["required"] == ["field"]
+        assert schema == _regex_schema(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [r"^[A-Za-z0-9_\-.~:@+]{1,200}$", r"^(?:a|b)+$", r"^(?P<name>\w+)$", r"^(?i)abc$", r"^[^\p{Cc}\p{Cf}]{1,200}$"],
+        ids=["plain", "non-capturing-group", "named-group", "inline-flag", "non-python-without-lookaround"],
+    )
+    def test_keeps_regexes_without_lookaround_and_returns_the_same_object(self, pattern):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = _regex_schema(pattern)
+
+        assert drop_lookaround_regex_patterns(schema) is schema
+
+    def test_lookaround_inside_data_positions_is_not_a_regex(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "template": {"type": "object", "default": {"pattern": _ARTIFACT_DATA_ID_PATTERN}},
+                "hint": {"type": "string", "description": "ids match " + _ARTIFACT_DATA_ID_PATTERN},
+            },
+            "required": ["pattern"],
+        }
+
+        assert drop_lookaround_regex_patterns(schema) is schema
+
+
+@pytest.mark.parametrize(
+    ("dropper", "patterns"),
+    [
+        ("drop_non_python_regex_patterns", (_ARTIFACT_FIELD_PATTERN, r"^\p{L}+$")),
+        ("drop_lookaround_regex_patterns", (_ARTIFACT_DATA_ID_PATTERN, r"^(?=.*[a-z])\w+$")),
+    ],
+    ids=["non-python", "lookaround"],
+)
+class TestDroppedPatternPropertiesKeepTheirNamesAllowed:
+    """Dropping a ``patternProperties`` key from an object closed by ``additionalProperties:
+    false`` must not ban the names that key allowed: its value schema takes over as the
+    object's ``additionalProperties``."""
+
+    @staticmethod
+    def _drop(dropper):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            drop_non_python_regex_patterns,
+        )
+
+        return {
+            "drop_non_python_regex_patterns": drop_non_python_regex_patterns,
+            "drop_lookaround_regex_patterns": drop_lookaround_regex_patterns,
+        }[dropper]
+
+    def test_closed_object_takes_the_dropped_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string", "pattern": patterns[0]}},
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "string"},
+        }
+
+    def test_closed_object_losing_two_entries_accepts_either_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {
+                patterns[0]: {"type": "string"},
+                patterns[1]: {"type": "integer"},
+                "^x_": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {"^x_": {"type": "boolean"}},
+            "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        }
+
+    def test_object_with_its_own_additional_properties_schema_keeps_it(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string"}},
+            "additionalProperties": {"type": "integer"},
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "integer"},
+        }
 
 
 class TestRequestContainsImageContent:
@@ -1879,6 +2083,20 @@ class TestEncryptedReasoningReplay:
         assert messages[0] == {"role": "user", "content": "question"}
         assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
 
+    def test_strip_uses_predicate_to_keep_selected_encrypted_blocks(self):
+        kept_signature = encrypted_reasoning_signature("keep")
+        stripped_signature = encrypted_reasoning_signature("strip")
+        content = [
+            {"type": "thinking", "thinking": "keep", "signature": kept_signature},
+            {"type": "thinking", "thinking": "strip", "signature": stripped_signature},
+        ]
+        messages = [{"role": "assistant", "content": content}]
+
+        strip_encrypted_reasoning_from_messages(messages, should_strip=lambda block: block.get("thinking") == "strip")
+
+        assert messages[0]["content"] is content
+        assert content == [{"type": "thinking", "thinking": "keep", "signature": kept_signature}]
+
     @pytest.mark.parametrize(
         "messages",
         [
@@ -1990,3 +2208,258 @@ class TestMergeConsecutiveSystemMessages:
         )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
+
+
+_CLAUDE_CODE_TOOL_TURN: Final = [
+    {"role": "user", "content": "list the files"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        pytest.param(_CLAUDE_CODE_TOOL_TURN, "list the filescalc.py test_calc.py", id="tool-result-string"),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "text", "text": "x = 1"},
+                                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "x = 1",
+            id="tool-result-blocks",
+        ),
+        pytest.param(
+            [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]}],
+            "",
+            id="tool-result-without-content",
+        ),
+    ],
+)
+def test_get_semantic_cache_prompt_from_messages_keeps_tool_result_text(
+    messages: list[dict[str, object]], expected: str
+) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == expected
+
+
+def test_get_semantic_cache_prompt_from_messages_differs_from_the_turn_before_it() -> None:
+    assert get_str_from_messages(_CLAUDE_CODE_TOOL_TURN) == get_str_from_messages(_CLAUDE_CODE_TOOL_TURN[:1])
+    assert get_semantic_cache_prompt_from_messages(_CLAUDE_CODE_TOOL_TURN) != get_semantic_cache_prompt_from_messages(
+        _CLAUDE_CODE_TOOL_TURN[:1]
+    )
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "system", "content": "be brief. "}, {"role": "user", "content": "hello"}], id="strings"),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is "},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "this?"},
+                    ],
+                }
+            ],
+            id="text-parts",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant"},
+                {"role": "assistant", "content": None},
+                {"role": "user", "content": ""},
+                {"role": "tool", "content": "small", "search_results": [{"source": "s", "title": "t", "content": []}]},
+            ],
+            id="empty-content-and-search-results",
+        ),
+    ],
+)
+def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_without_tool_results(
+    messages: list[dict[str, object]],
+) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
+
+
+def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
+    marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+
+    assert cache_control_as_prompt_cache_breakpoint(marked) == {
+        "type": "text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+
+def test_a_block_without_cache_control_is_returned_untouched() -> None:
+    unmarked: Final = {"type": "text", "text": "rules"}
+
+    assert cache_control_as_prompt_cache_breakpoint(unmarked) is unmarked
+
+
+def test_a_breakpoint_the_client_wrote_survives_a_message_level_mark_ttl_included() -> None:
+    block: Final = {
+        "type": "input_text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
+
+    assert with_prompt_cache_breakpoint(block, {"mode": "explicit"}) is block
+
+
+def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> None:
+    both: Final = {
+        "type": "input_text",
+        "text": "rules",
+        "cache_control": {"type": "ephemeral"},
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
+
+    assert cache_control_as_prompt_cache_breakpoint(both) == {
+        "type": "input_text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
+
+
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "data, native",
+    [
+        pytest.param(_NATIVE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="claude-native"),
+        pytest.param(_CONVERSE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="converse-wrapped-legacy-history"),
+        pytest.param(
+            encrypted_reasoning_signature("gAAAA_1"), encrypted_reasoning_signature("gAAAA_1"), id="openai-encrypted"
+        ),
+        pytest.param("", "", id="blank"),
+        pytest.param(base64.b64encode(b"not base64!").decode(), base64.b64encode(b"not base64!").decode(), id="b64-once"),
+    ],
+)
+def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(data: str, native: str) -> None:
+    assert native_redacted_thinking_data(data) == native
+
+
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
+    assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
+    message: Final = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "provider_specific_fields": {"namespace": "ns"},
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "provider_specific_fields": {"namespace": "ns"},
+                },
+            }
+        ],
+    }
+
+    stripped: Final = strip_litellm_response_only_fields(message)
+
+    tool_call: Final = cast("dict[str, object]", stripped["tool_calls"][0])
+    assert "provider_specific_fields" not in tool_call
+    function: Final = cast("dict[str, object]", tool_call["function"])
+    assert "provider_specific_fields" not in function
+    assert function["name"] == "get_weather"
+    assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize(
+    ("schema", "is_open"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {}}, False),
+        ({"type": "object", "additionalProperties": False}, False),
+        ({"type": "string"}, False),
+        ({"type": "object"}, True),
+        ({"type": ["object", "null"]}, True),
+        ({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": True}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, True),
+        ({"type": "object", "properties": {}, "patternProperties": {"^x": {"type": "string"}}}, True),
+        ({"type": "object", "properties": {"inner": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}, True),
+        ({"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}, True),
+    ],
+)
+def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema, is_open):
+    assert schema_has_open_object(schema) is is_open
+
+
+def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "object", "properties": properties, **defs}
+
+
+@pytest.mark.parametrize(
+    ("schema", "unresolvable"),
+    [
+        (_object_with({"a": {"type": "string"}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
+        (_object_with({"a": {"$ref": "other.json#/A"}}), True),
+        (_object_with({"parent": {"$ref": "#"}}), True),
+        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
+        (
+            _object_with(
+                {"a": {"$ref": "#/$defs/A"}},
+                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
+            ),
+            True,
+        ),
+    ],
+    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
+)
+def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
+    assert schema_has_unresolvable_ref(schema) is unresolvable
+
+
+@pytest.mark.parametrize(
+    ("schema", "properties", "branches"),
+    [
+        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
+        (
+            _object_with(
+                {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},
+                required=["x", "y"],
+                **{"$defs": {"Pair": _object_with({"l": {"type": "string"}, "r": {"type": "string"}}, required=["l"])}},
+            ),
+            4,
+            7,
+        ),
+        (_object_with({"inner": _object_with({"z": {"type": "string"}})}, required=["inner"]), 2, 4),
+    ],
+    ids=["flat", "shared-def-counted-once", "nested"],
+)
+def test_schema_size_counts_every_written_object_once(schema, properties, branches):
+    assert schema_property_count(schema) == properties
+    assert schema_grammar_branch_count(schema) == branches

@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
 )
 from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, Usage
 
-PER_SECOND_ENTRY: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+PER_SECOND_ENTRY: Final = {"cost_per_second": 0.00042}
 FREE_ENTRY: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0, "cache_read_input_token_cost": 2e-08}
 PRICED_ENTRY: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
 TEXT_USAGE: Final = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from redis.exceptions import RedisError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
@@ -58,6 +59,8 @@ from litellm.types.caching import (
     RedisPipelineRpushOperation,
 )
 from litellm.types.services import ServiceTypes
+
+SPEND_QUEUE_TARGET: Final = "spend_queue"
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -144,7 +147,7 @@ class RedisUpdateBuffer:
         self.redis_cache = redis_cache
 
     @staticmethod
-    def _should_commit_spend_updates_to_redis() -> bool:
+    def should_commit_spend_updates_to_redis() -> bool:
         """
         Checks if the Pod should commit spend updates to Redis
 
@@ -160,11 +163,16 @@ class RedisUpdateBuffer:
             return False
         return _use_redis_transaction_buffer
 
+    _should_commit_spend_updates_to_redis = should_commit_spend_updates_to_redis
+
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def _store_transactions_in_redis(
         self,
-        transactions: Mapping[str, BaseDailySpendTransaction] | None,
+        transactions: dict[str, BaseDailySpendTransaction] | None,  # mutable-ok: add_update requires dict
         redis_key: str,
         service_type: ServiceTypes,
+        *,
+        source_queue: DailySpendUpdateQueue,
     ) -> None:
         """
         Helper method to store transactions in Redis and emit an event
@@ -173,6 +181,7 @@ class RedisUpdateBuffer:
             transactions: The transactions to store
             redis_key: The Redis key to store under
             service_type: The service type for event emission
+            source_queue: The in-memory queue to restore transactions to if Redis push fails
         """
         if transactions is None or len(transactions) == 0:
             return
@@ -185,6 +194,15 @@ class RedisUpdateBuffer:
                 key=redis_key,
                 values=list_of_transactions,
             )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). "
+                "Restoring them to the in-memory queue for retry on next tick. Error: %s",
+                redis_key,
+                str(e),
+            )
+            await source_queue.add_update(transactions)
+        else:
             verbose_proxy_logger.debug(
                 "Spend tracking - pushed spend updates to Redis buffer. redis_key=%s, buffer_size=%s",
                 redis_key,
@@ -194,13 +212,8 @@ class RedisUpdateBuffer:
                 queue_size=current_redis_buffer_size,
                 service=service_type,
             )
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). Error: %s",
-                redis_key,
-                str(e),
-            )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_in_memory_spend_updates_in_redis(
         self,
         spend_update_queue: SpendUpdateQueue,
@@ -483,6 +496,7 @@ class RedisUpdateBuffer:
         if window_spend_update_transactions and window_spend_update_queue is not None:
             await window_spend_update_queue.update_queue.put(window_spend_update_transactions)
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def restore_transactions_to_redis(
         self,
         db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
@@ -543,13 +557,14 @@ class RedisUpdateBuffer:
                 str(e),
             )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_spend_logs_in_redis(
         self,
         rows: Sequence[SpendLogRow],
         max_rows: int = REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     ) -> bool:
         """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
-        if self.redis_cache is None or len(rows) == 0 or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or len(rows) == 0 or not self.should_commit_spend_updates_to_redis():
             return False
         try:
             buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
@@ -572,9 +587,10 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.info("Spend tracking - parked %d spend log rows in Redis for a later flush", len(rows))
         return True
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
-        if self.redis_cache is None or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
         popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
             key=REDIS_SPEND_LOGS_BUFFER_KEY,
@@ -604,6 +620,7 @@ class RedisUpdateBuffer:
         """
         return {key.replace(prefix, "", 1): value for key, value in data.items()}
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_update_transactions_from_redis_buffer(
         self,
     ) -> DBSpendUpdateTransactions | None:
@@ -671,6 +688,7 @@ class RedisUpdateBuffer:
 
         return combined_transaction
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_transactions_from_redis_buffer_pipeline(
         self,
     ) -> tuple[
@@ -781,8 +799,10 @@ class RedisUpdateBuffer:
             transactions=daily_tag_spend_update_transactions,
             redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
             service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
+            source_queue=daily_tag_spend_update_queue,
         )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def _lpop_daily_spend_transactions(
         self,
         redis_key: str,

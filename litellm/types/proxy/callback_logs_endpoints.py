@@ -7,12 +7,13 @@ payloads here; the proxy replays them through the standard callback fan-out.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.constants import MAX_CALLBACK_LOG_RECORDS
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class CallbackLogRecord(BaseModel):
+class CallbackLogRecord(LiteLLMBaseModel):
     """A single finished logging event to replay through the callbacks."""
 
     status: Literal["success", "failure"]
@@ -20,7 +21,7 @@ class CallbackLogRecord(BaseModel):
     error: str | None = None
 
 
-class CallbackLogsRequest(BaseModel):
+class CallbackLogsRequest(LiteLLMBaseModel):
     """A batch of logging events posted by an external producer."""
 
     # Bounded so one POST can't trigger an unbounded callback/DB fan-out (each
@@ -28,14 +29,14 @@ class CallbackLogsRequest(BaseModel):
     records: list[CallbackLogRecord] = Field(..., max_length=MAX_CALLBACK_LOG_RECORDS)
 
 
-class CallbackLogFailure(BaseModel):
+class CallbackLogFailure(LiteLLMBaseModel):
     """A record that failed to replay, identified by its index in the batch."""
 
     index: int
     error: str
 
 
-class CallbackLogsResponse(BaseModel):
+class CallbackLogsResponse(LiteLLMBaseModel):
     """Per-batch result: counts plus per-record failure detail so the caller can
     distinguish a transient callback error from a structurally bad payload."""
 

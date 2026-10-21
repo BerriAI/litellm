@@ -25,6 +25,7 @@ from typing import Final, Protocol
 
 import pytest
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import (
     PROVIDER_RATE_LIMIT_ATTEMPTS,
     RateLimitedError,
@@ -60,6 +61,13 @@ TEST_IMAGE_URL = (
 )
 
 
+MISTRAL_OCR_MODEL: Final = "mistral/mistral-ocr-latest"
+AZURE_AI_OCR_MODEL: Final = "azure_ai/mistral-document-ai-2512"
+AZURE_DOC_INTELLIGENCE_MODEL: Final = "azure_ai/doc-intelligence/prebuilt-layout"
+VERTEX_OCR_MODEL: Final = "vertex_ai/mistral-ocr-2505"
+COHERE_OCR_MODEL: Final = "cohere/parse-v5.0"
+
+
 class OcrProvider(Protocol):
     """One OCR provider's deployment config: its model id plus the os.environ/*
     credential references the proxy resolves at call time. Each provider owns which
@@ -70,7 +78,7 @@ class OcrProvider(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class MistralOcr:
-    model: str = "mistral/mistral-ocr-latest"
+    model: str = MISTRAL_OCR_MODEL
 
     def litellm_params(self) -> LiteLLMParamsBody:
         return LiteLLMParamsBody(model=self.model, api_key="os.environ/MISTRAL_API_KEY")
@@ -96,7 +104,7 @@ class AzureDocIntelligenceOcr:
     AZURE_DOCUMENT_INTELLIGENCE_API_KEY, which the OCR config resolves from the
     doc-intelligence model name when api_base/api_key are left unset."""
 
-    model: str = "azure_ai/doc-intelligence/prebuilt-layout"
+    model: str = AZURE_DOC_INTELLIGENCE_MODEL
 
     def litellm_params(self) -> LiteLLMParamsBody:
         return LiteLLMParamsBody(model=self.model)
@@ -119,6 +127,14 @@ class VertexOcr:
 
 
 @dataclass(frozen=True, slots=True)
+class CohereOcr:
+    model: str = COHERE_OCR_MODEL
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model, api_key="os.environ/COHERE_API_KEY")
+
+
+@dataclass(frozen=True, slots=True)
 class _OcrCase:
     suffix: str
     provider: OcrProvider
@@ -133,7 +149,7 @@ RUST_OCR_CASES: tuple[_OcrCase, ...] = (
     ),
     _OcrCase(
         "azure-ai",
-        AzureAiOcr("azure_ai/mistral-document-ai-2512"),
+        AzureAiOcr(AZURE_AI_OCR_MODEL),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
     _OcrCase(
@@ -143,12 +159,57 @@ RUST_OCR_CASES: tuple[_OcrCase, ...] = (
     ),
     _OcrCase(
         "vertex-mistral",
-        VertexOcr("vertex_ai/mistral-ocr-2505", "us-central1"),
+        VertexOcr(VERTEX_OCR_MODEL, "us-central1"),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
 )
 
-_CASE_IDS = tuple(case.suffix for case in RUST_OCR_CASES)
+PDF_TEXT: Final = "test pdf file"
+IMAGE_TEXT: Final = "litellm"
+PDF_DOCUMENT: Final = OcrDocument(type="document_url", document_url=TEST_PDF_URL)
+IMAGE_DOCUMENT: Final = OcrDocument(type="image_url", image_url=TEST_IMAGE_URL)
+
+
+@dataclass(frozen=True, slots=True)
+class _OcrContentCase:
+    suffix: str
+    provider: OcrProvider
+    document: OcrDocument
+    expected_text: str
+
+
+OCR_CONTENT_CASES: Final = (
+    _OcrContentCase("mistral-pdf", MistralOcr(), PDF_DOCUMENT, PDF_TEXT),
+    _OcrContentCase("mistral-image", MistralOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
+    _OcrContentCase("azure-ai-image", AzureAiOcr(AZURE_AI_OCR_MODEL), IMAGE_DOCUMENT, IMAGE_TEXT),
+    _OcrContentCase(
+        "vertex-mistral-image", VertexOcr(VERTEX_OCR_MODEL, "us-central1"), IMAGE_DOCUMENT, IMAGE_TEXT
+    ),
+    _OcrContentCase("cohere-image", CohereOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
+)
+
+
+def _ocr_subject(provider: OcrProvider) -> Subject:
+    match provider:
+        case MistralOcr():
+            vendor, model = Provider.MISTRAL, MISTRAL_OCR_MODEL
+        case AzureAiOcr():
+            vendor, model = Provider.AZURE_AI, AZURE_AI_OCR_MODEL
+        case AzureDocIntelligenceOcr():
+            vendor, model = Provider.AZURE_AI, AZURE_DOC_INTELLIGENCE_MODEL
+        case VertexOcr():
+            vendor, model = Provider.VERTEX_AI, VERTEX_OCR_MODEL
+        case CohereOcr():
+            vendor, model = Provider.COHERE, COHERE_OCR_MODEL
+        case _:
+            raise TypeError(f"no OCR subject for {provider!r}")
+    return Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.OCR,
+        providers=(vendor,),
+        models=(model,),
+        mode=Mode.NONSTREAM,
+    )
 
 
 def _assert_ocr_document(response: OcrResponse) -> None:
@@ -170,7 +231,10 @@ def _assert_provider_rate_limit_relayed(model: str, outcome: RateLimitedError) -
 
 
 class TestRustOcrGateway:
-    @pytest.mark.parametrize("case", RUST_OCR_CASES, ids=_CASE_IDS)
+    @pytest.mark.parametrize(
+        "case",
+        [pytest.param(case, marks=meta(_ocr_subject(case.provider)), id=case.suffix) for case in RUST_OCR_CASES],
+    )
     def test_rust_ocr_response(self, proxy: ProxyClient, resources: ResourceManager, case: _OcrCase) -> None:
         model = f"rust-ocr-{case.suffix}-{unique_marker()}"
         model_id = proxy.create_model(model, case.provider.litellm_params())
@@ -187,6 +251,14 @@ class TestRustOcrGateway:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/ocr 500s (aocr TypeError) on missing document instead of 400")
     @pytest.mark.covers("llm.ocr.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.OCR,
+            providers=(),
+            models=(),
+        )
+    )
     def test_missing_document_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"rust-ocr-val-{unique_marker()}"
         model_id = proxy.create_model(model, MistralOcr().litellm_params())
@@ -198,3 +270,39 @@ class TestRustOcrGateway:
             json=_OptionalOcrBody(model=model),
         )
         assert_client_error(result, "ocr missing document")
+
+
+class TestOcrDocumentContent:
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(case, marks=meta(_ocr_subject(case.provider)), id=case.suffix)
+            for case in OCR_CONTENT_CASES
+        ],
+    )
+    def test_ocr_reads_the_document_and_bills_its_pages(
+        self, proxy: ProxyClient, resources: ResourceManager, case: _OcrContentCase
+    ) -> None:
+        model = f"ocr-content-{case.suffix}-{unique_marker()}"
+        model_id = proxy.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
+
+        result = proxy.transport.send(
+            "/v1/ocr",
+            headers=proxy.transport.bearer(resources.key()),
+            json=OcrBody(model=model, document=case.document),
+        )
+        assert result.status_code == 200, f"{model}: /v1/ocr failed with {result.status_code}: {result.body[:300]}"
+        response = OcrResponse.model_validate_json(result.body)
+        assert response.object == "ocr", f"expected object='ocr', got {response.object!r}"
+        assert [page.index for page in response.pages] == list(range(len(response.pages))), (
+            f"page indexes are not contiguous from 0: {[page.index for page in response.pages]}"
+        )
+        text = " ".join(" ".join(page.markdown for page in response.pages).split()).lower()
+        assert case.expected_text in text, f"{model}: OCR text lost the document content: {text[:300]!r}"
+        assert response.usage_info is not None and response.usage_info.pages_processed == len(response.pages), (
+            f"usage_info.pages_processed disagrees with the returned pages: {response.usage_info!r}"
+        )
+        assert result.response_cost is not None and result.response_cost > 0, (
+            f"{model}: OCR call was not costed: x-litellm-response-cost={result.response_cost!r}"
+        )

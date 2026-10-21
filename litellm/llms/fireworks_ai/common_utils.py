@@ -49,6 +49,33 @@ def with_fireworks_session_affinity(
     return MappingProxyType({**headers, "x-session-affinity": session_id})
 
 
+FIREWORKS_FORWARD_USER_ID_PARAM: Final = "fireworks_forward_user_id"
+
+
+def _authenticated_user_id(metadata: object) -> str | None:
+    user_id: Final = metadata.get("user_api_key_user_id") if isinstance(metadata, Mapping) else None
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+def get_fireworks_forwarded_user_id(litellm_params: Mapping[str, object]) -> str | None:
+    if litellm_params.get(FIREWORKS_FORWARD_USER_ID_PARAM) is not True:
+        return None
+    return next(
+        (
+            user_id
+            for key in ("metadata", "litellm_metadata")
+            if (user_id := _authenticated_user_id(litellm_params.get(key))) is not None
+        ),
+        None,
+    )
+
+
+def without_caller_user(extra_body: Mapping[str, object], forwarded_user_id: str | None) -> Mapping[str, object]:
+    if forwarded_user_id is None:
+        return extra_body
+    return MappingProxyType({key: value for key, value in extra_body.items() if key != "user"})
+
+
 def resolve_fireworks_api_key(api_key: str | None) -> str | None:
     return api_key or (
         get_secret_str("FIREWORKS_API_KEY")
@@ -60,6 +87,7 @@ def resolve_fireworks_api_key(api_key: str | None) -> str | None:
 
 AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
 FIREROUTER: Final = "firerouter"
+ROUTER_SHORT_NAMES: Final = frozenset({FIREROUTER, "auto", "auto-instant"})
 
 
 def resolve_fireworks_resource_name(model: str) -> str:
@@ -68,7 +96,7 @@ def resolve_fireworks_resource_name(model: str) -> str:
         return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"
-    if stripped.endswith("-fast") or stripped == FIREROUTER or stripped.startswith(f"{FIREROUTER}/"):
+    if stripped.endswith("-fast") or stripped in ROUTER_SHORT_NAMES or stripped.startswith(f"{FIREROUTER}/"):
         return f"accounts/fireworks/routers/{stripped}"
     return f"accounts/fireworks/models/{stripped}"
 
@@ -110,4 +138,4 @@ class FireworksAIMixin:
 
     def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
         pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
-        return dict(pinned)  # mutable-ok: the HTTP handler updates the returned headers in place
+        return dict(pinned)

@@ -5,7 +5,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
-use crate::{Pythonized, panic_to_pyerr, release_gil};
+use crate::{Error, Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -73,6 +73,18 @@ where
     pyo3_async_runtimes::tokio::future_into_py(py, future)
 }
 
+pub fn ready_future<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let future = py
+        .import("asyncio")?
+        .call_method0("get_running_loop")?
+        .call_method0("create_future")?;
+    future.call_method1("set_result", (value,))?;
+    Ok(future)
+}
+
 pub fn run_sync<T, E, F>(
     py: Python<'_>,
     future: F,
@@ -100,9 +112,7 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
+        return Err(Error::SyncInsideTokio.into());
     }
     release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?
 }
@@ -119,9 +129,7 @@ where
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
+        return Err(Error::SyncInsideTokio.into());
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
@@ -231,6 +239,58 @@ mod tests {
 
     use super::*;
     use crate::{InitializedPython, initialized_python};
+
+    #[pyfunction]
+    fn completed_future<'py>(
+        py: Python<'py>,
+        value: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        ready_future(py, &value)
+    }
+
+    #[rstest]
+    fn a_ready_future_preserves_identity_and_the_callers_loop(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        python.attach(|py| {
+            let locals = PyDict::new(py);
+            locals
+                .set_item(
+                    "completed_future",
+                    wrap_pyfunction!(completed_future, py).unwrap(),
+                )
+                .unwrap();
+            py.run(
+                c"
+import asyncio
+
+async def exercise():
+    value = object()
+    future = completed_future(value)
+    assert isinstance(future, asyncio.Future)
+    assert future.done()
+    assert future.get_loop() is asyncio.get_running_loop()
+    assert future.result() is value
+    assert await future is value
+
+asyncio.run(exercise())
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[rstest]
+    fn a_ready_future_requires_a_running_loop(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        python.attach(|py| {
+            let error = ready_future(py, py.None().bind(py)).unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
 
     #[derive(Debug)]
     struct Error(String);
