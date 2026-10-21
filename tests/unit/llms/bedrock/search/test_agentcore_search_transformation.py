@@ -7,11 +7,11 @@ the sharded CI (coverage collection runs against this tree).
 """
 
 import json
-from typing import Final
 import os
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
 from litellm.llms.bedrock.search.transformation import (
