@@ -20,6 +20,7 @@ from integration._support.anthropic_sse import (
     text_delta,
 )
 from integration._support.client import Gateway, object_value
+from integration._support.routing import assert_routing_matches_policy, rule_aware_overrides, trace_path
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire
 from pydantic import JsonValue, TypeAdapter
@@ -217,6 +218,16 @@ def one_delivery(wire: Wire, marker: str) -> Delivery:
 
 def rust_routed(headers: Mapping[str, str]) -> bool:
     return headers.get(RUST_ROUTE_HEADER) == "true"
+
+
+def assert_routing_policy(headers: Mapping[str, str], trace_dir: Path) -> None:
+    trace_id: Final = headers.get("x-integration-routing-id")
+    assert trace_id is not None, dict(headers)
+    assert_routing_matches_policy(headers, trace_path(trace_dir, trace_id))
+
+
+def routing_overrides(directory: Path, *, rust: bool) -> Mapping[str, str]:
+    return rule_aware_overrides(directory, rust=rust)
 
 
 def messages_body(model: str, marker: str, *, stream: bool = False) -> dict[str, JsonValue]:

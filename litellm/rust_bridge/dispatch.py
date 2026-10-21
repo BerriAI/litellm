@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
+from litellm.rust_bridge.observation import observe_early
 
 RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
@@ -34,6 +35,7 @@ class PublicDispatch(Generic[RequestT]):
     def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> RequestT:
         request: Final = self.request(args, kwargs)
         if request is None:
+            observe_early(self.route, "projection_failure")
             raise runtime.NoPythonImplementationError(
                 f"{self.route.value} has no Python implementation, so every call must project to a native request"
             )
@@ -43,6 +45,7 @@ class PublicDispatch(Generic[RequestT]):
         try:
             return self.context(request)
         except Exception:  # noqa: BLE001  # detectors call legacy handlers, so any error must fall back to Python
+            observe_early(self.route, "detector_failure")
             verbose_logger.warning(
                 "%s route detection failed, serving the call on Python", self.route.value, exc_info=True
             )
@@ -69,9 +72,11 @@ class PublicDispatch(Generic[RequestT]):
                 rules=selected_rules,
             )
         if not catalog.rust_might_handle(self.route, selected_rules):
+            observe_early(self.route, "no_candidate")
             return python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:
+            observe_early(self.route, "projection_failure")
             return python(*args, **kwargs)
         context: Final = self._guarded_context(request)
         if context is None:
@@ -105,9 +110,11 @@ class PublicDispatch(Generic[RequestT]):
                 rules=selected_rules,
             )
         if not catalog.rust_might_handle(self.route, selected_rules):
+            observe_early(self.route, "no_candidate")
             return await python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:
+            observe_early(self.route, "projection_failure")
             return await python(*args, **kwargs)
         context: Final = self._guarded_context(request)
         if context is None:

@@ -10,6 +10,7 @@ from litellm.exceptions import APIError
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 from litellm.rust_bridge.catalog import RouteContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.observation import observe_terminal, observed_attempt
 from litellm.rust_bridge.response_metadata import mark_rust_response
 
 NativeT = TypeVar("NativeT")
@@ -62,19 +63,28 @@ def run(
     rules: Rules | None = None,
 ) -> ResultT:
     selected: Final = decision(context, rules)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(_attempt_native(context, binding, native), context)
-    match selected:
-        case Decision.PYTHON:
-            return python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
-            result: Final = _attempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
-                return _required(result, context)
-            return python()
-        case _:
-            assert_never(selected)
+    with observed_attempt(context, selected) as attempt_id:
+        if isinstance(python, NoPythonImplementation):
+            _require_rust(context, selected)
+            return _observed_result(
+                _required(_attempt_native(context, binding, native), context),
+                attempt_id,
+                context,
+                selected,
+                "rust",
+            )
+        match selected:
+            case Decision.PYTHON:
+                return _observed_result(python(), attempt_id, context, selected, "python")
+            case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+                native_result: Final = _attempt_native(context, binding, native)
+                if isinstance(native_result, RustHandled):
+                    return _observed_result(_required(native_result, context), attempt_id, context, selected, "rust")
+                if selected is Decision.RUST_REQUIRED:
+                    return _observed_result(_required(native_result, context), attempt_id, context, selected, "rust")
+                return _observed_result(python(), attempt_id, context, selected, "python")
+            case _:
+                assert_never(selected)
 
 
 async def arun(
@@ -86,19 +96,39 @@ async def arun(
     rules: Rules | None = None,
 ) -> ResultT:
     selected: Final = decision(context, rules)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(await _aattempt_native(context, binding, native), context)
-    match selected:
-        case Decision.PYTHON:
-            return await python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
-            result: Final = await _aattempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
-                return _required(result, context)
-            return await python()
-        case _:
-            assert_never(selected)
+    with observed_attempt(context, selected) as attempt_id:
+        if isinstance(python, NoPythonImplementation):
+            _require_rust(context, selected)
+            return _observed_result(
+                _required(await _aattempt_native(context, binding, native), context),
+                attempt_id,
+                context,
+                selected,
+                "rust",
+            )
+        match selected:
+            case Decision.PYTHON:
+                return _observed_result(await python(), attempt_id, context, selected, "python")
+            case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+                native_result: Final = await _aattempt_native(context, binding, native)
+                if isinstance(native_result, RustHandled):
+                    return _observed_result(_required(native_result, context), attempt_id, context, selected, "rust")
+                if selected is Decision.RUST_REQUIRED:
+                    return _observed_result(_required(native_result, context), attempt_id, context, selected, "rust")
+                return _observed_result(await python(), attempt_id, context, selected, "python")
+            case _:
+                assert_never(selected)
+
+
+def _observed_result(
+    value: ResultT,
+    attempt_id: str,
+    context: RouteContext,
+    selected: Decision,
+    engine: str,
+) -> ResultT:
+    observe_terminal(attempt_id, context, selected, engine=engine)
+    return value
 
 
 def _require_rust(context: RouteContext, selected: Decision) -> None:

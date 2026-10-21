@@ -37,3 +37,9 @@ together with its dedicated job, and list a new dedicated GitHub workflow with t
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
 fails a file here that a GitHub workflow runs unless it is in `GITHUB_FILES` and that workflow owns its
 directory (#46780)
+
+Owned proxy tests that opt into rule-aware routing use
+`integration._support.routing:install_rule_aware_harness` as a worker startup hook. The hook installs
+worker-local trace middleware and resolves the shared catalog into explicit Python-only or native-required
+rules. Assertions correlate the generated `x-integration-routing-id` response header with its trace and
+use `assert_routing_matches_policy` rather than assuming an engine from a test row

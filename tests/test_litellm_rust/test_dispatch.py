@@ -8,6 +8,7 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge import observation
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
 
@@ -270,6 +271,79 @@ def test_a_detector_error_keeps_the_call_on_python() -> None:
         rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
     )
     assert result is expected
+
+
+def test_dispatch_observes_detector_failure_without_projecting_a_python_call() -> None:
+    class Collector:
+        def __init__(self) -> None:
+            self.events: tuple[observation.RouteObservation, ...] = ()
+
+        def record(self, event: observation.RouteObservation) -> None:
+            self.events = (*self.events, event)
+
+    collector: Final = Collector()
+    token: Final = observation.set_observer(collector)
+    try:
+        with observation.request_scope("trace"), observation.trace_scope():
+            assert (
+                failing_dispatch().run(
+                    ("model",),
+                    {},
+                    python=lambda *_: "python",
+                    binding=binding(),
+                    native=reject_native,
+                    rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
+                )
+                == "python"
+            )
+        assert any(event.reason == "detector_failure" for event in collector.events)
+    finally:
+        observation.reset_observer(token)
+
+
+def test_dispatch_observes_no_candidate_and_projection_failure() -> None:
+    class Collector:
+        def __init__(self) -> None:
+            self.events: tuple[observation.RouteObservation, ...] = ()
+
+        def record(self, event: observation.RouteObservation) -> None:
+            self.events = (*self.events, event)
+
+    collector: Final = Collector()
+    token: Final = observation.set_observer(collector)
+    dispatch: Final = PublicDispatch(
+        route=Route.CHAT_COMPLETIONS,
+        request=lambda args, kwargs: None,
+        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS),
+    )
+    try:
+        with observation.request_scope("trace"), observation.trace_scope():
+            assert (
+                dispatch.run(
+                    ("model",),
+                    {},
+                    python=lambda *_: "python",
+                    binding=binding(),
+                    native=reject_native,
+                    rules=(),
+                )
+                == "python"
+            )
+        with observation.request_scope("trace"), observation.trace_scope():
+            assert (
+                dispatch.run(
+                    ("model",),
+                    {},
+                    python=lambda *_: "python",
+                    binding=binding(),
+                    native=reject_native,
+                    rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
+                )
+                == "python"
+            )
+        assert {event.reason for event in collector.events} == {"no_candidate", "projection_failure"}
+    finally:
+        observation.reset_observer(token)
 
 
 async def test_a_detector_error_keeps_the_async_call_on_python() -> None:

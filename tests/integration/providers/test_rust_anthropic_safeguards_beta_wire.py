@@ -5,6 +5,7 @@ import threading
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import anthropic
@@ -12,7 +13,6 @@ import httpx
 import pytest
 from integration._support.client import (
     Gateway,
-    Scenario,
     eventually,
     gateway_from_environment,
 )
@@ -46,6 +46,7 @@ from integration.providers._anthropic_safeguards_beta_support import (
     WEB_SEARCH,
     WEB_SEARCH_TOOL,
     anthropic_peer,
+    assert_routing_policy,
     chat_body,
     deliveries,
     json_object,
@@ -55,7 +56,7 @@ from integration.providers._anthropic_safeguards_beta_support import (
     outage_peer,
     owned_config,
     responses_body,
-    rust_routed,
+    routing_overrides,
     safeguarded,
     started_workers,
 )
@@ -79,6 +80,7 @@ class _Rig:
     owned: OwnedProxy
     wire: Wire
     outage: threading.Event
+    trace_dir: Path
 
     @property
     def gateway(self) -> Gateway:
@@ -91,7 +93,6 @@ class _Answer:
     marker: str
     status: int
     text: str
-    rust: bool
 
 
 @pytest.fixture(scope="module")
@@ -103,14 +104,16 @@ def shared_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         wire_server(outage_peer(outage)) as wire,
     ):
         config: Final = owned_config(directory, environment, wire.url)
-        with owned_proxy_process(environment, directory, {"LITELLM_RUST": "true"}, config=config, workers=2) as owned:
+        with owned_proxy_process(
+            environment, directory, routing_overrides(directory, rust=True), config=config, workers=2
+        ) as owned:
             eventually(
                 lambda: started_workers(owned.log),
                 lambda pids: len(pids) == 2,
                 seconds=60,
             )
             wire.drain()
-            yield _Rig(owned, wire, outage)
+            yield _Rig(owned, wire, outage, directory / "routing-traces")
 
 
 @pytest.fixture
@@ -155,7 +158,7 @@ def test_sdk_messages_with_safeguards_go_upstream_with_the_dangerous_tool_use_be
             extra_body={"safeguards": list(SAFEGUARDS), "tools": [dict(BASH_TOOL)]},
         )
     message: Final = raw.parse()
-    assert rust_routed(raw.headers), dict(raw.headers)
+    assert_routing_policy(raw.headers, rig.trace_dir)
     received: Final = json_object(message.model_dump_json())
     assert message.id == f"msg_{marker}", received
     assert received.get("safeguard_results") == list(SAFEGUARD_RESULTS), received
@@ -192,7 +195,7 @@ async def test_sdk_streamed_messages_with_safeguards_go_upstream_with_the_beta(
         ) as stream:
             text: Final = "".join([piece async for piece in stream.text_stream])
             final: Final = await stream.get_final_message()
-            assert rust_routed(stream.response.headers), dict(stream.response.headers)
+            assert_routing_policy(stream.response.headers, rig.trace_dir)
     assert (final.id, text) == (f"msg_{marker}", REPLY_TEXT), (final, text)
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.beta, sent.safeguards) == (
@@ -209,7 +212,7 @@ def test_raw_messages_merge_the_safeguards_beta_into_the_client_betas(rig: _Rig,
     body: Final = safeguarded(messages_body(ANTHROPIC_DEPLOYMENT, marker, stream=stream), list(SAFEGUARDS))
     response: Final = _post(rig.gateway, body, beta=CLIENT_BETAS)
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, rig.trace_dir)
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.beta) == (ANTHROPIC_TARGET, MERGED_BETAS), sent
@@ -221,7 +224,7 @@ def test_null_or_absent_safeguards_add_no_beta(rig: _Rig, extra: Mapping[str, Js
     marker: Final = new_marker()
     response: Final = _post(rig.gateway, {**messages_body(ANTHROPIC_DEPLOYMENT, marker), **extra})
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, rig.trace_dir)
     assert f"msg_{marker}" in response.text and "safeguard_results" not in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.beta, sent.safeguards) == (None, None), sent
@@ -253,7 +256,7 @@ def test_malformed_safeguards_still_add_the_beta_and_relay_the_vendor_verdict(
     control: Final = new_marker()
     after: Final = _post(rig.gateway, messages_body(ANTHROPIC_DEPLOYMENT, control))
     assert after.status_code == 200, after.text
-    assert rust_routed(after.headers), dict(after.headers)
+    assert_routing_policy(after.headers, rig.trace_dir)
     assert one_delivery(rig.wire, control).beta is None
     assert rig.gateway.request("GET", "/health/liveliness").status_code == 200
 
@@ -276,7 +279,7 @@ def test_duplicated_safeguards_keys_resolve_to_the_last_value(rig: _Rig, last: s
         },
     )
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, rig.trace_dir)
     assert ("safeguard_results" in response.text) == (last == "list"), response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.beta == (DANGEROUS_TOOL_USE if last == "list" else None), sent
@@ -304,7 +307,7 @@ def test_vertex_messages_with_safeguards_keep_the_beta_from_the_shared_helper(
     body: Final = safeguarded(messages_body(VERTEX_DEPLOYMENT, marker, stream=stream), list(SAFEGUARDS))
     response: Final = _post(rig.gateway, {**body, "tools": tools})
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, rig.trace_dir)
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.target == (VERTEX_STREAM_TARGET if stream else VERTEX_TARGET), sent
@@ -326,24 +329,28 @@ def test_deepseek_messages_forward_safeguards_without_adding_a_beta(rig: _Rig, b
         beta=beta,
     )
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, rig.trace_dir)
     assert f"msg_{marker}" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.api_key, sent.safeguards) == (DEEPSEEK_TARGET, DEEPSEEK_KEY, list(SAFEGUARDS)), sent
     assert _beta_set(sent.beta) <= _beta_set(beta) - {DANGEROUS_TOOL_USE}, sent
 
 
-def test_python_route_adds_the_beta_for_safeguards(gateway: Gateway, scenario: Scenario) -> None:
-    with wire_server(anthropic_peer) as wire:
+def test_python_policy_route_adds_the_beta_for_safeguards(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        wire_server(anthropic_peer) as wire,
+        owned_proxy_process(gateway, tmp_path, routing_overrides(tmp_path, rust=False)) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         deployment: Final = scenario.model(model=f"anthropic/{BACKEND}", api_base=wire.url, api_key=ANTHROPIC_KEY)
         marker: Final = new_marker()
-        response: Final = _post(gateway, safeguarded(messages_body(deployment, marker), list(SAFEGUARDS)))
+        response: Final = _post(owned.gateway, safeguarded(messages_body(deployment, marker), list(SAFEGUARDS)))
         assert response.status_code == 200, response.text
         assert "safeguard_results" in response.text, response.text
         (sent,) = deliveries(wire)
     assert (sent.marker, sent.safeguards) == (marker, list(SAFEGUARDS)), sent
     assert DANGEROUS_TOOL_USE in _beta_set(sent.beta), sent
-    assert not rust_routed(response.headers), dict(response.headers)
+    assert_routing_policy(response.headers, tmp_path / "routing-traces")
 
 
 def _burst_request(index: int, marker: str) -> tuple[str, dict[str, JsonValue]]:
@@ -356,21 +363,25 @@ def _burst_request(index: int, marker: str) -> tuple[str, dict[str, JsonValue]]:
     return "/v1/responses", responses_body(ANTHROPIC_DEPLOYMENT, marker)
 
 
-def _answer(gateway: Gateway, path: str, marker: str, body: Mapping[str, JsonValue]) -> _Answer:
-    response: Final = gateway.request("POST", path, body)
-    return _Answer(path, marker, response.status_code, response.text, rust_routed(response.headers))
+def _answer(rig: _Rig, path: str, marker: str, body: Mapping[str, JsonValue]) -> _Answer:
+    response: Final = rig.gateway.request("POST", path, body)
+    if response.status_code == 200:
+        if path == "/v1/messages":
+            assert_routing_policy(response.headers, rig.trace_dir)
+        else:
+            assert response.headers.get("x-litellm-rust") != "true", dict(response.headers)
+    return _Answer(path, marker, response.status_code, response.text)
 
 
-def _wave(pool: ThreadPoolExecutor, gateway: Gateway, markers: tuple[str, ...], offset: int) -> tuple[_Answer, ...]:
+def _wave(pool: ThreadPoolExecutor, rig: _Rig, markers: tuple[str, ...], offset: int) -> tuple[_Answer, ...]:
     planned: Final = tuple((marker, *_burst_request(offset + index, marker)) for index, marker in enumerate(markers))
-    submitted: Final = tuple(pool.submit(_answer, gateway, path, marker, body) for marker, path, body in planned)
+    submitted: Final = tuple(pool.submit(_answer, rig, path, marker, body) for marker, path, body in planned)
     return tuple(future.result(timeout=120) for future in submitted)
 
 
 def _assert_served(answer: _Answer) -> None:
     assert answer.status == 200, answer
     assert REPLY_TEXT in answer.text, answer
-    assert answer.rust == (answer.path == "/v1/messages"), answer
     if answer.path == "/v1/messages":
         assert f"msg_{answer.marker}" in answer.text and "safeguard_results" in answer.text, answer
 
@@ -383,12 +394,12 @@ def test_peer_outage_mid_safeguards_burst_relays_each_verdict_once_and_recovers(
     outage: Final = tuple(new_marker() for _ in range(_BURST // 2))
     recovery: Final = tuple(new_marker() for _ in range(_RECOVERY))
     with ThreadPoolExecutor(max_workers=8) as pool:
-        before: Final = _wave(pool, rig.gateway, healthy, 0)
+        before: Final = _wave(pool, rig, healthy, 0)
         rig.outage.set()
         assert rig.gateway.request("GET", "/health/liveliness").status_code == 200
-        during: Final = _wave(pool, rig.gateway, outage, len(healthy))
+        during: Final = _wave(pool, rig, outage, len(healthy))
         rig.outage.clear()
-        after: Final = _wave(pool, rig.gateway, recovery, len(healthy) + len(outage))
+        after: Final = _wave(pool, rig, recovery, len(healthy) + len(outage))
     for answer in (*before, *after):
         _assert_served(answer)
     for answer in during:

@@ -153,6 +153,7 @@ class Answer:
     call_id: str
     response_id: str
     rust: bool = False
+    routing_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,10 @@ def _call_id(headers: httpx.Headers) -> str:
 
 def _rust(headers: httpx.Headers) -> bool:
     return "true" in headers.get_list(RUST_SERVED)
+
+
+def _routing_id(headers: httpx.Headers) -> str:
+    return next(iter(headers.get_list("x-integration-routing-id")), "")
 
 
 def _refused(status: int, response: httpx.Response) -> Answer:
@@ -272,7 +277,7 @@ def _post(
     if response.status_code != 200:
         return _refused(response.status_code, response)
     text, identity = read(_JSON.validate_json(response.content))
-    return Answer(200, text, _call_id(response.headers), identity, _rust(response.headers))
+    return Answer(200, text, _call_id(response.headers), identity, _rust(response.headers), _routing_id(response.headers))
 
 
 def _chat_body(body: Mapping[str, JsonValue]) -> tuple[str, str]:
@@ -345,6 +350,7 @@ def transcription(target: ProxyTarget, model: str, marker: str) -> Answer:
         _call_id(response.headers),
         "",
         _rust(response.headers),
+        _routing_id(response.headers),
     )
 
 
@@ -405,6 +411,7 @@ def messages_sdk(target: ProxyTarget, model: str, marker: str) -> Answer:
             _call_id(raw.headers),
             message.id,
             _rust(raw.headers),
+            _routing_id(raw.headers),
         )
 
 
@@ -432,6 +439,7 @@ async def _messages_stream(target: ProxyTarget, model: str, marker: str) -> Answ
             _call_id(raw.headers),
             next((event.message.id for event in events if isinstance(event, RawMessageStartEvent)), ""),
             _rust(raw.headers),
+            _routing_id(raw.headers),
         )
 
 
@@ -648,6 +656,7 @@ class UpstreamProxy:
     workers: tuple[int, int]
     rows: Mapping[str, Row]
     gateways: Mapping[str, IdleGateway]
+    trace_dir: Path
 
     @property
     def target(self) -> ProxyTarget:
@@ -712,7 +721,13 @@ def proxy_for(
         healthcheck=WorkerHealthcheck.LENIENT,
         state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
-        yield UpstreamProxy(owned, two_workers(owned), MappingProxyType({row.name: row for row in rows}), gateways)
+        yield UpstreamProxy(
+            owned,
+            two_workers(owned),
+            MappingProxyType({row.name: row for row in rows}),
+            gateways,
+            directory / "routing-traces",
+        )
 
 
 @contextmanager
