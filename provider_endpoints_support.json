@@ -3098,13 +3098,6 @@
         "vector_stores_search": true
       }
     },
-    "opensearch": {
-      "display_name": "Amazon OpenSearch (`opensearch`)",
-      "url": "https://docs.litellm.ai/docs/providers/opensearch_vector_stores",
-      "endpoints": {
-        "vector_stores_search": true
-      }
-    },
     "helicone": {
       "display_name": "Helicone (`helicone`)",
       "url": "https://docs.litellm.ai/docs/providers/helicone",

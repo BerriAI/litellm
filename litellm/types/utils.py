@@ -4507,7 +4507,6 @@ class LlmProviders(str, Enum):
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
     MONGODB = "mongodb"
-    OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
