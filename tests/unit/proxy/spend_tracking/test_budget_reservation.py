@@ -426,3 +426,22 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.asyncio
+async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_group() -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import count_request_input_tokens
+    from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    request_body: Final = {"model": "gpt-4o", "messages": _one_page_pdf_message()}
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"}}]
+    )
+
+    counts: Final = await count_request_input_tokens(
+        request_body=request_body, route="/chat/completions", llm_router=router
+    )
+
+    assert counts == {"gpt-4o": count_input_tokens_for_model(request_body=request_body, model="claude-haiku-5-5")}
+    assert counts["gpt-4o"] > count_input_tokens_for_model(request_body=request_body, model="gpt-4o")

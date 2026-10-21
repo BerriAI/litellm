@@ -71,6 +71,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
@@ -137,6 +138,12 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     if llm_router is None:
         return None
     return resolve_model_group_alias(llm_router.model_group_alias, model)
+
+
+def _resolve_counted_models_via_proxy_router(model: str) -> Sequence[str]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return models_counted_for(model, llm_router)
 
 
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
@@ -843,6 +850,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        counted_models_resolver: Callable[[str], Sequence[str]] = _resolve_counted_models_via_proxy_router,
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
@@ -853,6 +861,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._counted_models_resolver = counted_models_resolver
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
@@ -3962,8 +3971,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
-            data=data, model=requested_model, call_type=call_type
+        counted_models: Final = self._counted_models_resolver(requested_model) if requested_model else (None,)
+        raw_estimated_input_tokens: Final = max(
+            [
+                await offload_token_count(self._estimate_precise_input_tokens)(
+                    data=data, model=model, call_type=call_type
+                )
+                for model in counted_models
+            ]
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

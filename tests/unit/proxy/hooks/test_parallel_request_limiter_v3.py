@@ -8686,3 +8686,33 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_reserves_a_pdf_at_the_largest_count_of_the_group_deployments() -> None:
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        counted_models_resolver=lambda model: ("claude-haiku-5-5", "gpt-5.6-sol"),
+    )
+    messages: Final = _one_page_pdf_message()
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-pdf-itpm"),
+        project_id="pdf-itpm",
+        project_metadata={"model_itpm_limit": {"gpt-4o": 1_000_000}, "model_otpm_limit": {"gpt-4o": 1_000_000}},
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=caller,
+        cache=cache,
+        data={"model": "gpt-4o", "messages": messages, "max_tokens": 10},
+        call_type="acompletion",
+    )
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    claude_count: Final = handler._estimate_precise_input_tokens({"messages": messages}, "claude-haiku-5-5")
+    assert claude_count > handler._estimate_precise_input_tokens({"messages": messages}, "gpt-4o")
+    assert stash.itpm_reserved_tokens == claude_count

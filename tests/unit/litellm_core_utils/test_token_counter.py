@@ -2172,7 +2172,9 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
     )
 
 
-@pytest.mark.parametrize("model", ["azure/gpt-chat-latest", "azure/codex-mini"])
+@pytest.mark.parametrize(
+    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat", "azure/gpt-4.5-preview"]
+)
 def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
     assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
@@ -2395,6 +2397,14 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
+    sample: Final = "A custom tokenizer passed with no model still counts."
+
+    assert litellm.token_counter(model=None, custom_tokenizer=litellm.utils.select_tokenizer("gpt-4o"), text=sample) == (
+        len(tiktoken.get_encoding("cl100k_base").encode(sample))
+    )
 
 
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:

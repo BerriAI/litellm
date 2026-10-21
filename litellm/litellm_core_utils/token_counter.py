@@ -483,11 +483,12 @@ def _cost_map_entry(model: str) -> Mapping[str, object]:
 
 
 def _is_azure_openai_chat_model(model: str) -> bool:
-    entry: Final = _cost_map_entry(f"azure/{_openai_deployment_name(model)}")
+    name: Final = _openai_deployment_name(model)
+    entry: Final = _cost_map_entry(f"azure/{name}")
     return (
         entry.get("litellm_provider") == "azure"
         and entry.get("mode") in OPENAI_CHAT_MODES
-        and entry.get("supports_pdf_input") is True
+        and (entry.get("supports_pdf_input") is True or name.startswith("gpt-"))
     )
 
 
@@ -809,7 +810,7 @@ def _get_exact_count_function(
 
         return count_tokens
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model)
+        encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)

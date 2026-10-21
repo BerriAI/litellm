@@ -15,7 +15,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +28,9 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
@@ -123,6 +126,17 @@ def _count_input_tokens_for_models(
             if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
         }
     )
+
+
+def models_counted_for(model: str, llm_router: Router | None) -> tuple[str, ...]:
+    """The names a request for `model` is counted with: each deployment's model minus its provider prefix, the
+    name `/v1/messages/count_tokens` counts with, or `model` itself when no deployment serves it."""
+    deployments: Final = (llm_router.get_model_list(model_name=model) or ()) if llm_router is not None else ()
+    deployment_models: Final = (deployment["litellm_params"].get("model") for deployment in deployments)
+    served: Final = tuple(
+        dict.fromkeys(name.partition("/")[2] or name for name in deployment_models if isinstance(name, str) and name)
+    )
+    return served or (model,)
 
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
