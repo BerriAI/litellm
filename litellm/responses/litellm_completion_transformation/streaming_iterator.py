@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from typing import Any, Final, cast
 
@@ -13,7 +13,10 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
 from litellm.responses.litellm_completion_transformation.tool_search import (
     build_tool_search_call,
     has_server_tool_search,
@@ -53,13 +56,14 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
-from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
+    Choices,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
 )
+from litellm.types.utils import Delta as ChatCompletionDelta
 
 
 def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int | None:
@@ -159,6 +163,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
         self._cached_reasoning_item_id: str | None = None
+        self._cached_encrypted_reasoning_content: str | None = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
@@ -917,6 +922,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         reasoning_item_id: str,
         reasoning_content: str,
         sequence_number: int,
+        encrypted_content: str | None = None,
     ) -> OutputItemDoneEvent:
         """
         Create response.output_item.done event for reasoning items.
@@ -929,31 +935,48 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "item": {
                 "id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
                 "type": "reasoning",
+                "status": "completed",
                 "summary": [
                     {
                         "type": "summary_text",
                         "text": "**Clarifying the first humans**..."
                     }
-                ]
+                ],
+                "encrypted_content": "..."
             }
         }
         """
+        item_kwargs: Final = (
+            {
+                "id": reasoning_item_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": reasoning_content,
+                    }
+                ],
+                "encrypted_content": encrypted_content,
+            }
+            if encrypted_content
+            else {
+                "id": reasoning_item_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": reasoning_content,
+                    }
+                ],
+            }
+        )
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._reasoning_index(),
             sequence_number=sequence_number,
-            item=BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": reasoning_content,
-                        }
-                    ],
-                }
-            ),
+            item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
         )
 
     def return_default_done_events(
@@ -1000,6 +1023,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return False
 
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
+        if self._reasoning_active and not self._reasoning_done_emitted:
+            self._flush_pending_reasoning_done_events()
+        if self._pending_response_events:
+            return self._pending_response_events.pop(0)
+
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:
@@ -1077,13 +1105,29 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queue_message_item_added_events()
         return
 
-    def _queue_reasoning_done_events_on_reasoning_end(self, chunk: ModelResponseStream) -> None:
+    def _extract_streamed_thinking_blocks_encrypted(self) -> str | None:
+        if self._cached_encrypted_reasoning_content is not None:
+            return self._cached_encrypted_reasoning_content
+        chunks: Final = [
+            c if c.get("model") else {**c, "model": self.model or "unknown"}
+            for c in self.collected_chat_completion_chunks
+            if c.get("choices")
+        ]
+        if not chunks:
+            return None
+        try:
+            built: Final = stream_chunk_builder(chunks=chunks)
+            if built and built.choices and isinstance(built.choices[0], Choices):
+                thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
+                    getattr(built.choices[0].message, "thinking_blocks", None) or ()
+                )
+                self._cached_encrypted_reasoning_content = encode_thinking_blocks(thinking_blocks)
+        except (KeyError, ValueError, TypeError, AttributeError, IndexError):
+            pass
+        return self._cached_encrypted_reasoning_content
+
+    def _flush_pending_reasoning_done_events(self) -> None:
         if not self._reasoning_active or self._reasoning_done_emitted:
-            return
-        delta: Final = chunk.choices[0].delta if chunk.choices else None
-        if delta and getattr(delta, "reasoning_content", None):
-            self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
-        if not self._is_reasoning_end(chunk):
             return
         reasoning_content: Final = "".join(self._accumulated_reasoning_content_parts)
         self._cached_reasoning_item_id = (
@@ -1103,14 +1147,26 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             sequence_number=self._sequence_number,
         )
         self._sequence_number += 1
+        encrypted_content: Final = self._extract_streamed_thinking_blocks_encrypted()
         reasoning_output_item_done_event: Final = self.create_reasoning_output_item_done_event(
             reasoning_item_id=reasoning_item_id,
             reasoning_content=reasoning_content,
             sequence_number=self._sequence_number,
+            encrypted_content=encrypted_content,
         )
         self._pending_response_events.extend([text_done_event, part_done_event, reasoning_output_item_done_event])
         self._reasoning_done_emitted = True
         self._reasoning_active = False
+
+    def _queue_reasoning_done_events_on_reasoning_end(self, chunk: ModelResponseStream) -> None:
+        if not self._reasoning_active or self._reasoning_done_emitted:
+            return
+        delta: Final = chunk.choices[0].delta if chunk.choices else None
+        if delta and getattr(delta, "reasoning_content", None):
+            self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
+        if not self._is_reasoning_end(chunk):
+            return
+        self._flush_pending_reasoning_done_events()
 
     async def __anext__(
         self,

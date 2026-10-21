@@ -35,9 +35,7 @@ from litellm.types.utils import (
 )
 
 CHAT_COMPLETION_ID = "chatcmpl-77d33d09-effa-4cd2-9c0d-c742d4358256"
-RESPONSE_ID_EVENT_TYPES = frozenset(
-    {"response.created", "response.in_progress", "response.completed"}
-)
+RESPONSE_ID_EVENT_TYPES = frozenset({"response.created", "response.in_progress", "response.completed"})
 
 
 def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStream:
@@ -90,11 +88,7 @@ def _build_iterator(chunks) -> LiteLLMCompletionStreamingIterator:
 
 
 def _response_ids(events) -> list[str]:
-    return [
-        event.response.id
-        for event in events
-        if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
-    ]
+    return [event.response.id for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
 
 
 def test_tool_call_delta_is_emitted_as_responses_events():
@@ -225,9 +219,7 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
             content=None,
             provider_specific_fields={
                 "web_search_results": [first_result],
-                "web_search_calls": [
-                    build_web_search_call(call_ids[0], {"query": "one"}, first_result)
-                ]
+                "web_search_calls": [build_web_search_call(call_ids[0], {"query": "one"}, first_result)]
                 if tool_type != "function" and first_result["type"] == "web_search_tool_result"
                 else [],
             },
@@ -326,9 +318,7 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         assert {event["output_index"] for event in search_events} == {completed_indexes[item["id"]]}
         assert search_events[0]["item"]["status"] == "in_progress"
         assert search_events[-1]["item"] == item
-        assert item["status"] == (
-            "failed" if result_kind == "error" and call_id.endswith("01Search") else "completed"
-        )
+        assert item["status"] == ("failed" if result_kind == "error" and call_id.endswith("01Search") else "completed")
         assert item["action"]["type"] == "search"
         assert item["action"]["query"] == ("one" if call_id.endswith("01Search") else "two")
         assert item["action"]["queries"] == [item["action"]["query"]]
@@ -437,9 +427,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     )
 
     # Create a chunk with a large arguments string that should be split
-    large_arguments = (
-        '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
-    )
+    large_arguments = '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
     chunk = ModelResponseStream(
         id="chunk-1",
         created=123,
@@ -494,9 +482,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
 
     # Keep draining pending events (expected: ceil(67 / 10) = 7 delta events)
     while iterator._pending_tool_events:
-        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(
-            empty_chunk
-        )
+        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(empty_chunk)
         if evt and evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
             delta_events.append(evt)
 
@@ -549,20 +535,12 @@ def test_tool_call_delta_without_id_uses_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     streamed_arguments = "".join(evt.delta for evt in delta_events)
 
     assert streamed_arguments == '{"location": "New York"}'
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 1
     assert output_item_added_events[0].item.id == "fc_call_abc123"
     assert output_item_added_events[0].item.call_id == "call_abc123"
@@ -603,18 +581,10 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 2
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")
@@ -667,11 +637,7 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")
@@ -711,22 +677,17 @@ def test_sync_streaming_events_share_the_chat_completion_response_id():
     assert len(response_ids) == 3
     assert len(set(response_ids)) == 1
     assert (
-        ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])["response_id"]
-        == CHAT_COMPLETION_ID
+        ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])["response_id"] == CHAT_COMPLETION_ID
     )
 
 
 @pytest.mark.asyncio
 async def test_streaming_emits_every_chunk_after_priming_the_response_id():
-    iterator = _build_iterator(
-        [_chunk("Hel"), _chunk("lo"), _chunk("!", finish_reason="stop")]
-    )
+    iterator = _build_iterator([_chunk("Hel"), _chunk("lo"), _chunk("!", finish_reason="stop")])
 
     events = [event async for event in iterator]
 
-    deltas = "".join(
-        event.delta for event in events if getattr(event, "type", None) == "response.output_text.delta"
-    )
+    deltas = "".join(event.delta for event in events if getattr(event, "type", None) == "response.output_text.delta")
     assert deltas == "Hello!"
 
 
@@ -772,7 +733,9 @@ async def test_leading_empty_choices_chunk_does_not_kill_the_stream():
 
     event_types = [getattr(event, "type", None) for event in events]
     assert event_types.count(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) == 1
-    assert "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert (
+        "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    )
     assert event_types[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
 
@@ -956,9 +919,7 @@ def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
         litellm_metadata={},
     )
 
-    response_events: Final = [
-        event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
-    ]
+    response_events: Final = [event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
 
     assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
 
@@ -999,9 +960,7 @@ def _signed_thinking_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
     chunk: Final = _chunk("Hello!", finish_reason="stop")
     signed_block: Final = {"type": "thinking", "thinking": "", "signature": "sig_only"}
     delta: Final = Delta(**{**chunk.choices[0].delta.model_dump(), "thinking_blocks": [signed_block]})
-    return (
-        chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),
-    )
+    return (chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),)
 
 
 StreamChunks = Callable[[], tuple[ModelResponseStream, ...]]
@@ -1421,9 +1380,7 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
             model="claude-sonnet-5-5",
             object="chat.completion.chunk",
             choices=[
-                StreamingChoices(
-                    index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None
-                )
+                StreamingChoices(index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None)
             ],
         )
         for index, delta in enumerate(deltas)
@@ -1524,3 +1481,159 @@ async def test_caller_function_named_like_the_search_tool_streams_as_function_ca
 
     assert [(item["type"], item["name"]) for item in output] == [("function_call", "tool_search_tool_regex")]
     assert "response.function_call_arguments.done" in [event["type"] for event in events]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_carries_encrypted_content_and_status(sync_mode: bool):
+    """
+    Issue #44657: output_item.done for reasoning must carry encrypted_content and status: completed,
+    matching response.completed, so replay clients do not lose signatures across tool turns.
+    """
+    chunk: Final = _chunk("Hello!", finish_reason="stop")
+    signed_block: Final = {"type": "thinking", "thinking": "Let me think", "signature": "sig_abc123"}
+    delta: Final = Delta(**{**chunk.choices[0].delta.model_dump(), "thinking_blocks": [signed_block]})
+    chunks: Final = (
+        chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),
+    )
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert (
+        getattr(reasoning_item, "encrypted_content", None)
+        == '[{"type":"thinking","thinking":"Let me think","signature":"sig_abc123"}]'
+    )
+
+    # Verify response.completed carries the exact same encrypted_content and id
+    completed_event: Final = next(
+        e for e in events if getattr(e, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    completed_reasoning: Final = next(item for item in completed_event.response.output if item.type == "reasoning")
+    assert completed_reasoning.id == getattr(reasoning_item, "id", None)
+    assert completed_reasoning.status == "completed"
+    assert completed_reasoning.encrypted_content == getattr(reasoning_item, "encrypted_content", None)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_encrypted_content_incremental_stream(sync_mode: bool):
+    """
+    Verify thinking blocks fragmented across streaming chunks are assembled into complete
+    encrypted_content on output_item.done.
+    """
+    chunk1: Final = _chunk("", finish_reason=None)
+    delta1: Final = Delta(
+        **{**chunk1.choices[0].delta.model_dump(), "thinking_blocks": [{"type": "thinking", "thinking": "Step 1 "}]}
+    )
+
+    chunk2: Final = _chunk("", finish_reason=None)
+    delta2: Final = Delta(
+        **{**chunk2.choices[0].delta.model_dump(), "thinking_blocks": [{"type": "thinking", "thinking": "Step 2"}]}
+    )
+
+    chunk3: Final = _chunk("Hello!", finish_reason="stop")
+    delta3: Final = Delta(
+        **{
+            **chunk3.choices[0].delta.model_dump(),
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_done"}],
+        }
+    )
+
+    chunks: Final = (
+        chunk1.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta1, finish_reason=None)]}),
+        chunk2.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta2, finish_reason=None)]}),
+        chunk3.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta3, finish_reason="stop")]}),
+    )
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert (
+        getattr(reasoning_item, "encrypted_content", None)
+        == '[{"type":"thinking","thinking":"Step 1 Step 2","signature":"sig_done"}]'
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_without_signed_thinking_omits_encrypted_content(sync_mode: bool):
+    """
+    Verify reasoning without signed thinking blocks has status: completed and omits encrypted_content.
+    """
+    chunks: Final = _reasoning_then_text_chunks()
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert getattr(reasoning_item, "encrypted_content", None) is None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_abrupt_stream_termination_flushes_pending_done_events(sync_mode: bool):
+    """
+    Verify stream ending while reasoning is active flushes pending reasoning done events in common_done_event_logic.
+    """
+    chunks: Final = (_reasoning_chunk("abrupt thinking"),)
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+
+
+def test_extract_streamed_thinking_blocks_encrypted_caching_and_empty():
+    iterator: Final = _build_iterator([])
+    assert iterator._extract_streamed_thinking_blocks_encrypted() is None
+
+    iterator._cached_encrypted_reasoning_content = "cached_sig"
+    assert iterator._extract_streamed_thinking_blocks_encrypted() == "cached_sig"
+
+    iterator._flush_pending_reasoning_done_events()
+    assert iterator._reasoning_done_emitted is False
+
+
+def test_extract_streamed_thinking_blocks_encrypted_error_handling(monkeypatch: pytest.MonkeyPatch):
+    import sys
+
+    si_module: Final = sys.modules[LiteLLMCompletionStreamingIterator.__module__]
+    iterator: Final = _build_iterator([])
+    iterator.collected_chat_completion_chunks = [_chunk("test").model_dump()]
+
+    def _mock_builder(*args: object, **kwargs: object) -> None:
+        raise ValueError("simulated builder failure")
+
+    monkeypatch.setattr(si_module, "stream_chunk_builder", _mock_builder)
+    assert iterator._extract_streamed_thinking_blocks_encrypted() is None
