@@ -7,16 +7,19 @@ machines.
 | Tool | What it does |
 | --- | --- |
 | `mockllm` | Fake OpenAI chat completions, Anthropic messages and Bedrock invoke upstream. Streams or not, and takes its timing from a directive in the prompt (`[[mock ttft_ms=800 dur_ms=300000 out=2000]]`). Counts hits per deployment (`/d/<id>/` path prefix) at `GET /stats`; `-faults "chat-0-3=429:1.0"` makes chosen deployments fail. |
-| `loadgen` | Open-loop Poisson arrivals from a workload file: weighted request classes with their own endpoint, stream share, context size (10k to 1M tokens), time to first token and total time. Writes one JSON line per request. Shard across machines with `-shard i -shards n`. |
+| `loadgen` | Open-loop arrivals from a workload file, Poisson or evenly spaced (`"arrivals": "constant"`): weighted request classes with their own endpoint, stream share, context size (10k to 1M tokens), time to first token and total time. Writes one JSON line per request, with `lag_ms`, how late it left against its planned arrival (when that grows, the generator is the limit). Shard across machines with `-shard i -shards n`. |
 | `genconfig` | Gateway `config.yaml` with many model groups and deployments pointing at the mocks, plus `keys.txt` and `keys.sql` (rows for `LiteLLM_VerificationToken`). `-key-seed` makes every machine generate the same keys. The `bifrost` key set is written as a Bifrost config; see [Bifrost](#bifrost). |
 | `summarize` | Merges result files and prints proxy overhead (observed minus planned time) by stage, class and context size. |
 | `procmon` | Samples the gateway process's CPU, RSS, fds and TCP connections from `/proc`. |
 | `verify` | Checks what each gateway recorded for a run against what loadgen sent: spend logs, key/team/user/member spend, daily tables, Prometheus counters, S3 request logs and the headers the provider received. See [Full-feature runs](#full-feature-runs). |
 | `chatparity` | Sends the same chat completions requests through the Python proxy and the gateway, both pointed at its recording mock provider, and reports every difference in what the provider was sent and what the client got. See [Chat parity](#chat-parity). |
-| `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. |
+| `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. Objects are stored compressed and listed from a sorted index, so millions of logs fit. |
 
 Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `large-context`,
-`key-churn` and `soak`.
+`key-churn` and `soak`. `sustained-100`, `sustained-500` and `sustained-1000` hold one rate for
+15 minutes with evenly spaced arrivals and smoke's request mix over every model group;
+`sustained-check` runs the same mix at 100, 500 and 1,000 rps for 2 minutes each, to check that the
+client, mock and stack hold 1,000 rps before the long runs.
 
 ## Build the images
 

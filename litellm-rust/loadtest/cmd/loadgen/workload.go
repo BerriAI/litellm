@@ -8,11 +8,13 @@ import (
 	"os"
 )
 
-// Workload describes an open-loop test: requests arrive as a Poisson process at the stage's
-// rate, each one drawn from a weighted class.
+// Workload describes an open-loop test: requests arrive at the stage's rate, as a Poisson process
+// or evenly spaced, each one drawn from a weighted class.
 type Workload struct {
 	Name   string  `json:"name"`
 	Stages []Stage `json:"stages"`
+	// Arrivals is "poisson" (the default) or "constant", one request every 1/rps seconds.
+	Arrivals string `json:"arrivals"`
 	// WarmupS seconds at the first stage's rate whose requests are marked warmup.
 	WarmupS float64 `json:"warmup_s"`
 	// MaxInFlight caps open requests per load generator; arrivals above it are counted as shed.
@@ -131,6 +133,9 @@ func loadWorkload(path string) (*Workload, error) {
 		if m, ok := w.Models[c.Endpoint]; !ok || m.Count == 0 {
 			return nil, fmt.Errorf("class %s: no models for endpoint %s", c.Name, c.Endpoint)
 		}
+	}
+	if w.Arrivals != "" && w.Arrivals != "poisson" && w.Arrivals != "constant" {
+		return nil, fmt.Errorf("%s: arrivals must be poisson or constant, got %q", path, w.Arrivals)
 	}
 	if w.MaxInFlight == 0 {
 		w.MaxInFlight = 100000

@@ -1,8 +1,11 @@
 // loadgen is an open-loop load generator for the LiteLLM gateway. Requests arrive as a Poisson
-// process (so a slow proxy cannot slow the arrivals down, unlike a closed loop), each drawn from a
+// process, or evenly spaced with "arrivals": "constant" (either way a slow proxy cannot slow the
+// arrivals down, unlike a closed loop), each drawn from a
 // weighted class with its own endpoint, stream share, context size and simulated model time. The
 // simulated timing travels to mockllm as a directive in the prompt, so every result line carries
 // both what the mock was told to take and what the client saw; the difference is proxy overhead.
+// Each line also has lag_ms, how late the request left against its planned arrival: when it grows,
+// the generator, not the gateway, is the limit.
 //
 // Run several copies on separate machines with -shard i -shards n; each sends rate/n.
 package main
@@ -52,6 +55,9 @@ type result struct {
 	MaxGapMs   float64 `json:"max_gap_ms,omitempty"`
 	Chunks     int     `json:"chunks,omitempty"`
 	Err        string  `json:"err,omitempty"`
+	LagMs      float64 `json:"lag_ms"`
+
+	planned time.Time
 }
 
 type counters struct {
@@ -177,7 +183,11 @@ schedule:
 			next = stageEnd
 			continue
 		}
-		next = next.Add(seconds(rng.ExpFloat64() / rate))
+		gap := 1 / rate
+		if w.Arrivals != "constant" {
+			gap = rng.ExpFloat64() / rate
+		}
+		next = next.Add(seconds(gap))
 		select {
 		case <-ctx.Done():
 			break schedule
@@ -214,6 +224,7 @@ schedule:
 			Stream:    stream,
 			NewConn:   rng.Float64() < w.NewConnFraction,
 			CtxTokens: int(cl.ContextTokens.Sample(rng)), TTFTPlanMs: ttftMs, DurPlanMs: durMs,
+			planned: next,
 		}
 		outTokens := max(int(float64(durMs-ttftMs)/1000*tps), 1)
 		res.OutTokens = outTokens
@@ -304,6 +315,7 @@ func do(ctx context.Context, transport *http.Transport, target string, p paths, 
 	}
 
 	t0 := time.Now()
+	res.LagMs = ms(t0.Sub(res.planned))
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		res.Err = trim(err.Error())
