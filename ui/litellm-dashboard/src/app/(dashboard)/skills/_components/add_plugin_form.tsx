@@ -16,6 +16,7 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -48,6 +49,7 @@ const addPluginShape = {
       "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
     ),
   sha256: z.string().refine(isValidSha256, "SHA-256 must be a 64-character hex digest"),
+  hostArchive: z.boolean(),
   name: z
     .string()
     .min(1, "Please enter skill name")
@@ -72,6 +74,7 @@ const EMPTY_VALUES: AddPluginFormValues = {
   skillUrl: "",
   subPath: "",
   sha256: "",
+  hostArchive: false,
   name: "",
   domain: "",
   namespace: "",
@@ -95,6 +98,8 @@ const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
 const archiveUrlOf = (preview: SkillSourcePreview | null): string | undefined =>
   preview?.parsed.source === "archive" ? preview.parsed.url : undefined;
 
+const hostsArchiveByDefault = (source: PluginSource["source"] | undefined): boolean => source === "archive";
+
 const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource => {
   const digest = sha256.trim();
   return source.source === "archive" && digest ? { ...source, sha256: digest.toLowerCase() } : source;
@@ -102,9 +107,11 @@ const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource =
 
 const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): SkillRegisterRequest => {
   const author = buildAuthor(values);
+  const serveArchive = values.hostArchive !== hostsArchiveByDefault(source.source) ? values.hostArchive : undefined;
   return {
     name: values.name.trim(),
     source: withArchiveDigest(source, values.sha256),
+    ...(serveArchive !== undefined ? { serve_archive: serveArchive } : {}),
     ...(values.version ? { version: values.version.trim() } : {}),
     ...(values.description ? { description: values.description.trim() } : {}),
     ...(author ? { author } : {}),
@@ -161,6 +168,10 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     const preview = parseSkillSource(skillUrl, lock ? undefined : subPath);
     if (archiveUrlOf(preview) !== archiveUrlOf(urlPreview) && form.getValues("sha256")) {
       form.setValue("sha256", "");
+    }
+    const nextSource = preview?.parsed.source;
+    if (nextSource !== urlPreview?.parsed.source) {
+      form.setValue("hostArchive", hostsArchiveByDefault(nextSource));
     }
     setUrlPreview(preview);
     if (preview && !form.getValues("name")) {
@@ -284,6 +295,23 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 >
                   {({ ref, ...field }) => (
                     <Input {...field} ref={ref} placeholder="64 hex characters" className="rounded-lg font-mono" />
+                  )}
+                </FormField>
+              )}
+
+              {urlPreview && (
+                <FormField
+                  control={form.control}
+                  name="hostArchive"
+                  orientation="horizontal"
+                  label={labelWithHint(
+                    "Host for Claude Desktop",
+                    "LiteLLM downloads the plugin when you add it, stores it as a zip on this server and serves it from the same origin as the marketplace, which is the only plugin source Claude Desktop installs from a marketplace URL. Claude Code keeps working either way. Git sources must be hosted on GitHub.",
+                  )}
+                  description="Serve this skill to Claude Desktop as a zip archive from this LiteLLM server"
+                >
+                  {({ id, value, onChange, "aria-describedby": ariaDescribedBy }) => (
+                    <Switch id={id} checked={value} onCheckedChange={onChange} aria-describedby={ariaDescribedBy} />
                   )}
                 </FormField>
               )}

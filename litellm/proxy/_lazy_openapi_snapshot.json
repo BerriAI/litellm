@@ -7276,6 +7276,11 @@
               ],
               "title": "Namespace"
             },
+            "serve_archive": {
+              "default": false,
+              "title": "Serve Archive",
+              "type": "boolean"
+            },
             "source": {
               "additionalProperties": {
                 "type": "string"
@@ -7365,6 +7370,12 @@
               "description": "Plugin name",
               "title": "Name",
               "type": "string"
+            },
+            "serve_archive": {
+              "default": false,
+              "description": "Whether LiteLLM hosts this plugin's ZIP archive",
+              "title": "Serve Archive",
+              "type": "boolean"
             },
             "source": {
               "additionalProperties": {
@@ -7507,6 +7518,18 @@
               ],
               "description": "Skill namespace within domain (e.g., 'workflows')",
               "title": "Namespace"
+            },
+            "serve_archive": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Have LiteLLM build and host this plugin as a same-origin ZIP (served at /claude-code/plugins/{name}/archive.zip) and advertise it as an 'archive' source with its sha256, which is what Claude Desktop installs from. Defaults to true for 'archive' sources and false for git sources. Git sources must be hosted on GitHub. Claude Code entries are unchanged when false",
+              "title": "Serve Archive"
             },
             "source": {
               "additionalProperties": {
@@ -7668,6 +7691,18 @@
               ],
               "description": "Skill namespace within domain (e.g., 'workflows')",
               "title": "Namespace"
+            },
+            "serve_archive": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Have LiteLLM build and host this plugin as a same-origin ZIP (served at /claude-code/plugins/{name}/archive.zip) and advertise it as an 'archive' source with its sha256, which is what Claude Desktop installs from. Defaults to true for 'archive' sources and false for git sources. Git sources must be hosted on GitHub. Claude Code entries are unchanged when false",
+              "title": "Serve Archive"
             },
             "source": {
               "additionalProperties": {
@@ -8022,6 +8057,58 @@
             }
           ],
           "summary": "Update Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/archive.zip": {
+        "get": {
+          "description": "Download a plugin as a ZIP with the plugin at the archive root.\n\nThis is the same-origin `archive` source Claude Desktop installs from; marketplace.json\nadvertises its URL and sha256 for plugins registered with `serve_archive` (the default for\n`archive` sources). Like marketplace.json it is unauthenticated for enabled plugins, and\n`?key=sk-...` unlocks the disabled plugins granted to that key.\n\nThe ZIP is built when the plugin is registered or updated and kept on this server. If the\nfile is missing (new container, another replica) it is refetched from the plugin's source.",
+          "operationId": "get_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Plugin Archive",
           "tags": [
             "claude_code_marketplace"
           ]
