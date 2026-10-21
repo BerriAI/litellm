@@ -3013,7 +3013,7 @@ class TestPollPageStarvation:
         prisma: Final = self._prisma([])
         prisma.db.litellm_managedobjecttable = table
         llm_router: Final = MagicMock()
-        llm_router.aretrieve_batch = AsyncMock(return_value=MagicMock(status="in_progress"))
+        llm_router.aretrieve_batch = AsyncMock(side_effect=RuntimeError("timed out"))
         poller: Final = self._instance(prisma, llm_router)
 
         await poller.check_batch_cost()
@@ -4596,6 +4596,9 @@ async def test_a_batch_past_the_staleness_cutoff_that_the_provider_finished_is_s
     assert row.batch_processed is True
 
 
+_A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", llm_provider="openai", model="gpt-4")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("age", "db_status", "unified_object_id", "retrieve", "expected_status"),
@@ -4605,38 +4608,21 @@ async def test_a_batch_past_the_staleness_cutoff_that_the_provider_finished_is_s
             "in_progress",
             _CLAIM_UNIFIED_BATCH_ID,
             [_provider_batch("in_progress")],
-            "stale_expired",
-        ),
-        (
-            _PAST_THE_STALENESS_CUTOFF,
-            "in_progress",
-            _CLAIM_UNIFIED_BATCH_ID,
-            RuntimeError("timed out"),
             "in_progress",
         ),
+        (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "stale_expired"),
         (
             _PAST_THE_STALENESS_CUTOFF,
             "in_progress",
             _CLAIM_UNIFIED_BATCH_ID,
             litellm.InternalServerError(message="upstream error", llm_provider="openai", model="gpt-4"),
-            "in_progress",
-        ),
-        (
-            _PAST_THE_STALENESS_CUTOFF,
-            "in_progress",
-            _CLAIM_UNIFIED_BATCH_ID,
-            litellm.AuthenticationError(message="invalid api key", llm_provider="openai", model="gpt-4"),
             "stale_expired",
         ),
+        (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "stale_expired"),
         (_PAST_THE_STALENESS_CUTOFF, "in_progress", "batch-raw-1", [_provider_batch("in_progress")], "stale_expired"),
-        (
-            _INSIDE_THE_STALENESS_CUTOFF,
-            "in_progress",
-            _CLAIM_UNIFIED_BATCH_ID,
-            [_provider_batch("in_progress")],
-            "in_progress",
-        ),
+        (_INSIDE_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "in_progress"),
         (_PAST_THE_STALENESS_CUTOFF, "completed", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "completed"),
+        (_PAST_THE_STALENESS_CUTOFF, "completed", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "completed"),
     ),
     ids=(
         "still_running",
@@ -4645,7 +4631,8 @@ async def test_a_batch_past_the_staleness_cutoff_that_the_provider_finished_is_s
         "key_rejected",
         "unroutable",
         "inside_the_cutoff",
-        "finished_but_unbilled",
+        "finished_and_retrieve_timed_out",
+        "finished_and_key_rejected",
     ),
 )
 async def test_a_batch_the_poller_cannot_settle_expires_only_once_past_the_staleness_cutoff(
@@ -4692,28 +4679,18 @@ async def _an_output_file_the_key_cannot_read() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("age", "retired"), ((_PAST_THE_STALENESS_CUTOFF, True), (_INSIDE_THE_STALENESS_CUTOFF, False)))
-@pytest.mark.parametrize(
-    ("retrieve", "during_fetch"),
-    (
-        (_a_vertex_job_that_no_longer_exists, None),
-        (_a_finished_batch_whose_output_never_appeared, None),
-        (None, _an_output_file_the_key_cannot_read),
-    ),
-    ids=("batch_gone_without_its_id", "output_never_appeared", "output_unreadable"),
-)
-async def test_a_finished_batch_the_poller_cannot_bill_frees_its_files_once_past_the_staleness_cutoff(
-    age: timedelta, retired: bool, retrieve: object, during_fetch: object
+async def test_a_finished_batch_whose_output_never_appeared_frees_its_files_once_past_the_staleness_cutoff(
+    age: timedelta, retired: bool
 ) -> None:
     row: Final = _FakeManagedObjectRow()
     row.created_at = datetime.now(timezone.utc) - age
     row.status = "completed"
     router: Final = TestMultiPodBatchCostClaim._router()
-    if retrieve is not None:
-        router.aretrieve_batch.side_effect = retrieve
+    router.aretrieve_batch.side_effect = _a_finished_batch_whose_output_never_appeared
     prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
     poller: Final = TestMultiPodBatchCostClaim._instance(prisma, router)
 
-    with TestMultiPodBatchCostClaim._billing_patches([], during_fetch=during_fetch):
+    with TestMultiPodBatchCostClaim._billing_patches([]):
         await poller.check_batch_cost()
 
     assert (row.status, row.batch_processed) == ("completed", retired)
@@ -4725,18 +4702,55 @@ async def test_a_finished_batch_the_poller_cannot_bill_frees_its_files_once_past
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retrieve", "during_fetch"),
+    (
+        (_A_REJECTED_KEY, None),
+        (_a_vertex_job_that_no_longer_exists, None),
+        (None, _an_output_file_the_key_cannot_read),
+    ),
+    ids=("key_rejected", "batch_404_without_its_id", "output_unreadable"),
+)
+async def test_a_finished_batch_the_provider_refuses_past_the_staleness_cutoff_bills_once_the_refusal_is_fixed(
+    retrieve: object, during_fetch: object
+) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
+    row.status = "completed"
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = retrieve
+    journal: Final = []
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, journal)
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal, during_fetch=during_fetch):
+        await poller.check_batch_cost()
+
+    assert (row.status, row.batch_processed) == ("completed", False)
+    with pytest.raises(HTTPException):
+        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+
+    router.aretrieve_batch.side_effect = None
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        await poller.check_batch_cost()
+
+    assert journal[-1] == "bill"
+    assert row.batch_processed is True
+
+
+@pytest.mark.asyncio
 async def test_expiring_a_batch_past_the_staleness_cutoff_keeps_a_finished_status_a_client_wrote_meanwhile() -> None:
     row: Final = _FakeManagedObjectRow()
     row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
     router: Final = TestMultiPodBatchCostClaim._router()
 
-    async def _a_client_reads_the_finished_batch_after_the_poller_saw_it_running(
+    async def _a_client_reads_the_finished_batch_while_the_poller_retrieve_times_out(
         *, model: str, batch_id: str, litellm_metadata: object
     ) -> LiteLLMBatch:
         row.status = "completed"
-        return _provider_batch("in_progress")
+        raise RuntimeError("timed out")
 
-    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_after_the_poller_saw_it_running
+    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_poller_retrieve_times_out
     poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
 
     with TestMultiPodBatchCostClaim._billing_patches([]):
@@ -4846,6 +4860,23 @@ def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, mes
     error: Final = NotFoundError(message=message.format(id=resource_id), model="test", llm_provider="openai")
     assert CheckBatchCost._is_batch_gone_at_provider(error, resource_id) is True
     assert CheckBatchCost._is_output_file_gone_at_provider(error, resource_id) is True
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "gone"), (("out/job-123/input.jsonl.out", True), ("out/job-123/other.jsonl.out", False))
+)
+def test_an_s3_no_such_key_for_the_output_object_is_permanent_loss(missing_key: str, gone: bool) -> None:
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    # S3 GetObject 404 body shape, checked live against a missing key on 2026-10-20
+    error: Final = BedrockError(
+        status_code=404,
+        message='<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>NoSuchKey</Code>'
+        f"<Message>The specified key does not exist.</Message><Key>{missing_key}</Key>"
+        "<RequestId>R</RequestId><HostId>H</HostId></Error>",
+    )
+    assert CheckBatchCost._is_output_file_gone_at_provider(error, "s3://qa-bucket/out/job-123/input.jsonl.out") is gone
 
 
 @pytest.mark.parametrize("output_file_id", (None, ""))

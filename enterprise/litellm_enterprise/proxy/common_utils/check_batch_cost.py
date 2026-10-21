@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 
 def _error_names_resource(error: Exception, resource_id: str) -> bool:
-    return resource_id in re.findall(r"""[^\s"'`]+""", str(error))
+    return resource_id in re.findall(r"""[^\s"'`<>]+""", str(error))
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
@@ -241,13 +241,19 @@ class CheckBatchCost:
             return {"id": job.id, "batch_processed": False}
         return {"id": job.id, "updated_at": job.updated_at}
 
+    @staticmethod
+    def _is_past_staleness_cutoff(job: ManagedObjectRow) -> bool:
+        return job.created_at < datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+
     async def _expire_if_stale(self, job: ManagedObjectRow) -> None:
-        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        if job.created_at >= cutoff:
+        if not self._is_past_staleness_cutoff(job):
             return
         if job.status in TERMINAL_MANAGED_OBJECT_STATUSES:
             await self._retire_job(job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created")
             return
+        await self._expire_unfinished(job)
+
+    async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
         try:
             expired: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={
@@ -373,16 +379,6 @@ class CheckBatchCost:
 
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
 
-    @staticmethod
-    def _is_lasting_provider_failure(error: Exception) -> bool:
-        import openai
-
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-        if not isinstance(error, (BaseLLMException, openai.APIStatusError)):
-            return False
-        return not litellm.should_retry(error.status_code)
-
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
         deployment. Once that deployment leaves the router, default fallbacks can
@@ -394,8 +390,8 @@ class CheckBatchCost:
     def _is_output_file_gone_at_provider(error: Exception, output_file_id: Optional[str]) -> bool:
         """A 404 naming the output file means there is nothing to fetch on this or any
         later poll: providers like Vertex AI advertise an output path for every batch,
-        including terminal ones that never wrote it. Storage backends name a gs:// or s3://
-        object without its scheme. Any other failure may be transient, so it keeps retrying."""
+        including terminal ones that never wrote it. GCS names a gs:// object without its scheme,
+        and S3 names an s3:// object by its key alone. Any other failure keeps retrying."""
         import openai
 
         from litellm.exceptions import NotFoundError
@@ -406,10 +402,9 @@ class CheckBatchCost:
         is_not_found: Final = isinstance(error, (NotFoundError, openai.NotFoundError)) or (
             isinstance(error, BaseLLMException) and error.status_code == 404
         )
-        return is_not_found and (
-            _error_names_resource(error, output_file_id)
-            or _error_names_resource(error, output_file_id.split("://", 1)[-1])
-        )
+        object_path: Final = output_file_id.split("://", 1)[-1]
+        names: Final = (output_file_id, object_path, object_path.split("/", 1)[-1])
+        return is_not_found and any(_error_names_resource(error, name) for name in names)
 
     async def _finalize_unbilled_terminal_job(
         self, job: "ManagedObjectRow", response: "LiteLLMBatch"
@@ -1206,8 +1201,8 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
-                elif self._is_lasting_provider_failure(e):
-                    await self._expire_if_stale(job)
+                elif self._is_past_staleness_cutoff(job) and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES:
+                    await self._expire_unfinished(job)
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -1235,8 +1230,6 @@ class CheckBatchCost:
                         f"(job {job.id}): {tracking_err}"
                     )
                     self._record_error(prom_logger, "cost_tracking_error")
-                    if self._is_lasting_provider_failure(tracking_err):
-                        await self._expire_if_stale(job)
                     continue
                 if tracked is None:
                     continue
@@ -1273,8 +1266,6 @@ class CheckBatchCost:
                     await self._expire_if_stale(job)
                     continue
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
-            else:
-                await self._expire_if_stale(job)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:
