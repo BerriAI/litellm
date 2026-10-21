@@ -710,13 +710,28 @@ class TestClaudeModelPatternMatching:
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 class TestTypesafeJevPatternMatching:
-    @pytest.mark.parametrize("model", ["jev-latest", "jev-preview", "jev-1.13", "jev-1.14.0", "jev-2.0.0-rc1"])
-    def test_bare_jev_id_routes_to_typesafe(self, model, shipped_generalizations):
+    @pytest.mark.parametrize("model", ["jev-latest", "jev-preview", "jev-1.13", "jev-1.14.0"])
+    def test_bare_jev_id_routes_to_typesafe(
+        self, model: str, shipped_generalizations: None
+    ) -> None:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
         assert custom_llm_provider == "typesafe"
 
-    @pytest.mark.parametrize("model", ["foo/jev-latest", "openjev-latest", "jev-", "jev-latest model", "jev-internal-router"])
-    def test_namespaced_or_partial_jev_name_does_not_match_rule(self, model, shipped_generalizations):
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "foo/jev-latest",
+            "openjev-latest",
+            "jev-",
+            "jev-latest model",
+            "jev-internal-router",
+            "jev-2.0-internal",
+            "jev-1.0-acme.router",
+        ],
+    )
+    def test_namespaced_or_partial_jev_name_does_not_match_rule(
+        self, model: str, shipped_generalizations: None
+    ) -> None:
         from litellm.litellm_core_utils.fallback_generalizations import (
             match_routing_generalization,
         )

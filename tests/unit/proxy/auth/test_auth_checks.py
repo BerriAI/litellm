@@ -12,7 +12,7 @@ load_dotenv()
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
@@ -745,11 +745,16 @@ def shipped_routing_rules() -> Iterator[None]:
         (["openai/*"], "jev-latest", False),
         (["typesafe/*"], "foo/jev-latest", False),
         (["typesafe/*"], "jev-internal-router", False),
+        (["typesafe/*"], "jev-2.0-internal", False),
     ],
 )
 def test_typesafe_provider_wildcard_covers_bare_jev_model(
-    shipped_routing_rules, object_type, allowed_models, model, expect_to_work
-):
+    shipped_routing_rules: None,
+    object_type: Literal["team", "project"],
+    allowed_models: list[str],
+    model: str,
+    expect_to_work: bool,
+) -> None:
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_object_call_model
 
