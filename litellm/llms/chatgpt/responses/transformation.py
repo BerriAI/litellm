@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hid
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.sse_output_recovery import (
@@ -253,8 +254,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: dict,
     ) -> str:
         api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""

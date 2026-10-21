@@ -1351,3 +1351,17 @@ async def test_agentcore_stream_cut_before_it_signals_its_end_raises(sync_mode: 
 
     with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
         await _stream_agentcore(_AGENTCORE_DELTAS, sync_mode)
+
+
+def test_get_complete_url_sends_a_non_string_runtime_endpoint_to_that_endpoint():
+    vpc_endpoint: Final = "https://vpce-1.bedrock-agentcore.us-west-2.vpce.amazonaws.com"
+
+    url: Final = AmazonAgentCoreConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="agentcore/arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/my-agent",
+        optional_params={"aws_bedrock_runtime_endpoint": httpx.URL(f"{vpc_endpoint}/")},
+        litellm_params={},
+    )
+
+    assert url.startswith(f"{vpc_endpoint}/runtimes/")

@@ -42,6 +42,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsSpend,
     Logging,
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
@@ -400,6 +401,32 @@ def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
         global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
     ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
+class _InputEventRecorder(CustomLogger):
+    def __init__(self, label: str, events: list[str]) -> None:
+        self._label = label
+        self.events = events
+
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object) -> None:
+        self.events.append(f"{self._label} pre")
+
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.events.append(f"{self._label} post")
+
+
+def test_input_events_reach_the_replacement_and_not_the_global_callback_it_replaced(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[list[str]] = []
+    monkeypatch.setattr(litellm, "input_callback", [_InputEventRecorder("global", events)])
+    logging_obj.replace_global_callback(_InputEventRecorder("replacement", events))
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    logging_obj.pre_call(input="", api_key="")
+    logging_obj.post_call(original_response="ok", input="", api_key="")
+
+    assert events == ["replacement pre", "replacement post"]
 
 
 def test_get_masked_api_base(logging_obj):
@@ -1822,13 +1849,19 @@ def test_mark_logging_complete_flags_by_stream_and_event(
         "async_failure",
         "sync_failure",
     )
+    attempt_marker: Final = datetime_unit_test(2026, 1, 1)
     logging_obj.stream = stream
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = attempt_marker
 
     logging_obj.mark_logging_complete(event_type=event)
 
     expected_to_run: Final = stream and event in ("async_success", "sync_success")
     assert logging_obj.should_run_logging(event_type=event) is expected_to_run
     assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
+    if event == "async_failure":
+        assert logging_obj.model_call_details["async_failure_logged_attempt"] is attempt_marker
+    else:
+        assert "async_failure_logged_attempt" not in logging_obj.model_call_details
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -3088,7 +3121,7 @@ async def test_dispatch_failure_handlers_submits_sync_handler_for_failure_only_c
             prefer_async_handlers=True,
         )
 
-    mock_submit.assert_called_once_with(mock_sync, exception, traceback_exception)
+    mock_submit.assert_called_once_with(mock_sync, exception, traceback_exception, for_async_request=True)
 
 
 @pytest.mark.asyncio
@@ -6811,6 +6844,26 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["total_tokens"] == 0
 
 
+def test_failure_after_earlier_rounds_bills_only_the_failed_round_when_it_priced_no_breakdown(
+    logging_obj: LitellmLogging,
+) -> None:
+    earlier_breakdown: Final = CostBreakdown(total_cost=0.3, margin_fixed_amount=0.1)
+    logging_obj.cost_breakdown = earlier_breakdown
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    logging_obj.record_failure_after_earlier_rounds(
+        BilledRoundsSpend(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.3, earlier_breakdown),
+        Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7),
+        0.0,
+    )
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "anthropic", "claude"), "tb")
+
+    row: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (7, 0)
+    assert row["response_cost"] == pytest.approx(0.0)
+    assert row.get("cost_breakdown") is None or row["cost_breakdown"]["total_cost"] == pytest.approx(0.0)
+
+
 def test_set_cost_breakdown_stores_reasoning_cost():
     """reasoning_cost is stored only when positive, mirroring the cache-cost fields."""
     from datetime import datetime
@@ -8186,6 +8239,155 @@ def test_cache_callback_alone_does_not_start_sync_callbacks_for_async_requests(
     logging_obj: Final = _async_request_logging_obj("cache-gate", [])
 
     assert logging_obj._should_run_sync_callbacks_for_async_calls() is expected
+
+
+class _FailureHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks: list[str] = []
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_failure")
+
+
+class _BothFailureHooksRecorder(_FailureHookRecorder):
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_failure")
+
+
+def _failure_hook_count_logging_obj(
+    call_type: str, recorder: _FailureHookRecorder, *, async_failure_listed: bool
+) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini-tts",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id=f"failure-hook-count-{call_type}",
+        function_id=f"failure-hook-count-{call_type}",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder] if async_failure_listed else [],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    return logging_obj
+
+
+@pytest.fixture
+def no_global_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recorder_type", "async_listed", "expected"),
+    [
+        (_BothFailureHooksRecorder, True, ["async_failure"]),
+        (_FailureHookRecorder, True, ["sync_failure"]),
+        (_BothFailureHooksRecorder, False, ["sync_failure"]),
+    ],
+)
+@pytest.mark.parametrize("call_type", ["aspeech", "atranscription", "aimage_edit", "asearch"])
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_async_call_outside_the_async_flag_list_gets_one_custom_logger_failure_hook(
+    call_type: str, recorder_type: type[_FailureHookRecorder], async_listed: bool, expected: list[str]
+) -> None:
+    recorder: Final = recorder_type()
+    logging_obj: Final = _failure_hook_count_logging_obj(call_type, recorder, async_failure_listed=async_listed)
+
+    logging_obj.failure_handler(ValueError("upstream rejected"), "traceback", for_async_request=True)
+    await logging_obj.async_failure_handler(ValueError("upstream rejected"), "traceback")
+
+    assert recorder.hooks == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_logger_in_the_global_failure_callback_lists_gets_one_failure_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = _BothFailureHooksRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini-tts",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="global-failure",
+        function_id="global-failure",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    logging_obj.failure_handler(ValueError("upstream rejected"), "traceback", for_async_request=True)
+    await logging_obj.async_failure_handler(ValueError("upstream rejected"), "traceback")
+
+    assert recorder.hooks == ["async_failure"]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_failure_handler_run_without_an_async_failure_run_keeps_the_sync_hook() -> None:
+    recorder: Final = _BothFailureHooksRecorder()
+
+    _failure_hook_count_logging_obj("aspeech", recorder, async_failure_listed=True).failure_handler(
+        ValueError("upstream rejected"), "traceback"
+    )
+
+    assert recorder.hooks == ["sync_failure"]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_async_call_outside_the_async_flag_list_still_runs_sync_failure_function_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm_logging, "customLogger", CustomLogger())
+    calls: Final[list[str]] = []
+
+    def failure_function(kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        calls.append("function_failure")
+
+    recorder: Final = _BothFailureHooksRecorder()
+    logging_obj: Final = _failure_hook_count_logging_obj("aspeech", recorder, async_failure_listed=True)
+    logging_obj.dynamic_failure_callbacks = [recorder, failure_function]
+
+    logging_obj.failure_handler(ValueError("upstream rejected"), "traceback", for_async_request=True)
+
+    assert calls == ["function_failure"]
+    assert recorder.hooks == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_client_wrapped_failure_gives_a_logger_in_litellm_callbacks_one_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = _BothFailureHooksRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    @litellm.utils.client
+    async def aspeech(model: str, input: str, voice: str, **kwargs: object) -> None:
+        raise litellm.BadRequestError(message="upstream rejected", model=model, llm_provider="openai")
+
+    @litellm.utils.client
+    def speech(model: str, input: str, voice: str, **kwargs: object) -> None:
+        raise litellm.BadRequestError(message="upstream rejected", model=model, llm_provider="openai")
+
+    with pytest.raises(litellm.BadRequestError):
+        await aspeech(model="gpt-4o-mini-tts", input="hi", voice="alloy")
+    with pytest.raises(litellm.BadRequestError):
+        speech(model="gpt-4o-mini-tts", input="hi", voice="alloy")
+
+    assert recorder.hooks == ["async_failure", "sync_failure"]
 
 
 @pytest.mark.asyncio
@@ -10019,6 +10221,7 @@ class TestAzurePTUSpilloverCost:
 
     ROUTER_MODEL_ID: Final = "ptu-spill-router-model-id"
     SERVED_MODEL: Final = "azure/spill-served-model-ptu"
+    PTU_DEPLOYMENT: Final = "azure/spill-ptu-deployment"
     PTU_MODEL_INFO: Final = {
         "id": ROUTER_MODEL_ID,
         "team_id": "team-1",
@@ -10054,7 +10257,9 @@ class TestAzurePTUSpilloverCost:
         litellm.model_cost.pop(TestAzurePTUSpilloverCost.ROUTER_MODEL_ID, None)
         litellm.model_cost.pop(TestAzurePTUSpilloverCost.SERVED_MODEL, None)
 
-    def _logging_obj(self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch) -> LitellmLogging:
+    def _logging_obj(
+        self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch, deployment: str | None = None
+    ) -> LitellmLogging:
         monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
         obj = LitellmLogging(
             model=self.SERVED_MODEL,
@@ -10071,7 +10276,7 @@ class TestAzurePTUSpilloverCost:
             optional_params={},
             litellm_params={
                 "api_base": "",
-                "metadata": {"model_info": model_info},
+                "metadata": {"model_info": model_info, "deployment": deployment},
                 "input_cost_per_token": litellm_rate,
                 "output_cost_per_token": litellm_rate,
             },
@@ -10173,6 +10378,50 @@ class TestAzurePTUSpilloverCost:
                 100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
             )
         finally:
+            self._unregister_models()
+
+    def test_spillover_without_base_model_reports_the_pay_as_you_go_rates_billing_used(self, monkeypatch) -> None:
+        self._register_models()
+        litellm.model_cost[self.PTU_DEPLOYMENT] = {"litellm_provider": "azure", "mode": "chat"}
+        try:
+            obj = self._logging_obj(
+                dict(self.PTU_MODEL_INFO),
+                flag="True",
+                litellm_rate=0.0,
+                monkeypatch=monkeypatch,
+                deployment=self.PTU_DEPLOYMENT,
+            )
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+            response._hidden_params["provider_response_model"] = response.model
+            response_cost: Final = obj.response_cost_calculator(result=response)
+            response.model = "spill-model-group-alias"
+
+            payload: Final = get_standard_logging_object_payload(
+                kwargs={
+                    "model": self.SERVED_MODEL,
+                    "custom_llm_provider": "azure",
+                    "litellm_params": obj.litellm_params,
+                    "response_cost": response_cost,
+                },
+                init_response_obj=response,
+                start_time=datetime.datetime.now(),
+                end_time=datetime.datetime.now(),
+                logging_obj=obj,
+                status="success",
+            )
+
+            assert response_cost == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert payload is not None
+            model_map_information: Final = payload["model_map_information"]
+            assert model_map_information["model_map_key"] != self.PTU_DEPLOYMENT
+            model_map_value: Final = model_map_information["model_map_value"]
+            assert model_map_value is not None
+            assert response_cost == pytest.approx(
+                100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
+            )
+        finally:
+            litellm.model_cost.pop(self.PTU_DEPLOYMENT, None)
             self._unregister_models()
 
     def test_spillover_header_does_not_touch_non_ptu_custom_pricing(self, monkeypatch) -> None:

@@ -13,6 +13,7 @@ export interface ProviderAuthType {
 const EMPTY_PROVIDER_AUTH_TYPES: readonly ProviderAuthType[] = [];
 
 export const GITHUB_COPILOT_AUTH_TYPE_KEY = "github_copilot_auth_type";
+export const GITHUB_COPILOT_HOST_KEY = "github_copilot_host";
 export const GITHUB_COPILOT_PER_USER_AUTH_TYPE = "per_user_oauth";
 
 export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonly ProviderAuthType[]>> = {
@@ -31,7 +32,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
       credentialOnly: true,
       description:
         "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401.",
-      fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
+      fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY, GITHUB_COPILOT_HOST_KEY],
       requiredFieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
       fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: GITHUB_COPILOT_PER_USER_AUTH_TYPE },
     },

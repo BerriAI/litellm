@@ -16580,6 +16580,24 @@
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
         "supports_vision": true
     },
+    "cloudflare/clairic": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "extraction",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clairic/",
+        "supports_vision": true
+    },
+    "cloudflare/@cf/cloudflare/clairic": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "extraction",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clairic/",
+        "supports_vision": true
+    },
     "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
         "input_cost_per_token": 1.923e-06,
         "litellm_provider": "cloudflare",
@@ -21903,6 +21921,7 @@
         ],
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -21927,6 +21946,7 @@
         ],
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -21958,6 +21978,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -22021,6 +22042,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -29417,6 +29439,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -30139,6 +30162,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -30200,6 +30224,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -30268,6 +30293,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -30317,6 +30343,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_url_context": false,
@@ -31743,6 +31770,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -31927,6 +31955,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -31989,6 +32018,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -32051,6 +32081,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -32420,6 +32451,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -32481,6 +32513,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -32549,6 +32582,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -32598,6 +32632,7 @@
         "supports_reasoning": true,
         "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_url_context": false,
@@ -33192,6 +33227,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "github_copilot/gemini-3.8-flash": {
@@ -33210,6 +33246,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "github_copilot/gpt-3.5-turbo": {
@@ -52605,6 +52642,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_url_context": true,
@@ -64157,13 +64195,17 @@
     },
     "fireworks_ai/accounts/fireworks/models/muse-spark-open": {
         "cache_read_input_token_cost": 1.5e-07,
+        "cache_read_input_token_cost_priority": 2.25e-07,
         "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 1.875e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.25e-06,
-        "source": "https://fireworks.ai/models/fireworks/muse-spark-open",
+        "output_cost_per_token_priority": 6.375e-06,
+        "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
@@ -65823,6 +65865,7 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true,
         "source": "https://deepinfra.com/pricing",
         "supports_audio_input": true
@@ -67292,6 +67335,7 @@
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-flash-us": {
         "cache_read_input_token_cost": 4.5e-08,
         "cache_read_input_token_cost_priority": 5.625e-08,
+        "deprecation_date": "2026-11-07",
         "input_cost_per_token": 2.25e-07,
         "input_cost_per_token_priority": 2.8125e-07,
         "litellm_provider": "fireworks_ai",
@@ -67326,6 +67370,7 @@
     "fireworks_ai/glm-5p3-flash-us": {
         "cache_read_input_token_cost": 4.5e-08,
         "cache_read_input_token_cost_priority": 5.625e-08,
+        "deprecation_date": "2026-11-07",
         "input_cost_per_token": 2.25e-07,
         "input_cost_per_token_priority": 2.8125e-07,
         "litellm_provider": "fireworks_ai",
@@ -69262,6 +69307,7 @@
     "perplexity/google/gemini-3.5-flash-lite": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_sampling_params": false,
         "supports_web_search": true,
         "supports_function_calling": true,
         "input_cost_per_token": 3e-07,
@@ -69272,6 +69318,7 @@
     "perplexity/google/gemini-3.6-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_sampling_params": false,
         "supports_web_search": true,
         "supports_function_calling": true,
         "input_cost_per_token": 1.5e-06,
@@ -69282,6 +69329,7 @@
     "perplexity/google/gemini-3.7-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_sampling_params": false,
         "supports_web_search": true,
         "supports_function_calling": true,
         "input_cost_per_token": 7.5e-07,
@@ -71373,6 +71421,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_vision": true,
         "supports_web_search": true
     },
@@ -71390,6 +71439,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_vision": true,
         "supports_web_search": true
     },
@@ -74320,6 +74370,7 @@
     "perplexity/google/gemini-3.8-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_sampling_params": false,
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3.75e-06,
         "cache_read_input_token_cost": 7.5e-08,
@@ -75062,12 +75113,10 @@
     "gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
-        "cache_read_input_token_cost_flex": 7.5e-08,
         "cache_read_input_token_cost_priority": 2.7e-07,
         "input_cost_per_image": 0.00168,
         "input_cost_per_token": 1.5e-06,
         "input_cost_per_token_batches": 7.5e-07,
-        "input_cost_per_token_flex": 7.5e-07,
         "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 131072,
@@ -75078,7 +75127,6 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
-        "output_cost_per_token_flex": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
@@ -75111,12 +75159,10 @@
     "vertex_ai/gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
-        "cache_read_input_token_cost_flex": 7.5e-08,
         "cache_read_input_token_cost_priority": 2.7e-07,
         "input_cost_per_image": 0.00168,
         "input_cost_per_token": 1.5e-06,
         "input_cost_per_token_batches": 7.5e-07,
-        "input_cost_per_token_flex": 7.5e-07,
         "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 131072,
@@ -75127,7 +75173,6 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
-        "output_cost_per_token_flex": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
@@ -76668,14 +76713,14 @@
         "supports_response_schema": true
     },
     "baseten/reflection/Beam-1.0": {
-        "cache_read_input_token_cost": 1.3e-07,
-        "input_cost_per_token": 1.3e-06,
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 4e-07,
         "litellm_provider": "baseten",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4.3e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://inference.baseten.co/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -76927,5 +76972,83 @@
         "supported_output_modalities": [
             "text"
         ]
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash-1017-us": {
+        "cache_read_input_token_cost": 9e-09,
+        "cache_read_input_token_cost_priority": 1.125e-08,
+        "input_cost_per_token": 4.5e-07,
+        "input_cost_per_token_priority": 5.625e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-06,
+        "output_cost_per_token_priority": 2.25e-06,
+        "source": "https://docs.fireworks.ai/serverless/us-only-serverless",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "wandb/reflection/Beam-1.0-501B-A23B": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "wandb/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "azure_ai/MAI-Code-1.1-Flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "deprecation_date": "2026-12-09",
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
