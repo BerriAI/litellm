@@ -15,7 +15,18 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import TypeAdapter
+from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
+    ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
+    REQUIRE_BOTH_LIMITS,
+    ProjectModelQuotaPolicy,
+    ProvidersOf,
+    describe_missing_quota,
+    missing_project_model_quota,
+    no_providers,
+    parse_project_model_quota_setting,
+    router_deployment_providers,
+)
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -265,26 +276,6 @@ def _check_team_project_limits(
         )
 
 
-def _project_models_missing_positive_quota(
-    models: list[str] | None,
-    rpm_limits: Mapping[str, object] | None,
-    tpm_limits: Mapping[str, object] | None,
-) -> list[str]:
-    """Return the models that lack a positive `rpm` AND `tpm` quota.
-
-    A valid quota is a positive integer; null, zero, and negative are rejected
-    because downstream rate limiters treat a non-positive limit as immediately
-    exhausted (every request blocked).
-    """
-
-    def _is_positive(value: object) -> bool:
-        return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-    rpm = rpm_limits or {}
-    tpm = tpm_limits or {}
-    return [model for model in (models or []) if not _is_positive(rpm.get(model)) or not _is_positive(tpm.get(model))]
-
-
 def _router_access_group_names(llm_router: "Router | None") -> frozenset[str]:
     return frozenset(llm_router.get_model_access_groups()) if llm_router is not None else frozenset()
 
@@ -311,64 +302,79 @@ def _raise_on_project_models_expanding_at_request_time(
     raise HTTPException(
         status_code=400,
         detail={
-            "error": f"models {list(expanding)} expand to multiple models at request time, so a per-model rpm/tpm quota cannot be enforced for them while 'enforce_project_model_quota' is enabled. List concrete model names instead."
+            "error": f"models {list(expanding)} expand to multiple models at request time, so a per-model rpm/tpm quota cannot be enforced for them while '{ENFORCE_PROJECT_MODEL_QUOTA_SETTING}' is enabled. List concrete model names instead."
         },
     )
 
 
+def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ProjectModelQuotaPolicy | None:
+    try:
+        return parse_project_model_quota_setting(general_settings.get(ENFORCE_PROJECT_MODEL_QUOTA_SETTING))
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"general_settings.{ENFORCE_PROJECT_MODEL_QUOTA_SETTING} is invalid: {e}"},
+        ) from e
+
+
 def _raise_on_missing_project_model_quota(
-    data: NewProjectRequest | UpdateProjectRequest, access_group_names: frozenset[str] = frozenset()
+    data: NewProjectRequest | UpdateProjectRequest,
+    access_group_names: frozenset[str] = frozenset(),
+    policy: ProjectModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
+    providers_of: ProvidersOf = no_providers,
 ) -> None:
-    """Require a positive `rpm`/`tpm` quota for every model on project CREATE.
+    """Require the positive `rpm`/`tpm` quotas the policy asks of each model on project CREATE.
 
     `model_rpm_limit`/`model_tpm_limit` are relocated into `metadata` by the request
     model's `set_model_info` validator, so they are read from there.
-
-    Only invoked when `general_settings.enforce_project_model_quota` is enabled
-    (default off), so it is opt-in and does not change behavior for existing users.
     """
     _raise_on_project_models_expanding_at_request_time(data.models, access_group_names)
     metadata = data.metadata or {}
-    missing = _project_models_missing_positive_quota(
-        data.models, metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit")
+    missing: Final = missing_project_model_quota(
+        data.models or (), metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit"), policy, providers_of
     )
     if not missing:
         return
     raise HTTPException(
         status_code=400,
         detail={
-            "error": f"models {missing} added to project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+            "error": f"models added to project without a positive rpm/tpm quota: {describe_missing_quota(missing)}. Set a positive value for each listed limit."
         },
     )
 
 
 def _raise_on_missing_project_model_quota_on_update(
-    data: UpdateProjectRequest, existing_project: object, access_group_names: frozenset[str] = frozenset()
+    data: UpdateProjectRequest,
+    existing_project: object,
+    access_group_names: frozenset[str] = frozenset(),
+    policy: ProjectModelQuotaPolicy = REQUIRE_BOTH_LIMITS,
+    providers_of: ProvidersOf = no_providers,
 ) -> None:
-    """Require a positive `rpm`/`tpm` quota over the RESULTING state on project UPDATE.
+    """Require the positive `rpm`/`tpm` quotas the policy asks of each model over the RESULTING state on project UPDATE.
 
     `/project/update` replaces `models` and `metadata` when they are provided, so the
     check runs on what the project WILL look like: a partial update that doesn't touch
     models/quota keeps the existing values, while one that adds a model or clears a
-    model's quota must leave every resulting model with a positive limit.
-
-    Only invoked when `general_settings.enforce_project_model_quota` is enabled
-    (default off), so it is opt-in and does not change behavior for existing users.
+    model's quota must leave every resulting model with the limits it needs.
     """
     resulting_models = data.models if data.models is not None else (getattr(existing_project, "models", None) or [])
     resulting_metadata = (
         data.metadata if data.metadata is not None else (getattr(existing_project, "metadata", None) or {})
     )
     _raise_on_project_models_expanding_at_request_time(resulting_models, access_group_names)
-    missing = _project_models_missing_positive_quota(
-        resulting_models, resulting_metadata.get("model_rpm_limit"), resulting_metadata.get("model_tpm_limit")
+    missing: Final = missing_project_model_quota(
+        resulting_models,
+        resulting_metadata.get("model_rpm_limit"),
+        resulting_metadata.get("model_tpm_limit"),
+        policy,
+        providers_of,
     )
     if not missing:
         return
     raise HTTPException(
         status_code=400,
         detail={
-            "error": f"models {missing} would be left on the project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+            "error": f"models would be left on the project without a positive rpm/tpm quota: {describe_missing_quota(missing)}. Set a positive value for each listed limit."
         },
     )
 
@@ -567,9 +573,14 @@ async def new_project(
             data=data,
         )
 
-        # Opt-in (default off): require rpm/tpm for every model added to the project.
-        if general_settings.get("enforce_project_model_quota", False):
-            _raise_on_missing_project_model_quota(data, _router_access_group_names(llm_router))
+        quota_policy: Final = _project_model_quota_policy(general_settings)
+        if quota_policy is not None:
+            _raise_on_missing_project_model_quota(
+                data,
+                _router_access_group_names(llm_router),
+                quota_policy,
+                router_deployment_providers(llm_router, data.team_id),
+            )
 
         # Check if user has permission to create projects for this team
         # only team admins can create projects for their team
@@ -817,10 +828,14 @@ async def update_project(
                 data=data,
             )
 
-        # Opt-in (default off): require rpm/tpm for every model the update would leave on the project.
-        if general_settings.get("enforce_project_model_quota", False):
+        quota_policy: Final = _project_model_quota_policy(general_settings)
+        if quota_policy is not None:
             _raise_on_missing_project_model_quota_on_update(
-                data, existing_project, _router_access_group_names(llm_router)
+                data,
+                existing_project,
+                _router_access_group_names(llm_router),
+                quota_policy,
+                router_deployment_providers(llm_router, target_team_id),
             )
 
         # Prepare update data

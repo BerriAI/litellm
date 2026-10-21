@@ -1205,7 +1205,9 @@ def test_update_quota_existing_quotaless_model_rejected():
         _raise_on_missing_project_model_quota_on_update(data, existing)
 
 
-def _enforced_new_project_mocks(monkeypatch, team_models: list[str], llm_router: mock.MagicMock | None) -> None:
+def _enforced_new_project_mocks(
+    monkeypatch, team_models: list[str], llm_router: object, quota_setting: object = True
+) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
 
@@ -1213,7 +1215,7 @@ def _enforced_new_project_mocks(monkeypatch, team_models: list[str], llm_router:
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock())
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": True})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": quota_setting})
     monkeypatch.setattr(pe, "_validate_team_exists", mock.AsyncMock(return_value=team))
     monkeypatch.setattr(pe, "_check_user_permission_for_project", mock.AsyncMock(return_value=True))
 
@@ -1602,6 +1604,212 @@ async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
 
     assert "prod-models" in str(exc_info.value)
     assert "expand to multiple models at request time" in str(exc_info.value)
+
+
+_CUSTOMER_QUOTA_POLICY: Final = {
+    "providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []},
+    "models": {"veo-*": ["rpm"], "jev-latest": []},
+}
+
+_CUSTOMER_MODEL_PROVIDERS: Final = {
+    "gemini-3.8-flash": frozenset({"vertex_ai"}),
+    "veo-3.1-lite-generate-001": frozenset({"vertex_ai"}),
+    "runway-gen4-turbo": frozenset({"runwayml"}),
+}
+
+
+def _customer_providers_of(model: str) -> frozenset[str]:
+    return _CUSTOMER_MODEL_PROVIDERS.get(model, frozenset())
+
+
+def _quota_error(
+    models: list[str],
+    rpm: dict[str, int] | None = None,
+    tpm: dict[str, int] | None = None,
+    setting: object = _CUSTOMER_QUOTA_POLICY,
+    providers_of=_customer_providers_of,
+) -> str | None:
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
+        parse_project_model_quota_setting,
+    )
+
+    policy = parse_project_model_quota_setting(setting)
+    assert policy is not None
+    data = NewProjectRequest(team_id="test-team", models=models, model_rpm_limit=rpm, model_tpm_limit=tpm)
+    try:
+        _raise_on_missing_project_model_quota(data, frozenset(), policy, providers_of)
+    except HTTPException as e:
+        rejection = e
+    else:
+        return None
+    assert rejection.status_code == 400
+    return str(rejection.detail)
+
+
+def test_quota_policy_exempts_provider_and_passthrough_name_but_keeps_vertex_strict():
+    assert _quota_error(["runway-gen4-turbo", "jev-latest"]) is None
+    error = _quota_error(["gemini-3.8-flash"], rpm={"gemini-3.8-flash": 10})
+    assert error is not None
+    assert "gemini-3.8-flash (model_tpm_limit)" in error
+
+
+def test_quota_policy_model_pattern_overrides_its_provider_per_limit():
+    assert _quota_error(["veo-3.1-lite-generate-001"], rpm={"veo-3.1-lite-generate-001": 5}) is None
+    error = _quota_error(["veo-3.1-lite-generate-001"], tpm={"veo-3.1-lite-generate-001": 5000})
+    assert error is not None
+    assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
+    assert "model_tpm_limit" not in error
+
+
+def test_quota_policy_error_names_each_model_with_the_limits_it_misses():
+    error = _quota_error(["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo"])
+    assert error is not None
+    assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in error
+    assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
+    assert "runway-gen4-turbo" not in error
+
+
+@pytest.mark.parametrize(
+    "setting, model, expected_missing",
+    [
+        ({"default": ["tpm"]}, "unrouted-name", "unrouted-name (model_tpm_limit)"),
+        ({"default": [], "providers": {"runwayml": ["rpm"]}}, "runway-gen4-turbo", "(model_rpm_limit)"),
+        (
+            {"providers": {"runwayml": []}, "models": {"runway-gen4-turbo": ["tpm"]}},
+            "runway-gen4-turbo",
+            "(model_tpm_limit)",
+        ),
+        ({"models": {"runway-*": [], "runway-gen4-turbo": ["rpm"]}}, "runway-gen4-turbo", "(model_rpm_limit)"),
+        ({"models": {"veo-*": [], "veo-3.1-lite-*": ["rpm"]}}, "veo-3.1-lite-generate-001", "(model_rpm_limit)"),
+    ],
+)
+def test_quota_policy_precedence_is_model_then_pattern_then_provider_then_default(setting, model, expected_missing):
+    error = _quota_error([model], setting=setting)
+    assert error is not None
+    assert expected_missing in error
+
+
+def test_quota_policy_model_entry_matches_names_literally_apart_from_star():
+    setting = {"models": {"claude-opus-5-5[1m]": [], "gpt.5": []}}
+    assert _quota_error(["claude-opus-5-5[1m]"], setting=setting) is None
+    assert _quota_error(["claude-opus-5-51"], setting=setting) is not None
+    assert _quota_error(["gptx5"], setting=setting) is not None
+
+
+def test_quota_policy_model_on_several_providers_needs_every_required_limit():
+    def mixed_providers(_model: str) -> frozenset[str]:
+        return frozenset({"runwayml", "vertex_ai"})
+
+    error = _quota_error(["video-pool"], rpm={"video-pool": 10}, providers_of=mixed_providers)
+    assert error is not None
+    assert "video-pool (model_tpm_limit)" in error
+
+
+@pytest.mark.parametrize("setting", [True, "true", {}])
+def test_quota_setting_true_or_empty_mapping_still_requires_both_limits(setting):
+    error = _quota_error(["runway-gen4-turbo"], setting=setting)
+    assert error is not None
+    assert "runway-gen4-turbo (model_rpm_limit and model_tpm_limit)" in error
+
+
+@pytest.mark.parametrize("setting", [False, None])
+def test_quota_setting_off_enforces_nothing(setting):
+    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
+        parse_project_model_quota_setting,
+    )
+
+    assert parse_project_model_quota_setting(setting) is None
+
+
+def test_update_quota_policy_resolves_providers_for_the_resulting_models():
+    import types
+
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+    from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
+        parse_project_model_quota_setting,
+    )
+
+    policy = parse_project_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
+    assert policy is not None
+    existing = types.SimpleNamespace(models=["runway-gen4-turbo"], metadata={})
+    assert (
+        _raise_on_missing_project_model_quota_on_update(
+            UpdateProjectRequest(project_id="p", description="unrelated change"),
+            existing,
+            frozenset(),
+            policy,
+            _customer_providers_of,
+        )
+        is None
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota_on_update(
+            UpdateProjectRequest(project_id="p", models=["runway-gen4-turbo", "gemini-3.8-flash"]),
+            existing,
+            frozenset(),
+            policy,
+            _customer_providers_of,
+        )
+    assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.detail)
+
+
+def _customer_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-3.8-flash",
+                "litellm_params": {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"},
+            },
+            {
+                "model_name": "veo-3.1-lite-generate-001",
+                "litellm_params": {"model": "vertex_ai/veo-3.1-lite-generate-001", "vertex_project": "qa-project"},
+            },
+            {
+                "model_name": "runway-gen4-turbo",
+                "litellm_params": {"model": "runwayml/gen4_turbo", "api_key": "qa-runway-key"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_project_quota_policy_reads_providers_from_router_deployments(monkeypatch):
+    team_models = ["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo", "jev-latest"]
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=team_models, llm_router=_customer_router(), quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=team_models))
+
+    assert exc_info.value.code == "400"
+    assert (
+        "gemini-3.8-flash (model_rpm_limit and model_tpm_limit), veo-3.1-lite-generate-001 (model_rpm_limit)."
+        in str(exc_info.value.message)
+    )
+    assert "runway-gen4-turbo" not in str(exc_info.value.message)
+    assert "jev-latest" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch):
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["runway-gen4-turbo"],
+        llm_router=_customer_router(),
+        quota_setting={"provider": {"runwayml": []}},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
+
+    assert exc_info.value.code == "500"
+    assert "general_settings.enforce_project_model_quota is invalid" in str(exc_info.value.message)
 
 
 _ACCESS_NOW: Final = datetime.now(timezone.utc)
