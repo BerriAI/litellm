@@ -79,7 +79,7 @@ To qualify for a bounty, reports must include clear reproduction steps, a reprod
 - Audit Logs with retention policy
 - Control Allowed IP Addresses that can access your Cloud LiteLLM Instance
 
-For security inquiries, please contact us at support@berri.ai
+For security inquiries, please contact us at security@berri.ai
 
 #### Supported data regions for LiteLLM Cloud
 
