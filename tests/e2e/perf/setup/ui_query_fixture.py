@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections.abc import Iterable
 from datetime import datetime, timedelta
+from itertools import chain
 from typing import Final
 
 import psycopg
@@ -18,6 +20,33 @@ class UiFixture(BaseModel):
 
     anchor: AwareDatetime
     api_key: str
+    """`perf_ui_db_*` JUnit properties naming how much data the journeys ran against."""
+    volume: tuple[tuple[str, int], ...] = ()
+
+
+class TableVolume(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    table: str
+    rows: int
+    bytes: int
+
+
+QUERIED_TABLES: Final = (
+    "LiteLLM_SpendLogs",
+    "LiteLLM_DailyUserSpend",
+    "LiteLLM_DailyTeamSpend",
+    "LiteLLM_DailyTagSpend",
+    "LiteLLM_VerificationToken",
+    "LiteLLM_TeamTable",
+    "LiteLLM_UserTable",
+    "LiteLLM_ProxyModelTable",
+)
+_VOLUME_SQL: Final = """
+    SELECT c.relname, GREATEST(c.reltuples, 0)::bigint, pg_total_relation_size(c.oid)
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY(%(tables)s)
+"""
 
 
 SEEDED_TEAMS: Final = 100
@@ -59,6 +88,30 @@ _SEED_SQL: Final = (
 )
 
 
+def volume_properties(volumes: Iterable[TableVolume]) -> tuple[tuple[str, int], ...]:
+    """One `perf_ui_db_rows_<table>` and one `perf_ui_db_bytes_<table>` property per table the journeys read,
+    so the dashboard can say what the latencies were measured against."""
+    return tuple(
+        chain.from_iterable(
+            ((f"perf_ui_db_rows_{v.table}", v.rows), (f"perf_ui_db_bytes_{v.table}", v.bytes)) for v in volumes
+        )
+    )
+
+
+def table_volumes(connection: psycopg.Connection, spend_log_rows: int) -> tuple[TableVolume, ...]:
+    """Planner row estimates and on-disk size (indexes included) of the queried tables. The restore's
+    `LiteLLM_SpendLogs` count comes from the seed checkpoint, exact where the estimate can be stale."""
+    adapter: Final = TypeAdapter(tuple[str, int, int])
+    found: Final = tuple(
+        adapter.validate_python(row)
+        for row in connection.execute(_VOLUME_SQL, {"tables": list(QUERIED_TABLES)}).fetchall()
+    )
+    return tuple(
+        TableVolume(table=table, rows=spend_log_rows if table == "LiteLLM_SpendLogs" else rows, bytes=size)
+        for table, rows, size in sorted(found)
+    )
+
+
 def prepare_fixture() -> UiFixture:
     validate_target(os.environ["DATABASE_URL"])
     _finish_upgrade()
@@ -71,6 +124,7 @@ def prepare_fixture() -> UiFixture:
             anchor=TypeAdapter(datetime).validate_python(row[0]),
             api_key=hashlib.md5(b"perf-key:0", usedforsecurity=False).hexdigest()
             + hashlib.md5(b"perf-key-tail:0", usedforsecurity=False).hexdigest(),
+            volume=volume_properties(table_volumes(connection, TypeAdapter(int).validate_python(row[1]))),
         )
         return fixture
 
