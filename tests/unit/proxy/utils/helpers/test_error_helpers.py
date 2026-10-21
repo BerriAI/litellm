@@ -202,7 +202,7 @@ def test_handle_exception_on_proxy_labels_an_http_exception_by_the_status_it_ans
     assert (result.code, result.type) == (str(status_code), expected_type)
 
 
-def _exception_carrying_status(carried: int) -> Exception:
+def _exception_carrying_status(carried: int | None) -> Exception:
     class _CarriedStatus(Exception):
         status_code = carried
 
@@ -234,6 +234,15 @@ def test_handle_exception_on_proxy_keeps_the_type_the_exception_already_names():
     )
 
     assert (result.code, result.type) == ("429", "throttling_error")
+
+
+def test_handle_exception_on_proxy_answers_500_for_an_exception_whose_status_is_none():
+    """A guardrail whose upstream refuses the connection raises with status_code=None, and
+    passing that through as the code crashed the proxy's error handler, which then blamed the
+    auth database with a 503 instead of naming the unreachable guardrail."""
+    result = handle_exception_on_proxy(_exception_carrying_status(None))
+
+    assert (result.code, result.type, result.message) == ("500", ProxyErrorTypes.internal_server_error.value, "boom")
 
 
 @pytest.mark.parametrize(
