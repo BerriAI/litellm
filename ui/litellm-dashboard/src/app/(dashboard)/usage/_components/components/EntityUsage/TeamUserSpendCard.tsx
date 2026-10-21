@@ -25,7 +25,7 @@ interface TeamUserSpendCardProps {
   accessToken: string | null;
   startTime: Date | null;
   endTime: Date | null;
-  teamIds: string[];
+  teamIds: readonly string[];
 }
 
 const QUIET_HEADER = { headerClassName: "font-normal" };

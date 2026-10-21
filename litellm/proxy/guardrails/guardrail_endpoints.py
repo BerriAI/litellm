@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -65,6 +65,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
+    PiiEntityCategoryMap,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
@@ -88,6 +89,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1481,6 +1483,17 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _undeclared_logging_only(
+    guardrail_class: type[CustomGuardrail], hooks: Sequence[GuardrailEventHooks]
+) -> tuple[GuardrailEventHooks, ...]:
+    """logging_only when the class accepts it at save time without declaring it in its hooks."""
+    return (
+        (GuardrailEventHooks.logging_only,)
+        if guardrail_class.accepts_logging_only_mode() and GuardrailEventHooks.logging_only not in hooks
+        else ()
+    )
+
+
 @router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
@@ -1504,7 +1517,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    category_maps: Final = [
+    category_maps: Final[list[PiiEntityCategoryMap]] = [
         {
             "category": category.value,
             "entities": [entity.value for entity in entities],
@@ -1513,7 +1526,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     ]
 
     supported_modes_by_provider: Final = {
-        provider: [hook.value for hook in hooks]
+        provider: [hook.value for hook in (*hooks, *_undeclared_logging_only(guardrail_class, hooks))]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
     } | MappingProxyType(
@@ -1618,7 +1631,7 @@ async def get_major_airlines():
         with open(airlines_path, "r", encoding="utf-8") as f:
             import json
 
-            airlines: Final = json.load(f)
+            airlines: Final = _DECODED_JSON.validate_python(json.load(f))
         return {"airlines": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
@@ -2354,9 +2367,6 @@ class _GuardrailLoggingObj(Protocol):
     @property
     def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
 
-    @property
-    def success_handler(self) -> "Callable[..., object]": ...
-
 
 class _GuardrailProxyLogging(Protocol):
     @property
@@ -2386,10 +2396,6 @@ async def _emit_guardrail_success_logs(
     caller from receiving the guardrail response.  Returns the (possibly
     hook-modified) response.
     """
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        executor as thread_pool_executor,
-    )
-
     try:
         modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
@@ -2417,16 +2423,6 @@ async def _emit_guardrail_success_logs(
             )
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
-        try:
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-        except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
 
     return response
 
