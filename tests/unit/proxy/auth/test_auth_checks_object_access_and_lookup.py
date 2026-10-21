@@ -1769,20 +1769,6 @@ def _allowlist(object_permission_id: str, vector_stores: list[str] | None) -> Li
             id="key-vector-store-ids-other-store",
         ),
         pytest.param(["vs_allowed"], None, _vector_store_ids_request("vs_allowed"), None, id="key-vector-store-ids"),
-        pytest.param(
-            None,
-            ["vs_allowed"],
-            {**_vector_store_ids_request("vs_other_team"), "vector_store_ids": ["vs_other_team", {"id": "vs_allowed"}]},
-            ProxyErrorTypes.team_vector_store_access_denied,
-            id="team-vector-store-ids-with-a-non-string-entry",
-        ),
-        pytest.param(
-            None,
-            ["vs_allowed"],
-            {**_vector_store_ids_request("vs_other_team"), "vector_store_ids": [{"id": "vs_other_team"}, ["vs_other_team"]]},
-            None,
-            id="non-string-vector-store-ids-name-no-store",
-        ),
     ],
 )
 @pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
@@ -2320,16 +2306,27 @@ async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
         {"tools": [{"type": "file_search", "vector_store_ids": "KBSTOREA"}]},
         {"tools": [{"type": "file_search", "vector_store_ids": [1]}]},
         {"vector_store_ids": "KBSTOREA"},
+        {"vector_store_ids": {"KBSTOREB": True}},
+        {"vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]},
     ],
-    ids=["string-tool-ids", "int-tool-id", "string-top-level-ids"],
+    ids=["string-tool-ids", "int-tool-id", "string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
 )
-async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request(request_body: Mapping[str, object]):
+@pytest.mark.parametrize(
+    "general_settings", [{"vector_store_deny_by_default": True}, {}], ids=["deny-by-default", "legacy"]
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_malformed_vector_store_ids_are_rejected_as_bad_request(
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    vector_store_registry: VectorStoreRegistry | None,
+):
     with pytest.raises(ProxyException) as exc_info:
         await _common_checks_for_rag_query(
-            {"vector_store_deny_by_default": True},
+            general_settings,
             _virtual_key(object_permission_id="key-permission"),
             SimpleNamespace(vector_stores=["KBSTOREA"]),
             request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
+            vector_store_registry=vector_store_registry,
         )
     assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
         "invalid_request_error",

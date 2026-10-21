@@ -163,7 +163,6 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
-from litellm.vector_stores.vector_store_registry import requested_vector_store_ids
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -7933,9 +7932,9 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
 
 def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Same fields requested_vector_store_ids reads, but a vector_store_ids that is not a list of
-    strings is a 400 instead of being skipped or iterated, and tools that are not objects name no
-    store.
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
+    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
+    objects name no store.
     """
     return tuple(
         chain(
@@ -8000,8 +7999,8 @@ async def vector_store_access_check(
     `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
-    Both modes read the same request fields, with or without a vector store registry. Legacy mode
-    skips a malformed field, and strict mode answers 400.
+    Both modes read the same request fields, with or without a vector store registry, and answer 400
+    when a `vector_store_ids` field is not a list of strings.
 
     With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
     nonempty.
@@ -8019,8 +8018,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and with the flag on, ProxyException (400,
-    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) when a
+    `vector_store_ids` field is not a list of strings.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8032,11 +8031,7 @@ async def vector_store_access_check(
         return True
 
     typed_request_body: Final = _typed_request_body(request_body)
-    requested_ids: Final = (
-        _strict_requested_vector_store_ids(typed_request_body)
-        if deny_by_default
-        else requested_vector_store_ids(typed_request_body, typed_request_body.get("tools"))
-    )
+    requested_ids: Final = _strict_requested_vector_store_ids(typed_request_body)
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))

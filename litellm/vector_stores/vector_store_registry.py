@@ -56,20 +56,6 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
         return ()
 
 
-def _tools_vector_store_ids(tools: object) -> tuple[str, ...]:
-    try:
-        validated_tools: Final = _ITEMS.validate_python(tools)
-    except ValidationError:
-        return ()
-    return tuple(chain.from_iterable(_tool_vector_store_ids(tool) for tool in validated_tools))
-
-
-def requested_vector_store_ids(non_default_params: Mapping[str, object], tools: object = None) -> list[str]:
-    vector_store_ids_param: Final = non_default_params.get("vector_store_ids")
-    named_ids: Final = _named_store_ids(vector_store_ids_param) if isinstance(vector_store_ids_param, list) else ()
-    return list(dict.fromkeys(chain(named_ids, _tools_vector_store_ids(tools))))
-
-
 class VectorStoreIndexRegistry:
     def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
         self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
@@ -166,7 +152,22 @@ class VectorStoreRegistry:
         return VectorStoreToolParams(**kwargs)
 
     def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
-        return requested_vector_store_ids(non_default_params, tools)
+        """
+        Returns the vector store ids to run
+
+        vector_store_ids can be provided in two ways:
+        """
+        vector_store_ids: list[str] = []
+
+        # 1. check if vector_store_ids is provided in the non_default_params
+        vector_store_ids_param: Final = non_default_params.get("vector_store_ids")
+        if isinstance(vector_store_ids_param, list):
+            vector_store_ids.extend(vector_store_ids_param)
+
+        # 2. check if vector_store_ids is provided as a tool in the request
+        vector_store_ids = self._get_vector_store_ids_from_tool_calls(tools=tools, vector_store_ids=vector_store_ids)
+
+        return list(dict.fromkeys(vector_store_ids))
 
     def get_and_pop_recognised_vector_store_tools(
         self,
@@ -413,6 +414,16 @@ class VectorStoreRegistry:
                 vector_stores_to_run.append(vector_store_copy)
 
         return vector_stores_to_run
+
+    def _get_vector_store_ids_from_tool_calls(self, tools: object, vector_store_ids: list[str]) -> list[str]:
+        """
+        Returns the vector store ids from the tool calls
+        """
+        try:
+            validated_tools: Final = _ITEMS.validate_python(tools)
+        except ValidationError:
+            return vector_store_ids
+        return [*vector_store_ids, *chain.from_iterable(_tool_vector_store_ids(tool) for tool in validated_tools)]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """
