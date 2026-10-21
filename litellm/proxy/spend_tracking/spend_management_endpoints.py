@@ -3101,15 +3101,16 @@ async def ui_view_spend_logs(
             enrich_session_counts=not is_v2,
             total_is_capped=total_is_capped,
         )
-        if project_ids is None:
-            return response
-        return {  # mutable-ok: FastAPI response body
-            **response,
-            "project_filter": {"version": 1, "project_ids": project_ids},  # mutable-ok: FastAPI response body
-        }
     except Exception as e:
         verbose_proxy_logger.exception("Error in ui_view_spend_logs: %s", e)
         raise handle_exception_on_proxy(e)
+
+    if project_ids is None:
+        return response
+    return {
+        **response,
+        "project_filter": {"version": 1, "project_ids": project_ids},
+    }
 
 
 class _SessionPageRow(TypedDict):
