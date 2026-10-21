@@ -24,7 +24,18 @@ Ask everything in one message, with defaults the user can accept by saying "go":
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
 
-In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. Give them the command as `LITELLM_MODE=PRODUCTION <bin>/litellm --setup`, with `<bin>` replaced by the folder `uv tool dir --bin` prints, to run from the folder they want the config in. It writes `litellm_config.yaml` there with the keys inline and offers to start the proxy, which then listens on every network interface and stops with Ctrl+C in that window. When the user is done, run `chmod 600 litellm_config.yaml; grep -qx 'litellm_config.yaml' .gitignore 2>/dev/null || echo 'litellm_config.yaml' >> .gitignore` in that folder, since the wizard leaves the file readable by every account on the machine and nothing keeps it out of git, then skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. Give them the command as `LITELLM_MODE=PRODUCTION <bin>/litellm --setup`, with `<bin>` replaced by the folder `uv tool dir --bin` prints, to run from the folder they want the config in. It writes `litellm_config.yaml` there with the provider keys and master key in plain text and offers to start the proxy, which then listens on every network interface and stops with Ctrl+C in that window. When the user is done, run this in that folder. It makes the file readable only by them, keeps it out of git (the wizard does neither), and prints only the model names. Never print that file or run `grep`, `sed`, or `cat` on it:
+
+```bash
+chmod 600 litellm_config.yaml; grep -qx 'litellm_config.yaml' .gitignore 2>/dev/null || echo 'litellm_config.yaml' >> .gitignore
+"$(uv tool dir)/litellm/bin/python" -I -c 'import yaml; print(*(m["model_name"] for m in yaml.safe_load(open("litellm_config.yaml"))["model_list"]), sep="\n")'
+```
+
+Then skip to step 8 and run it against their proxy, starting that shell command with this line instead of the loader line, which reads the master key without printing it:
+
+```bash
+export LITELLM_MASTER_KEY="$("$(uv tool dir)/litellm/bin/python" -I -c 'import yaml; print(yaml.safe_load(open("litellm_config.yaml"))["general_settings"]["master_key"])')"
+```
 
 ## 2. Check prerequisites
 
@@ -175,7 +186,7 @@ Tell the user, without printing any secret:
 
 - The base URL is `http://127.0.0.1:4000`. Any OpenAI-compatible client works with it as the base URL and the master key or a virtual key as the API key
 - The master key is `LITELLM_MASTER_KEY` in the folder's `.env`
-- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), `<folder>/litellm-gateway stop` (quickstart), or Ctrl+C in its window (`litellm --setup`). To start it again, rerun the step 7 command, `docker start litellm`, or `<folder>/litellm-gateway start`. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
+- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), `<folder>/litellm-gateway stop` (quickstart), or Ctrl+C in its window (`litellm --setup`). To start it again, `docker start litellm`, `<folder>/litellm-gateway start`, or on uv the whole step 7 command as you ran it, loader line and PATH export included, shown as a code block and never paraphrased, since a new shell has neither. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
 - With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 3 or 6 first
 - The Admin UI warns that the master-key login is a shared secret, which is fine while only this machine reaches the proxy. Before anyone else can reach it, invite an admin with their own password on the Internal Users page, then set `general_settings.disable_env_credential_login: true` in the proxy config
 - To manage the running proxy from a coding agent (keys, teams, users, models, MCP servers), install `npx skills add BerriAI/litellm-skills -g`
