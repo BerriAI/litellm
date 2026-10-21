@@ -1259,3 +1259,49 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         assert encrypted_content_callbacks[0].router is router
     finally:
         router.discard()
+
+
+def test_sync_text_completion_calls_the_deployment_model_not_the_group_alias():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-instruct-alias",
+                "litellm_params": {"model": "gpt-3.5-turbo-instruct", "api_key": "fake-key"},
+            }
+        ]
+    )
+
+    with patch.object(litellm, "text_completion", wraps=litellm.text_completion) as text_completion_spy:
+        response = router.text_completion(model="my-instruct-alias", prompt="hi", mock_response="ok")
+
+    assert response.choices[0].text == "ok", response
+    assert text_completion_spy.call_args.kwargs["model"] == "gpt-3.5-turbo-instruct", text_completion_spy.call_args
+
+
+def test_sync_text_completion_falls_back_like_async():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo-instruct",
+                    "api_key": "fake-key",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo-instruct",
+                    "api_key": "fake-key",
+                    "mock_response": "from backup",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    response = router.text_completion(model="primary", prompt="hi")
+
+    assert response.choices[0].text == "from backup", response

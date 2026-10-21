@@ -5724,31 +5724,46 @@ class Router:
         is_async: bool | None = False,
         **kwargs,
     ):
-        messages: Final = [{"role": "user", "content": prompt}]
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs["original_function"] = self._text_completion
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            return self.function_with_fallbacks(**kwargs)
+        except Exception as e:
+            raise e
 
-            # pick the one that is available (lowest TPM/RPM)
+    def _text_completion(self, model: str, prompt: str, **kwargs):
+        model_name = None
+        try:
+            verbose_router_logger.debug("Inside _text_completion()- model: %s; kwargs: %s", model, kwargs)
             deployment: Final = self.get_available_deployment(
                 model=model,
-                messages=messages,
+                messages=[{"role": "user", "content": prompt}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data: Final = deployment["litellm_params"].copy()
-            for k, v in self.default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
+            model_name = data["model"]
+            self.total_calls[model_name] += 1
 
-            # call via litellm.completion()
-            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
+            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            self.routing_strategy_pre_call_checks(deployment=deployment)
+
+            # kwargs no longer carries the model group name, so the deployment's model is used
+            response: Final = litellm.text_completion(
+                **{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}
+            )
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+            return response
         except Exception as e:
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def atext_completion(
