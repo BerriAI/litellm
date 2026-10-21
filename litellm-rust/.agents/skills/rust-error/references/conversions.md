@@ -56,7 +56,7 @@ When a lower error needs a different meaning for every caller, do it in the uppe
 impl From<litellm_http::Error> for Error {
     fn from(error: litellm_http::Error) -> Self {
         if error.is_computed_header() {
-            return Self::Unsupported("request forwards a header AWS SigV4 computes");
+            return Self::Declined(Decline::new("request forwards a header AWS SigV4 computes"));
         }
         Self::Http(error)
     }
@@ -70,7 +70,7 @@ All four inference routes classify a header the signer computes the same way, be
 | The upper layer | Do | Example |
 |---|---|---|
 | has nothing to add | nest in one transparent variant and delegate predicates | `Self::Http(error) => error.is_request()` |
-| changes what the failure means | translate to an upper variant, keep the cause attached when it helps | computed header -> `Unsupported` |
+| changes what the failure means | translate to an upper variant, keep the cause attached when it helps | computed header -> `Declined` |
 | knows something the lower one does not | a variant with the extra fields plus the cause as its source | `Read { path, tls_source, source }` |
 
 Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift.

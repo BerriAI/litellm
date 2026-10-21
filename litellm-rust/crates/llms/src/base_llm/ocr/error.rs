@@ -87,8 +87,6 @@ pub enum Error {
     PollOrigin,
     #[error("OCR polling timed out")]
     PollTimeout,
-    #[error("unsupported by the rust path: {0}")]
-    Unsupported(&'static str),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
     #[error("invalid model: {provider} has no model {model:?} - use one of: {}", supported.join(", "))]
@@ -202,7 +200,6 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
-            | Self::Unsupported(_)
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::MissingCredential { .. }
@@ -245,54 +242,11 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
-            | Self::Unsupported(_)
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::Secret(_)
             | Self::Host(_)
             | Self::HostCall
-            | Self::Params(_)
-            | Self::Headers(_)
-            | Self::Http(_) => false,
-        }
-    }
-
-    pub fn is_unsupported(&self) -> bool {
-        match self {
-            Self::Unsupported(_) => true,
-            Self::Provider { .. }
-            | Self::EmptyFile
-            | Self::FileRead { .. }
-            | Self::DocumentTask(_)
-            | Self::InvalidMimeType(_)
-            | Self::UnsupportedDocument { .. }
-            | Self::RejectedDocument { .. }
-            | Self::RequestFormat
-            | Self::RequestField { .. }
-            | Self::Arguments(_)
-            | Self::MissingField(_)
-            | Self::MissingDocumentUrl
-            | Self::InvalidDataUri
-            | Self::InlineDocumentTooLarge
-            | Self::Pages(_)
-            | Self::Features
-            | Self::DotModel
-            | Self::TooLarge { .. }
-            | Self::ResponseField { .. }
-            | Self::EmptyContent
-            | Self::OperationStatus(_)
-            | Self::NumericRange(_)
-            | Self::PollLocation
-            | Self::InvalidPollUrl { .. }
-            | Self::PollOrigin
-            | Self::PollTimeout
-            | Self::InvalidProvider(_)
-            | Self::InvalidModel { .. }
-            | Self::MissingCredential { .. }
-            | Self::Secret(_)
-            | Self::Host(_)
-            | Self::HostCall
-            | Self::Auth(_)
             | Self::Params(_)
             | Self::Headers(_)
             | Self::Http(_) => false,
@@ -345,7 +299,6 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
-            | Self::Unsupported(_)
             | Self::MissingCredential { .. }
             | Self::Secret(_)
             | Self::Host(_)
@@ -382,7 +335,6 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::DotModel
-            | Self::Unsupported(_)
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::MissingCredential { .. }

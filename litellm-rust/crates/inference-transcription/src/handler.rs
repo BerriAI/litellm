@@ -67,7 +67,8 @@ pub(super) async fn execute(
             error,
         ))
     })?;
-    Ok(config
-        .transform_audio_transcription_response(provider.model, response_json)?
-        .into_json())
+    config
+        .transform_audio_transcription_response(provider.model, response_json)
+        .map(|response| response.into_json())
+        .map_err(|error| Error::from(error).after_send())
 }
