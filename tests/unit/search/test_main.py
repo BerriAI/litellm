@@ -279,3 +279,128 @@ async def test_async_linkup_deep_search_reports_the_deep_price(
     )
     assert json.loads(respx_mock.calls.last.request.content)["depth"] == "deep"
     assert response.hidden_params["response_cost"] == pytest.approx(0.011)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_exa_reported_total_drives_search_response_cost(respx_mock: respx.MockRouter) -> None:
+    reported_total: Final = 0.123456789
+    assert all(entry.get("input_cost_per_query") != reported_total for entry in litellm.model_cost.values())
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": reported_total}})
+
+    response: Final = litellm.search(
+        query="provider reported cost",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(reported_total)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(
+    ("search_type", "catalog_model"),
+    [
+        ("lite", "exa_ai/search-lite"),
+        ("deep", "exa_ai/search-deep"),
+        ("deep-lite", "exa_ai/search-deep-lite"),
+        (None, "exa_ai/search"),
+        ("legacy-type", "exa_ai/search"),
+    ],
+    ids=["lite", "deep", "deep-lite", "default", "unknown-type"],
+)
+def test_exa_search_without_reported_cost_uses_the_matching_catalog_price(
+    respx_mock: respx.MockRouter, search_type: str | None, catalog_model: str
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    if search_type is None:
+        response: Final = litellm.search(
+            query="catalog price",
+            search_provider="exa_ai",
+            api_key="test-exa-key",
+        )
+    else:
+        response: Final = litellm.search(
+            query="catalog price",
+            search_provider="exa_ai",
+            api_key="test-exa-key",
+            type=search_type,
+        )
+    expected_cost: Final = float(litellm.model_cost[catalog_model]["input_cost_per_query"])
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_exa_max_results_charges_for_each_result_above_ten(respx_mock: respx.MockRouter) -> None:
+    from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_ADDITIONAL_RESULT_COST
+
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    response: Final = litellm.search(
+        query="additional results",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        max_results=25,
+    )
+    base_cost: Final = float(litellm.model_cost["exa_ai/search"]["input_cost_per_query"])
+
+    assert response._hidden_params["response_cost"] == pytest.approx(base_cost + 15 * EXA_AI_ADDITIONAL_RESULT_COST)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_exa_ignores_caller_reported_cost_when_provider_reports_a_total(respx_mock: respx.MockRouter) -> None:
+    reported_total: Final = 0.234567891
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(
+        json={"results": [], "costDollars": {"total": reported_total}}
+    )
+
+    response: Final = litellm.search(
+        query="caller cost spoof",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        _exa_ai_cost_dollars=0,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "caller cost spoof",
+        "contents": {"text": True},
+    }
+    assert response._hidden_params["response_cost"] == pytest.approx(reported_total)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_exa_ignores_caller_reported_cost_when_provider_omits_a_total(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    response: Final = litellm.search(
+        query="caller cost fallback",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        type="lite",
+        _exa_ai_cost_dollars=0,
+    )
+    expected_cost: Final = float(litellm.model_cost["exa_ai/search-lite"]["input_cost_per_query"])
+
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "caller cost fallback",
+        "type": "lite",
+        "contents": {"text": True},
+    }
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_exa_runtime_registered_price_wins_over_provider_reported_cost(respx_mock: respx.MockRouter) -> None:
+    reported_total: Final = 0.345678912
+    custom_price: Final = 0.987654321
+    base_entry: Final = dict(litellm.model_cost["exa_ai/search"])
+    litellm.register_model(
+        {"exa_ai/search": {**base_entry, "input_cost_per_query": custom_price}},
+    )
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": reported_total}})
+
+    response: Final = litellm.search(
+        query="registered catalog price",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(custom_price)

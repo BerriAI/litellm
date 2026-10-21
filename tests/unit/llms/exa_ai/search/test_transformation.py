@@ -1,6 +1,6 @@
+import datetime
 import json
 from typing import Final
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -8,10 +8,26 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_PARAM
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
+
+
+def _logging_obj() -> Logging:
+    logging_obj: Final = Logging(
+        model="exa-search",
+        messages=[],
+        stream=False,
+        call_type="search",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="exa-search-cost",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    return logging_obj
 
 
 @pytest.fixture
@@ -41,7 +57,7 @@ def test_transform_search_response_snippet_falls_back_through_content_modes(
         json={"results": [{"title": "Title", "url": "https://example.com", **content_fields}]},
     )
 
-    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock())
+    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=_logging_obj())
 
     assert response.results[0].snippet == expected_snippet
 
@@ -93,7 +109,37 @@ def test_search_sends_max_results_as_num_results(respx_mock: respx.MockRouter) -
 
 
 def _transform(payload: object) -> SearchResponse:
-    return ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=Mock())
+    return ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=_logging_obj())
+
+
+def test_transform_search_request_drops_caller_reported_cost() -> None:
+    request: Final = ExaAISearchConfig().transform_search_request(
+        "search query",
+        {EXA_AI_COST_PARAM: 0.0},
+    )
+
+    assert request == {"query": "search query", "contents": {"text": True}}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_cost"),
+    [
+        ({"costDollars": {"total": 0.123456789}}, 0.123456789),
+        ({}, None),
+        ({"costDollars": {"total": True}}, None),
+        ({"costDollars": {"total": -0.1}}, None),
+        ({"costDollars": None}, None),
+    ],
+)
+def test_transform_search_response_writes_only_a_valid_reported_cost_to_logging_params(
+    payload: dict[str, object], expected_cost: float | None
+) -> None:
+    logging_obj: Final = _logging_obj()
+    logging_obj.optional_params = {EXA_AI_COST_PARAM: 0.0}
+
+    ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=logging_obj)
+
+    assert logging_obj.optional_params[EXA_AI_COST_PARAM] == expected_cost
 
 
 def test_transform_search_response_maps_every_exa_result_in_provider_order():
@@ -117,7 +163,7 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
                 {"title": "Second", "url": "https://example.com/second", "highlights": ["one", "two"]},
                 {"title": "Third", "url": "https://example.com/third", "summary": "Summary", "publishedDate": None},
             ],
-            "costDollars": {"total": 0.005},
+            "costDollars": {"total": 0.123456789},
         }
     )
 
@@ -148,7 +194,7 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
         "provider_metadata": {
             "requestId": "b5947044c4b78efa9552a7c89b306d95",
             "resolvedSearchType": "neural",
-            "costDollars": {"total": 0.005},
+            "costDollars": {"total": 0.123456789},
         }
     }
 
@@ -188,8 +234,13 @@ def test_transform_search_response_attaches_only_the_exa_result_fields_it_return
         ({"requestId": "abc"}, {"requestId": "abc"}),
         ({"context": "joined result text", "results": []}, {"context": "joined result text"}),
         (
-            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}, "results": [{"text": "t"}]},
-            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}},
+            {
+                "requestId": "abc",
+                "searchTime": 412.5,
+                "costDollars": {"total": 0.123456789},
+                "results": [{"text": "t"}],
+            },
+            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.123456789}},
         ),
     ],
 )

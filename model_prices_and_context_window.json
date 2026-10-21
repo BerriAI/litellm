@@ -24430,24 +24430,24 @@
         "output_vector_size": 2560
     },
     "exa_ai/search": {
+        "input_cost_per_query": 0.007,
         "litellm_provider": "exa_ai",
-        "mode": "search",
-        "tiered_pricing": [
-            {
-                "input_cost_per_query": 0.005,
-                "max_results_range": [
-                    0,
-                    25
-                ]
-            },
-            {
-                "input_cost_per_query": 0.025,
-                "max_results_range": [
-                    26,
-                    100
-                ]
-            }
-        ]
+        "mode": "search"
+    },
+    "exa_ai/search-deep": {
+        "input_cost_per_query": 0.012,
+        "litellm_provider": "exa_ai",
+        "mode": "search"
+    },
+    "exa_ai/search-deep-lite": {
+        "input_cost_per_query": 0.012,
+        "litellm_provider": "exa_ai",
+        "mode": "search"
+    },
+    "exa_ai/search-lite": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "exa_ai",
+        "mode": "search"
     },
     "firecrawl/search": {
         "litellm_provider": "firecrawl",

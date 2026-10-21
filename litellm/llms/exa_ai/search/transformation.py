@@ -5,10 +5,10 @@ Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
 from collections.abc import Iterable, Mapping
-from typing import Final, TypedDict
+from typing import Final, TypedDict, cast  # noqa: TID251  # dynamic logger state needs an explicit mapping type
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -17,12 +17,21 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_PARAM, exa_ai_reported_cost_dollars
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
 _RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
+
+
+def _reported_cost_from_response(response_json: Mapping[str, object]) -> float | None:
+    try:
+        cost_dollars: Final = _JSON_OBJECT.validate_python(response_json.get("costDollars"))
+    except ValidationError:
+        return None
+    return exa_ai_reported_cost_dollars(cost_dollars.get("total"))
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -144,7 +153,11 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
+            if (
+                param not in self.get_supported_perplexity_optional_params()
+                and param not in result_data
+                and param != EXA_AI_COST_PARAM
+            ):
                 result_data[param] = value
 
         # By default, request text content if not explicitly specified
@@ -183,6 +196,16 @@ class ExaAISearchConfig(BaseSearchConfig):
             SearchResponse with standardized format
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        reported_cost: Final = _reported_cost_from_response(response_json)
+        current_optional_params: Final[Mapping[str, object]] = cast(  # cast-ok: logger params use string keys
+            Mapping[str, object],
+            logging_obj.optional_params,
+        )
+
+        logging_obj.optional_params = {  # rebind-ok: the logging object owns response pricing metadata
+            **current_optional_params,
+            EXA_AI_COST_PARAM: reported_cost,
+        }
 
         # Transform results to SearchResult objects
         results: Final = []

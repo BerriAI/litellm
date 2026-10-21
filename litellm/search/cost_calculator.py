@@ -17,7 +17,7 @@ PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = T
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
-    {"tavily": "search_depth", "linkup": "depth"}
+    {"tavily": "search_depth", "linkup": "depth", "exa_ai": "type"}
 )
 
 
@@ -33,7 +33,7 @@ def _provider_usage(
         return None
 
 
-def _registered_at_runtime(entry: str) -> bool:
+def model_cost_registered_at_runtime(entry: str) -> bool:
     """Whether `entry`'s live price differs from the catalog as loaded, i.e. `register_model` changed it."""
     live: Final[object] = litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
     return live != GetModelCostMap.loaded_model_cost_map().get(entry)  # pyright: ignore[reportUnknownVariableType]  # `live` comes from the untyped registry
@@ -54,7 +54,9 @@ def _pricing_model(
     mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
     mode_model: Final = f"{custom_llm_provider}/search-{mode}"
     priced: Final = mode_model in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-    if not priced or (_registered_at_runtime(generic_model) and not _registered_at_runtime(mode_model)):
+    if not priced or (
+        model_cost_registered_at_runtime(generic_model) and not model_cost_registered_at_runtime(mode_model)
+    ):
         return model
     return mode_model
 
@@ -70,7 +72,7 @@ def search_provider_cost_per_query(
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
-    provider's mode parameter (Tavily `search_depth`, Linkup `depth`).
+    provider's mode parameter.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -93,12 +95,25 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
+    if custom_llm_provider == "exa_ai":
+        from litellm.llms.exa_ai.search.cost_calculator import exa_ai_search_cost
+
+        pricing_model: Final = _pricing_model(model, custom_llm_provider, optional_params)
+        canonical_model: Final = (
+            pricing_model.removeprefix("exa_ai/") if pricing_model.startswith("exa_ai/exa_ai/") else pricing_model
+        )
+        exa_cost: Final = exa_ai_search_cost(
+            model=canonical_model,
+            optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS,
+        )
+        return (exa_cost, 0.0)
+
     model_info: Final = get_model_info(
         model=_pricing_model(model, custom_llm_provider, optional_params),
         custom_llm_provider=custom_llm_provider,
     )
 
-    # Check for tiered pricing (e.g., Exa AI based on max_results)
+    # Check for tiered pricing used by other search providers
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if tiered_pricing and isinstance(tiered_pricing, list):
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
