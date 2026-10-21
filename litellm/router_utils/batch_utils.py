@@ -5,6 +5,7 @@ from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
+from litellm.types.utils import CallTypes
 
 
 class InMemoryFile(io.BytesIO):
@@ -170,3 +171,20 @@ def _get_router_metadata_variable_name(function_name: str | None) -> str:
         return "litellm_metadata"
     else:
         return "metadata"
+
+
+BATCH_RETRIEVE_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.aretrieve_batch.value,
+        CallTypes.retrieve_batch.value,
+    }
+)
+
+
+def is_batch_retrieve_call_type(call_type: object) -> bool:
+    """
+    A batch retrieve reports the whole job's token usage, which the provider spent
+    asynchronously over the life of the batch, and reports it again on every poll of the
+    finished batch. Per-minute usage counters must not be fed from it.
+    """
+    return isinstance(call_type, str) and call_type in BATCH_RETRIEVE_CALL_TYPES
