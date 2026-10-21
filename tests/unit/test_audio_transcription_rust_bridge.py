@@ -272,9 +272,27 @@ def test_bedrock_transcription_forwards_language_and_text_formats_to_rust() -> N
     }
 
 
+@pytest.mark.parametrize(("sent", "expected"), [("0.2", 0.2), ("0", 0.0), (0.5, 0.5), (1, 1.0)])
+def test_bedrock_transcription_forwards_form_temperature_as_a_number(sent: object, expected: float) -> None:
+    bridge: Final = SyncBridge()
+    NATIVE_TRANSCRIPTION.override(bridge)
+
+    litellm.transcription(model=MODEL, file=AUDIO_FILE, temperature=sent)
+
+    forwarded: Final = bridge.calls[0].resolved["optional_params"]["temperature"]
+    assert (type(forwarded), forwarded) == (float, expected)
+
+
 @pytest.mark.parametrize(
     "unsupported",
-    [{"response_format": "srt"}, {"response_format": "verbose_json"}, {"timestamp_granularities": ["word"]}],
+    [
+        {"response_format": "srt"},
+        {"response_format": "verbose_json"},
+        {"timestamp_granularities": ["word"]},
+        {"temperature": "warm"},
+        {"temperature": "inf"},
+        {"temperature": True},
+    ],
 )
 def test_bedrock_transcription_rejects_params_it_cannot_honor(unsupported: dict[str, object]) -> None:
     bridge: Final = SyncBridge()
@@ -284,6 +302,7 @@ def test_bedrock_transcription_rejects_params_it_cannot_honor(unsupported: dict[
         litellm.transcription(model=MODEL, file=AUDIO_FILE, language="fr", **unsupported)
 
     assert raised.value.status_code == 400
+    assert next(iter(unsupported)) in str(raised.value)
     assert bridge.calls == ()
 
     dropped: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, language="fr", drop_params=True, **unsupported)

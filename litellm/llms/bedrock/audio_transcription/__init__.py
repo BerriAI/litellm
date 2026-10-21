@@ -1,4 +1,5 @@
 import base64
+import math
 from collections.abc import Mapping
 from typing import Final
 
@@ -24,21 +25,42 @@ SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS: Final = ("language", "prompt", "temperatu
 TEXT_RESPONSE_FORMATS: Final = frozenset({"json", "text"})
 
 
+def _as_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number: Final = float(value)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _rejection(key: str, value: object) -> str | None:
+    if key not in SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS:
+        return f"bedrock transcription does not support {key}."
+    if key == "response_format" and value not in TEXT_RESPONSE_FORMATS:
+        return f"bedrock transcription returns only the transcript text, so response_format={value!r} is not supported."
+    if key == "temperature" and _as_float(value) is None:
+        return f"bedrock transcription needs a number for temperature, got {value!r}."
+    return None
+
+
 def map_openai_transcription_params(
     non_default_params: Mapping[str, object], drop_params: bool
 ) -> Mapping[str, object]:
-    response_format: Final = non_default_params.get("response_format", "json")
-    if response_format in TEXT_RESPONSE_FORMATS:
-        return dict(non_default_params)
-    if drop_params:
-        return {key: value for key, value in non_default_params.items() if key != "response_format"}
-    raise UnsupportedParamsError(
-        message=(
-            f"bedrock transcription returns only the transcript text, so response_format={response_format!r} is not "
-            "supported. To drop it from the call, set `litellm.drop_params = True`."
-        ),
-        llm_provider="bedrock",
-    )
+    rejections: Final = {
+        key: reason for key, value in non_default_params.items() if (reason := _rejection(key, value)) is not None
+    }
+    if rejections and not drop_params:
+        raise UnsupportedParamsError(
+            message=f"{' '.join(rejections.values())} To drop it from the call, set `litellm.drop_params = True`.",
+            llm_provider="bedrock",
+        )
+    return {
+        key: _as_float(value) if key == "temperature" else value
+        for key, value in non_default_params.items()
+        if key not in rejections
+    }
 
 
 class _RustTranscriptionResult(BaseModel):

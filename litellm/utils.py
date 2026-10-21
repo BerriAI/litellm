@@ -4045,12 +4045,8 @@ def get_optional_params_transcription(
             drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "bedrock":
-        from litellm.llms.bedrock.audio_transcription import (
-            SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS,
-            map_openai_transcription_params,
-        )
+        from litellm.llms.bedrock.audio_transcription import map_openai_transcription_params
 
-        _check_valid_arg(supported_params=SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS)
         optional_params = dict(
             map_openai_transcription_params(
                 non_default_params, drop_params=drop_params is True or litellm.drop_params is True
@@ -4070,7 +4066,7 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=list(default_params) if custom_llm_provider == "bedrock" else OPENAI_TRANSCRIPTION_PARAMS,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
