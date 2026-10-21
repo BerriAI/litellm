@@ -464,6 +464,39 @@ def _task_map(config: ProfileConfig) -> dict[str, ProfileTask]:
     }
 
 
+def _repair_profile_versions(root_dir: Path, runs_path: Path, guard_sha256: str) -> ProfileVersions:
+    harness_versions: Final = _profile_versions(root_dir, None, guard_sha256)
+    rows: Final = tuple(
+        row
+        for row in run_pilot.read_jsonl_locked(runs_path)
+        if row.get("record_type") != "env_correction_attempt_link"
+    )
+    model_versions: Final = tuple(
+        sorted(
+            {
+                (str(row["model_alias"]), str(row["returned_model_version"]))
+                for row in rows
+                if isinstance(row.get("model_alias"), str)
+                and isinstance(row.get("returned_model_version"), str)
+            }
+        )
+    )
+    deployments: Final = tuple(
+        sorted(
+            {
+                (str(row["model_alias"]), str(row["deployment_id"]))
+                for row in rows
+                if isinstance(row.get("model_alias"), str)
+            }
+        )
+    )
+    return replace(
+        harness_versions,
+        model_versions=model_versions,
+        model_deployments=deployments,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Repair a verified task environment for profiling")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -509,7 +542,7 @@ def main() -> None:
     env["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"] = "1"
     base_url: Final = os.environ.get("LITELLM_GATEWAY_BASE_URL", "https://gateway.litellm-sandbox.ai").rstrip("/")
     guard_sha256: Final = _guard_sha256(arguments.root, DEFAULT_OVERLAYS)
-    versions: Final = _profile_versions(arguments.root, config.runs_path, guard_sha256)
+    versions: Final = _repair_profile_versions(arguments.root, config.runs_path, guard_sha256)
     guard: Final = profile_guard(config)
     for task in selected_tasks:
         data: Final = _repair_task_data(config, task, agent_source, eval_source)

@@ -8,7 +8,13 @@ from typing import Final, cast
 import pytest
 
 from poc import run_pilot
-from poc.repair_task_env import _repair_task_data, main, repair_task
+from poc.repair_task_env import (
+    _append_attempt_link,
+    _repair_profile_versions,
+    _repair_task_data,
+    main,
+    repair_task,
+)
 from poc.run_profiling import (
     DEFAULT_OVERLAYS,
     AttemptPaths,
@@ -16,6 +22,7 @@ from poc.run_profiling import (
     ProfileTask,
     RuntimeOps,
     _guard_sha256,
+    _profile_versions,
     model_order_for_task,
 )
 from poc.profiles import ProfileVersions
@@ -229,6 +236,33 @@ def _repair(scenario: tuple[object, ...]) -> bool:
         {},
         "https://gateway.invalid",
     )
+
+
+def test_repair_profile_versions_skips_link_rows_but_preserves_attempt_cohorts(tmp_path: Path) -> None:
+    scenario: Final = _scenario(tmp_path)
+    config: Final = scenario[0]
+    task: Final = scenario[1]
+    poc_dir: Final = tmp_path / "poc"
+    poc_dir.mkdir()
+    (poc_dir / "pilot_models.json").write_text(json.dumps({"solvers": {}}))
+    attempt: Final = {
+        "record_type": "attempt",
+        "task_id": task.task_id,
+        "run_id": "attempt-1",
+        "model_alias": "haiku-4.5",
+        "returned_model_version": "anthropic/claude-haiku-4-5",
+        "deployment_id": "deployment-1",
+        "cost_usd": 0.1,
+    }
+    run_pilot.append_jsonl(config.runs_path, attempt)
+    _append_attempt_link(config, task, "haiku-4.5", 1, attempt, {})
+
+    with pytest.raises(KeyError, match="deployment_id"):
+        _profile_versions(config.root_dir, config.runs_path, "guard")
+
+    versions: Final = _repair_profile_versions(config.root_dir, config.runs_path, "guard")
+    assert versions.model_versions == (("haiku-4.5", "anthropic/claude-haiku-4-5"),)
+    assert versions.model_deployments == (("haiku-4.5", "deployment-1"),)
 
 
 def test_repair_appends_correction_and_preflight_without_changing_old_rows(tmp_path: Path) -> None:
