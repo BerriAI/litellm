@@ -3918,7 +3918,11 @@ def _utils_token_counter(
         "llm_router",
         Router(
             model_list=[
-                {"model_name": "count-log-gpt", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"}}
+                {
+                    "model_name": "count-log-gpt",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    "model_info": {"id": "count-log-utils-deployment"},
+                }
             ]
         ),
     )
@@ -3936,6 +3940,7 @@ def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_co
         {
             "litellm_call_id": "count-log-utils",
             "request_model": "count-log-gpt",
+            "model_id": "count-log-utils-deployment",
             "model_used": "gpt-4o-mini",
             "input_tokens": response.json()["total_tokens"],
             "count_source": "local_estimate",
@@ -3974,6 +3979,7 @@ def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
         {
             "litellm_call_id": "count-log-utils-error",
             "request_model": "count-log-gpt",
+            "model_id": "count-log-utils-deployment",
             "model_used": None,
             "input_tokens": None,
             "count_source": None,

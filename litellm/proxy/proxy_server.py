@@ -548,7 +548,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
-from litellm.proxy.common_utils.token_count_log import logged_token_count
+from litellm.proxy.common_utils.token_count_log import deployment_model_id, logged_token_count
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
@@ -15209,9 +15209,11 @@ async def count_request_tokens(
 ) -> TokenCountResponse:
     if request.prompt is None and request.messages is None and request.contents is None:
         raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
+    routed: Final = await _routed_count_deployment(request.model, responses_request)
     return await logged_token_count(
         _count_request_tokens(
             request=request,
+            routed=routed,
             call_endpoint=call_endpoint,
             messages_format=messages_format,
             output_format=output_format,
@@ -15221,11 +15223,29 @@ async def count_request_tokens(
         ),
         litellm_call_id=resolve_litellm_call_id(litellm_call_id),
         request_model=request.model,
+        model_id=deployment_model_id(routed),
     )
+
+
+async def _routed_count_deployment(
+    model: str, responses_request: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    if llm_router is None:
+        return None
+    try:
+        return await llm_router.async_get_available_deployment(
+            model=model, request_kwargs=dict(_responses_routing_kwargs(responses_request))
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
+        )
+        return None
 
 
 async def _count_request_tokens(
     request: TokenCountRequest,
+    routed: Mapping[str, object] | None,
     call_endpoint: bool,
     messages_format: TokenCountMessagesFormat,
     output_format: JsonValue,
@@ -15239,20 +15259,9 @@ async def _count_request_tokens(
     tools: Final = request.tools
     system: Final = request.system
 
-    deployment: dict[str, Any] | None = None
+    deployment: dict[str, Any] | None = None if routed is None else dict(routed)
     litellm_model_name = None
     model_info: ModelMapInfo | None = None
-    if llm_router is not None:
-        # get 1 deployment corresponding to the model
-        try:
-            deployment = await llm_router.async_get_available_deployment(
-                model=request.model,
-                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
-            )
-        except Exception:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
-            )
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})

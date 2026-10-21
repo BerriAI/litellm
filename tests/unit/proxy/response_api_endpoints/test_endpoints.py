@@ -4466,7 +4466,15 @@ class TestResponsesInputTokens:
         from litellm.proxy.proxy_server import count_request_tokens
 
         gpt: Final = {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"}
-        router: Final = litellm.Router(model_list=[{"model_name": "count-log-gpt", "litellm_params": gpt}])
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "count-log-gpt",
+                    "litellm_params": gpt,
+                    "model_info": {"id": "count-log-responses-deployment"},
+                }
+            ]
+        )
         monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
         monkeypatch.setattr(
             openai_count_tokens_http,
@@ -4493,6 +4501,7 @@ class TestResponsesInputTokens:
             {
                 "litellm_call_id": "count-log-responses",
                 "request_model": "count-log-gpt",
+                "model_id": "count-log-responses-deployment",
                 "model_used": "gpt-4o-mini",
                 "input_tokens": 7,
                 "count_source": "provider",

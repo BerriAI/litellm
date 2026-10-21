@@ -429,6 +429,7 @@ def fresh_agent_read_through(monkeypatch):
 TOKEN_COUNT_LOG_FIELDS: Final = (
     "litellm_call_id",
     "request_model",
+    "model_id",
     "model_used",
     "input_tokens",
     "count_source",

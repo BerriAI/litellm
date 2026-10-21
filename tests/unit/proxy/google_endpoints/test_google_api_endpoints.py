@@ -255,7 +255,17 @@ def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_co
 
     claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
     monkeypatch.setattr(
-        proxy_server, "llm_router", Router(model_list=[{"model_name": "count-log-claude", "litellm_params": claude}])
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-log-claude",
+                    "litellm_params": claude,
+                    "model_info": {"id": "count-log-gemini-deployment"},
+                }
+            ]
+        ),
     )
     monkeypatch.setattr(
         anthropic_count_tokens_handler,
@@ -278,6 +288,7 @@ def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_co
         {
             "litellm_call_id": "count-log-gemini",
             "request_model": "count-log-claude",
+            "model_id": "count-log-gemini-deployment",
             "model_used": "claude-zeta-9",
             "input_tokens": 77,
             "count_source": "provider",

@@ -7273,6 +7273,7 @@ async def _bedrock_native_count(
                         "aws_access_key_id": "AKIATESTACCESSKEY",
                         "aws_secret_access_key": "test-secret",
                     },
+                    "model_info": {"id": "count-log-bedrock-deployment"},
                 }
             ]
         ),
@@ -7315,6 +7316,7 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
         {
             "litellm_call_id": "bedrock-native-count",
             "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
             "model_used": "anthropic.claude-haiku-4-5-20251001-v1:0",
             "input_tokens": 12,
             "count_source": "provider",
@@ -7339,6 +7341,7 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
         {
             "litellm_call_id": "bedrock-native-count",
             "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
             "model_used": None,
             "input_tokens": None,
             "count_source": None,
