@@ -5,13 +5,9 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
-from collections.abc import Sequence
 from typing import Final, TypedDict
 
 import httpx
-import typing_extensions
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -42,29 +38,6 @@ class YouComSearchRequest(_YouComSearchRequestRequired, total=False):
     include_domains: list[str]
     exclude_domains: list[str]
     safesearch: str
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _YouComItem(typing_extensions.TypedDict):
-    title: ReadOnly[NotRequired[str]]
-    url: ReadOnly[NotRequired[str]]
-    description: ReadOnly[NotRequired[str]]
-    snippets: ReadOnly[NotRequired[Sequence[str] | None]]
-    page_age: ReadOnly[NotRequired[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _YouComResults(typing_extensions.TypedDict):
-    web: ReadOnly[NotRequired[Sequence[_YouComItem] | None]]
-    news: ReadOnly[NotRequired[Sequence[_YouComItem] | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _YouComResponse(typing_extensions.TypedDict):
-    results: ReadOnly[NotRequired[_YouComResults | None]]
-
-
-_YOUCOM_RESPONSE: Final = TypeAdapter(_YouComResponse)
 
 
 class YouComSearchConfig(BaseSearchConfig):
@@ -196,7 +169,7 @@ class YouComSearchConfig(BaseSearchConfig):
         - snippets[0] → SearchResult.snippet (falls back to `description`)
         - page_age    → SearchResult.date
         """
-        response_json: Final = _YOUCOM_RESPONSE.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
         raw_results: Final = response_json.get("results") or {}
 
         web_results: Final = raw_results.get("web") or []

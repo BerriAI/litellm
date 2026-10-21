@@ -1,9 +1,6 @@
-from collections.abc import Sequence
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
@@ -11,19 +8,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import add_path_to_api_base
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _VLLMModel(TypedDict):
-    id: ReadOnly[str]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _VLLMModelList(TypedDict):
-    data: ReadOnly[Sequence[_VLLMModel]]
-
-
-_MODEL_LIST: Final = TypeAdapter(_VLLMModelList)
 
 
 class VLLMError(BaseLLMException):
@@ -92,7 +76,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
         response.raise_for_status()
 
-        models: Final = _MODEL_LIST.validate_python(response.json())["data"]
+        models: Final = response.json()["data"]
 
         return [model["id"] for model in models]
 

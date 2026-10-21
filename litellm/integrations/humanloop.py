@@ -7,8 +7,7 @@ https://humanloop.com/
 from typing import Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache
@@ -26,15 +25,6 @@ class PromptManagementClient(TypedDict):
     prompt_template: list[AllMessageValues]
     model: str | None
     optional_params: dict[str, object] | None
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _HumanloopPromptResponse(TypedDict):
-    template: ReadOnly[object]
-    model: ReadOnly[str | None]
-
-
-_HUMANLOOP_PROMPT_RESPONSE: Final = TypeAdapter(_HumanloopPromptResponse)
 
 
 class HumanLoopPromptManager(DualCache):
@@ -88,7 +78,7 @@ class HumanLoopPromptManager(DualCache):
         except httpx.HTTPStatusError as e:
             raise Exception(f"Error getting prompt from Humanloop: {e.response.text}")
 
-        json_response: Final = _HUMANLOOP_PROMPT_RESPONSE.validate_python(response.json())
+        json_response: Final = response.json()
         template_message: Final = json_response["template"]
         if isinstance(template_message, dict):
             template_messages = [template_message]

@@ -12,7 +12,6 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
-_PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]], config={"strict": True})
 
 
 class SimpleProviderConfig:
@@ -54,7 +53,7 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = _PROVIDERS_FILE_ADAPTER.validate_python(json.load(f))
+                data: Final = json.load(f)
 
             for slug, config in data.items():
                 cls._providers[slug] = SimpleProviderConfig(slug, config)

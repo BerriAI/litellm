@@ -5,8 +5,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from httpx import Headers, Response
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -17,6 +16,7 @@ from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
+    BedrockCreateBatchResponse,
     BedrockInputDataConfig,
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
@@ -51,35 +51,6 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 )
 
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _BedrockCreateBatchPayload(TypedDict):
-    jobArn: ReadOnly[NotRequired[str]]
-    status: ReadOnly[NotRequired[object]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _BedrockGetBatchPayload(TypedDict):
-    jobArn: ReadOnly[NotRequired[str]]
-    status: ReadOnly[NotRequired[object]]
-    submitTime: ReadOnly[NotRequired[object]]
-    lastModifiedTime: ReadOnly[NotRequired[object]]
-    endTime: ReadOnly[NotRequired[object]]
-    jobExpirationTime: ReadOnly[NotRequired[object]]
-    inputDataConfig: ReadOnly[NotRequired[object]]
-    outputDataConfig: ReadOnly[NotRequired[object]]
-    message: ReadOnly[NotRequired[str | None]]
-    jobName: ReadOnly[NotRequired[object]]
-    clientRequestToken: ReadOnly[NotRequired[object]]
-    modelId: ReadOnly[NotRequired[object]]
-    roleArn: ReadOnly[NotRequired[object]]
-    timeoutDurationInHours: ReadOnly[NotRequired[object]]
-    vpcConfig: ReadOnly[NotRequired[object]]
-
-
-_CREATE_BATCH_PAYLOAD: Final = TypeAdapter(_BedrockCreateBatchPayload)
-_GET_BATCH_PAYLOAD: Final = TypeAdapter(_BedrockGetBatchPayload)
 
 
 def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
@@ -339,7 +310,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Transform Bedrock batch creation response to LiteLLM format.
         """
         try:
-            response_data: Final = _CREATE_BATCH_PAYLOAD.validate_python(raw_response.json())
+            response_data: Final[BedrockCreateBatchResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
@@ -348,7 +319,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
 
         # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Final[Mapping[str, str]] = {
+        status_mapping: Final[dict[str, str]] = {
             "Submitted": "validating",
             "Validating": "validating",
             "Scheduled": "in_progress",
@@ -614,8 +585,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """
         Transform Bedrock batch retrieval response to LiteLLM format.
         """
+        from litellm.types.llms.bedrock import BedrockGetBatchResponse
+
         try:
-            response_data: Final = _GET_BATCH_PAYLOAD.validate_python(raw_response.json())
+            response_data: Final[BedrockGetBatchResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
@@ -623,7 +596,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
 
         # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Final[Mapping[str, str]] = {
+        status_mapping: Final[dict[str, str]] = {
             "Submitted": "validating",
             "Validating": "validating",
             "Scheduled": "in_progress",

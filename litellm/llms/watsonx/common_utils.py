@@ -1,8 +1,6 @@
 from typing import Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -25,15 +23,6 @@ class WatsonXAIError(BaseLLMException):
 
 
 iam_token_cache: Final = InMemoryCache()
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _IAMTokenResponse(TypedDict):
-    access_token: ReadOnly[str]
-    expires_in: ReadOnly[int | float]
-
-
-_IAM_TOKEN_RESPONSE: Final = TypeAdapter(_IAMTokenResponse)
 
 
 def get_watsonx_iam_url():
@@ -69,7 +58,7 @@ def generate_iam_token(api_key=None, **params) -> str:
         )
         response: Final = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
         response.raise_for_status()
-        json_data: Final = _IAM_TOKEN_RESPONSE.validate_python(response.json())
+        json_data: Final = response.json()
 
         result = json_data["access_token"]
         iam_token_cache.set_cache(

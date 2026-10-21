@@ -15,7 +15,6 @@ from typing import Final, Literal
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -39,8 +38,6 @@ from litellm.types.guardrails import (
 )
 
 GUARDRAIL_NAME: Final = "lakera_prompt_injection"
-
-_LAKERA_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 INPUT_POSITIONING_MAP: Final = {
     Role.SYSTEM.value: 0,
@@ -285,7 +282,7 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             }
             """
-            self._check_response_flagged(response=_LAKERA_RESPONSE.validate_python(response.json()))
+            self._check_response_flagged(response=response.json())
 
     @log_guardrail_information
     async def async_pre_call_hook(

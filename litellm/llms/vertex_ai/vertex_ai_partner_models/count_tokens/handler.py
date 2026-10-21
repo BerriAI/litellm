@@ -8,9 +8,6 @@ their respective publisher-specific count-tokens endpoints.
 
 from typing import Any, Final
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
-
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
@@ -21,14 +18,6 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
     ("llama", "meta"),
     ("meta/", "meta"),
 )
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _CountTokensResponse(TypedDict):
-    input_tokens: ReadOnly[NotRequired[int]]
-
-
-_COUNT_TOKENS_RESPONSE: Final = TypeAdapter(_CountTokensResponse)
 
 
 def count_tokens_publisher(model: str) -> str | None:
@@ -190,7 +179,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
-        result: Final = _COUNT_TOKENS_RESPONSE.validate_python(response.json())
+        result: Final = response.json()
 
         # Return token count
         # Vertex AI Anthropic returns: {"input_tokens": 123}

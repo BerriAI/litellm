@@ -10,7 +10,6 @@ Docs: https://openrouter.ai/docs
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -26,10 +25,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_OPENROUTER_EMBEDDING_RESPONSE: Final = TypeAdapter(
-    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
-)
 
 
 class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
@@ -103,15 +98,17 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding request to OpenRouter format (OpenAI-compatible).
         """
         # Ensure input is a list
-        request_input: Final = [input] if isinstance(input, str) else input
+        if isinstance(input, str):
+            input = [input]
 
         # OpenRouter expects the full model name (e.g., google/gemini-embedding-001)
         # Strip 'openrouter/' prefix if present
-        request_model: Final = model.replace("openrouter/", "", 1) if model.startswith("openrouter/") else model
+        if model.startswith("openrouter/"):
+            model = model.replace("openrouter/", "", 1)
 
         return {
-            "model": request_model,
-            "input": request_input,
+            "model": model,
+            "input": input,
             **optional_params,
         }
 
@@ -132,7 +129,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # OpenRouter returns standard OpenAI-compatible embedding response
-        response_json: Final = _OPENROUTER_EMBEDDING_RESPONSE.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,

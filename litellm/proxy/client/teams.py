@@ -4,11 +4,8 @@ import builtins
 from typing import Any, Final
 
 import requests
-from pydantic import TypeAdapter
 
 from .exceptions import UnauthorizedError
-
-_TEAM_LIST_V2_RESPONSE: Final = TypeAdapter(dict[str, object], config={"strict": True})
 
 
 class TeamsManagementClient:
@@ -128,7 +125,7 @@ class TeamsManagementClient:
             raise UnauthorizedError("Authentication failed. Check your API key.")
 
         response.raise_for_status()
-        return _TEAM_LIST_V2_RESPONSE.validate_python(response.json())
+        return response.json()
 
     def get_available(self) -> builtins.list[dict[str, Any]]:
         """

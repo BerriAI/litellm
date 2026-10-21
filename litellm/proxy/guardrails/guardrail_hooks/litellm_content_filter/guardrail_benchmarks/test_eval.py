@@ -25,11 +25,9 @@ from typing import Final
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter
 
 EVAL_DIR: Final = os.path.join(os.path.dirname(__file__), "evals")
 RESULTS_DIR: Final = os.path.join(os.path.dirname(__file__), "results")
-_EVAL_CASE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -44,7 +42,7 @@ def _load_jsonl(filename: str) -> list[dict]:
             line = line.strip()
             if not line:
                 continue
-            obj = _EVAL_CASE.validate_python(json.loads(line))
+            obj = json.loads(line)
             cases.append(
                 {
                     "sentence": obj["sentence"],
