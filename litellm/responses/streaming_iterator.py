@@ -41,10 +41,12 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -289,6 +291,7 @@ class BaseResponsesAPIStreamingIterator:
         self._yielded_first_chunk = False
         self._generated_content = ""
         self._generated_tool_arguments = ""
+        self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
@@ -450,6 +453,10 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = _get_openai_response_types()
+                if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED:
+                    _created: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if isinstance(_created, ResponsesAPIResponse):
+                        self._created_response = _created
                 if openai_responses_api_chunk and _chunk_type in (
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
@@ -481,7 +488,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    _stamp_responses_usage_cost(_billed_response, self.logging_obj)
+                    stamp_responses_usage_cost(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -873,6 +880,34 @@ class BaseResponsesAPIStreamingIterator:
             )
         except Exception:
             pass
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        """
+        The response.incomplete event to bill when the client went away mid-stream,
+        the same shape the success handler assembles for a natural end of stream.
+        Its response is the response.created payload (it carries the served
+        service_tier) plus the text and tool arguments relayed so far, with counted
+        usage since the provider never sent any. None when nothing was relayed yet
+        or the stream already reached its terminal event and billed itself.
+        """
+        created: Final = self._created_response
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        if self.completed_response is not None or created is None or not generated:
+            return None
+        usage: Final = _estimate_usage_safely(
+            self.model or "", self.request_data.get("input"), self.request_data, generated
+        )
+        if usage is None:
+            return None
+        partial: Final = created.model_copy(
+            update={
+                "status": "incomplete",
+                "usage": usage,
+                "output": _partial_output_items(self._generated_content),
+            }
+        )
+        stamp_responses_usage_cost(partial, self.logging_obj)
+        return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
 
 async def call_post_streaming_hooks_for_testing(
@@ -1347,6 +1382,37 @@ def _add_text_like_part_events(
         )
 
 
+@runtime_checkable
+class _BillsPartialStreamOnDisconnect(Protocol):
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None: ...
+
+
+def partial_responses_incomplete_event_on_disconnect(stream: object) -> ResponseIncompleteEvent | None:
+    """Ask the stream behind a proxy or router wrapper for the partial response to bill, if it can build one."""
+    if not isinstance(stream, _BillsPartialStreamOnDisconnect):
+        return None
+    try:
+        partial: Final = stream.partial_response_on_disconnect()
+    except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
+        verbose_logger.debug("Failed to build partial Responses API response for disconnect billing: %s", e)
+        return None
+    return partial if isinstance(partial, ResponseIncompleteEvent) else None
+
+
+def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
+    if not generated_text:
+        return []
+    return [
+        GenericResponseOutputItem(
+            type="message",
+            id=f"msg_{uuid.uuid4()}",
+            status="incomplete",
+            role="assistant",
+            content=[OutputText(type="output_text", text=generated_text, annotations=[])],
+        )
+    ]
+
+
 def _billed_terminal_response(
     response_obj: object, estimate: Callable[[], ResponseAPIUsage | None] | None
 ) -> ResponsesAPIResponse | None:
@@ -1453,7 +1519,7 @@ def _estimate_usage_safely(
         return None
 
 
-def _stamp_responses_usage_cost(
+def stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
@@ -1479,7 +1545,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = _get_openai_response_types()
-    _stamp_responses_usage_cost(transformed, logging_obj)
+    stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
@@ -1695,6 +1761,8 @@ RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.incomplete",
     "error",
 ]
+
+_HISTORY_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
 
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
@@ -2479,7 +2547,7 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_response_id(completed_event: _MutableJsonObject) -> str | None:
         """
-        Pull the raw (decoded) response ID out of a ``response.completed`` event.
+        Pull the raw (decoded) response ID out of a terminal (``response.completed`` or ``response.incomplete``) event.
         Returns *None* if the event doesn't contain a usable ID.
         """
         resp_obj: Final = completed_event.get("response", {})
@@ -2495,8 +2563,8 @@ class ManagedResponsesWebSocketHandler:
         completed_event: _MutableJsonObject,
     ) -> list[dict[str, object]]:
         """
-        Convert the output items in a ``response.completed`` event into
-        Responses API message dicts suitable for the next turn's ``input``.
+        Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
+        API message dicts suitable for the next turn's ``input``.
         """
         resp_obj: Final = completed_event.get("response", {})
         if not isinstance(resp_obj, dict):
@@ -2737,11 +2805,11 @@ class ManagedResponsesWebSocketHandler:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
-        Captures the ``response.completed`` event type from the chunk object
-        directly (before serialization) to avoid a redundant JSON round-trip on
-        every chunk.  Returns the completed event dict, or ``None``.
+        Captures the first terminal (``response.completed`` or ``response.incomplete``) event from the chunk object
+        directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
+        event dict, or ``None``.
         """
-        completed_event: _MutableJsonObject | None = None
+        terminal_event: _MutableJsonObject | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:
             if chunk is None:
@@ -2751,31 +2819,31 @@ class ManagedResponsesWebSocketHandler:
             serialized = self._serialize_chunk(chunk)
             if serialized is None:
                 continue
-            if chunk_type == "response.completed" and completed_event is None:
+            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
                 try:
-                    completed_event = _load_json_object(serialized)
+                    terminal_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:
                 await self.websocket.send_text(serialized)
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                return completed_event  # Client disconnected
-        return completed_event
+                return terminal_event  # Client disconnected
+        return terminal_event
 
     def _save_turn_history(
         self,
-        completed_event: _MutableJsonObject | None,
+        terminal_event: _MutableJsonObject | None,
         prior_history: list[dict[str, object]],
         current_messages: list[dict[str, object]],
     ) -> None:
-        """Store this turn in in-memory history for future previous_response_id lookups."""
-        if completed_event is None:
+        """Store this terminal (``response.completed`` or ``response.incomplete``) event for future history lookups."""
+        if terminal_event is None:
             return
-        new_response_id: Final = self._extract_response_id(completed_event)
+        new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(completed_event)
+        output_msgs: Final = self._extract_output_messages(terminal_event)
         all_messages: Final = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(
@@ -2801,7 +2869,8 @@ class ManagedResponsesWebSocketHandler:
         2. Prepend those messages to the current ``input`` so the model has full
            conversation context.
         3. After the stream completes, extract the new response ID and output
-           messages from ``response.completed`` and store them in
+           messages from the terminal (``response.completed`` or
+           ``response.incomplete``) event and store them in
            ``self._session_history`` for the next turn.
 
         This in-memory approach avoids the async DB-write race condition that
@@ -2855,13 +2924,13 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.update(self.extra_kwargs)
 
         try:
-            completed_event: Final = await self._stream_and_forward(model, call_kwargs)
+            terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))
             return
 
-        self._save_turn_history(completed_event, prior_history, current_messages)
+        self._save_turn_history(terminal_event, prior_history, current_messages)
 
     # ------------------------------------------------------------------
     # Main entry point

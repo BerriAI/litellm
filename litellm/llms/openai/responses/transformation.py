@@ -22,7 +22,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_5_transformation import (
+    is_gpt_reasoning_series_name,
+    unsupported_reasoning_effort_message,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
@@ -137,6 +140,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return supports_none_reasoning_effort(model=model, custom_llm_provider=None)
 
     @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        """Whether the model's cost-map row turns this effort level off.
+
+        The same row the chat gate reads, so a level the row refuses is refused on both wires
+        and a new model needs its row, not code. This surface stays opt-out for every level,
+        xhigh included, since it never refused a level the row omits; max is the exception, a
+        level the row cannot gate because the same model takes it here and refuses it on chat.
+        Azure overrides this so a bare deployment name reads the azure/ entry.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
+
+    @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", the one condition
         under which a non-default temperature is accepted.
@@ -242,7 +259,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
-            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            if (
+                isinstance(reasoning, dict)
+                and isinstance(requested_effort, str)
+                and self._effort_level_is_disabled(lookup_name, requested_effort)
+            ):
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.UnsupportedParamsError(
+                        message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
+                        status_code=400,
+                    )
+                remaining: Final = reasoning.copy()
+                remaining.pop("effort", None)
+                if remaining:
+                    params["reasoning"] = remaining
+                else:
+                    params.pop("reasoning", None)
+            forwarded_reasoning: Final = params.get("reasoning")
+            effort: Final = forwarded_reasoning.get("effort") if isinstance(forwarded_reasoning, dict) else None
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
             effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 

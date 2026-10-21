@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -21,6 +21,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_utils import (
+    type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
+)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -59,6 +62,10 @@ from ...anthropic.chat.transformation import (
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
+_RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
+    Final[TypeAdapter[dict[str, object] | None]]
+) = TypeAdapter(dict[str, object] | None)
+
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
@@ -66,6 +73,15 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     return message_dict.get("role") == "assistant" and not any(
         message_dict.get(key) for key in ("content", "tool_calls", "function_call")
     )
+
+
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
+        case _:
+            return message
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -190,6 +206,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @classmethod
     def get_config(cls, *, model: str | None = None):
         return super().get_config()
+
+    def get_json_schema_from_pydantic_object(
+        self,
+        response_format: (  # mutable-ok: matches BaseConfig override signature
+            type[BaseModel] | dict[str, object] | None
+        ),
+    ) -> dict[str, object] | None:  # mutable-ok: BaseConfig contract returns a dict
+        return _RESPONSE_FORMAT_ADAPTER.validate_python(type_to_response_format_param(response_format=response_format))
 
     def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
@@ -447,6 +471,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -462,7 +487,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             _sanitize_empty_content(cast(dict[str, Any], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(

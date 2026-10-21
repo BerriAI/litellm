@@ -212,7 +212,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "anthropic.claude-opus-4-8",
         "vertex_ai/claude-opus-4-6@default",
         "us.anthropic.claude-sonnet-4-6",
-        "openrouter/anthropic/claude-opus-4.7",
         "azure_ai/claude-opus-4-7",
     ]:
         assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive

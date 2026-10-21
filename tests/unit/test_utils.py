@@ -756,10 +756,41 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+                "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
+                "cost_per_second": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+                "supports_regex_lookaround": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
@@ -773,6 +804,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
@@ -781,6 +814,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
@@ -797,6 +831,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_32k_tokens": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -826,6 +862,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_request": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
                 "input_cost_per_image_token_batches": {"type": "number"},
@@ -861,6 +901,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -896,6 +937,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_32k_tokens": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
@@ -1037,6 +1080,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "web_search_billing_unit": {
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
+                },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -3134,9 +3187,7 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(
-            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
-        )
+        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4196,7 +4247,11 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+@pytest.mark.parametrize("rate", (0.0, 0.000123))
+@pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
+def test_reapply_runtime_registrations_replays_register_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
+) -> None:
     """
     register_model is the documented way to override pricing for a model. A
     price-data reload swaps litellm.model_cost for a freshly fetched catalog,
@@ -4227,10 +4282,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
                 "openai/gpt-4o": {
                     "litellm_provider": "openai",
                     "mode": "chat",
-                    "input_cost_per_token": 0.000123,
+                    "input_cost_per_token": rate,
                 }
             }
         )
+
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": True, "input_cost_per_token": None}})
+        litellm.register_model(
+            {"openai/gpt-4o": {"input_cost_per_token": str(updated_rate) if updated_rate is not None else None}}
+        )
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
         litellm.model_cost = {
             "openai/gpt-4o": {
@@ -4243,7 +4304,9 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         _invalidate_model_cost_lowercase_map()
         reapply_runtime_model_cost_registrations()
 
-        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        expected_rate: Final = rate if updated_rate is None else updated_rate
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
+        assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
         litellm.model_cost = saved_model_cost
@@ -4516,7 +4579,13 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+            id="resp_abc",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            model="gpt-5.6",
         ),
         CallTypes.aresponses,
         id="responses",
@@ -4544,7 +4613,9 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    failure_logs: Final = tuple(
+        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
+    )
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -6353,6 +6424,66 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, key: {"litellm_provider": "bedrock_converse", "mode": "chat"}}
+    )
+    monkeypatch.setattr(model_utils, "_runtime_registered_fields", {})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
+
+
+def test_registered_fields_reset_when_model_cost_is_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {})
+    litellm.register_model({"registered-fields-probe": {"input_cost_per_token": 1e-06, "litellm_provider": "openai"}})
+    assert "registered-fields-probe" in litellm.utils._registered_fields_for_current_map()
+
+    monkeypatch.setattr(litellm, "model_cost", {})
+
+    assert litellm.utils._registered_fields_for_current_map() == {}
+
+
+def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
+    """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
+    step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-4.1",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True}
+    assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
 
 @pytest.mark.asyncio
