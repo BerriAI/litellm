@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, chain, islice
+from itertools import accumulate, chain, groupby, islice
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -380,10 +380,17 @@ def _newest_stored_calls_the_input_answers(
     newest_turn_by_call_id: Final = MappingProxyType(
         dict(chain.from_iterable(map(_call_ids_at_turn, enumerate(session_history))))
     )
+    answered_turns: Final = tuple(
+        sorted((newest_turn_by_call_id[call_id], call_id) for call_id in answered if call_id in newest_turn_by_call_id)
+    )
+    answered_by_turn: Final = MappingProxyType(
+        {
+            turn: frozenset(call_id for _, call_id in calls)
+            for turn, calls in groupby(answered_turns, key=lambda turn_and_call: turn_and_call[0])
+        }
+    )
     return (
-        _stored_turn_with_calls(
-            message, frozenset(call_id for call_id in answered if newest_turn_by_call_id.get(call_id) == index)
-        )
+        _stored_turn_with_calls(message, answered_by_turn.get(index, frozenset()))
         for index, message in enumerate(session_history)
     )
 

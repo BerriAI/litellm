@@ -861,7 +861,7 @@ class ModelResponseIterator:
                 "type": "compaction_delta",
                 "content": compaction_delta,
             }
-            if self.compaction_blocks:
+            if self.compaction_blocks and isinstance(compaction_delta, str):
                 streamed_summary: Final = self.compaction_blocks[-1].get("content")
                 self.compaction_blocks = [
                     *self.compaction_blocks[:-1],

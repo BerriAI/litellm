@@ -695,6 +695,50 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
 
 
+def test_streamed_responses_over_anthropic_answer_after_a_failed_compaction(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_failed_compaction",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": None}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "compaction_delta", "content": None}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "The."}},
+                {"type": "content_block_stop", "index": 1},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input=list(_FIRST_INPUT),
+            context_management=list(_COMPACT_AT_50K),
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert [item.type for item in events[-1].response.output] == ["message"]
+    assert events[-1].response.output[0].content[0].text == "The."
+
+
 @pytest.mark.asyncio
 async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_follows_it() -> None:
     anthropic: Final = httpx.MockTransport(
