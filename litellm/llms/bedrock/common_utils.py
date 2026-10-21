@@ -31,6 +31,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -136,6 +137,25 @@ def merge_bedrock_aws_request_params(
             if key not in litellm_params:
                 request_params.pop(key, None)
     return request_params
+
+
+def configured_bedrock_control_plane_endpoint(endpoint: object) -> str | None:
+    """An ``aws_bedrock_control_plane_endpoint`` value without a trailing slash, or None when unset."""
+    if isinstance(endpoint, str) and endpoint.strip():
+        return endpoint.strip().rstrip("/")
+    return None
+
+
+def bedrock_control_plane_base_url(endpoint: object, aws_region_name: str) -> str:
+    """Base URL for Bedrock control-plane calls such as model invocation jobs.
+
+    A configured ``aws_bedrock_control_plane_endpoint`` (a VPC endpoint or a compatible gateway)
+    wins over the regional ``bedrock`` host. ``api_base`` is deliberately not used here, since on a
+    Bedrock deployment it points at the runtime host, which does not serve these APIs.
+    """
+    return configured_bedrock_control_plane_endpoint(endpoint) or (
+        f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+    )
 
 
 def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
@@ -1286,10 +1306,7 @@ def build_mantle_messages_url(
     """
     override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
-        base: Final = override.rstrip("/")
-        if base.endswith(MANTLE_MESSAGES_PATH):
-            return base
-        return f"{base}{MANTLE_MESSAGES_PATH}"
+        return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 

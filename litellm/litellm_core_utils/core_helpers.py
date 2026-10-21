@@ -329,11 +329,14 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    and user_api_key values are in 'metadata'. The proxy receive stamp rides along for the same
+    reason: a guardrail hook can plant `litellm_metadata` on a chat request after the proxy stamped
+    `metadata`, and the response timing headers anchor on that stamp.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in dict(metadata).items():
-        if potential_spend_tracking_metadata_substring in key:
+        carry_receive_stamp = key == "litellm_received_at" and key not in litellm_metadata
+        if potential_spend_tracking_metadata_substring in key or carry_receive_stamp:
             litellm_metadata[key] = value
     return litellm_metadata
 

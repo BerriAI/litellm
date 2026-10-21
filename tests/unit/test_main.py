@@ -23,6 +23,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import (
@@ -3867,6 +3868,9 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
             model="gpt-3.5-turbo-instruct",
             choices=[{"text": " world", "index": 0, "logprobs": None, "finish_reason": "stop"}],
         ),
+        TextCompletionResponse(
+            id="cmpl-1", object="text_completion", created=1, model="gpt-3.5-turbo-instruct", choices=[]
+        ),
     ]
 
     response = stream_chunk_builder_text_completion(chunks=chunks, messages=[{"role": "user", "content": "say hello"}])
@@ -3935,6 +3939,100 @@ async def test_acompletion_forwards_store_and_prompt_cache_key_to_openai():
         request_body = mock_client.call_args.kwargs["body"]
         assert request_body["store"] is False
         assert request_body["prompt_cache_key"] == "test-cache-key"
+
+
+_TOOL: Final[Mapping[str, object]] = {"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}
+
+# Client settings ride in OPENAI_CHAT_COMPLETION_PARAMS but configure the HTTP client, never the body.
+_OPENAI_CLIENT_SETTINGS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "api_version",
+        "base_url",
+        "default_headers",
+        "deployment_id",
+        "extra_headers",
+        "max_retries",
+        "organization",
+        "request_timeout",
+        "timeout",
+    }
+)
+
+# Accepted by completion() for other providers, never sent to OpenAI's /chat/completions body.
+_NOT_OPENAI_BODY_PARAMS: Final = frozenset({"include_server_side_tool_invocations", "thinking"})
+
+# param -> (model that accepts it, the call kwargs that carry it)
+_OPENAI_BODY_PARAM_CASES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
+    "audio": ("openai/gpt-4o", {"audio": {"voice": "alloy", "format": "wav"}}),
+    "frequency_penalty": ("openai/gpt-4o", {"frequency_penalty": 0.5}),
+    "function_call": ("openai/gpt-4o", {"function_call": "auto"}),
+    "functions": ("openai/gpt-4o", {"functions": [_TOOL["function"]]}),
+    "logit_bias": ("openai/gpt-4o", {"logit_bias": {"1": 1}}),
+    "logprobs": ("openai/gpt-4o", {"logprobs": True}),
+    "max_completion_tokens": ("openai/gpt-4o", {"max_completion_tokens": 7}),
+    "max_tokens": ("openai/gpt-4o", {"max_tokens": 7}),
+    "modalities": ("openai/gpt-4o", {"modalities": ["text"]}),
+    "n": ("openai/gpt-4o", {"n": 2}),
+    "parallel_tool_calls": ("openai/gpt-4o", {"tools": [_TOOL], "parallel_tool_calls": False}),
+    "prediction": ("openai/gpt-4o", {"prediction": {"type": "content", "content": "x"}}),
+    "presence_penalty": ("openai/gpt-4o", {"presence_penalty": 0.5}),
+    "prompt_cache_key": ("openai/gpt-4o", {"prompt_cache_key": "k"}),
+    "prompt_cache_retention": ("openai/gpt-5.5", {"prompt_cache_retention": "24h"}),
+    "reasoning_effort": ("openai/gpt-5.5", {"reasoning_effort": "low"}),
+    "response_format": ("openai/gpt-4o", {"response_format": {"type": "json_object"}}),
+    "safety_identifier": ("openai/gpt-4o", {"safety_identifier": "s"}),
+    "seed": ("openai/gpt-4o", {"seed": 3}),
+    "service_tier": ("openai/gpt-4o", {"service_tier": "priority"}),
+    "stop": ("openai/gpt-4o", {"stop": ["x"]}),
+    "store": ("openai/gpt-4o", {"store": False}),
+    "stream": ("openai/gpt-4o", {"stream": True}),
+    "stream_options": ("openai/gpt-4o", {"stream": True, "stream_options": {"include_usage": True}}),
+    "temperature": ("openai/gpt-4o", {"temperature": 0.5}),
+    "tool_choice": ("openai/gpt-4o", {"tools": [_TOOL], "tool_choice": "auto"}),
+    "tools": ("openai/gpt-4o", {"tools": [_TOOL]}),
+    "top_logprobs": ("openai/gpt-4o", {"logprobs": True, "top_logprobs": 2}),
+    "top_p": ("openai/gpt-4o", {"top_p": 0.5}),
+    "user": ("openai/gpt-4o", {"user": "u1"}),
+    "verbosity": ("openai/gpt-5.5", {"verbosity": "low"}),
+    "web_search_options": ("openai/gpt-4o", {"web_search_options": {"search_context_size": "low"}}),
+}
+
+
+def test_every_openai_body_param_has_a_forwarding_case():
+    body_params: Final = frozenset(litellm.OPENAI_CHAT_COMPLETION_PARAMS) - _OPENAI_CLIENT_SETTINGS - _NOT_OPENAI_BODY_PARAMS
+    assert frozenset(_OPENAI_BODY_PARAM_CASES) == body_params, (
+        "a param added to OPENAI_CHAT_COMPLETION_PARAMS needs a case in _OPENAI_BODY_PARAM_CASES proving "
+        "completion() sends it to OpenAI; prompt_cache_retention (LIT-9758) and store/prompt_cache_key "
+        "(#33184) were listed as supported but silently dropped"
+    )
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.mark.parametrize("param", sorted(_OPENAI_BODY_PARAM_CASES))
+def test_completion_sends_openai_body_param_to_openai(
+    param: str, respx_mock: respx.MockRouter, openai_api_response: Mapping[str, object]
+):
+    api_base: Final = "http://localhost:12346/v1"
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    model, call_kwargs = _OPENAI_BODY_PARAM_CASES[param]
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        **call_kwargs,
+    )
+
+    assert route.call_count == 1
+    sent: Final = _REQUEST_BODY.validate_json(route.calls.last.request.content)
+    assert sent.get(param) == call_kwargs[param], f"{param} did not reach the OpenAI request body: {sent}"
 
 
 def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
@@ -8758,7 +8856,8 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    assert "".join(chunk.choices[0].text or "" for chunk in chunks) == "reply"
+    assert "".join(chunk.choices[0].text or "" for chunk in chunks if chunk.choices) == "reply"
+    assert chunks[-1].choices == []
     final_usage: Final = chunks[-1].usage
     assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
 

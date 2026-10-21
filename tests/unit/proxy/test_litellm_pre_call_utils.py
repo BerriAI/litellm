@@ -936,6 +936,26 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
     }, proxy_request
 
 
+def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request() -> None:
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+
+    request: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    proxy_request: Final = {"body": dict(request)}
+    data: Final = {
+        **request,
+        **stream_usage_tracking_updates(request, {}, "acompletion", lambda: True),
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert data[STREAM_USAGE_INJECTED_FIELD] is True
+    assert proxy_request["body"]["stream_options"] == {"include_usage": True}
+    assert STREAM_USAGE_INJECTED_FIELD not in proxy_request["body"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
@@ -1209,6 +1229,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_metadata": copy.deepcopy(malicious_metadata),
         "weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
         "_router_weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
+        "_encrypted_content_affinity_pinned": True,
     }
 
     updated = await add_litellm_data_to_request(
@@ -1231,6 +1252,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
     assert "_router_weights" not in updated["proxy_server_request"]["body"]
+    assert "_encrypted_content_affinity_pinned" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -3330,9 +3352,7 @@ def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_se
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
-@pytest.mark.parametrize(
-    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
-)
+@pytest.mark.parametrize("session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"])
 @pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
@@ -8282,6 +8302,7 @@ _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
+    "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
@@ -8316,6 +8337,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+    assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
@@ -9347,7 +9369,9 @@ class TestResolveUserProviderCredentials:
             llm_router=self._router(),
         )
 
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
@@ -9804,7 +9828,9 @@ class TestResolveUserProviderCredentials:
             team_id=None,
             llm_router=router,
         )
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
 
@@ -10290,7 +10316,8 @@ async def test_secret_fields_user_provider_credentials_repr_hides_tokens(monkeyp
     assert isinstance(credentials, RedactedDict)
     assert "gho_secret" not in str(data)
     assert "gho_secret" not in repr(credentials)
-    assert credentials["copilot-cred"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio
@@ -10304,8 +10331,10 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10344,7 +10373,8 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"], f"header-mapped user-b must never reach the token loader: {called_user_ids}"
     credentials = updated["secret_fields"]["user_provider_credentials"]
-    assert credentials["copilot-cred"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
     assert updated["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
 
@@ -10357,8 +10387,10 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10394,7 +10426,8 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
 
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
-    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio

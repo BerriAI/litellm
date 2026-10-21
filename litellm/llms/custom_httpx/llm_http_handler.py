@@ -59,7 +59,7 @@ from litellm.litellm_core_utils.realtime_errors import (
     websocket_close_reason,
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -76,6 +76,7 @@ from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
+from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -104,7 +105,7 @@ from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS, run_aws_signing, sign_request_off_loop_if_aws
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS, run_aws_signing, run_off_loop_if_aws
 from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -128,6 +129,7 @@ from litellm.types.containers.main import (
     DeleteContainerResult,
 )
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -1700,6 +1702,115 @@ class BaseLLMHTTPHandler:
             model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
         )
 
+    def _prepare_extraction_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
+        if logging_obj is not None:
+            logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # Logging.pre_call is untyped
+                input=dict(body),
+                api_key=api_key,
+                model=model,
+                additional_args={"api_base": url, "complete_input_dict": dict(body), "headers": outbound_headers},
+            )
+        return url, outbound_headers
+
+    def extraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: HTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        sync_httpx_client: Final = client if client is not None else get_httpx_client()
+        try:
+            response: Final = sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
+        )
+
+    async def aextraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: AsyncHTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        async_httpx_client: Final = (
+            client
+            if client is not None
+            else get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
+        )
+        try:
+            response: Final = await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
+        )
+
     def _prepare_audio_transcription_request(
         self,
         model: str,
@@ -2085,14 +2196,18 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"No provider config found for provider: {custom_llm_provider}")
 
         # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        headers = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.validate_environment,
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
         )
 
         # Transform the request first
-        data: Final = provider_config.transform_search_request(
+        data: Final = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.transform_search_request,
             query=query,
             optional_params=optional_params,
             api_key=api_key,
@@ -2108,7 +2223,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
-        signed_headers, signed_json_body = await sign_request_off_loop_if_aws(
+        signed_headers, signed_json_body = await run_off_loop_if_aws(
             provider_config,
             provider_config.sign_request,
             headers=headers,
@@ -2236,7 +2351,7 @@ class BaseLLMHTTPHandler:
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
                     recovered_errors = (*recovered_errors, e)
-                headers, signed_json_body = await sign_request_off_loop_if_aws(
+                headers, signed_json_body = await run_off_loop_if_aws(
                     provider_config,
                     provider_config.sign_request,
                     headers=headers,
@@ -2405,7 +2520,9 @@ class BaseLLMHTTPHandler:
         logging_obj.model_call_details.update(request_body)
 
         # Make the request
-        request_url: Final = anthropic_messages_provider_config.get_complete_url(
+        request_url: Final = await run_off_loop_if_aws(
+            anthropic_messages_provider_config,
+            anthropic_messages_provider_config.get_complete_url,
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -2416,7 +2533,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
         )
 
-        headers, signed_json_body = await sign_request_off_loop_if_aws(
+        headers, signed_json_body = await run_off_loop_if_aws(
             anthropic_messages_provider_config,
             anthropic_messages_provider_config.sign_request,
             headers=headers,
@@ -2967,7 +3084,9 @@ class BaseLLMHTTPHandler:
         stream = response_api_optional_request_params.get("stream", False)
         caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
-        api_base: Final = responses_api_provider_config.get_complete_url(
+        api_base: Final = await run_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.get_complete_url,
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
@@ -3009,7 +3128,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
             )
 
-        headers, signed_body = await sign_request_off_loop_if_aws(
+        headers, signed_body = await run_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
             headers=validated_headers,
@@ -3856,7 +3975,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
         )
-        complete_api_base: Final = provider_config.get_complete_file_url(
+        complete_api_base: Final = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.get_complete_file_url,
             api_base=api_base,
             api_key=api_key,
             model="",
@@ -3867,7 +3988,9 @@ class BaseLLMHTTPHandler:
         if not complete_api_base:
             raise ValueError("api_base is required for create_file")
         return await self.async_create_file(
-            transformed_request=provider_config.transform_create_file_request(
+            transformed_request=await run_off_loop_if_aws(
+                provider_config,
+                provider_config.transform_create_file_request,
                 model="",
                 create_file_data=create_file_data,
                 litellm_params=litellm_params,
@@ -4334,7 +4457,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
         )
-        complete_api_base: Final = provider_config.get_complete_batch_url(
+        complete_api_base: Final = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.get_complete_batch_url,
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -4345,7 +4470,9 @@ class BaseLLMHTTPHandler:
         if not complete_api_base:
             raise ValueError("api_base is required for create_batch")
         return await self.async_create_batch(
-            transformed_request=provider_config.transform_create_batch_request(
+            transformed_request=await run_off_loop_if_aws(
+                provider_config,
+                provider_config.transform_create_batch_request,
                 model=model,
                 create_batch_data=create_batch_data,
                 litellm_params=litellm_params,
@@ -4818,7 +4945,9 @@ class BaseLLMHTTPHandler:
             **(extra_headers or {}),
         }
 
-        api_base: Final = responses_api_provider_config.get_complete_url(
+        api_base: Final = await run_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.get_complete_url,
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
@@ -4836,7 +4965,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        headers, signed_body = await sign_request_off_loop_if_aws(
+        headers, signed_body = await run_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
             headers=validated_headers,
@@ -4962,7 +5091,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
-        url, params = provider_config.transform_retrieve_file_request(
+        url, params = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.transform_retrieve_file_request,
             file_id=file_id,
             optional_params={},
             litellm_params=litellm_params,
@@ -5089,7 +5220,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
-        url, params = provider_config.transform_delete_file_request(
+        url, params = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.transform_delete_file_request,
             file_id=file_id,
             optional_params={},
             litellm_params=litellm_params,
@@ -5214,7 +5347,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
-        url, params = provider_config.transform_list_files_request(
+        url, params = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.transform_list_files_request,
             purpose=purpose,
             optional_params={},
             litellm_params=litellm_params,
@@ -5298,7 +5433,9 @@ class BaseLLMHTTPHandler:
             )
             yield page_files[: MAX_FILE_LIST_LIMIT - listed_count]
             listed_count += len(page_files)
-            next_request = self._next_listing_request(latest_page, provider_config, litellm_params, listed_count)
+            next_request = await run_off_loop_if_aws(
+                provider_config, self._next_listing_request, latest_page, provider_config, litellm_params, listed_count
+            )
             if next_request is None:
                 return
             url, params = next_request
@@ -5524,7 +5661,9 @@ class BaseLLMHTTPHandler:
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> "_PreparedFileContentRequest":
-        url, params = provider_config.transform_file_content_request(
+        url, params = await run_off_loop_if_aws(
+            provider_config,
+            provider_config.transform_file_content_request,
             file_content_request=file_content_request,
             optional_params={},
             litellm_params=litellm_params,
@@ -6434,6 +6573,7 @@ class BaseLLMHTTPHandler:
         provider_config: Union[
             BaseConfig,
             BaseDecisionsConfig,
+            BaseExtractionConfig,
             BaseRerankConfig,
             BaseResponsesAPIConfig,
             BaseImageEditConfig,
@@ -6797,7 +6937,7 @@ class BaseLLMHTTPHandler:
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint}"
+            url = join_api_base(api_base, f"v1/realtime/{endpoint}")
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -6866,7 +7006,7 @@ class BaseLLMHTTPHandler:
             url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            url = join_api_base(api_base, "v1/realtime/calls")
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }
@@ -10332,7 +10472,9 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        api_base: Final = vector_store_provider_config.get_complete_url(
+        api_base: Final = await run_off_loop_if_aws(
+            vector_store_provider_config,
+            vector_store_provider_config.get_complete_url,
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
@@ -10366,7 +10508,7 @@ class BaseLLMHTTPHandler:
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
-        headers, signed_json_body = await sign_request_off_loop_if_aws(
+        headers, signed_json_body = await run_off_loop_if_aws(
             vector_store_provider_config,
             vector_store_provider_config.sign_request,
             headers=headers,
