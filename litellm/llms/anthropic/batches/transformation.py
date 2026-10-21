@@ -1,9 +1,11 @@
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -11,12 +13,38 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
+from ..common_utils import merge_anthropic_beta_headers, without_caller_credential_headers
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+class AnthropicBatchRequestCounts(TypedDict, total=False):
+    """The ``request_counts`` object of an Anthropic Message Batch."""
+
+    processing: ReadOnly[int]
+    succeeded: ReadOnly[int]
+    errored: ReadOnly[int]
+    canceled: ReadOnly[int]
+    expired: ReadOnly[int]
+
+
+class AnthropicMessageBatch(TypedDict, total=False):
+    """The fields of an Anthropic Message Batch that map onto an OpenAI Batch."""
+
+    id: ReadOnly[str]
+    processing_status: ReadOnly[str]
+    created_at: ReadOnly[str | None]
+    ended_at: ReadOnly[str | None]
+    expires_at: ReadOnly[str | None]
+    cancel_initiated_at: ReadOnly[str | None]
+    archived_at: ReadOnly[str | None]
+    request_counts: ReadOnly[AnthropicBatchRequestCounts]
 
 
 class AnthropicBatchesConfig(BaseBatchesConfig):
@@ -43,24 +71,30 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: str | None = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
+        auth_header: Final = self.anthropic_model_info.get_auth_header(
+            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers: Final = {
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            "message-batches-2024-09-24",
+        )
+        # The deployment's own credential is applied below, so a caller-supplied one must not
+        # ride along: without this a minted federation Bearer travels beside the caller's x-api-key.
+        return {
+            **without_caller_credential_headers(headers),
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
+            **auth_header,
+            "anthropic-beta": merged_beta,
         }
-        _headers.update(auth_header)
-        # Add beta header for message batches
-        if "anthropic-beta" not in headers:
-            headers["anthropic-beta"] = "message-batches-2024-09-24"
-        headers.update(_headers)
-        return headers
 
     def get_complete_batch_url(
         self,
@@ -83,7 +117,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to Anthropic format.
 
@@ -133,7 +167,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform batch retrieval request for Anthropic.
 
@@ -152,7 +186,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final[AnthropicMessageBatch] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
 
@@ -161,18 +195,20 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         processing_status: Final = response_data.get("processing_status", "in_progress")
 
         # Map Anthropic processing_status to OpenAI status
-        status_mapping: dict[
-            str,
-            Literal[
-                "validating",
-                "failed",
-                "in_progress",
-                "finalizing",
-                "completed",
-                "expired",
-                "cancelling",
-                "cancelled",
-            ],
+        status_mapping: Final[
+            Mapping[
+                str,
+                Literal[
+                    "validating",
+                    "failed",
+                    "in_progress",
+                    "finalizing",
+                    "completed",
+                    "expired",
+                    "cancelling",
+                    "cancelled",
+                ],
+            ]
         ] = {
             "in_progress": "in_progress",
             "canceling": "cancelling",
@@ -261,7 +297,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -279,7 +315,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 if not line:
                     continue
                 try:
-                    response_json = json.loads(line)
+                    response_json: Mapping[str, Mapping[str, dict[str, object]]] = json.loads(line)
                     # Update model_response with the parsed JSON
                     completion_response = response_json["result"]["message"]
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(

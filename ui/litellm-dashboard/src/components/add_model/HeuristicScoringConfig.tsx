@@ -8,7 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { type ComplexityRouterConfigValue, heuristicScoringRole } from "./ComplexityRouterConfig";
-import { dimensionLabel, weightTotal } from "./heuristic_scoring_knobs";
+import {
+  dimensionLabel,
+  effectiveDimensionWeights,
+  rebalanceDimensionWeights,
+  type WeightEdit,
+} from "./heuristic_scoring_knobs";
+import CustomDimensionRows from "./CustomDimensionRows";
+import { customDimensionsError } from "./custom_dimensions";
 
 export type KnobGroup = "tier_boundaries" | "token_thresholds" | "dimension_weights";
 
@@ -54,7 +61,8 @@ const GROUPS: GroupSpec[] = [
   {
     group: "dimension_weights",
     title: "Dimension weights",
-    blurb: "How much each signal contributes to the score. Absolute multipliers, so the total need not be 1.00.",
+    blurb:
+      "Changing a weight rebalances the other built-in and custom weights to total 1.00. Save stores those values. Untouched routers keep their existing weights.",
     min: 0,
     max: 1,
     step: 0.01,
@@ -89,6 +97,19 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
   // The panel owns its own visibility: the scorer does not run at all when an LLM classifier
   // falls back to the default model, so there is nothing here to configure.
   const scorerRuns = heuristicScoringRole(value) !== "never";
+  const customEnabled = heuristicScoringRole(value) === "decides";
+  const customRows = customEnabled ? value.custom_dimensions : undefined;
+  const [weightError, setWeightError] = useState<string | null>(null);
+  const rowError = customDimensionsError(customRows);
+  const changeWeights = (edit: WeightEdit) => {
+    const result = rebalanceDimensionWeights(defaults?.dimension_weights, value.dimension_weights, customRows, edit);
+    if (!result.ok) {
+      setWeightError(result.error);
+      return;
+    }
+    setWeightError(null);
+    onChange({ ...value, dimension_weights: result.dimension_weights, custom_dimensions: result.custom_dimensions });
+  };
 
   // What an untouched override floor follows: the boundary in effect, override included, not the shipped one.
   const trackedFloor: number | undefined = { ...defaults?.tier_boundaries, ...value.tier_boundaries }.simple_medium;
@@ -102,6 +123,10 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
   const commit = (spec: GroupSpec, effective: Record<string, number>, key: string, raw: string) => {
     const parsed = Number(raw);
     if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    if (spec.group === "dimension_weights") {
+      changeWeights({ type: "set", target: { kind: "builtin", id: key }, weight: parsed });
+      return;
+    }
     const clamped = Math.min(spec.max ?? Infinity, Math.max(spec.min, parsed));
     onChange({
       ...value,
@@ -154,9 +179,19 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                 </div>
               )}
               {GROUPS.map((spec) => {
-                const shipped = defaults?.[spec.group] ?? {};
-                const effective: Record<string, number> = { ...shipped, ...value[spec.group] };
+                const shipped = defaults?.[spec.group] ?? value[spec.group] ?? {};
+                const effective: Record<string, number> =
+                  spec.group === "dimension_weights"
+                    ? effectiveDimensionWeights(shipped, value.dimension_weights)
+                    : { ...shipped, ...value[spec.group] };
+                const total =
+                  Object.values(effective).reduce((sum, weight) => sum + weight, 0) +
+                  (customRows ?? []).reduce((sum, row) => sum + row.weight, 0);
                 const problem = warn(spec.group, effective);
+                const overridden =
+                  value[spec.group] !== undefined || (spec.withSlider && value.custom_dimensions !== undefined);
+                const resettable = spec.withSlider || overridden;
+                const scoringError = spec.withSlider ? weightError || rowError : null;
                 return (
                   <section key={spec.group} className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -166,18 +201,26 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                             alone would state a total that is not the router's. */}
                         {spec.withSlider && defaults !== undefined && (
                           <span className="text-xs text-muted-foreground" data-testid="dimension-weight-total">
-                            total {weightTotal(effective).toFixed(2)}
+                            total {total.toFixed(2)}
                           </span>
                         )}
                       </div>
-                      {value[spec.group] !== undefined && (
+                      {resettable && (
                         <Button
                           type="button"
                           variant="link"
                           size="xs"
-                          onClick={() => onChange({ ...value, [spec.group]: undefined })}
+                          disabled={!overridden}
+                          onClick={() => {
+                            setWeightError(null);
+                            onChange({
+                              ...value,
+                              [spec.group]: undefined,
+                              ...(spec.withSlider && { custom_dimensions: undefined }),
+                            });
+                          }}
                         >
-                          Reset to defaults
+                          {spec.withSlider ? "Restore default weights" : "Reset to defaults"}
                         </Button>
                       )}
                     </div>
@@ -196,6 +239,7 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                               min={spec.min}
                               max={spec.max}
                               step={spec.step}
+                              disabled={defaults === undefined}
                               value={[effective[key]]}
                               onValueChange={(next) =>
                                 commit(spec, effective, key, String(Array.isArray(next) ? next[0] : next))
@@ -209,7 +253,8 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                             type="text"
                             inputMode="decimal"
                             className={spec.withSlider ? "w-24" : "w-28"}
-                            value={draft?.id === id ? draft.raw : String(effective[key])}
+                            disabled={spec.withSlider && defaults === undefined}
+                            value={draft?.id === id ? draft.raw : Number(effective[key].toPrecision(6)).toString()}
                             onChange={(event) => {
                               setDraft({ id, raw: event.target.value });
                               commit(spec, effective, key, event.target.value);
@@ -220,6 +265,28 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                       );
                     })}
 
+                    {spec.withSlider && customEnabled && (
+                      <CustomDimensionRows
+                        rows={customRows ?? []}
+                        disabled={defaults === undefined}
+                        onChange={(rows) => onChange({ ...value, custom_dimensions: rows })}
+                        onWeight={(id, weight) =>
+                          changeWeights({ type: "set", target: { kind: "custom", id }, weight })
+                        }
+                        onAdd={() =>
+                          changeWeights({
+                            type: "add",
+                            row: { id: crypto.randomUUID(), name: "", weight: 0.1, scoring_mode: "match_count" },
+                          })
+                        }
+                        onRemove={(id) => changeWeights({ type: "remove", id })}
+                      />
+                    )}
+                    {scoringError && (
+                      <p className="text-xs text-destructive" role="alert">
+                        {scoringError}
+                      </p>
+                    )}
                     {problem && (
                       <p className="text-xs font-medium text-destructive" role="alert">
                         {problem}

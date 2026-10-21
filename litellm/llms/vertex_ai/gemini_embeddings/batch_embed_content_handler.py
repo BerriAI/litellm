@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 
@@ -22,12 +22,17 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
-    _is_file_reference,
+    file_reference_name,
+    flatten_media_sources,
+    is_file_reference,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -35,12 +40,9 @@ class GoogleBatchEmbeddings(VertexLLM):
     def _flatten_and_detect_file_refs(
         input: GeminiEmbeddingInput,
     ) -> tuple[list[str], bool]:
-        """Flatten nested input lists and detect file references."""
-        input_list: Final = [input] if isinstance(input, str) else input
-        flat_elements: Final = [
-            e for item in input_list for e in (item if isinstance(item, list) else [item]) if isinstance(e, str)
-        ]
-        has_file_refs: Final = any(_is_file_reference(e) for e in flat_elements)
+        """Flatten nested input lists and file content blocks into their sources and detect file references."""
+        flat_elements: Final = list(flatten_media_sources(input))
+        has_file_refs: Final = any(is_file_reference(e) for e in flat_elements)
         return flat_elements, has_file_refs
 
     def _resolve_file_references(
@@ -64,8 +66,8 @@ class GoogleBatchEmbeddings(VertexLLM):
         resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
-            if isinstance(element, str) and _is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+            if isinstance(element, str) and is_file_reference(element):
+                url = f"https://generativelanguage.googleapis.com/v1beta/{file_reference_name(element)}"
                 headers = {"x-goog-api-key": api_key}
                 response = sync_handler.get(url=url, headers=headers)
 
@@ -101,8 +103,8 @@ class GoogleBatchEmbeddings(VertexLLM):
         resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
-            if isinstance(element, str) and _is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+            if isinstance(element, str) and is_file_reference(element):
+                url = f"https://generativelanguage.googleapis.com/v1beta/{file_reference_name(element)}"
                 headers = {"x-goog-api-key": api_key}
                 response = await async_handler.get(url=url, headers=headers)
 
@@ -125,7 +127,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         api_base: str | None = None,
         encoding=None,
@@ -136,6 +138,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         timeout=300,
         client=None,
         extra_headers: dict | None = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -204,22 +207,26 @@ class GoogleBatchEmbeddings(VertexLLM):
                 api_key=api_key,
                 optional_params=optional_params,
                 logging_obj=logging_obj,
+                drop_params=drop_params,
             )
 
         ### TRANSFORMATION (sync path) ###
-        request_data: Any
+        request_data: VertexAIBatchEmbeddingsRequestBody | dict[str, object]
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
             if api_key:
-                resolved_files = self._resolve_file_references(input=input, api_key=api_key, sync_handler=sync_handler)
+                resolved_files = self._resolve_file_references(
+                    input=flat_elements, api_key=api_key, sync_handler=sync_handler
+                )
             request_data = transform_openai_input_gemini_embed_content(
                 input=input,
                 model=model,
                 optional_params=optional_params,
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
         else:
-            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
@@ -235,6 +242,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params,
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
 
         ## LOGGING
@@ -290,7 +298,8 @@ class GoogleBatchEmbeddings(VertexLLM):
         use_embed_content: bool = False,
         api_key: str | None = None,
         optional_params: dict | None = None,
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         if client is None:
             _params: Final = {}
@@ -309,20 +318,21 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client
 
         ### TRANSFORMATION (async path) ###
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
             if api_key:
                 resolved_files = await self._async_resolve_file_references(
-                    input=input, api_key=api_key, async_handler=async_handler
+                    input=flat_elements, api_key=api_key, async_handler=async_handler
                 )
             data = transform_openai_input_gemini_embed_content(
                 input=input,
                 model=model,
                 optional_params=optional_params or {},
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
         else:
-            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
@@ -338,6 +348,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params or {},
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
 
         ## LOGGING

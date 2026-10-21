@@ -1,10 +1,10 @@
 # LiteLLM Terraform Provider
 
-This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, and API keys via the LiteLLM REST API.
+This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, API keys, users, organizations, budgets, tags, projects, guardrails, prompts, agents, search tools, access groups, fallbacks, MCP servers, credentials and vector stores via the LiteLLM REST API, along with read-only data sources for each of them.
 
 ## Source of truth
 
-This directory (`terraform/provider/` in [BerriAI/litellm](https://github.com/BerriAI/litellm)) is the source of truth for the provider. [BerriAI/terraform-provider-litellm](https://github.com/BerriAI/terraform-provider-litellm) is a thin release mirror that the public Terraform Registry ingests from; do not open PRs there. Changes land here, where CI builds the provider, runs its tests, and statically audits every endpoint the provider calls against the proxy's generated OpenAPI schema (`tools/endpointaudit/`), so the provider cannot drift from the LiteLLM API silently. Releases are published by mirroring this directory into the split repo and tagging it, which triggers the goreleaser workflow there (see `RELEASING.md`)
+This directory (`terraform/provider/` in [BerriAI/litellm](https://github.com/BerriAI/litellm)) is the source of truth for the provider. [BerriAI/terraform-provider-litellm](https://github.com/BerriAI/terraform-provider-litellm) is a thin release mirror that the public Terraform Registry ingests from; do not open PRs there. Changes land here, where CI builds the provider, runs its tests, and statically audits every endpoint the provider calls against the proxy's generated OpenAPI schema (`tools/endpointaudit/`), so the provider cannot drift from the LiteLLM API silently. The same audit runs in reverse as a coverage gate: every management endpoint in the schema must be covered by a resource or data source, or carry a documented entry in `tools/endpointaudit/coverage_allowlist.txt`, and stale allowlist entries fail CI. Releases are published by mirroring this directory into the split repo and tagging it, which triggers the goreleaser workflow there (see `RELEASING.md`)
 
 ## Versioning
 
@@ -79,6 +79,7 @@ Here's an example of creating an API key with various options:
 
 ```hcl
 resource "litellm_key" "example_key" {
+  key_type             = "llm_api"
   models               = ["gpt-4", "claude-3.5-sonnet"]
   max_budget           = 100.0
   user_id              = "user123"
@@ -103,9 +104,12 @@ resource "litellm_key" "example_key" {
   permissions          = {
     can_create_keys = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "claude-3.5-sonnet" = 30
   }
@@ -120,6 +124,7 @@ resource "litellm_key" "example_key" {
 
 The <code>litellm_key</code> resource supports the following options:
 
+- <code>key_type</code>: Choose the key's default route access
 - <code>models</code>: List of allowed models for this key
 - <code>max_budget</code>: Maximum budget for the key
 - <code>user_id</code> and <code>team_id</code>: Associate the key with a user and team
@@ -151,6 +156,7 @@ For full details on the <code>litellm_key</code> resource, see the [key resource
 - <code>litellm_mcp_server</code>: Manage MCP (Model Context Protocol) servers. [Documentation](docs/resources/mcp_server.md)
 - <code>litellm_credential</code>: Manage credentials for secure authentication. [Documentation](docs/resources/credential.md)
 - <code>litellm_vector_store</code>: Manage vector stores for embeddings and RAG. [Documentation](docs/resources/vector_store.md)
+- <code>litellm_jwt_key_mapping</code>: Map JWT claim values to virtual keys for per-client budgets and limits. [Documentation](docs/resources/jwt_key_mapping.md)
 
 ### Available Data Sources
 

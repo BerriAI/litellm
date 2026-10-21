@@ -32,12 +32,8 @@ export function FallbackGroupConfig({
   // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
 
-  const handlePrimaryChange = (value: string) => {
-    let newFallbacks = [...group.fallbackModels];
-    // Remove from fallbacks if it was there
-    if (newFallbacks.includes(value)) {
-      newFallbacks = newFallbacks.filter((m) => m !== value);
-    }
+  const handlePrimaryChange = (value: string | null) => {
+    const newFallbacks = group.fallbackModels.filter((model) => model !== value);
     onChange({
       ...group,
       primaryModel: value,
@@ -76,7 +72,7 @@ export function FallbackGroupConfig({
         <SearchSelect
           inputId={primaryModelInputId}
           options={availableModels.map((m) => ({ label: m, value: m }))}
-          value={group.primaryModel ?? ""}
+          value={group.primaryModel}
           onValueChange={handlePrimaryChange}
           placeholder="Select primary model"
           emptyText="No models found"
@@ -92,7 +88,7 @@ export function FallbackGroupConfig({
       </div>
 
       {/* Visual Connection */}
-      <div className="flex items-center justify-center -my-4 z-10">
+      <div className="flex items-center justify-center -my-4 z-raised">
         <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-900">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...

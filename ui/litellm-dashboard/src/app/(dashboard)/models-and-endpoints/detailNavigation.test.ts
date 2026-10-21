@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { withNuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { describe, expect, it, vi } from "vitest";
-import { useModelDetailRouting } from "./detailNavigation";
+import { useModelDetailRouting, useModelGroupFilterRouting } from "./detailNavigation";
 
 describe("useModelDetailRouting", () => {
   it("openModel sets ?model= with a history push", async () => {
@@ -52,5 +52,31 @@ describe("useModelDetailRouting", () => {
     });
     expect(result.current.modelId).toBe("xyz");
     expect(result.current.teamId).toBeNull();
+  });
+});
+
+describe("useModelGroupFilterRouting", () => {
+  it("reads the selected group from ?model_group=", () => {
+    const { result } = renderHook(() => useModelGroupFilterRouting(), {
+      wrapper: withNuqsTestingAdapter({ searchParams: "?model_group=gpt-4.1" }),
+    });
+    expect(result.current.modelGroup).toBe("gpt-4.1");
+  });
+
+  it("writes the selected group to ?model_group= and clears it on null", async () => {
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    const { result } = renderHook(() => useModelGroupFilterRouting(), {
+      wrapper: withNuqsTestingAdapter({ onUrlUpdate }),
+    });
+    await act(async () => {
+      result.current.setModelGroup("claude-sonnet-5");
+    });
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("model_group")).toBe("claude-sonnet-5");
+
+    await act(async () => {
+      result.current.setModelGroup(null);
+    });
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("model_group")).toBe(false));
   });
 });

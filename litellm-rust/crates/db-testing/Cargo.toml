@@ -1,0 +1,16 @@
+[package]
+name = "litellm-db-testing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sqlx = { workspace = true, features = ["migrate"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tempfile.workspace = true

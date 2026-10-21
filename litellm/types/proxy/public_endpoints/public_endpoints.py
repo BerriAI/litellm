@@ -1,10 +1,12 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class PublicModelHubInfo(BaseModel):
+class PublicModelHubInfo(LiteLLMBaseModel):
     docs_title: str
     custom_docs_description: str | None
     litellm_version: str
@@ -14,7 +16,7 @@ class PublicModelHubInfo(BaseModel):
     useful_links: dict[str, str | dict[str, Any]] | None
 
 
-class ProviderCredentialField(BaseModel):
+class ProviderCredentialField(LiteLLMBaseModel):
     key: str
     label: str
     placeholder: str | None = None
@@ -25,7 +27,7 @@ class ProviderCredentialField(BaseModel):
     default_value: str | None = None
 
 
-class ProviderCreateInfo(BaseModel):
+class ProviderCreateInfo(LiteLLMBaseModel):
     provider: str
     provider_display_name: str
     litellm_provider: str
@@ -33,7 +35,7 @@ class ProviderCreateInfo(BaseModel):
     default_model_placeholder: str | None = None
 
 
-class AgentCredentialField(BaseModel):
+class AgentCredentialField(LiteLLMBaseModel):
     key: str
     label: str
     placeholder: str | None = None
@@ -43,9 +45,11 @@ class AgentCredentialField(BaseModel):
     options: list[str] | None = None
     default_value: str | None = None
     include_in_litellm_params: bool | None = None
+    validation_pattern: str | None = None
+    validation_message: str | None = None
 
 
-class AgentCreateInfo(BaseModel):
+class AgentCreateInfo(LiteLLMBaseModel):
     agent_type: str
     agent_type_display_name: str
     description: str | None = None
@@ -55,23 +59,61 @@ class AgentCreateInfo(BaseModel):
     model_template: str | None = None
 
 
-class EndpointProvider(BaseModel):
+class EndpointProvider(LiteLLMBaseModel):
     slug: str
     display_name: str
 
 
-class SupportedEndpoint(BaseModel):
+class SupportedEndpoint(LiteLLMBaseModel):
     key: str
     label: str
     endpoint: str
     providers: list[EndpointProvider]
 
 
-class SupportedEndpointsResponse(BaseModel):
+class SupportedEndpointsResponse(LiteLLMBaseModel):
     endpoints: list[SupportedEndpoint]
 
 
-class ComplexityScorerDefaults(BaseModel):
+class AutoRouterPresetTiers(LiteLLMBaseModel):
+    """Exactly the four built-in tiers the dashboard's preset prefill can apply.
+
+    extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+    picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    SIMPLE: Sequence[str]
+    MEDIUM: Sequence[str]
+    COMPLEX: Sequence[str]
+    REASONING: Sequence[str]
+
+
+class AutoRouterPresetConfig(LiteLLMBaseModel):
+    """The complexity_router_config a preset prefills.
+
+    Only tiers is validated, because every dashboard consumer dereferences it; everything else
+    passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+    this proxy shipped still serves its new fields intact.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    tiers: AutoRouterPresetTiers
+
+
+class AutoRouterPresetRecord(LiteLLMBaseModel):
+    """One auto-router preset as served to the dashboard's template picker."""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    description: str
+    complexity_router_config: AutoRouterPresetConfig
+
+
+class ComplexityScorerDefaults(LiteLLMBaseModel):
     """The complexity router's shipped heuristic scorer defaults.
 
     The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so

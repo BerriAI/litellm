@@ -1,9 +1,30 @@
-from collections.abc import Iterator, Mapping
+import re
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    ARIZE_OTLP_PROTOCOLS,
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    OTEL_SPAN_SCOPES,
+    TRUSTED_CALLBACK_VARS_FIELD,
+    StandardCallbackDynamicParams,
+)
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
+_inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
+    "inherited_message_logging_disabled", default=False
+)
+
+
+@contextmanager
+def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
+    token: Final = _inherited_message_logging_disabled.set(_inherited_message_logging_disabled.get() or disabled)
+    try:
+        yield
+    finally:
+        _inherited_message_logging_disabled.reset(token)
 
 
 def iter_client_callback_metadata_dicts(
@@ -45,12 +66,58 @@ def validate_no_callback_env_reference(param: str, value: object, *, source: str
         _raise_env_reference_error(param, source=source)
 
 
+# Langfuse rejects events whose environment does not match this pattern
+# (lowercase alphanumerics, hyphens, underscores; no "langfuse" prefix).
+# Validating here fails fast at config/init time instead of silently
+# dropping every trace server-side.
+LANGFUSE_ENVIRONMENT_PATTERN: Final = r"^(?!langfuse)[a-z0-9-_]+$"
+
+
+def validate_langfuse_environment_value(value: str) -> None:
+    if not re.match(LANGFUSE_ENVIRONMENT_PATTERN, value):
+        raise ValueError(
+            f"Invalid langfuse_environment {value!r}: must be lowercase "
+            "alphanumerics/hyphens/underscores and must not start with "
+            f"'langfuse' (pattern {LANGFUSE_ENVIRONMENT_PATTERN})"
+        )
+
+
+def validate_langfuse_span_scope_value(value: str) -> None:
+    if value not in OTEL_SPAN_SCOPES:
+        raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
+
+
+def validate_arize_otlp_protocol_value(value: str) -> None:
+    if value not in ARIZE_OTLP_PROTOCOLS:
+        raise ValueError(f"Invalid arize_otlp_protocol {value!r}: must be one of {sorted(ARIZE_OTLP_PROTOCOLS)}")
+
+
+def validate_capture_message_content_value(value: str) -> None:
+    if value not in CAPTURE_MESSAGE_CONTENT_VALUES:
+        raise ValueError(
+            f"Invalid capture_message_content {value!r}: must be one of {sorted(CAPTURE_MESSAGE_CONTENT_VALUES)}"
+        )
+
+
+def validate_excluded_services_value(value: str) -> None:
+    from litellm.integrations.otel.model.config import invalid_excluded_service_names
+
+    names: Final = tuple(name.strip().lower() for name in value.split(","))
+    invalid_names: Final = invalid_excluded_service_names(value)
+    allowed: Final = "redis, postgres, postgresql, batch_write_to_db, redis_-prefixed service names, or none"
+    if invalid_names or ("none" in names and len(names) != 1):
+        raise ValueError(
+            f"Invalid excluded_services {value!r}: use {allowed}; 'none' must be used alone and names cannot be empty"
+        )
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
     "langfuse_host",
+    "langfuse_environment",
     "langfuse_prompt_version",
     "langsmith_api_key",
     "langsmith_project",
@@ -61,6 +128,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "arize_api_key",
     "arize_space_key",
     "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
     "posthog_api_key",
     "posthog_host",
     "braintrust_api_key",
@@ -74,6 +143,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "dd_agent_port",
     "newrelic_api_key",
     "newrelic_region",
+    "signoz_ingestion_endpoint",
+    "signoz_ingestion_key",
     "turn_off_message_logging",
 )
 
@@ -87,6 +158,8 @@ _request_blocked_callback_params: Final = frozenset(
         "dd_agent_port",
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
@@ -99,11 +172,13 @@ _trusted_overlay_callback_params: Final = frozenset(
     {
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 
@@ -120,7 +195,7 @@ def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple
 
 
 def initialize_standard_callback_dynamic_params(
-    kwargs: dict | None = None,
+    kwargs: dict[str, object] | None = None,
 ) -> StandardCallbackDynamicParams:
     """
     Initialize the standard callback dynamic params from the kwargs
@@ -156,4 +231,10 @@ def initialize_standard_callback_dynamic_params(
             if param in _trusted_overlay_callback_params:
                 standard_callback_dynamic_params[param] = trusted_value
 
+    if _inherited_message_logging_disabled.get():
+        private_params: Final[StandardCallbackDynamicParams] = {
+            **standard_callback_dynamic_params,
+            "turn_off_message_logging": True,
+        }
+        return private_params
     return standard_callback_dynamic_params

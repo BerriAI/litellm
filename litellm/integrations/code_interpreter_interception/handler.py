@@ -26,9 +26,11 @@ from litellm.types.integrations.code_interpreter_interception import (
 )
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    CODE_INTERPRETER_INTERCEPTION_PREFIX,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    as_converted_stream,
     is_interception_internal_key,
 )
 from litellm.types.llms.openai import (
@@ -290,8 +292,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         else:
             kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
         if kwargs.get("stream"):
-            kwargs["stream"] = False
-            kwargs[_CONVERTED_STREAM_KEY] = True
+            kwargs.update(as_converted_stream(kwargs, CODE_INTERPRETER_INTERCEPTION_PREFIX))
+            kwargs.pop("stream_options", None)
         self._write_interception_metadata(kwargs)
 
         function_tool: Final = self._get_function_tool(call_type=call_type)

@@ -66,6 +66,14 @@ describe("BlogDropdown", () => {
       expect(screen.getByRole("button", { name: /blog/i })).toBeInTheDocument();
     });
 
+    it("should keep the shared hover highlight rather than pinning the background transparent", () => {
+      renderWithProviders(<BlogDropdown />);
+
+      const trigger = screen.getByRole("button", { name: /blog/i });
+      expect(trigger).toHaveClass("hover:bg-accent");
+      expect(trigger.className).not.toMatch(/\bbg-\S*!/);
+    });
+
     it("should not render menu content before the trigger is hovered", () => {
       mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 1) } };
       renderWithProviders(<BlogDropdown />);

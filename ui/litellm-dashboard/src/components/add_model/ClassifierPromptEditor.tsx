@@ -104,6 +104,12 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
               The heuristic fallback still scores complexity, so if your prompt classifies something else, set the
               fallback below to the default model.
             </p>
+            <p className="mt-2">
+              This is the legacy whole-prompt mode: the tier definitions and labels are frozen into this text, so
+              renaming a tier or changing the rubric will not update it. Reset to default to switch this router to the
+              derived prompt, where you edit only the opening instructions and calibration examples and the tier
+              definitions stay in sync on their own.
+            </p>
           </div>
 
           <Textarea
