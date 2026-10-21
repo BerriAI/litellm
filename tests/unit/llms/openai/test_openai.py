@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -32,6 +32,7 @@ from litellm.llms.openai.openai import (
 from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -439,6 +440,84 @@ async def test_acompletion_streams_text_deltas_over_injected_transport(
             part.choices[0].finish_reason for part in reversed(chunks) if part.choices and part.choices[0].finish_reason
         )
         assert last_finish == "stop"
+
+
+def _sse_event(delta: Mapping[str, str], finish: str | None) -> bytes:
+    body: Final = {
+        "id": "chatcmpl-dropped",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-5.6",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+_FINISHED_EVENTS_WITHOUT_DONE: Final = (
+    _sse_event({"role": "assistant", "content": "Hel"}, None),
+    _sse_event({"content": "lo"}, "stop"),
+)
+
+
+def _finished_then_dropped_transport(http_backend: ModuleType) -> object:
+    class FinishedThenDropped(http_backend.SyncByteStream, http_backend.AsyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield from _FINISHED_EVENTS_WITHOUT_DONE
+            raise http_backend.ReadError("peer closed the connection before [DONE]")
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for event in _FINISHED_EVENTS_WITHOUT_DONE:
+                yield event
+            raise http_backend.ReadError("peer closed the connection before [DONE]")
+
+    return http_backend.MockTransport(
+        lambda _request: http_backend.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=FinishedThenDropped()
+        )
+    )
+
+
+def _streamed_text_and_finish_reasons(chunks: list[ModelResponseStream]) -> tuple[str, list[str]]:
+    text: Final = "".join(part.choices[0].delta.content or "" for part in chunks if part.choices)
+    finish_reasons: Final = [part.choices[0].finish_reason for part in chunks if part.choices and part.choices[0].finish_reason]
+    return text, finish_reasons
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done(
+    http_backend: ModuleType,
+):
+    async with http_backend.AsyncClient(transport=_finished_then_dropped_transport(http_backend)) as http_client:
+        stream: Final = await litellm.acompletion(
+            model="openai/gpt-5.6",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "dropped-stream-request"}],
+            stream=True,
+            num_retries=0,
+            max_retries=0,
+        )
+
+        async def drain() -> list[ModelResponseStream]:
+            return [part async for part in stream]
+
+        chunks: Final = await asyncio.wait_for(drain(), timeout=10)
+
+    assert _streamed_text_and_finish_reasons(chunks) == ("Hello", ["stop"])
+
+
+def test_completion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done(http_backend: ModuleType):
+    with http_backend.Client(transport=_finished_then_dropped_transport(http_backend)) as http_client:
+        stream: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            client=OpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "dropped-stream-request"}],
+            stream=True,
+            num_retries=0,
+            max_retries=0,
+        )
+        chunks: Final = list(stream)
+
+    assert _streamed_text_and_finish_reasons(chunks) == ("Hello", ["stop"])
 
 
 @pytest.mark.asyncio
