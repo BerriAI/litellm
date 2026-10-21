@@ -1028,6 +1028,33 @@ def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(pr
     assert denied.value.status_code == 400
 
 
+# eu-jev.com/docs (read 2026-10-21): an omitted model means eu-jeff-latest, and the legacy names
+# jeff-latest and jeff-1.0.0 answer with the current release.
+@pytest.mark.parametrize(
+    ("request_data", "permission_model"),
+    [
+        ({}, "eu_jev/eu-jeff-latest"),
+        ({"model": None}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-1.0.0"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_eu_jev_decision_is_checked_against_the_model_eu_jev_runs(
+    request_data: dict[str, object], permission_model: str, suffix: str
+) -> None:
+    assert get_model_from_request(request_data=request_data, route=f"/eu_jev/v1/systemone{suffix}") == permission_model
+
+
+@pytest.mark.parametrize("model", [["eu-jeff-latest"], 7, {"name": "eu-jeff-latest"}])
+def test_eu_jev_decision_rejects_a_model_that_is_not_a_string(model: object) -> None:
+    with pytest.raises(HTTPException) as denied:
+        get_model_from_request(request_data={"model": model}, route="/eu_jev/v1/systemone")
+    assert denied.value.status_code == 400
+
+
 def test_laya_model_normalization_does_not_change_other_provider_routes() -> None:
     assert get_model_from_request(request_data={"model": "jev-latest"}, route="/typesafe/v1/systemone") == "jev-latest"
     assert get_model_from_request(request_data={}, route="/laya/health") is None

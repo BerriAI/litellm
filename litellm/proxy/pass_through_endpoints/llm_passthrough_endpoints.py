@@ -715,15 +715,13 @@ _EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
 )
 
 
-@router.api_route(
-    "/eu_jev/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+@router.post(
+    "/eu_jev/v1/systemone",
     tags=["eu/jev Pass-through", "pass-through"],
     responses={200: {"model": EuJevDecisionResponse}},
     openapi_extra={"requestBody": _EU_JEV_DECISION_REQUEST_BODY},
 )
 async def eu_jev_proxy_route(
-    endpoint: str,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -732,8 +730,8 @@ async def eu_jev_proxy_route(
     Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
 
     `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
-    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is
-    rejected with a 400.
+    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+    `stream` are rejected with a 400.
 
     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
     """
@@ -742,19 +740,18 @@ async def eu_jev_proxy_route(
         raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
     if body.get("stream"):
         raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
-    base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com"
-    encoded_endpoint: Final = httpx.URL(endpoint).path
-    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
-    base_url: Final = httpx.URL(base_target_url)
-    updated_url: Final = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-    )
     eu_jev_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="eu_jev",
         region_name=None,
     )
+    if not eu_jev_api_key:
+        raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
+    base_url: Final = httpx.URL(get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
+    )
     endpoint_func: Final = create_pass_through_route(
-        endpoint=endpoint,
+        endpoint="v1/systemone",
         target=str(updated_url),
         custom_headers={
             "Authorization": f"Bearer {eu_jev_api_key}",
