@@ -17,6 +17,7 @@ from litellm.types.llms.openai import (
     MCPListToolsCompletedEvent,
     MCPListToolsFailedEvent,
     MCPListToolsInProgressEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -287,6 +288,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
+        self._follow_up_history: ResponseInputParam | None = self.original_request_params.get("input")
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
@@ -912,8 +914,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
-                    original_input=self.original_request_params.get("input"),
+                    original_input=self._follow_up_history,
                     preserve_reasoning=persistence_disabled,
+                )
+                self._follow_up_history = cast(  # cast-ok: helper returns valid input items
+                    "ResponseInputParam", follow_up_input
                 )
 
                 # Make follow-up call with streaming
