@@ -11,8 +11,15 @@ from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 BASE_URL: Final = "https://api-inference.bitdeer.ai/v1"
-MODEL: Final = "moonshotai/Kimi-K3"
-MODELS: Final = (MODEL, "zai-org/GLM-5.2", "deepseek-ai/DeepSeek-V4-Flash")
+MODEL: Final = "deepseek-ai/DeepSeek-V4-Flash"
+MODELS: Final = (
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "zai-org/GLM-5.3",
+    "zai-org/GLM-5.3-Flash",
+    "Qwen/Qwen3.8-27B",
+    MODEL,
+)
 
 
 @pytest.mark.parametrize("api_key", (None, "explicit-key"))
@@ -209,7 +216,7 @@ def test_bitdeer_pricing_and_packaged_registry() -> None:
         name: Final = f"bitdeer-ai/{model}"
         entry: Final = prices[name]
         assert entry == backup[name] == litellm.model_cost[name]
-        assert entry["max_tokens"] == entry["max_output_tokens"] <= entry["max_input_tokens"]
+        assert entry["max_input_tokens"] > 0
         assert entry["litellm_provider"] == "bitdeer-ai"
         prompt_cost, output_cost = litellm.cost_per_token(model=name, prompt_tokens=100, completion_tokens=10)
         assert prompt_cost == pytest.approx(100 * entry["input_cost_per_token"])

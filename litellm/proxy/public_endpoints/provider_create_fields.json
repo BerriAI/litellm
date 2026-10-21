@@ -820,7 +820,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "bitdeer-ai/moonshotai/Kimi-K3"
+    "default_model_placeholder": "bitdeer-ai/deepseek-ai/DeepSeek-V4-Flash"
   },
   {
     "provider": "BYTEZ",
