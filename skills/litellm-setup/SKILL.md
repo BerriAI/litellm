@@ -7,10 +7,10 @@ description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gatew
 
 Take the user from nothing to a running LiteLLM proxy that has answered one chat completion. Run every command yourself unless a step says the user does it
 
-Never print a secret. Provider keys, the master key, the salt key, the database URL, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`. Load `.env` into a shell with this line, which exports each line as it is, so a `&` or `$` in a value stays literal, and first drops any database settings the shell already had, so only `.env` picks the database. The steps that need it start with it:
+Never print a secret. Provider keys, the master key, the salt key, the database URL, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`. Load `.env` into a shell with this line, which exports each line as it is, so a `&` or `$` in a value stays literal, and first drops any database settings the shell already had and sets `LITELLM_MODE=PRODUCTION`, which stops `litellm` from also loading a `.env` it finds above its install folder, such as `~/.env`, so only this `.env` picks the database. The steps that need it start with it:
 
 ```bash
-unset DATABASE_URL DIRECT_URL DATABASE_HOST; while IFS= read -r line || [ -n "$line" ]; do case "$line" in [A-Za-z_]*=*) export "$line" ;; esac; done < .env
+unset DATABASE_URL DIRECT_URL DATABASE_HOST; export LITELLM_MODE=PRODUCTION; while IFS= read -r line || [ -n "$line" ]; do case "$line" in [A-Za-z_]*=*) export "$line" ;; esac; done < .env
 ```
 
 ## 1. Ask once
@@ -19,12 +19,12 @@ Ask everything in one message, with defaults the user can accept by saying "go":
 
 - Providers and models. Default is OpenAI with its newest flagship model, using the `OPENAI_API_KEY` in your environment when `[ -n "$OPENAI_API_KEY" ] && echo set` says it is there. Run that check before asking, and say in the question that the default uses that variable, naming it but never its value, since a key in your environment can belong to another account
 - Whether they want virtual keys, teams, spend tracking, or the Admin UI. Those need Postgres, plain routing does not. Default is no
-- uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres server they already have, with a new, empty database for LiteLLM
+- uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres server they already have, with a new, empty database for LiteLLM, so someone with their own Postgres server picks uv
 - Folder and port. Defaults are `./litellm-proxy` (`./litellm-gateway` for the quickstart) and 4000
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
 
-In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy, which then listens on every network interface and stops with Ctrl+C in that window. When the user is done, run `chmod 600 litellm_config.yaml`, since the wizard leaves it readable by every account on the machine, then skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. Give them the command as `LITELLM_MODE=PRODUCTION <bin>/litellm --setup`, with `<bin>` replaced by the folder `uv tool dir --bin` prints, to run from the folder they want the config in. It writes `litellm_config.yaml` there with the keys inline and offers to start the proxy, which then listens on every network interface and stops with Ctrl+C in that window. When the user is done, run `chmod 600 litellm_config.yaml; grep -qx 'litellm_config.yaml' .gitignore 2>/dev/null || echo 'litellm_config.yaml' >> .gitignore` in that folder, since the wizard leaves the file readable by every account on the machine and nothing keeps it out of git, then skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
 
 ## 2. Check prerequisites
 
@@ -32,7 +32,7 @@ In the same message, say that someone who picks uv and would rather answer promp
 uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version; command -v python3
 ```
 
-Every path needs curl, openssl, and python3, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it, and only after the user says yes run `curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh`, which leaves their shell profile alone (https://docs.astral.sh/uv/getting-started/installation/). It puts uv in `~/.local/bin`, so start every later command that runs `uv` or `litellm` with `export PATH="$HOME/.local/bin:$PATH";`. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
+On native Windows, ask the user to run Claude Code inside WSL, since every command here is POSIX shell. Every path needs curl, openssl, and python3, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it, and only after the user says yes run `curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh`, which leaves their shell profile alone (https://docs.astral.sh/uv/getting-started/installation/). It puts uv in `~/.local/bin`, so start every later command that runs `uv` or `litellm` with `export PATH="$HOME/.local/bin:$PATH";`. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
 
 Check the port is free with `curl -s -o /dev/null --max-time 2 http://127.0.0.1:4000; echo $?`, which prints `7` (could not connect) only when nothing listens there. Don't use `lsof` for this, since it misses ports that root or Docker hold. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
 
@@ -62,10 +62,10 @@ uv:
 
 ```bash
 uv tool install --python '>=3.10,<3.15' 'litellm[proxy]'
-litellm --version
+export PATH="$(uv tool dir --bin):$PATH"; litellm --version
 ```
 
-With their own Postgres, install `'litellm[proxy,extra_proxy]'` instead, with the same `--python` range, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. If `litellm` is not found, start every later command that runs it with `export PATH="$(uv tool dir --bin):$PATH";`. `uv tool update-shell` puts it on the PATH of new shells by editing the user's shell profile, so run it only after the user says yes
+With their own Postgres, install `'litellm[proxy,extra_proxy]'` instead, with the same `--python` range, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. Start every later command that runs `litellm` with `export PATH="$(uv tool dir --bin):$PATH";`, so this install runs even when the shell has no `litellm` or an older one from a venv or `pip install litellm`. `uv tool update-shell` puts it on the PATH of new shells by editing the user's shell profile, so run it only after the user says yes
 
 Docker:
 
@@ -98,7 +98,7 @@ for name, row in json.load(sys.stdin).items():
 ' openai
 ```
 
-In `config.yaml`, `model` is a name from that list, as in `openai/gpt-6.1-sol` or `bedrock/us.anthropic.<name>`, and `model_name` is what clients will send. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
+In `config.yaml`, `model` is a name from that list, as in `openai/gpt-6.1-sol` or `bedrock/us.anthropic.<name>`, and `model_name` is what clients will send. If the folder already has a `config.yaml`, show the user its `model_name` lines and ask before replacing it. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
 
 ```yaml
 model_list:
@@ -136,6 +136,7 @@ Bind to `127.0.0.1` unless the user wants other machines to reach it
 uv, in one shell command that starts with the loader line, since the installed `litellm` does not read `.env` by itself:
 
 ```bash
+export PATH="$(uv tool dir --bin):$PATH"
 nohup litellm --config config.yaml --host 127.0.0.1 --port 4000 > litellm.log 2>&1 &
 echo $! > litellm.pid
 ```
@@ -182,7 +183,7 @@ Tell the user, without printing any secret:
 ## Troubleshooting
 
 - `refused to start: no master key is set` means the loader line did not run in the shell command that started `litellm`, or `--env-file .env` is missing from `docker run`
-- `a database URL is set but the prisma CLI is neither on PATH nor importable` means the install lacks `extra_proxy`, so rerun step 4 with it
+- `a database URL is set but the prisma CLI is neither on PATH nor importable` means the install lacks `extra_proxy`, so rerun step 4 with it, or, on plain routing, that the command that started `litellm` did not start with the loader line
 - `The Client hasn't been generated yet` or `Unable to find Prisma binaries` means the Prisma generate command in step 6 has not run
 - `Incorrect API key provided` or another provider `AuthenticationError` means a provider key is wrong. Fix it in `.env` and restart, since the proxy reads the environment only at startup. On uv, stop it and rerun step 7. On Docker, `docker rm -f litellm` and rerun step 7, since `docker restart` keeps the environment the container was created with. On the quickstart the key is saved with the model, so delete the model and add it again: `GET /model/info` lists each model's `model_info.id`, and `POST /model/delete` with `{"id": "<id>"}` deletes it
 - `Cannot automatically baseline this database` means `DATABASE_URL` points at a database that already holds tables LiteLLM did not create. Point it at a new, empty database
