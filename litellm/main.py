@@ -6530,8 +6530,6 @@ async def _run_acompletion_retries(
 def _build_retry_wait_fn(
     num_retries: int, retry_strategy: str, first_attempt_is_a_retry: bool
 ) -> Callable[[_RetryState], float]:
-    """Tenacity wait callback honoring provider Retry-After headers and jitter via calculate_retry_after."""
-
     def _wait_fn(retry_state: _RetryState) -> float:
         outcome: Final[_RetryOutcome | None] = retry_state.outcome
         exc: Final[BaseException | None] = outcome.exception() if outcome is not None else None

@@ -2474,6 +2474,8 @@ def client(original_function):
             if acompletion_retried:
                 kwargs["num_retries"] = num_retries
                 _restore_correlation_context_if_supported(logging_obj)
+                if logging_obj and not _is_litellm_internal_call:
+                    unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 from litellm.chat_completions.dispatch import acompletion as public_acompletion
 
                 try:

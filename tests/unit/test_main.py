@@ -10842,6 +10842,49 @@ async def test_acompletion_keeps_provider_error_when_tenacity_is_missing(
     assert route.call_count == 1
 
 
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_hands_the_budget_reservation_back_while_it_waits_to_retry(
+    retry_upstream: respx.MockRouter,
+) -> None:
+    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(429, {"retry-after": "30"}))
+    call: Final = asyncio.create_task(
+        _completion_with_retries_kwargs(
+            False, _ANTHROPIC, num_retries=1, metadata={"user_api_key_budget_reservation": reservation}
+        )
+    )
+
+    await asyncio.wait_for(_until(lambda: route.call_count == 1), 10)
+    await asyncio.wait_for(_until(lambda: reservation["callback_bound"] is False), 5)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert route.call_count == 1
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_acompletion_retry_that_succeeds_leaves_the_budget_reservation_to_the_cost_callback(
+    retry_upstream: respx.MockRouter,
+) -> None:
+    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    await _completion_with_retries_kwargs(
+        False, _ANTHROPIC, num_retries=1, metadata={"user_api_key_budget_reservation": reservation}
+    )
+
+    assert reservation["callback_bound"] is True
+
+
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("profile,custom_price", ((None, False), ("us.openai.gpt-6-sol", False), (None, True)))
