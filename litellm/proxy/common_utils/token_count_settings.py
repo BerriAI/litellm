@@ -123,7 +123,7 @@ def unreliable_local_estimate(
     tools: Sequence[object] | None,
 ) -> str | None:
     if _has_document_content_block(messages):
-        return f"{model} has no server-side count_tokens and LiteLLM cannot count document content locally"
+        return f"{model} returned no server-side token count and LiteLLM cannot count document content locally"
     trigger: Final = "tools" if tools else "no_tools"
     matched_rule: Final = next(
         (

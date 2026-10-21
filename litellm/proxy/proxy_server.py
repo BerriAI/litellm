@@ -150,9 +150,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TokenCountSettings,
     cost_map_entry,
     resolve_token_count_settings,
-)
-from litellm.proxy.common_utils.token_count_settings import (
-    unreliable_local_estimate as _unreliable_local_estimate,
+    unreliable_local_estimate,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
@@ -14114,7 +14112,7 @@ async def count_request_tokens(
         return ladder
 
     if call_endpoint is True:
-        unreliable_reason: Final = _unreliable_local_estimate(
+        unreliable_reason: Final = unreliable_local_estimate(
             custom_llm_provider=custom_llm_provider,
             model=model_to_use,
             messages=messages,

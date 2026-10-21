@@ -2755,6 +2755,38 @@ async def test_count_request_tokens_rejects_only_known_unreliable_estimates(
 
 
 @pytest.mark.asyncio
+async def test_azure_ai_estimate_guard_runs_without_a_provider_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "azure-ai-count-target",
+                "litellm_params": {
+                    "model": "azure_ai/deepseek-v4-pro",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(
+            request=TokenCountRequest(
+                model="azure-ai-count-target",
+                messages=[{"role": "user", "content": "Summarize."}],
+                tools=[{"name": "search"}],
+            ),
+            call_endpoint=True,
+        )
+
+    assert raised.value.code == "400"
+    assert raised.value.type == "invalid_request_error"
+    assert raised.value.param == "model"
+    assert "deepseek-v4-pro" in raised.value.message
+
+
+@pytest.mark.asyncio
 async def test_document_block_keeps_successful_provider_count(monkeypatch: pytest.MonkeyPatch) -> None:
     router: Final = Router(
         model_list=[
