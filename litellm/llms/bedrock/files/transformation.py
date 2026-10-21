@@ -901,7 +901,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
-            litellm_params: Final = without_bedrock_native_output_opt_in({})
+            litellm_params: Final = without_bedrock_native_output_opt_in(MappingProxyType({}))
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
@@ -918,10 +918,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return config.transform_request(
                 model=model,
                 messages=messages,
-                optional_params={
+                optional_params={  # mutable-ok: provider transform consumes and removes request options
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
-                litellm_params=dict(litellm_params),
+                litellm_params=dict(litellm_params),  # mutable-ok: legacy provider transform requires a private dict
                 headers={},
             )
 

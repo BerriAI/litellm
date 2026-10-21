@@ -1383,7 +1383,11 @@ def schema_has_unresolvable_ref(schema: Mapping[str, object]) -> bool:
     if not _refs_in(schema) <= definitions.keys():
         return True
     try:
-        tuple(TopologicalSorter({pointer: _refs_in(body) for pointer, body in definitions.items()}).static_order())
+        tuple(
+            TopologicalSorter(
+                MappingProxyType({pointer: _refs_in(body) for pointer, body in definitions.items()})
+            ).static_order()
+        )
     except CycleError:
         return True
     return False

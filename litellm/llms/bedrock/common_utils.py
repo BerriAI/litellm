@@ -247,14 +247,18 @@ _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
-    model_info: Final = (litellm_params or {}).get("model_info")
-    return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
+    model_info: Final = litellm_params.get("model_info") if litellm_params is not None else None
+    return (
+        _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else MappingProxyType({})
+    )
 
 
 def _bedrock_native_output_opt_in(
     model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
 ) -> bool:
-    deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
+    deployment_flag: Final = (
+        model_info.get("supports_bedrock_native_structured_output") if model_info is not None else None
+    )
     if isinstance(deployment_flag, bool):
         return deployment_flag
     return _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
@@ -288,9 +292,12 @@ def bedrock_native_output_is_opt_in(
 
 
 def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    return {
+    return {  # mutable-ok: request metadata must remain JSON serializable and deep-copyable
         **litellm_params,
-        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+        "model_info": {  # mutable-ok: nested request metadata is serialized as JSON
+            **deployment_model_info(litellm_params),
+            "supports_bedrock_native_structured_output": False,
+        },
     }
 
 
@@ -394,7 +401,7 @@ def bedrock_native_output_format(
     native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider, model_info)
     if native_schema is None:
         return None
-    return {**output_format, "schema": native_schema}
+    return {**output_format, "schema": native_schema}  # mutable-ok: output format is serialized directly as JSON
 
 
 def apply_bedrock_invoke_structured_output(
@@ -427,7 +434,9 @@ def apply_bedrock_invoke_structured_output(
         if isinstance(existing_output_config, dict):
             existing_output_config["format"] = native_format
         else:
-            request_body["output_config"] = {"format": native_format}  # rebind-ok: out-param
+            request_body["output_config"] = {  # mutable-ok: wire request JSON object
+                "format": native_format
+            }  # rebind-ok: out-param
         return
 
     verbose_logger.warning(

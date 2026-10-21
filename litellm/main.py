@@ -1,4 +1,3 @@
-from pydantic import TypeAdapter
 # LiteLLM main module: public completion, embedding, streaming, and moderation entrypoints.
 #
 # +-----------------------------------------------+
@@ -9,7 +8,6 @@ from pydantic import TypeAdapter
 # +-----------------------------------------------+
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
-
 import asyncio
 import contextvars
 import datetime
@@ -28,6 +26,8 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 from urllib.parse import urlsplit
+
+from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -4177,9 +4177,11 @@ def _native_output_fallback(
     litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
-        optional_params={
-            **{key: value for key, value in remapped_params.items() if key != "aws_bedrock_client"},
-            **{
+        optional_params={  # mutable-ok: provider handlers consume request options in place
+            **{  # mutable-ok: request options need independent ownership
+                key: value for key, value in remapped_params.items() if key != "aws_bedrock_client"
+            },
+            **{  # mutable-ok: preserve only credentials resolved by the first attempt
                 key: first_attempt_params[key]
                 for key in _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS
                 if key in first_attempt_params
@@ -4272,8 +4274,12 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
                 messages=messages,
                 custom_prompt_dict=custom_prompt_dict,
                 model_response=model_response,
-                optional_params=optional_params if fallback is None else dict(fallback.optional_params),
-                litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
+                optional_params=optional_params
+                if fallback is None
+                else dict(fallback.optional_params),  # mutable-ok: handler pops request options
+                litellm_params=litellm_params
+                if fallback is None
+                else dict(fallback.litellm_params),  # mutable-ok: handler mutates private request metadata
                 logger_fn=logger_fn,
                 encoding=_get_encoding(),
                 logging_obj=logging,
@@ -4289,7 +4295,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         response = call_with_native_output_fallback(
             converse_attempt,
             (
-                partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
+                partial(_converse_native_output_fallback, ctx, converse_params, MappingProxyType(litellm_params.copy()))
                 if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
                 else None
             ),
@@ -4324,8 +4330,12 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
                 acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                optional_params=optional_params if fallback is None else dict(fallback.optional_params),
-                litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
+                optional_params=optional_params
+                if fallback is None
+                else dict(fallback.optional_params),  # mutable-ok: handler pops request options
+                litellm_params=litellm_params
+                if fallback is None
+                else dict(fallback.litellm_params),  # mutable-ok: handler mutates private request metadata
                 custom_llm_provider="bedrock",
                 timeout=timeout,
                 headers=headers,
@@ -4339,7 +4349,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         response = call_with_native_output_fallback(
             invoke_attempt,
             (
-                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
+                partial(_native_output_fallback, ctx, invoke_params, MappingProxyType(litellm_params.copy()))
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
                 and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
                 else None
