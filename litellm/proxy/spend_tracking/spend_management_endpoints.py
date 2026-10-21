@@ -2775,27 +2775,6 @@ async def ui_view_spend_logs(
                 where_conditions["metadata"] = metadata_filters[0]
             else:
                 where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
-        if key_alias is not None:
-            active_key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"key_alias": key_alias},
-            )
-            deleted_key_rows: Final = await prisma_client.db.litellm_deletedverificationtoken.find_many(
-                where={"key_alias": key_alias},
-            )
-            key_tokens: Final = list(dict.fromkeys(row.token for row in (*active_key_rows, *deleted_key_rows)))
-            key_alias_filter: Final = {"api_key": {"in": key_tokens}}
-            if where_conditions.get("api_key") is None:
-                where_conditions["api_key"] = key_alias_filter["api_key"]
-            else:
-                existing_and_conditions: Final = where_conditions.get("AND", [])
-                where_conditions["AND"] = [
-                    *(
-                        existing_and_conditions
-                        if isinstance(existing_and_conditions, list)
-                        else [existing_and_conditions]
-                    ),
-                    key_alias_filter,
-                ]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
