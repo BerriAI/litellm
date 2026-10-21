@@ -100,7 +100,7 @@ def _audio_websocket_handler_result(
         case "elevenlabs_tts":
             return ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
                 request_body=request_body,
-                upstream_frame_count=len(upstream_frames),
+                upstream_frames=tuple(frame for frame in upstream_frames if isinstance(frame, dict)),
                 logging_obj=logging_obj,
                 upstream_url=str(httpx_response.request.url),
                 kwargs=kwargs,

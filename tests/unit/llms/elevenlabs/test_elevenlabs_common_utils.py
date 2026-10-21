@@ -230,16 +230,28 @@ def test_client_text_the_billing_parser_cannot_read_is_refused_instead_of_forwar
     assert decision.code == 1007
 
 
-def test_recorded_upstream_frame_drops_audio_and_alignment():
-    frame = {
+def _audio_frame(spoken: str | None) -> dict[str, object]:
+    alignment = None if spoken is None else {"chars": list(spoken), "charStartTimesMs": [0], "charDurationsMs": [50]}
+    return {
         "audio": "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYxLjcuMTAw",
-        "alignment": {"chars": ["H"], "charStartTimesMs": [0], "charDurationsMs": [50]},
-        "normalizedAlignment": {"chars": ["H"], "charStartTimesMs": [0], "charDurationsMs": [50]},
+        "alignment": alignment,
+        "normalizedAlignment": alignment,
         "contextId": "ctx",
         "isFinal": None,
     }
 
-    assert elevenlabs_tts_recorded_upstream_frame(frame) == {"contextId": "ctx", "isFinal": None}
+
+def test_recorded_upstream_frame_drops_audio_and_alignment_but_keeps_the_aligned_character_count():
+    assert elevenlabs_tts_recorded_upstream_frame(_audio_frame("Hello")) == {
+        "contextId": "ctx",
+        "isFinal": None,
+        "aligned_characters": 5,
+    }
+    assert elevenlabs_tts_recorded_upstream_frame(_audio_frame(None)) == {
+        "contextId": "ctx",
+        "isFinal": None,
+        "aligned_characters": 0,
+    }
     assert elevenlabs_tts_recorded_upstream_frame({"isFinal": True}) == {"isFinal": True}
     assert elevenlabs_tts_recorded_upstream_frame({"message": "Invalid model", "error": "invalid_request"}) == {
         "message": "Invalid model",
@@ -247,15 +259,40 @@ def test_recorded_upstream_frame_drops_audio_and_alignment():
     }
 
 
-def test_characters_count_every_text_character_including_whitespace():
-    frames = (
-        {"text": " "},
-        {"text": "Hello world. "},
-        {"text": "¿Qué tal? "},
-        {"close_context": True},
-        {"text": None},
-        {"text": ""},
+def _session(client_texts: tuple[str, ...], *upstream: dict[str, object]) -> int:
+    return elevenlabs_tts_characters(
+        tuple({"text": text} for text in client_texts),
+        tuple(elevenlabs_tts_recorded_upstream_frame(frame) for frame in upstream),
     )
 
-    assert elevenlabs_tts_characters(frames) == 1 + len("Hello world. ") + len("¿Qué tal? ")
-    assert elevenlabs_tts_characters(()) == 0
+
+def test_characters_are_the_ones_elevenlabs_spoke_not_the_ones_sent():
+    sent = (" ", "Hello world. ", "¿Qué tal? ", "This part was cut off before it was spoken. ")
+
+    spoken = (_audio_frame("Hello world."), _audio_frame(None), _audio_frame("¿Qué tal?"), {"isFinal": True})
+
+    assert _session(sent, *spoken) == len("Hello world.") + len("¿Qué tal?")
+
+
+def test_a_session_that_got_no_audio_back_bills_nothing():
+    assert _session((" ", "Text that never reached the generation threshold "), {"isFinal": True}) == 0
+    assert (
+        _session(
+            (" ", "Text the caller dropped before any audio "),
+        )
+        == 0
+    )
+
+
+def test_audio_without_any_alignment_bills_every_character_sent():
+    sent = (" ", "Hello world. ", "¿Qué tal? ", "")
+
+    assert _session(sent, _audio_frame(None), _audio_frame(None), {"isFinal": True}) == (
+        1 + len("Hello world. ") + len("¿Qué tal? ")
+    )
+    assert (
+        elevenlabs_tts_characters(
+            ({"close_context": True}, {"text": None}), (elevenlabs_tts_recorded_upstream_frame(_audio_frame(None)),)
+        )
+        == 0
+    )

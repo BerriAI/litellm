@@ -144,9 +144,7 @@ def test_is_multipart():
         ),
     ],
 )
-def test_get_endpoint_type_classifies_anthropic_messages_routes(
-    url: str, expected_endpoint_type: EndpointType
-) -> None:
+def test_get_endpoint_type_classifies_anthropic_messages_routes(url: str, expected_endpoint_type: EndpointType) -> None:
     assert HttpPassThroughEndpointHelpers.get_endpoint_type(url) == expected_endpoint_type
 
 
@@ -3576,9 +3574,7 @@ async def test_pass_through_request_preserves_target_query_without_client_query(
 
 
 @pytest.mark.asyncio
-async def test_config_pass_through_without_configured_headers_preserves_no_authorization(
-    tmp_path, monkeypatch
-):
+async def test_config_pass_through_without_configured_headers_preserves_no_authorization(tmp_path, monkeypatch):
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
@@ -3645,9 +3641,7 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
-        config_pass_through_endpoints=[
-            {"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}
-        ],
+        config_pass_through_endpoints=[{"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}],
         db_pass_through_endpoints=[],
         master_key=MASTER_KEY,
     )
@@ -4824,6 +4818,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
 _PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 
 
@@ -7755,7 +7750,7 @@ async def test_websocket_passthrough_elevenlabs_policy_keeps_caller_keys_upstrea
     expected_request_body = {"client_frames": [{"text": " "}, {"text": "Hola, ¿qué tal?  "}, {"text": ""}]}
     assert success_call["request_body"] == expected_request_body
     assert success_call["passthrough_logging_payload"]["request_body"] == expected_request_body
-    assert success_call["response_body"] == [{"isFinal": None}, {"isFinal": True}]
+    assert success_call["response_body"] == [{"isFinal": None, "aligned_characters": 1}, {"isFinal": True}]
 
 
 @pytest.mark.asyncio
@@ -7795,7 +7790,7 @@ async def test_websocket_passthrough_bills_the_session_when_the_client_drops_whi
     assert client_send_text.await_count == 2
     success_call = success_handler.call_args.kwargs
     assert success_call["request_body"] == {"client_frames": [{"text": " "}, {"text": "Hello there "}]}
-    assert success_call["response_body"] == [{"isFinal": None}]
+    assert success_call["response_body"] == [{"isFinal": None, "aligned_characters": 1}]
 
 
 @pytest.mark.asyncio
@@ -8214,8 +8209,10 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
         }
     )
     body: Final = {
-        "model": "upstream-only-model", metadata_slot: {
-            "model_group": "managed-model", "customer_label": "retained",
+        "model": "upstream-only-model",
+        metadata_slot: {
+            "model_group": "managed-model",
+            "customer_label": "retained",
             "user_api_key_team_model_max_budget": budget,
         },
     }
@@ -8223,48 +8220,84 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     start: Final = datetime.now()
     logging_obj: Final = LiteLLMLoggingObj(
-        model="upstream-only-model", messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="custom-budget", function_id="custom-budget", kwargs={},
+        model="upstream-only-model",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="custom-budget",
+        function_id="custom-budget",
+        kwargs={},
         dynamic_async_success_callbacks=[limiter],
     )
     payload: Final = {
-        "url": "https://upstream.test/echo", "request_body": body, "request_method": "POST", "cost_per_request": 0.25,
+        "url": "https://upstream.test/echo",
+        "request_body": body,
+        "request_method": "POST",
+        "cost_per_request": 0.25,
     }
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=auth, passthrough_logging_payload=payload, logging_obj=logging_obj,
-        _parsed_body=body, litellm_call_id="custom-budget",
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=payload,
+        logging_obj=logging_obj,
+        _parsed_body=body,
+        litellm_call_id="custom-budget",
     )
     logging_obj.update_environment_variables(
-        model="upstream-only-model", user="unknown", optional_params={},
-        litellm_params=kwargs["litellm_params"], call_type="pass_through_endpoint",
+        model="upstream-only-model",
+        user="unknown",
+        optional_params={},
+        litellm_params=kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
     )
     response: Final = httpx.Response(
-        200, request=httpx.Request("POST", "https://upstream.test/echo"), json={"ok": True},
+        200,
+        request=httpx.Request("POST", "https://upstream.test/echo"),
+        json={"ok": True},
     )
     await PassThroughEndpointLogging().pass_through_async_success_handler(
-        httpx_response=response, response_body={"ok": True}, request_body=body, logging_obj=logging_obj,
-        url_route="https://upstream.test/echo", result=response.text, start_time=start, end_time=datetime.now(),
-        cache_hit=False, **kwargs,
+        httpx_response=response,
+        response_body={"ok": True},
+        request_body=body,
+        logging_obj=logging_obj,
+        url_route="https://upstream.test/echo",
+        result=response.text,
+        start_time=start,
+        end_time=datetime.now(),
+        cache_hit=False,
+        **kwargs,
     )
     assert logging_obj.model_call_details["response_cost"] == 0.25
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     metadata: Final = kwargs["litellm_params"]["metadata"]
     assert (metadata["model_group"], metadata["customer_label"]) == ("managed-model", "retained")
-    assert metadata.keys().isdisjoint({
-        "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
-        "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
-    })
+    assert metadata.keys().isdisjoint(
+        {
+            "user_api_key_model_max_budget",
+            "user_api_key_team_model_max_budget",
+            "user_api_key_user_model_max_budget",
+            "user_api_key_end_user_model_max_budget",
+        }
+    )
 
 
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
-        "headers": [], "query_string": b"",
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
-        passthrough_logging_payload=MagicMock(), logging_obj=MagicMock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
         _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
     )
     assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
@@ -8630,7 +8663,9 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     the call to (LIT-1761: passthrough successes carried model_id="")."""
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = httpx.URL("http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent")
+    mock_request.url = httpx.URL(
+        "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    )
     mock_request.headers = Headers({})
     mock_request.scope = {}
     mock_request.state = SimpleNamespace(
@@ -9661,11 +9696,13 @@ async def _drain_logging_worker():
     await GLOBAL_LOGGING_WORKER.stop()
     yield
 
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 def test_update_pass_through_route_updates_registry():
@@ -9756,9 +9793,7 @@ def mock_request():
             return self._dict.values()
 
     class MockRequest:
-        def __init__(
-            self, headers=None, method="POST", request_body: Optional[dict] = None
-        ):
+        def __init__(self, headers=None, method="POST", request_body: Optional[dict] = None):
             self.headers = headers or {}
             self.query_params = QueryParams()
             self.method = method
@@ -9866,9 +9901,9 @@ def test_pass_through_routes_support_all_methods():
                 path = route.path
                 methods = set(route.methods)
                 allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
-                assert (
-                    methods == allowed
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+                assert methods == allowed, (
+                    f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+                )
 
     check_router_methods(llm_router)
 
@@ -9898,19 +9933,11 @@ def test_is_bedrock_agent_runtime_route():
 
     # Test agent runtime endpoints (should return True)
     assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
-    assert (
-        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
-        is True
-    )
+    assert _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve") is True
 
     # Test regular bedrock runtime endpoints (should return False)
-    assert (
-        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
-    )
-    assert (
-        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
-        is False
-    )
+    assert _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
+    assert _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse") is False
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
@@ -9977,9 +10004,7 @@ def test_custom_pricing_used_in_cost_calculation():
 
     # Verify custom cost is different from standard cost (unless prices happen to match)
     # This confirms custom pricing is actually being applied
-    assert (
-        custom_cost != standard_cost
-    ), "Custom pricing should produce different cost than standard pricing"
+    assert custom_cost != standard_cost, "Custom pricing should produce different cost than standard pricing"
 
     # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
     # This specifically tests the parameters that were causing the original issue
@@ -10518,6 +10543,7 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
 
 @pytest.mark.asyncio
 async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():

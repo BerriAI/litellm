@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
@@ -47,7 +47,7 @@ class ElevenLabsTextToSpeechPassthroughLoggingHandler:
     def elevenlabs_tts_passthrough_handler(
         self,
         request_body: Mapping[str, object],
-        upstream_frame_count: int,
+        upstream_frames: Sequence[Mapping[str, object]],
         logging_obj: LiteLLMLoggingObj,
         upstream_url: str,
         kwargs: Mapping[str, object] = MappingProxyType({}),
@@ -56,7 +56,7 @@ class ElevenLabsTextToSpeechPassthroughLoggingHandler:
             request_body.get(WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY, ())
         )
         model: Final = elevenlabs_tts_model(upstream_url)
-        characters: Final = elevenlabs_tts_characters(client_frames)
+        characters: Final = elevenlabs_tts_characters(client_frames, upstream_frames)
         response_cost: Final = _speech_cost(upstream_url, characters)
 
         provider: Final = litellm.LlmProviders.ELEVENLABS.value
@@ -76,7 +76,7 @@ class ElevenLabsTextToSpeechPassthroughLoggingHandler:
                     "model": model,
                     "characters": characters,
                     "client_text_frames": len(client_frames),
-                    "upstream_frames": upstream_frame_count,
+                    "upstream_frames": len(upstream_frames),
                 }
             ),
             "kwargs": {

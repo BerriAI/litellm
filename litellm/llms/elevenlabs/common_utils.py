@@ -6,7 +6,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import ELEVENLABS_DEFAULT_API_BASE, ELEVENLABS_TTS_WEBSOCKET_DEFAULT_MODEL
@@ -26,6 +26,7 @@ ELEVENLABS_TTS_WEBSOCKET_ROUTE_SUFFIXES: Final = ("/stream-input", "/multi-strea
 ELEVENLABS_TTS_CALLER_CREDENTIAL_PARAMS: Final = frozenset({"authorization", "single_use_token"})
 ELEVENLABS_TTS_CALLER_CREDENTIAL_FIELDS: Final = frozenset({"xi_api_key", "xi-api-key", "authorization"})
 ELEVENLABS_TTS_AUDIO_FIELDS: Final = frozenset({"audio", "alignment", "normalizedAlignment"})
+ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY: Final = "aligned_characters"
 _MODEL_ID_PARAM: Final = "model_id"
 _VOICE_ID: Final = re.compile(r"[A-Za-z0-9_-]+")
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
@@ -122,9 +123,38 @@ def elevenlabs_tts_client_text(text: str) -> ClientTextDecision:
     return ForwardedClientText(text=forwarded, recorded={"text": frame_text} if frame_text is not None else None)
 
 
+class _Alignment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    chars: tuple[str, ...]
+
+
+_ALIGNMENT: Final = TypeAdapter(_Alignment)
+
+
+def _aligned_characters(alignment: object) -> int:
+    try:
+        return len(_ALIGNMENT.validate_python(alignment).chars)
+    except ValidationError:
+        return 0
+
+
 def elevenlabs_tts_recorded_upstream_frame(frame: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in frame.items() if key not in ELEVENLABS_TTS_AUDIO_FIELDS}
+    without_audio: Final = {key: value for key, value in frame.items() if key not in ELEVENLABS_TTS_AUDIO_FIELDS}
+    if not frame.get("audio"):
+        return without_audio
+    return {**without_audio, ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY: _aligned_characters(frame.get("alignment"))}
 
 
-def elevenlabs_tts_characters(client_frames: Sequence[Mapping[str, object]]) -> int:
+def elevenlabs_tts_characters(
+    client_frames: Sequence[Mapping[str, object]], upstream_frames: Sequence[Mapping[str, object]]
+) -> int:
+    """ElevenLabs bills the characters it synthesized, which its alignment lists, so text a session sent but never
+    heard (interrupted, unflushed, timed out) is free; audio that came back with no alignment at all bills the text
+    the client sent instead."""
+    audio_frames: Final = tuple(frame for frame in upstream_frames if ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY in frame)
+    aligned: Final = sum(
+        count for frame in audio_frames if isinstance(count := frame[ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY], int)
+    )
+    if aligned or not audio_frames:
+        return aligned
     return sum(len(text) for frame in client_frames if isinstance(text := frame.get("text"), str))
