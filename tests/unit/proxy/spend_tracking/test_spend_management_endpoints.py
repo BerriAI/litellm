@@ -4757,7 +4757,7 @@ async def test_ui_view_spend_logs_with_error_message(client):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
-    """Test merging error_code and key_alias filters with AND logic"""
+    """Test exact alias resolution while preserving API key and metadata filters"""
     mock_spend_logs = [
         {
             "id": "log1",
@@ -4773,7 +4773,7 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
         {
             "id": "log2",
             "request_id": "req2",
-            "api_key": "sk-test-key",
+            "api_key": "sk-other-key",
             "user": "test_user_2",
             "team_id": "team1",
             "spend": 0.10,
@@ -4795,34 +4795,50 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
     ]
 
     def filter_by_error_code_and_key_alias(where):
-        if "AND" in where:
-            key_alias = error_code = None
-            for cond in where["AND"]:
-                if "metadata" in cond:
-                    mf = cond["metadata"]
-                    if mf.get("path") == ["user_api_key_alias"]:
-                        key_alias = mf.get("string_contains")
-                    elif mf.get("path") == ["error_information", "error_code"]:
-                        error_code = str(mf.get("equals", "")).strip('"')
-            if key_alias == "test-key-1" and error_code == "500":
-                return [mock_spend_logs[2]]
+        metadata_filter = where.get("metadata", {})
+        has_alias_substring_filter = any(
+            condition.get("metadata", {}).get("path") == ["user_api_key_alias"]
+            for condition in where.get("AND", [])
+        )
+        if has_alias_substring_filter:
+            return mock_spend_logs
+        if (
+            metadata_filter.get("path") != ["error_information", "error_code"]
+            or str(metadata_filter.get("equals", "")).strip('"') != "500"
+        ):
+            return mock_spend_logs
+        api_key_filter = where.get("api_key")
+        if api_key_filter == "sk-other-key":
+            return []
+        if api_key_filter in ("sk-test-key", None) or api_key_filter == {
+            "in": ["sk-test-key", "sk-deleted-key"]
+        }:
+            return [mock_spend_logs[2]]
         return mock_spend_logs
+
+    query_observer = MagicMock()
+    prisma_mock = make_ui_spend_logs_mock_prisma(
+        mock_spend_logs,
+        filter_by_error_code_and_key_alias,
+        query_observer=query_observer,
+    )
+    active_key_lookup = AsyncMock(return_value=[MagicMock(token="sk-test-key")])
+    deleted_key_lookup = AsyncMock(return_value=[MagicMock(token="sk-deleted-key")])
+    prisma_mock.db.litellm_verificationtoken = MagicMock(find_many=active_key_lookup)
+    prisma_mock.db.litellm_deletedverificationtoken = MagicMock(find_many=deleted_key_lookup)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
     try:
-        with patch.object(
-            ps,
-            "prisma_client",
-            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
-        ):
+        with patch.object(ps, "prisma_client", prisma_mock):
             start_date, end_date = _default_date_range()
 
             response = client.get(
                 "/spend/logs/ui",
                 params={
+                    "api_key": "sk-test-key",
                     "error_code": "500",
                     "key_alias": "test-key-1",
                     "start_date": start_date,
@@ -4842,6 +4858,36 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
             assert metadata["user_api_key_alias"] == "test-key-1"
             assert "error_information" in metadata
             assert metadata["error_information"]["error_code"] == "500"
+
+            mismatch_response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "api_key": "sk-other-key",
+                    "error_code": "500",
+                    "key_alias": "test-key-1",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+            assert mismatch_response.status_code == 200
+            assert mismatch_response.json()["total"] == 0
+            assert mismatch_response.json()["data"] == []
+            page_query_call = next(
+                call
+                for call in query_observer.call_args_list
+                if 'FROM "LiteLLM_SpendLogs"' in call.args[0] and "ORDER BY" in call.args[0]
+            )
+            page_query: Final = page_query_call.args[0]
+            page_params: Final = page_query_call.args[1]
+            alias_subquery: Final = re.search(
+                r'api_key IN \(SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = \$(\d+) '
+                r'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = \$\1\)',
+                page_query,
+            )
+            assert alias_subquery is not None
+            assert page_params[int(alias_subquery.group(1)) - 1] == "test-key-1"
+            assert page_params.count("test-key-1") == 1
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

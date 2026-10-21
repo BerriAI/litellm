@@ -2575,7 +2575,7 @@ async def ui_view_spend_logs(
         description="Filter logs by model ID (litellm model deployment id)",
     ),
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
-    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
+    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by exact key alias match"),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
@@ -2754,14 +2754,6 @@ async def ui_view_spend_logs(
 
         # Build metadata filters
         metadata_filters: Final = []
-        if key_alias is not None:
-            metadata_filters.append(
-                {
-                    "path": ["user_api_key_alias"],
-                    "string_contains": key_alias,
-                }
-            )
-
         if error_code is not None:
             metadata_filters.append(
                 {
@@ -2783,6 +2775,27 @@ async def ui_view_spend_logs(
                 where_conditions["metadata"] = metadata_filters[0]
             else:
                 where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
+        if key_alias is not None:
+            active_key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"key_alias": key_alias},
+            )
+            deleted_key_rows: Final = await prisma_client.db.litellm_deletedverificationtoken.find_many(
+                where={"key_alias": key_alias},
+            )
+            key_tokens: Final = list(dict.fromkeys(row.token for row in (*active_key_rows, *deleted_key_rows)))
+            key_alias_filter: Final = {"api_key": {"in": key_tokens}}
+            if where_conditions.get("api_key") is None:
+                where_conditions["api_key"] = key_alias_filter["api_key"]
+            else:
+                existing_and_conditions: Final = where_conditions.get("AND", [])
+                where_conditions["AND"] = [
+                    *(
+                        existing_and_conditions
+                        if isinstance(existing_and_conditions, list)
+                        else [existing_and_conditions]
+                    ),
+                    key_alias_filter,
+                ]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
@@ -2929,8 +2942,11 @@ async def ui_view_spend_logs(
 
         # Metadata JSON filters (PostgreSQL JSONB operators)
         if key_alias is not None:
-            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
-            sql_params.append(f"%{key_alias}%")
+            sql_conditions.append(
+                f'api_key IN (SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = ${p} '
+                f'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = ${p})'
+            )
+            sql_params.append(key_alias)
             p += 1
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
