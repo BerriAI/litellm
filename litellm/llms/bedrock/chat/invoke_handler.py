@@ -1,9 +1,10 @@
+import json
 import types
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final, cast
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -15,6 +16,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -162,6 +165,19 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
+    if not json_mode:
+        return None
+    try:
+        body: Final = _REQUEST_BODY.validate_python(json.loads(data))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    return JsonModeRequest.model_validate(body).tool_schema()
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
@@ -223,6 +239,7 @@ async def make_call(
                 model=model,
                 sync_stream=False,
                 json_mode=json_mode,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
@@ -327,6 +344,7 @@ def make_sync_call(
                 model=model,
                 sync_stream=True,
                 json_mode=json_mode,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
@@ -770,6 +788,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
         json_mode: bool | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -781,6 +800,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             streaming_response=None,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            response_format_schema=response_format_schema,
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
