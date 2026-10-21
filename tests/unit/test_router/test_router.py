@@ -58,6 +58,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    _longest_embedding_input_tokens,
     Span,
 )
 from litellm.router_strategy import simple_shuffle
@@ -7930,6 +7931,20 @@ async def test_aembedding_rejects_a_batch_with_an_input_over_the_context_window(
 
     with pytest.raises(litellm.ContextWindowExceededError):
         await router.aembedding(model="embed", input=embedding_input, mock_response=[0.1, 0.2])
+
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    [
+        pytest.param(["one", "one two three four"], litellm.token_counter(text="one two three four"), id="texts"),
+        pytest.param(list(range(7)), 7, id="token-ids"),
+        pytest.param([[1, 2], list(range(5))], 5, id="token-id-lists"),
+        pytest.param([1, "one"], None, id="mixed"),
+        pytest.param([{"type": "message", "role": "user", "content": "hi"}], None, id="responses-items"),
+    ],
+)
+def test_longest_embedding_input_tokens_counts_only_embedding_batches(items, expected):
+    assert _longest_embedding_input_tokens(items) == expected
+
 
 def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
     router = litellm.Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}}])
