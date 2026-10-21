@@ -325,11 +325,15 @@ def test_list__hosted_vllm_routes_to_openai_instance(seams):
     _assert_only(seams.openai.list_batches, seams, "list_batches")
 
 
-def test_list__azure_dispatch(seams):
-    result = bm.list_batches(custom_llm_provider="azure")
+def test_list__azure_dispatch_and_payload(seams):
+    result = bm.list_batches(custom_llm_provider="azure", after="cur", limit=5)
 
     assert result is seams.azure.list_batches.return_value
     _assert_only(seams.azure.list_batches, seams, "list_batches")
+
+    kw = seams.azure.list_batches.call_args.kwargs
+    assert kw["after"] == "cur"
+    assert kw["limit"] == 5
 
 
 def test_list__vertex_ai_dispatch(seams):

@@ -3660,6 +3660,44 @@ async def test_list_batches_sends_provider_list_request_and_maps_page(is_async):
     assert provider_key not in json.dumps(raw_request_body)
 
 
+def test_list_batches_masks_read_only_auth_headers_in_raw_request_log():
+    """BatchHttpRequest types headers as any Mapping, so a provider config handing back a
+    read-only mapping must get the same masking as a dict before the request is logged."""
+    from types import MappingProxyType
+
+    from litellm.llms.base_llm.batches.transformation import BatchHttpRequest
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    class ReadOnlyHeadersConfig(MistralBatchesConfig):
+        def transform_list_batches_request(self, after, limit, litellm_params):
+            request = super().transform_list_batches_request(after, limit, litellm_params)
+            return BatchHttpRequest(
+                method=request["method"], url=request["url"], headers=MappingProxyType(dict(request["headers"]))
+            )
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    client, sent_requests = _mock_batch_client(
+        lambda request: httpx.Response(200, json={"object": "list", "total": 0, "data": []}, request=request),
+        False,
+    )
+    logging_obj = _mistral_batch_logging_obj("batch_list")
+
+    BaseLLMHTTPHandler().list_batches(
+        after=None,
+        limit=2,
+        litellm_params={"api_key": provider_key},
+        provider_config=ReadOnlyHeadersConfig(),
+        logging_obj=logging_obj,
+        _is_async=False,
+        client=client,
+        model="mistral/mistral-ocr-latest",
+    )
+
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body, default=dict)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_cancel_batch_posts_provider_cancel_request_and_maps_job(is_async):

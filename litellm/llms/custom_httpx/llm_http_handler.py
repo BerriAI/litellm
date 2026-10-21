@@ -440,7 +440,7 @@ def _log_batch_http_request(logging_obj: "LiteLLMLoggingObj", request: BatchHttp
         input="",
         api_key="",
         additional_args={
-            "complete_input_dict": _mask_presigned_request_headers(dict(request)),
+            "complete_input_dict": _mask_presigned_request_headers({**request, "headers": dict(request["headers"])}),
             "api_base": request["url"],
         },
     )

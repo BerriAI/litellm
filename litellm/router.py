@@ -195,7 +195,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     batch_create_routing,
-    deployment_provider,
+    batch_listing_provider,
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
@@ -415,7 +415,6 @@ from litellm.types.router import (
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
-    LIST_BATCHES_SUPPORTED_PROVIDERS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -7589,12 +7588,13 @@ class Router:
             raise Exception("Router not yet initialized.")
 
         async def try_retrieve_batch(model: DeploymentTypedDict):
-            provider: Final = deployment_provider(model)
-            listing_provider: Final = (
-                {"custom_llm_provider": provider} if provider in LIST_BATCHES_SUPPORTED_PROVIDERS else {}
-            )
+            provider: Final = batch_listing_provider(model)
+            if provider is None:
+                return None
             try:
-                return await litellm.alist_batches(**{**model["litellm_params"], **listing_provider, **kwargs})
+                return await litellm.alist_batches(
+                    **{**model["litellm_params"], "custom_llm_provider": provider, **kwargs}
+                )
             except Exception:
                 return None
 

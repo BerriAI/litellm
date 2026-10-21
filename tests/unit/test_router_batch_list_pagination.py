@@ -72,3 +72,28 @@ async def test_alist_batches_keeps_the_openai_default_for_providers_that_cannot_
 
     assert result["first_id"] == "batch_a"
     assert "next_page_token" not in result
+
+
+@pytest.mark.asyncio
+async def test_alist_batches_skips_deployments_whose_provider_cannot_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    listed_providers: Final = []
+
+    async def _record_alist_batches(**kwargs: object) -> OpenAIBatchListResponse:
+        listed_providers.append(kwargs.get("custom_llm_provider", "openai"))
+        return OpenAIBatchListResponse(data=(), first_id="batch_a", last_id="batch_a", has_more=False)
+
+    monkeypatch.setattr(litellm, "alist_batches", _record_alist_batches)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-batch",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5", "aws_region_name": "us-west-2"},
+            }
+        ]
+    )
+
+    result: Final = await router.alist_batches(model="claude-batch", limit=3)
+
+    assert listed_providers == []
+    assert result["data"] == []
+    assert result["first_id"] is None

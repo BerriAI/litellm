@@ -11,7 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, CallTypes, LlmProviders
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
@@ -104,6 +104,23 @@ def deployment_provider(deployment: Mapping[str, object]) -> str | None:
         return configured_provider
     model: Final = litellm_params.get("model")
     return model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
+
+
+_OPENAI_WIRE_PROVIDERS: Final = frozenset(
+    {
+        LlmProviders.OPENAI.value,
+        LlmProviders.TEXT_COMPLETION_OPENAI.value,
+        LlmProviders.CUSTOM_OPENAI.value,
+        LlmProviders.OPENAI_LIKE.value,
+    }
+)
+
+
+def batch_listing_provider(deployment: Mapping[str, object]) -> str | None:
+    provider: Final = deployment_provider(deployment)
+    if provider is None or provider in _OPENAI_WIRE_PROVIDERS:
+        return LlmProviders.OPENAI.value
+    return provider if provider in LIST_BATCHES_SUPPORTED_PROVIDERS else None
 
 
 def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) -> bool:

@@ -922,6 +922,8 @@ def list_batches(
 
             response = azure_batches_instance.list_batches(
                 _is_async=_is_async,
+                after=after,
+                limit=limit,
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,

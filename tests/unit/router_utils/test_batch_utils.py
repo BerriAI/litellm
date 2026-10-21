@@ -10,6 +10,7 @@ import pytest
 import litellm
 from litellm.router_utils.batch_utils import (
     InMemoryFile,
+    batch_listing_provider,
     deployment_provider,
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
@@ -369,6 +370,24 @@ def test_deployment_provider_prefers_configured_provider_over_model_prefix(
     litellm_params: Mapping[str, str], expected: str | None
 ) -> None:
     assert deployment_provider({"model_name": "group", "litellm_params": litellm_params}) == expected
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        ({"model": "mistral/mistral-ocr-latest"}, "mistral"),
+        ({"model": "gpt-4o", "custom_llm_provider": "azure"}, "azure"),
+        ({"model": "gpt-4o"}, "openai"),
+        ({"model": "text-completion-openai/gpt-3.5-turbo-instruct"}, "openai"),
+        ({"model": "custom_openai/my-model", "api_base": "http://localhost:8000"}, "openai"),
+        ({"model": "bedrock/us.anthropic.claude-sonnet-5-5"}, None),
+        ({"model": "anthropic/claude-sonnet-5-5"}, None),
+    ],
+)
+def test_batch_listing_provider_lists_each_deployment_on_its_own_provider_api(
+    litellm_params: Mapping[str, str], expected: str | None
+) -> None:
+    assert batch_listing_provider({"model_name": "group", "litellm_params": litellm_params}) == expected
 
 
 @pytest.fixture(autouse=True)
