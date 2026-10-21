@@ -1316,6 +1316,51 @@ def test_spend_row_bounds_a_compaction_summary_at_the_larger_of_the_summary_cap_
     _assert_bounded_like_a_db_string(stored_request_block["content"], summary)
 
 
+@pytest.mark.parametrize("summary_past_the_summary_cap", [False, True])
+def test_responses_shaped_spend_row_keeps_a_compaction_output_item_summary_bounded_like_a_chat_block(
+    monkeypatch: pytest.MonkeyPatch, summary_past_the_summary_cap: bool
+):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+    from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    filler: Final = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
+    summary: Final = (
+        _compaction_summary_past_the_summary_cap()
+        if summary_past_the_summary_cap
+        else f"{filler}The cat is named Biscuit. {filler}"
+    )
+    payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "response": {
+                "object": "response",
+                "output": [
+                    {
+                        "type": "compaction",
+                        "id": "cmp_1",
+                        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                            json.dumps({"type": "compaction", "content": summary}), "deployment-1"
+                        ),
+                    },
+                    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]},
+                ],
+            }
+        },
+    )
+
+    stored_item: Final = json.loads(_get_response_for_spend_logs_payload(payload))["output"][0]
+    model_id, _ = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(stored_item["encrypted_content"])
+    stored_summary: Final = compaction_summary(stored_item)
+    assert model_id == "deployment-1"
+    assert stored_summary is not None
+    if summary_past_the_summary_cap:
+        _assert_bounded_like_a_db_string(stored_summary, summary)
+        return
+    assert stored_summary == summary
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store):
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from response."""

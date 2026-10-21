@@ -73,6 +73,7 @@ from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     summary_only_compaction_content,
+    with_compaction_summary,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
@@ -1221,10 +1222,6 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
-def _is_compaction_block_summary(parent: Mapping[str, object], key: str, keep_compaction_blocks: bool) -> bool:
-    return keep_compaction_blocks and key == "content" and parent.get("type") == "compaction"
-
-
 def _truncated_for_db(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -1242,6 +1239,17 @@ def _compaction_summary_for_db(summary: str) -> str:
     return _truncated_for_db(
         summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
+
+
+def _bounded_compaction_summary(
+    parent: Mapping[str, object], key: str, value: object, keep_compaction_blocks: bool
+) -> str | None:
+    if not keep_compaction_blocks or not isinstance(value, str) or parent.get("type") != "compaction":
+        return None
+    if key == "content":
+        return _compaction_summary_for_db(value)
+    summary: Final = compaction_summary(parent) if key == "encrypted_content" else None
+    return None if summary is None else with_compaction_summary(value, _compaction_summary_for_db(summary))
 
 
 def _sanitize_request_body_for_spend_logs_payload(
@@ -1282,15 +1290,15 @@ def _sanitize_request_body_for_spend_logs_payload(
             return _truncated_for_db(value, max_string_length_prompt_in_db)
         return value
 
-    return {
-        k: REDACTED_BY_LITELM_STRING
-        if mask_credentials and _is_request_body_credential(k, v)
-        else _compaction_summary_for_db(v)
-        if isinstance(v, str) and _is_compaction_block_summary(request_body, k, keep_compaction_blocks)
-        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
-        for k, v in request_body.items()
-        if k not in _SENSITIVE_REQUEST_BODY_KEYS
-    }
+    def _stored_value(key: str, value: object) -> object:
+        if mask_credentials and _is_request_body_credential(key, value):
+            return REDACTED_BY_LITELM_STRING
+        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
+        if bounded_summary is not None:
+            return bounded_summary
+        return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
+
+    return {k: _stored_value(k, v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
