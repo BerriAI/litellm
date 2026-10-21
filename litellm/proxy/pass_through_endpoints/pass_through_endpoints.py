@@ -2508,8 +2508,8 @@ _TRANSCRIPTION_MODEL_PLACEMENTS: Final = (
 _STORED_PROMPT_PLACEMENTS: Final = (("prompt",), ("response", "prompt"), ("session", "prompt"))
 STORED_PROMPT_PROBE_MODEL: Final = "litellm-unverifiable-stored-prompt-model"
 _STORED_PROMPT_REFUSAL: Final = (
-    "This key is limited to specific models, and the gateway cannot check which model a stored prompt runs, "
-    "so frames that reference a stored prompt are refused for this key."
+    "This key is limited to specific models, so it cannot run a stored prompt. "
+    "The gateway cannot check which model a stored prompt runs."
 )
 _FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
 

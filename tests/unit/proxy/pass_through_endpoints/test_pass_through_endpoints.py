@@ -7774,10 +7774,13 @@ async def test_websocket_passthrough_refuses_a_stored_prompt_for_a_key_limited_t
 
     relayed = await _relay_client_frames([json.dumps(frame)], gate)
 
+    error_message: Final = json.loads(relayed.client.send_text.await_args.args[0])["error"]["message"]
+    close_reason: Final = relayed.client.close.await_args.kwargs["reason"]
     assert gate.checked == [STORED_PROMPT_PROBE_MODEL]
     assert relayed.upstream.send.await_args_list == []
-    assert "stored prompt" in json.loads(relayed.client.send_text.await_args.args[0])["error"]["message"]
     assert relayed.client.close.await_args.kwargs["code"] == 1008
+    assert "stored prompt" in close_reason
+    assert close_reason.endswith(".") and error_message.startswith(close_reason)
 
 
 @pytest.mark.asyncio
