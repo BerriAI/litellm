@@ -3847,6 +3847,7 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-core-utils",
  "litellm-gateway-auth",
  "litellm-gateway-hooks",
  "litellm-host",

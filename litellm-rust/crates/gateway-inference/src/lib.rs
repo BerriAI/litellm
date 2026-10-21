@@ -9,12 +9,16 @@ mod client_side;
 mod error;
 mod hooks;
 pub mod messages;
+mod models;
 pub mod observe;
 mod request;
 
 use std::sync::{Arc, OnceLock};
 
-use axum::{Router, routing::post};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use litellm_http::{
     ClientVariant, HttpClientConfig,
     media::{MediaFetcher, UrlPolicy},
@@ -144,6 +148,10 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/messages", post(messages::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
+        .route("/models", get(models::list))
+        .route("/v1/models", get(models::list))
+        .route("/models/{model_id}", get(models::retrieve))
+        .route("/v1/models/{model_id}", get(models::retrieve))
         .nest("/engines/{model}", model_routes())
         .nest("/openai/deployments/{model}", model_routes())
         // Not served: these routes skip the hooks (budgets, rate limits, spend), so a key could

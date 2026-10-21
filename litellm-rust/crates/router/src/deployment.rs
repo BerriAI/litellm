@@ -24,6 +24,9 @@ pub struct Deployment {
     /// The model a deployment serves under another name, from `litellm_params.base_model` or
     /// `model_info.base_model`, which Azure's param rules and prices follow.
     pub base_model: Option<String>,
+    /// `model_info.discoverable: false`: the deployment still serves requests, but only the
+    /// master key sees it in model listings.
+    pub undiscoverable: bool,
 }
 
 impl Deployment {
@@ -49,6 +52,7 @@ impl Deployment {
             shaping: MessagesShaping::default(),
             team_id: None,
             id: None,
+            undiscoverable: false,
             base_model: params
                 .extra
                 .get("base_model")

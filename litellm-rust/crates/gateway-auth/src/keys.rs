@@ -108,7 +108,7 @@ impl From<ModelAccess> for KeyModels {
 }
 
 /// The gateway's routes in the proxy's `openai_routes` preset.
-const OPENAI_ROUTES: [&str; 18] = [
+const OPENAI_ROUTES: [&str; 20] = [
     "/chat/completions",
     "/v1/chat/completions",
     "/engines/{model}/chat/completions",
@@ -127,10 +127,15 @@ const OPENAI_ROUTES: [&str; 18] = [
     "/v1/responses",
     "/ocr",
     "/v1/ocr",
+    "/models",
+    "/v1/models",
 ];
 
 /// The gateway's routes in the proxy's `anthropic_routes` preset.
 const ANTHROPIC_ROUTES: [&str; 2] = ["/v1/messages", "/v1/messages/count_tokens"];
+
+/// The gateway's routes in the proxy's `info_routes` preset.
+const INFO_ROUTES: [&str; 2] = ["/models", "/v1/models"];
 
 /// A key's `allowed_routes`. Empty allows every route.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -142,8 +147,8 @@ impl AllowedRoutes {
     }
 
     /// The proxy's `RouteChecks.is_virtual_key_allowed_to_call_route` for the routes this gateway
-    /// serves. Presets other than `llm_api_routes`, `openai_routes` and `anthropic_routes` grant
-    /// nothing here.
+    /// serves. Presets other than `llm_api_routes`, `openai_routes`, `anthropic_routes` and
+    /// `info_routes` grant nothing here.
     pub fn allows(&self, route: &str) -> bool {
         self.0.is_empty()
             || self.0.iter().any(|allowed| {
@@ -170,6 +175,7 @@ fn preset(name: &str) -> impl Iterator<Item = &'static str> {
         "llm_api_routes" => &[&OPENAI_ROUTES, &ANTHROPIC_ROUTES],
         "openai_routes" => &[&OPENAI_ROUTES],
         "anthropic_routes" => &[&ANTHROPIC_ROUTES],
+        "info_routes" => &[&INFO_ROUTES],
         _ => &[],
     };
     routes.iter().flat_map(|group| group.iter().copied())
@@ -570,6 +576,12 @@ mod tests {
     #[case::llm_api_routes_not_mcp(&["llm_api_routes"], "/mcp/sse", false)]
     #[case::openai_routes_chat(&["openai_routes"], "/v1/chat/completions", true)]
     #[case::openai_routes_responses(&["openai_routes"], "/v1/responses", true)]
+    #[case::openai_routes_models(&["openai_routes"], "/v1/models", true)]
+    #[case::openai_routes_not_model_retrieval(&["openai_routes"], "/v1/models/{model_id}", false)]
+    #[case::llm_api_routes_models(&["llm_api_routes"], "/models", true)]
+    #[case::info_routes_models(&["info_routes"], "/v1/models", true)]
+    #[case::info_routes_not_chat(&["info_routes"], "/v1/chat/completions", false)]
+    #[case::exact_models_allows_retrieval(&["/v1/models"], "/v1/models/{model_id}", true)]
     #[case::openai_routes_not_messages(&["openai_routes"], "/v1/messages", false)]
     #[case::anthropic_routes_messages(&["anthropic_routes"], "/v1/messages", true)]
     #[case::anthropic_routes_not_chat(&["anthropic_routes"], "/chat/completions", false)]

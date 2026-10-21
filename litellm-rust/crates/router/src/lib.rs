@@ -27,6 +27,8 @@ use health::Health;
 /// The model groups of a config and the health of each deployment in them.
 pub struct Router {
     groups: HashMap<String, ModelGroup>,
+    /// The groups' names in the order the config first names them.
+    names: Box<[Box<str>]>,
     /// Every deployment's shared-state id and health, in a fixed order.
     deployments: Box<[(Box<str>, Arc<Health>)]>,
     shared: OnceLock<Arc<dyn SharedHealth>>,
@@ -91,6 +93,7 @@ impl Router {
                             .base_model
                             .clone()
                             .or_else(|| info_base_model(model)),
+                        undiscoverable: undiscoverable(model),
                         ..deployment
                     },
                 ))
@@ -121,6 +124,11 @@ impl Router {
                 (name, group)
             })
             .collect();
+        let names = order
+            .iter()
+            .filter(|(_, index)| *index == 0)
+            .map(|(name, _)| name.as_str().into())
+            .collect();
         let deployments = order
             .into_iter()
             .map(|(name, index)| {
@@ -130,6 +138,7 @@ impl Router {
             .collect();
         Self {
             groups,
+            names,
             deployments,
             shared: OnceLock::new(),
             policy,
@@ -160,6 +169,11 @@ impl Router {
 
     pub fn group(&self, model_name: &str) -> Option<&ModelGroup> {
         self.groups.get(model_name)
+    }
+
+    /// Every model group, in the order the config first names each.
+    pub fn groups(&self) -> impl ExactSizeIterator<Item = &ModelGroup> {
+        self.names.iter().map(|name| &self.groups[&**name])
     }
 
     pub fn policy(&self) -> &RoutingPolicy {
@@ -365,6 +379,14 @@ fn owner_team(model: &Model) -> Option<String> {
         litellm_config::Value::String(team_id) => Some(team_id.clone()),
         other => Some(format!("{other:?}")),
     }
+}
+
+/// `model_info.discoverable: false`, which keeps the deployment out of model listings.
+fn undiscoverable(model: &Model) -> bool {
+    matches!(
+        model.model_info.get("discoverable"),
+        Some(litellm_config::Value::Bool(false))
+    )
 }
 
 fn info_base_model(model: &Model) -> Option<String> {

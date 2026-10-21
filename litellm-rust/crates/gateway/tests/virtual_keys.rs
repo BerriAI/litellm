@@ -187,6 +187,17 @@ async fn app() -> Router {
       api_key: sk-upstream
     model_info:
       team_id: team-2
+  - model_name: claude-hidden
+    litellm_params:
+      model: anthropic/claude-x
+      api_base: {upstream}
+      api_key: sk-upstream
+    model_info:
+      discoverable: false
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+      api_key: sk-upstream
 router_settings:
   num_retries: 0
 general_settings:
@@ -281,6 +292,109 @@ async fn messages_accept_virtual_keys_from_every_key_header(
             assert_eq!(body["error"]["code"], status.to_string());
             assert!(!body.to_string().contains(value));
         }
+    }
+}
+
+async fn get(app: Router, path: &str, key: Option<&str>) -> (u16, Value) {
+    let request = Request::get(path);
+    let request = match key {
+        Some(key) => request.header("authorization", format!("Bearer {key}")),
+        None => request,
+    };
+    let response = app
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// The OpenAI model list of `ids`, as the proxy's `/v1/models` answers.
+fn model_list(ids: &[&str]) -> Value {
+    json!({
+        "data": ids
+            .iter()
+            .map(|id| json!({"id": id, "object": "model", "created": 1_677_610_602, "owned_by": "openai"}))
+            .collect::<Vec<_>>(),
+        "object": "list",
+    })
+}
+
+/// One entry per model group the key may call, in config order: team-owned groups only for
+/// their team, `discoverable: false` groups only for the master key, and no wildcard group.
+#[rstest]
+#[case::master_key("sk-master", &["claude-a", "claude-owned", "claude-mixed", "claude-hidden"])]
+#[case::all_models("sk-all", &["claude-a", "claude-mixed"])]
+#[case::key_models("sk-scoped", &["claude-a"])]
+#[case::key_model_not_deployed("sk-other", &[])]
+#[case::own_team("sk-team-2", &["claude-a", "claude-owned", "claude-mixed"])]
+#[case::other_team("sk-team-1", &["claude-a", "claude-mixed"])]
+#[case::team_models("sk-team-narrowed", &[])]
+#[case::openai_routes("sk-chat-only", &["claude-a", "claude-mixed"])]
+#[case::llm_api_routes("sk-messages-only", &["claude-a", "claude-mixed"])]
+#[tokio::test]
+async fn models_lists_the_groups_a_key_may_call(
+    #[future] app: Router,
+    #[case] key: &str,
+    #[case] expected: &[&str],
+    #[values("/v1/models", "/models")] path: &str,
+) {
+    let (status, body) = get(app.await, path, Some(key)).await;
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, model_list(expected));
+}
+
+#[rstest]
+#[case::missing(None, 401, "auth_error")]
+#[case::unknown(Some("sk-unknown"), 401, "token_not_found_in_db")]
+#[case::expired(Some("sk-expired"), 401, "expired_key")]
+#[tokio::test]
+async fn models_requires_a_valid_key(
+    #[future] app: Router,
+    #[case] key: Option<&str>,
+    #[case] status: u16,
+    #[case] error_type: &str,
+) {
+    let (actual, body) = get(app.await, "/v1/models", key).await;
+
+    assert_eq!(actual, status, "{body}");
+    assert_eq!(body["error"]["type"], error_type);
+}
+
+#[rstest]
+#[case::master_key("sk-master", "claude-owned", 200)]
+#[case::shared("sk-all", "claude-a", 200)]
+#[case::own_team("sk-team-2", "claude-owned", 200)]
+#[case::other_team("sk-team-1", "claude-owned", 404)]
+#[case::key_models_exclude("sk-scoped", "claude-mixed", 404)]
+#[case::team_models_exclude("sk-team-narrowed", "claude-a", 404)]
+#[case::undiscoverable_retrievable_by_name("sk-all", "claude-hidden", 200)]
+#[case::undiscoverable_still_needs_access("sk-scoped", "claude-hidden", 404)]
+#[case::unknown_model("sk-master", "gpt-unknown", 404)]
+#[case::route_preset_lists_only("sk-chat-only", "claude-a", 403)]
+#[tokio::test]
+async fn model_retrieval_answers_only_models_the_key_may_call(
+    #[future] app: Router,
+    #[case] key: &str,
+    #[case] model: &str,
+    #[case] status: u16,
+    #[values("/v1/models", "/models")] prefix: &str,
+) {
+    let (actual, body) = get(app.await, &format!("{prefix}/{model}"), Some(key)).await;
+
+    assert_eq!(actual, status, "{body}");
+    match status {
+        200 => assert_eq!(
+            body,
+            json!({"id": model, "object": "model", "created": 1_677_610_602, "owned_by": "anthropic"})
+        ),
+        404 => assert_eq!(
+            body,
+            json!({"detail": format!("The model `{model}` does not exist or is not accessible")})
+        ),
+        _ => assert_eq!(body["error"]["type"], "auth_error"),
     }
 }
 
