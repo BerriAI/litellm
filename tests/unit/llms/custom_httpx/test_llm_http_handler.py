@@ -4367,3 +4367,45 @@ async def test_async_text_to_speech_handler_records_upstream_response_headers():
 
     assert response.content == b"audio-bytes"
     _assert_upstream_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_its_beta() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_dropped_safeguards",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-sonnet-4-6",
+            api_key="sk-ant-test",
+            safeguards=({"type": "dangerous_tool_use"},),
+            additional_drop_params=["safeguards"],
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    sent: Final = received[0]
+    assert "safeguards" not in json.loads(sent.content)
+    assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)

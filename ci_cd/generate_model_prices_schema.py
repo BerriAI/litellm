@@ -122,8 +122,9 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         "properties": {
             "model": NON_BLANK_STRING,
             "region": NON_BLANK_STRING,
+            "litellm_provider": {"type": "string", "enum": ["bedrock", "bedrock_mantle"]},
         },
-        "description": "Model that counts tokens for this one, and the AWS region its count API runs in.",
+        "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in.",
     },
 }
 

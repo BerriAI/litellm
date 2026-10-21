@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
 
 import litellm
 import litellm.litellm_core_utils
@@ -3247,6 +3247,141 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
+class _RegisteredPricingFields:
+    """Fields each register_model call set, per cost-map key, for the cost map they were written to.
+
+    A catalog reload swaps litellm.model_cost for a new object, which drops these the way main drops
+    an alias entry's registered_fields; persisted registrations are replayed onto the new map."""
+
+    cost_map_id: int = 0
+    fields: dict[str, dict[str, object]] = {}  # mutable-ok: reset with each new cost map
+
+    @classmethod
+    def current(cls) -> dict[str, dict[str, object]]:
+        if cls.cost_map_id != id(litellm.model_cost):
+            cls.cost_map_id = id(litellm.model_cost)
+            cls.fields = {}
+        return cls.fields
+
+    @classmethod
+    def record(cls, key: str, value: Mapping[str, object]) -> None:
+        registered: Final = cls.current()
+        registered[key] = _update_dictionary(dict(registered.get(key, {})), dict(value))
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInfoLookupMiss:
+    tripped: bool
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    try:
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError:
+        return ModelInfoLookupMiss(tripped=False)
+    except Exception:
+        return ModelInfoLookupMiss(tripped=True)
+    return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def runtime_model_cost_registrations(
+    model: str, custom_llm_provider: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    names: Final = _get_potential_model_names(model, custom_llm_provider)
+    candidates: Final = (
+        model,
+        names["combined_model_name"],
+        f"{custom_llm_provider}/{names['split_model']}",
+        names["split_model"],
+        names["stripped_model_name"],
+    )
+    return tuple(
+        (key, MappingProxyType({name: value for name, value in entry.items() if value is not None}))
+        for key, entry in ((key, _RegisteredPricingFields.current().get(key)) for key in dict.fromkeys(candidates))
+        if entry
+    )
+
+
+_TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
+_DIRECTION_RATE_FIELDS: Final = MappingProxyType(
+    {
+        "input_cost_per_token": ("input_cost_per_token",),
+        "output_cost_per_token": ("output_cost_per_token", "output_cost_per_reasoning_token"),
+    }
+)
+_RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
+_RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _is_overridden_rate(name: str, overridden_fields: tuple[str, ...]) -> bool:
+    is_variant: Final = name.startswith(tuple(f"{rate_field}_" for rate_field in overridden_fields))
+    return name in overridden_fields or (is_variant and "_cache_" not in name)
+
+
+def _without_overridden_rates(rates: Mapping[str, object], overridden_fields: tuple[str, ...]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {name: rate for name, rate in rates.items() if not _is_overridden_rate(name, overridden_fields)}
+    )
+
+
+def _rate_table_with_flat_prices(
+    name: str, table: object, overridden_fields: tuple[str, ...], flat_prices: Mapping[str, object]
+) -> object:
+    try:
+        if name == "tiered_pricing":
+            return [
+                {**_without_overridden_rates(tier, overridden_fields), **flat_prices}
+                for tier in _RATE_TIERS.validate_python(table)
+            ]
+        if name == "off_peak_pricing":
+            return dict(_without_overridden_rates(_RATE_TABLE.validate_python(table), overridden_fields))
+    except ValidationError:
+        return table
+    return table
+
+
+def _without_overridden_price_variants(
+    entry: Mapping[str, object], value: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A flat ``input_cost_per_token`` / ``output_cost_per_token`` replaces every inherited rate that would stand in
+    for it (token thresholds, service tiers, batches, ``tiered_pricing`` tiers, off-peak windows, and the reasoning
+    rate for output)."""
+    flat_prices: Final = MappingProxyType(
+        {cost_field: value[cost_field] for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None}
+    )
+    overridden_fields: Final = tuple(
+        itertools.chain.from_iterable(_DIRECTION_RATE_FIELDS[cost_field] for cost_field in flat_prices)
+    )
+    if not overridden_fields:
+        return entry
+    return MappingProxyType(
+        {
+            name: _rate_table_with_flat_prices(name, field_value, overridden_fields, flat_prices)
+            for name, field_value in entry.items()
+            if not _is_overridden_rate(name, overridden_fields)
+        }
+    )
+
+
+@with_config(ConfigDict(extra="allow"))
+class _PricingModelInfo(ModelInfo):
+    pass
+
+
+_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
+
+
+def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+    from litellm.types.utils import is_server_derived_pricing_key
+
+    overrides: Final = {
+        name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
+    }
+    return _PRICING_MODEL_INFO.validate_python(
+        _update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+    )
+
+
 class _LiveDeploymentReplay:
     """Single-slot holder for the callback that rebuilds live router deployments.
 
@@ -3349,7 +3484,10 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
+            _runtime_registered_model_cost[_registered_key] = _update_dictionary(
+                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                dict(_RATE_TABLE.validate_python(_registered_value)),
+            )
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
@@ -3415,6 +3553,7 @@ def register_model(
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        _RegisteredPricingFields.record(str(model_cost_key), value)
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()

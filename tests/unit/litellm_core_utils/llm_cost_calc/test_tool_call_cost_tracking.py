@@ -369,9 +369,9 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    model = "openrouter/google/gemini-3.1-flash-lite"
+    model = "azure/gpt-4o"
     model_info = litellm.get_model_info(model)
-    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["litellm_provider"] == "azure"
     assert not model_info.get("search_context_cost_per_query")
 
     usage = Usage(

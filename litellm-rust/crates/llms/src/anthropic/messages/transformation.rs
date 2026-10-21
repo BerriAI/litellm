@@ -137,10 +137,18 @@ pub(crate) fn transform_messages_request(
         messages: strip_encrypted_reasoning_blocks(messages),
         params: MessagesOptionalParams {
             context_management,
+            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
     })
+}
+
+fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
+    extra
+        .into_iter()
+        .filter(|(key, value)| key != "safeguards" || !value.is_null())
+        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -148,6 +156,13 @@ pub(crate) fn update_headers_with_anthropic_beta(
     request: &MessagesRequest,
 ) -> Headers {
     merge_beta_headers(headers, feature_betas(request))
+}
+
+fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -163,6 +178,7 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
+        carries_safeguards(params).then_some(AnthropicBeta::DangerousToolUse20260903),
     ]
     .into_iter()
     .flatten()
@@ -1010,6 +1026,8 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::safeguards(json!({"safeguards": [{"type": "dangerous_tool_use"}]}), &["dangerous-tool-use-2026-09-03"])]
+    #[case::null_safeguards(json!({"safeguards": null}), &[])]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
     }
