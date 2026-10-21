@@ -4271,8 +4271,13 @@ def test_input_without_a_marker_is_untouched_under_drop_params(
     assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == input
 
 
-def _transformed_input_for(model: str, input: list[dict[str, object]], litellm_params: GenericLiteLLMParams) -> object:
-    request: Final = _CONFIGS[0].transform_responses_api_request(
+def _transformed_input_for(
+    model: str,
+    input: list[dict[str, object]],
+    litellm_params: GenericLiteLLMParams,
+    config: BaseResponsesAPIConfig = _CONFIGS[0],
+) -> object:
+    request: Final = config.transform_responses_api_request(
         model=model,
         input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
         response_api_optional_request_params={},
@@ -4290,18 +4295,40 @@ def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", marker)
-    dropped: Final = _transformed_input_for("local-model", input, GenericLiteLLMParams(drop_params=True))
+    dropped: Final = _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=True))
     assert _single_part(dropped) == _PARTS["input_text"]
-    assert _transformed_input_for("local-model", input, GenericLiteLLMParams(drop_params=False)) == input
+    assert _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=False)) == input
 
 
-def test_a_declared_base_model_with_breakpoints_keeps_a_valid_marker_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_breakpoint_support(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    malformed: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "1h"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+def _declaring_base_model(where: str, base_model: str) -> GenericLiteLLMParams:
+    if where == "litellm_params":
+        return GenericLiteLLMParams(drop_params=True, base_model=base_model)
+    return GenericLiteLLMParams(drop_params=True, model_info={"base_model": base_model})
+
+
+@pytest.mark.parametrize("where", ("litellm_params", "model_info"))
+def test_a_declared_base_model_decides_whether_a_valid_marker_survives_drop_params(
+    monkeypatch: pytest.MonkeyPatch, where: str
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", {"mode": "explicit"})
-    litellm_params: Final = GenericLiteLLMParams(drop_params=True, model_info={"base_model": "gpt-6.1-sol"})
-    assert _transformed_input_for("prod-deployment", input, litellm_params) == input
+    kept: Final = _transformed_input_for("gpt-5.4-mini-prod", input, _declaring_base_model(where, "gpt-6.1-sol"))
+    assert kept == input
+    dropped: Final = _transformed_input_for("prod-deployment", input, _declaring_base_model(where, "gpt-5.4-mini"))
+    assert _single_part(dropped) == _PARTS["input_text"]
 
 
 @pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))

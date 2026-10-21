@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
-    supports_openai_prompt_cache_breakpoint,
+    openai_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
@@ -74,6 +74,13 @@ _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "
 _INPUT_PART_LIST_KEYS: Final = frozenset({"content", "output"})
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
+
+
+class _DeclaredModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    base_model: object = None
+    model_info: object = None
 
 
 class _DeploymentHost(BaseModel):
@@ -608,16 +615,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> str | ResponseInputParam:
         if not isinstance(input, list) or not _drops_params(litellm_params):
             return input
-        keeps_markers: Final = self._supports_prompt_cache_breakpoints(model=model, litellm_params=litellm_params)
+        keeps_markers: Final = self._keeps_prompt_cache_breakpoints(model=model, litellm_params=litellm_params)
         wire_safe_items: Final = [_item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input]
         return cast("ResponseInputParam", wire_safe_items)  # cast-ok: items keep their shape, minus a rejected marker
 
-    def _supports_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
+    def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
         provider: Final = _provider_name(self.custom_llm_provider)
         base_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
-        return supports_openai_prompt_cache_breakpoint(model, provider) or (
-            base_model != model and supports_openai_prompt_cache_breakpoint(base_model, provider)
+        known_support: Final = (
+            openai_prompt_cache_breakpoint_support(name, provider) for name in dict.fromkeys((base_model, model))
         )
+        return next((support for support in known_support if support is not None), None) is not False
 
     def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
         host: Final = _DeploymentHost.model_validate(litellm_params)
@@ -782,9 +790,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _declared_base_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
-        model_info: Final = _json_object_or_none(getattr(litellm_params, "model_info", None))
-        base_model: Final = None if model_info is None else model_info.get("base_model")
-        return base_model if isinstance(base_model, str) and base_model else model
+        declared: Final = _DeclaredModel.model_validate(litellm_params)
+        model_info: Final = _json_object_or_none(declared.model_info)
+        candidates: Final = (declared.base_model, None if model_info is None else model_info.get("base_model"))
+        return next((name for name in candidates if isinstance(name, str) and name), model)
 
     @staticmethod
     def _sanitized_tool_entry(

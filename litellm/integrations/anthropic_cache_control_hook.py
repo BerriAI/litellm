@@ -125,6 +125,10 @@ def _served_provider_for_model(model: str) -> str | None:
 
 
 def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
+    return openai_prompt_cache_breakpoint_support(model, custom_llm_provider) is True
+
+
+def openai_prompt_cache_breakpoint_support(model: str, custom_llm_provider: str | None = None) -> bool | None:
     hosted_flag: Final = (
         None
         if custom_llm_provider is None
@@ -137,7 +141,7 @@ def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str
         return model_map_flag
     version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
     if version_match is None:
-        return False
+        return None
     version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
