@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
 
+from litellm._internal_context import internal_sub_call
+
 if TYPE_CHECKING:
     from litellm import LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -111,9 +113,10 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
-        result: Final = completion(
-            **request_data,
-        )
+        with internal_sub_call():
+            result: Final = completion(
+                **request_data,
+            )
 
         requested_response_format: Final = optional_params.get("response_format")
         if isinstance(result, ModelResponse):

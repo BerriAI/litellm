@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -27,9 +28,20 @@ pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize::pythonize(py, value)
+    Pythonized(value).into_pyobject(py).map(Bound::unbind)
+}
+
+pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (document,))?
+        .call_method1("get", (name,))
         .map(Bound::unbind)
-        .map_err(PyErr::from)
+}
+
+pub fn json_loads(py: Python<'_>, document: &[u8]) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (PyBytes::new(py, document),))
+        .map(Bound::unbind)
 }
 
 pub struct Pythonized<T>(pub T);
@@ -45,7 +57,7 @@ where
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         catch_unwind(AssertUnwindSafe(|| pythonize::pythonize(py, &self.0)))
             .map_err(panic_to_pyerr)?
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(PyErr::from)
     }
 }
 
@@ -88,12 +100,31 @@ mod tests {
     }
 
     #[test]
-    fn pythonized_maps_serializer_panics_to_a_base_exception() {
+    fn pythonized_preserves_python_serialization_error_types() {
         crate::initialize_python();
         Python::attach(|py| {
-            let error = Pythonized(PanickingSerializer)
-                .into_pyobject(py)
-                .expect_err("serializer panic should become a Python exception");
+            let value = std::collections::BTreeMap::from([(vec![1], "value")]);
+            let direct = to_py(py, &value).unwrap_err();
+            let wrapped = Pythonized(value).into_pyobject(py).unwrap_err();
+            assert!(direct.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+            assert!(wrapped.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+            assert_eq!(wrapped.to_string(), direct.to_string());
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::wrapped(false)]
+    #[case::direct(true)]
+    fn output_conversion_maps_serializer_panics_to_a_base_exception(#[case] direct: bool) {
+        crate::initialize_python();
+        Python::attach(|py| {
+            let error = if direct {
+                to_py(py, &PanickingSerializer).unwrap_err()
+            } else {
+                Pythonized(PanickingSerializer)
+                    .into_pyobject(py)
+                    .unwrap_err()
+            };
             assert!(error.is_instance_of::<PanicException>(py));
             assert_eq!(error.to_string(), "PanicException: serializer panicked");
         });

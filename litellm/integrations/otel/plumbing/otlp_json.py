@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -62,8 +63,14 @@ def encode_spans_json(spans: Sequence[ReadableSpan]) -> bytes:
 
 
 class OTLPJsonSpanExporter(OTLPSpanExporter):
-    def __init__(self, endpoint: str | None, headers: dict[str, str]) -> None:  # mutable-ok: SDK __init__ takes Dict
-        super().__init__(endpoint=endpoint, headers=headers)
+    def __init__(
+        self,
+        endpoint: str | None,
+        headers: dict[str, str],  # mutable-ok: SDK __init__ takes Dict
+        certificate_file: str | None = None,
+        session: "requests.Session | None" = None,
+    ) -> None:
+        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
         self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
 
     def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:

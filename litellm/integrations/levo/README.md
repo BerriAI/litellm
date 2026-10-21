@@ -92,7 +92,7 @@ litellm/integrations/levo/
 
 ## Testing
 
-See the test files in `tests/test_litellm/integrations/levo/`:
+See the test files in `tests/unit/integrations/levo/`:
 - `test_levo.py`: Unit tests for configuration
 - `test_levo_integration.py`: Integration tests for callback registration
 

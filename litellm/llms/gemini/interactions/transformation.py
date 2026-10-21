@@ -274,8 +274,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
 
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
+        response.hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
         return response
 
@@ -313,6 +313,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
+        if not 200 <= raw_response.status_code < 300:
+            raise GeminiError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
         try:
             raw_json: Final = _interaction_body(raw_response)
         except Exception:
@@ -322,7 +328,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 headers=dict(raw_response.headers),
             )
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["headers"] = dict(raw_response.headers)
         return response
 
     def transform_delete_interaction_request(
@@ -363,13 +369,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, dict]:
-        """POST /{api_version}/interactions/{interaction_id}:cancel (if supported)"""
+        """POST /{api_version}/interactions/{interaction_id}/cancel"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}/cancel",
             {},
         )
 

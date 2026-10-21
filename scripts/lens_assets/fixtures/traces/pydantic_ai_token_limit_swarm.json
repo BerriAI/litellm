@@ -1,0 +1,752 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.44.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "86ebc260-1936-400c-a95b-7586433ac958"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.65b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "pydantic-ai",
+            "version": "2.53.0"
+          },
+          "spans": [
+            {
+              "traceId": "33551f56e73710cee91fb7beb1be6cc3",
+              "spanId": "7ca4ac8fb329b897",
+              "parentSpanId": "24b2af12b86ee99c",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791056421543363000",
+              "endTimeUnixNano": "1791056425461706000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "4002"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10348-2267-73e1-8db9-c2b0852388b9"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10348-2268-7087-879a-cf7a3a17ae78"
+                  }
+                },
+                {
+                  "key": "model_request_parameters",
+                  "value": {
+                    "stringValue": "{\"function_tools\":[{\"name\":\"search\",\"parameters_json_schema\":{\"additionalProperties\":false,\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"type\":\"object\"},\"description\":null,\"outer_typed_dict_key\":null,\"strict\":true,\"sequential\":false,\"kind\":\"function\",\"metadata\":null,\"timeout\":null,\"defer_loading\":false,\"unless_native\":null,\"with_native\":null,\"tool_kind\":null,\"return_schema\":null,\"include_return_schema\":null,\"toolset_id\":\"<agent>\",\"capability_id\":null},{\"name\":\"write\",\"parameters_json_schema\":{\"additionalProperties\":false,\"properties\":{\"facts\":{\"type\":\"string\"}},\"required\":[\"facts\"],\"type\":\"object\"},\"description\":null,\"outer_typed_dict_key\":null,\"strict\":true,\"sequential\":false,\"kind\":\"function\",\"metadata\":null,\"timeout\":null,\"defer_loading\":false,\"unless_native\":null,\"with_native\":null,\"tool_kind\":null,\"return_schema\":null,\"include_return_schema\":null,\"toolset_id\":\"<agent>\",\"capability_id\":null}],\"native_tools\":[],\"tool_visibility\":{\"search\":\"visible\",\"write\":\"visible\"},\"revealed_tool_names\":[],\"deferred_capability_ids\":[],\"output_mode\":\"text\",\"output_object\":null,\"output_tools\":[],\"prompted_output_template\":null,\"allow_text_output\":true,\"allow_image_output\":false,\"instruction_parts\":[{\"content\":\"Call search first, then write with the facts, and return the written answer.\",\"dynamic\":false,\"name\":null,\"id\":\"agent\",\"part_kind\":\"instruction\"}],\"thinking\":null}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"function\",\"name\":\"search\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"type\":\"object\"}},{\"type\":\"function\",\"name\":\"write\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"facts\":{\"type\":\"string\"}},\"required\":[\"facts\"],\"type\":\"object\"}}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_hILz5R2pcOQ6GLcp907fCVeQ\",\"name\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"definition of agent trace in AI agents execution trace tool calls observations steps\\\"}\"}],\"finish_reason\":\"tool_call\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Call search first, then write with the facts, and return the written answer.\"}]"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"gen_ai.input.messages\":{\"type\":\"array\"},\"gen_ai.output.messages\":{\"type\":\"array\"},\"gen_ai.system_instructions\":{\"type\":\"array\"},\"model_request_parameters\":{\"type\":\"object\"}}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "73"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "29"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.details.reasoning_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "operation.cost",
+                  "value": {
+                    "doubleValue": 2.18e-5
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_01997c07ed477935006ac15a25f77887d0ac643d353a6f752b"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool_call"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "33551f56e73710cee91fb7beb1be6cc3",
+              "spanId": "8a9938afa4fbec7a",
+              "parentSpanId": "e0b6ec844af041d5",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791056425469899000",
+              "endTimeUnixNano": "1791056428635319000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "4002"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "search_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10348-31f9-7338-8cba-d2e2e0279fa3"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10348-31f9-7338-8cba-d2e31caf91be"
+                  }
+                },
+                {
+                  "key": "model_request_parameters",
+                  "value": {
+                    "stringValue": "{\"function_tools\":[],\"native_tools\":[],\"tool_visibility\":{},\"revealed_tool_names\":[],\"deferred_capability_ids\":[],\"output_mode\":\"text\",\"output_object\":null,\"output_tools\":[],\"prompted_output_template\":null,\"allow_text_output\":true,\"allow_image_output\":false,\"instruction_parts\":[{\"content\":\"Find key facts about the topic.\",\"dynamic\":false,\"name\":null,\"id\":\"agent\",\"part_kind\":\"instruction\"}],\"thinking\":null}"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"definition of agent trace in AI agents execution trace tool calls observations steps\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[],\"finish_reason\":\"length\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Find key facts about the topic.\"}]"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"gen_ai.input.messages\":{\"type\":\"array\"},\"gen_ai.output.messages\":{\"type\":\"array\"},\"gen_ai.system_instructions\":{\"type\":\"array\"},\"model_request_parameters\":{\"type\":\"object\"}}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "30"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.details.accepted_prediction_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.details.audio_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.details.reasoning_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.details.rejected_prediction_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "operation.cost",
+                  "value": {
+                    "doubleValue": 0.000131
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-EUzsnFpH3W2H1tbWvpBypOpEPupRA"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "length"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "33551f56e73710cee91fb7beb1be6cc3",
+              "spanId": "e0b6ec844af041d5",
+              "parentSpanId": "0f26ef7b42e26366",
+              "name": "invoke_agent search_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791056425467616000",
+              "endTimeUnixNano": "1791056428700139000",
+              "attributes": [
+                {
+                  "key": "model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "agent_name",
+                  "value": {
+                    "stringValue": "search_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "search_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10348-31f9-7338-8cba-d2e2e0279fa3"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10348-31f9-7338-8cba-d2e31caf91be"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "logfire.msg",
+                  "value": {
+                    "stringValue": "search_agent run"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.input_tokens",
+                  "value": {
+                    "intValue": "30"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.output_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.details.accepted_prediction_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.details.audio_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
+                  "value": {
+                    "intValue": "256"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.details.rejected_prediction_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "pydantic_ai.all_messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"definition of agent trace in AI agents execution trace tool calls observations steps\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Find key facts about the topic.\"}]"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"pydantic_ai.all_messages\":{\"type\":\"array\"},\"gen_ai.system_instructions\":{\"type\":\"array\"},\"final_result\":{\"type\":\"object\"}}}"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791056428700080000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "pydantic_ai.exceptions.UnexpectedModelBehavior"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_instrumentation.py\", line 672, in record_uncaught_errors\n    yield\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 246, in wrap_run\n    result = await handler()\n             ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 265, in _do_run\n    raise extract_error(_run_error) if extract_error is not None else _run_error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 343, in _run_lifecycle_hooks\n    yield _RunLifecycle(short_circuited=short_circuited)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 4465, in open\n    yield agent_run\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 1439, in iter\n    yield agent_run\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py\", line 671, in run\n    node = await agent_run.next(node)  # pyright: ignore[reportArgumentType]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 564, in next\n    return await self._run_node_with_hooks(node, self._stream_and_advance)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 485, in _run_node_with_hooks\n    return await self._wrap_and_advance(run_context, node, step_fn)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 431, in _wrap_and_advance\n    result = await step_fn(node)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 578, in _stream_and_advance\n    return await self._advance_graph(node)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 405, in _advance_graph\n    task = await self._graph_run.next(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 584, in next\n    return await anext(self)\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 561, in __anext__\n    raise self._next.error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 862, in _run_tracked_task\n    result = await self._run_task(t_)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 920, in _run_task\n    output = await node.call(step_context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/step.py\", line 253, in _call_node\n    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2121, in run\n    async with self.stream(ctx):\n               ~~~~~~~~~~~^^^^^\n  File \"/home/user/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 221, in __aexit__\n    await anext(self.gen)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2142, in stream\n    async for _event in stream:\n        pass\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 643, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_run_context.py\", line 101, in dispatch_event_stream\n    async for event in stream:\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        yield ctx._event_stream_replacements.pop(event_id, event)  # pyright: ignore[reportPrivateUsage]\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 222, in _with_event_stream_buffer\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2351, in _run_stream\n    async for event in _run_stream():\n        self.model_response.workspace_ref = ctx.deps.workspace_ref\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2214, in _run_stream\n    raise exceptions.UnexpectedModelBehavior(\n        f'Model token limit ({ctx.state.last_max_tokens or \"provider default\"}) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.'\n    )\npydantic_ai.exceptions.UnexpectedModelBehavior: Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "UnexpectedModelBehavior: Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "33551f56e73710cee91fb7beb1be6cc3",
+              "spanId": "0f26ef7b42e26366",
+              "parentSpanId": "24b2af12b86ee99c",
+              "name": "execute_tool search",
+              "kind": 1,
+              "startTimeUnixNano": "1791056425464819000",
+              "endTimeUnixNano": "1791056428738477000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "call_hILz5R2pcOQ6GLcp907fCVeQ"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"query\":\"definition of agent trace in AI agents execution trace tool calls observations steps\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10348-2267-73e1-8db9-c2b0852388b9"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10348-2268-7087-879a-cf7a3a17ae78"
+                  }
+                },
+                {
+                  "key": "logfire.msg",
+                  "value": {
+                    "stringValue": "running tool: search"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"gen_ai.tool.call.arguments\":{\"type\":\"object\"},\"gen_ai.tool.call.result\":{\"type\":\"object\"},\"gen_ai.tool.name\":{},\"gen_ai.tool.call.id\":{}}}"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791056428738444000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "pydantic_ai.exceptions.UnexpectedModelBehavior"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 498, in _run_tool_span\n    result = await action()\n             ^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1060, in wrapped\n    return await cap.wrap_tool_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        _ctx_for_cap(cap, ctx), call=call, tool_def=tool_def, args=args, handler=inner\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1121, in wrap_tool_execute\n    return await handler(args)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1060, in wrapped\n    return await cap.wrap_tool_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        _ctx_for_cap(cap, ctx), call=call, tool_def=tool_def, args=args, handler=inner\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1121, in wrap_tool_execute\n    return await handler(args)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 499, in do_execute\n    return await self._raw_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n        modified_validated, usage=usage, wrap_validation_errors=wrap_validation_errors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 1059, in _raw_execute\n    tool_result = await self.toolset.call_tool(\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/_tool_search.py\", line 437, in call_tool\n    return await self.wrapped.call_tool(name, tool_args, ctx, tool)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/wrapper.py\", line 70, in call_tool\n    return await self.wrapped.call_tool(name, tool_args, ctx, tool)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/combined.py\", line 103, in call_tool\n    return await tool.source_toolset.call_tool(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        name, tool_args, ctx, replace(tool.source_tool, tool_def=source_tool_def)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/function.py\", line 711, in call_tool\n    return await tool.call_func(tool_args, ctx)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_function_schema.py\", line 85, in call\n    return await function(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/private/tmp/trace-sdk-pydantic/swarm.py\", line 40, in search\n    return (await search_agent.run(query, usage=ctx.usage)).output\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py\", line 671, in run\n    node = await agent_run.next(node)  # pyright: ignore[reportArgumentType]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 564, in next\n    return await self._run_node_with_hooks(node, self._stream_and_advance)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 485, in _run_node_with_hooks\n    return await self._wrap_and_advance(run_context, node, step_fn)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 431, in _wrap_and_advance\n    result = await step_fn(node)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 578, in _stream_and_advance\n    return await self._advance_graph(node)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 405, in _advance_graph\n    task = await self._graph_run.next(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 584, in next\n    return await anext(self)\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 561, in __anext__\n    raise self._next.error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 862, in _run_tracked_task\n    result = await self._run_task(t_)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 920, in _run_task\n    output = await node.call(step_context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/step.py\", line 253, in _call_node\n    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2121, in run\n    async with self.stream(ctx):\n               ~~~~~~~~~~~^^^^^\n  File \"/home/user/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 221, in __aexit__\n    await anext(self.gen)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2142, in stream\n    async for _event in stream:\n        pass\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 643, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_run_context.py\", line 101, in dispatch_event_stream\n    async for event in stream:\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        yield ctx._event_stream_replacements.pop(event_id, event)  # pyright: ignore[reportPrivateUsage]\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 222, in _with_event_stream_buffer\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2351, in _run_stream\n    async for event in _run_stream():\n        self.model_response.workspace_ref = ctx.deps.workspace_ref\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2214, in _run_stream\n    raise exceptions.UnexpectedModelBehavior(\n        f'Model token limit ({ctx.state.last_max_tokens or \"provider default\"}) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.'\n    )\npydantic_ai.exceptions.UnexpectedModelBehavior: Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "True"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "33551f56e73710cee91fb7beb1be6cc3",
+              "spanId": "24b2af12b86ee99c",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791056421521591000",
+              "endTimeUnixNano": "1791056428770544000",
+              "attributes": [
+                {
+                  "key": "model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "agent_name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10348-2267-73e1-8db9-c2b0852388b9"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10348-2268-7087-879a-cf7a3a17ae78"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "logfire.msg",
+                  "value": {
+                    "stringValue": "research_agent run"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.input_tokens",
+                  "value": {
+                    "intValue": "73"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.output_tokens",
+                  "value": {
+                    "intValue": "29"
+                  }
+                },
+                {
+                  "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "pydantic_ai.all_messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Call search first, then write with the facts, and return the written answer.\"}]"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"pydantic_ai.all_messages\":{\"type\":\"array\"},\"gen_ai.system_instructions\":{\"type\":\"array\"},\"final_result\":{\"type\":\"object\"}}}"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791056428770483000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "pydantic_ai.exceptions.UnexpectedModelBehavior"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_instrumentation.py\", line 672, in record_uncaught_errors\n    yield\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 246, in wrap_run\n    result = await handler()\n             ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 265, in _do_run\n    raise extract_error(_run_error) if extract_error is not None else _run_error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 343, in _run_lifecycle_hooks\n    yield _RunLifecycle(short_circuited=short_circuited)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 4465, in open\n    yield agent_run\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 1439, in iter\n    yield agent_run\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py\", line 671, in run\n    node = await agent_run.next(node)  # pyright: ignore[reportArgumentType]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 564, in next\n    return await self._run_node_with_hooks(node, self._stream_and_advance)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 485, in _run_node_with_hooks\n    return await self._wrap_and_advance(run_context, node, step_fn)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 431, in _wrap_and_advance\n    result = await step_fn(node)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 578, in _stream_and_advance\n    return await self._advance_graph(node)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 405, in _advance_graph\n    task = await self._graph_run.next(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 584, in next\n    return await anext(self)\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 561, in __anext__\n    raise self._next.error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 862, in _run_tracked_task\n    result = await self._run_task(t_)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 920, in _run_task\n    output = await node.call(step_context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/step.py\", line 253, in _call_node\n    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2121, in run\n    async with self.stream(ctx):\n               ~~~~~~~~~~~^^^^^\n  File \"/home/user/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 221, in __aexit__\n    await anext(self.gen)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2142, in stream\n    async for _event in stream:\n        pass\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 643, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_run_context.py\", line 101, in dispatch_event_stream\n    async for event in stream:\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        yield ctx._event_stream_replacements.pop(event_id, event)  # pyright: ignore[reportPrivateUsage]\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 222, in _with_event_stream_buffer\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2351, in _run_stream\n    async for event in _run_stream():\n        self.model_response.workspace_ref = ctx.deps.workspace_ref\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2316, in _run_stream\n    async for event in self._handle_tool_calls(ctx, tool_calls, response_output=response_output):\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2438, in _handle_tool_calls\n    async for event in process_tool_calls(\n    ...<9 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 371, in process_tool_calls\n    async for event in processor.run():\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 504, in run\n    async for event in self._run_strategy():\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 1166, in _run_strategy\n    async for event in flush_pending():\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 1154, in flush_pending\n    async for event in self._run_function_calls(batch):\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 698, in _run_function_calls\n    async for event in self._call_tools(\n    ...<6 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 879, in _call_tools\n    if event := await handle_call_or_result(item, index_by_task[item]):\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 819, in handle_call_or_result\n    (await coro_or_task) if inspect.isawaitable(coro_or_task) else coro_or_task.result()\n     ^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_tool_execution.py\", line 733, in _call_tool\n    tool_result = await self.tool_manager.execute_tool_call(validated)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 783, in execute_tool_call\n    return await self._execute_tool_call_impl(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        validated, usage=self.ctx.usage, wrap_validation_errors=wrap_validation_errors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 1031, in _execute_tool_call_impl\n    tool_result = await self._run_execute_hooks(\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        validated, usage=usage, wrap_validation_errors=wrap_validation_errors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 522, in _run_execute_hooks\n    tool_result = await cap.on_tool_execute_error(ctx, call=call, tool_def=tool_def, args=args, error=e)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 837, in on_tool_execute_error\n    raise error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 832, in on_tool_execute_error\n    return await capability.on_tool_execute_error(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        cap_ctx, call=call, tool_def=tool_def, args=args, error=error\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1153, in on_tool_execute_error\n    raise error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 832, in on_tool_execute_error\n    return await capability.on_tool_execute_error(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        cap_ctx, call=call, tool_def=tool_def, args=args, error=error\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1153, in on_tool_execute_error\n    raise error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 832, in on_tool_execute_error\n    return await capability.on_tool_execute_error(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        cap_ctx, call=call, tool_def=tool_def, args=args, error=error\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1153, in on_tool_execute_error\n    raise error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 514, in _run_execute_hooks\n    tool_result = await cap.wrap_tool_execute(\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        ctx, call=call, tool_def=tool_def, args=args, handler=do_execute\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 816, in wrap_tool_execute\n    return await chain(args)\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1060, in wrapped\n    return await cap.wrap_tool_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        _ctx_for_cap(cap, ctx), call=call, tool_def=tool_def, args=args, handler=inner\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 561, in wrap_tool_execute\n    return await self._run_tool_span(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<7 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 498, in _run_tool_span\n    result = await action()\n             ^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1060, in wrapped\n    return await cap.wrap_tool_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        _ctx_for_cap(cap, ctx), call=call, tool_def=tool_def, args=args, handler=inner\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1121, in wrap_tool_execute\n    return await handler(args)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1060, in wrapped\n    return await cap.wrap_tool_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        _ctx_for_cap(cap, ctx), call=call, tool_def=tool_def, args=args, handler=inner\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 1121, in wrap_tool_execute\n    return await handler(args)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 499, in do_execute\n    return await self._raw_execute(\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n        modified_validated, usage=usage, wrap_validation_errors=wrap_validation_errors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/tool_manager.py\", line 1059, in _raw_execute\n    tool_result = await self.toolset.call_tool(\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/_tool_search.py\", line 437, in call_tool\n    return await self.wrapped.call_tool(name, tool_args, ctx, tool)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/wrapper.py\", line 70, in call_tool\n    return await self.wrapped.call_tool(name, tool_args, ctx, tool)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/combined.py\", line 103, in call_tool\n    return await tool.source_toolset.call_tool(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        name, tool_args, ctx, replace(tool.source_tool, tool_def=source_tool_def)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/toolsets/function.py\", line 711, in call_tool\n    return await tool.call_func(tool_args, ctx)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_function_schema.py\", line 85, in call\n    return await function(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/private/tmp/trace-sdk-pydantic/swarm.py\", line 40, in search\n    return (await search_agent.run(query, usage=ctx.usage)).output\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py\", line 671, in run\n    node = await agent_run.next(node)  # pyright: ignore[reportArgumentType]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 564, in next\n    return await self._run_node_with_hooks(node, self._stream_and_advance)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 485, in _run_node_with_hooks\n    return await self._wrap_and_advance(run_context, node, step_fn)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 431, in _wrap_and_advance\n    result = await step_fn(node)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 578, in _stream_and_advance\n    return await self._advance_graph(node)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 405, in _advance_graph\n    task = await self._graph_run.next(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 584, in next\n    return await anext(self)\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 561, in __anext__\n    raise self._next.error\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 862, in _run_tracked_task\n    result = await self._run_task(t_)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 920, in _run_task\n    output = await node.call(step_context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/step.py\", line 253, in _call_node\n    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2121, in run\n    async with self.stream(ctx):\n               ~~~~~~~~~~~^^^^^\n  File \"/home/user/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 221, in __aexit__\n    await anext(self.gen)\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2142, in stream\n    async for _event in stream:\n        pass\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 643, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 890, in wrap_run_event_stream\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_run_context.py\", line 101, in dispatch_event_stream\n    async for event in stream:\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        yield ctx._event_stream_replacements.pop(event_id, event)  # pyright: ignore[reportPrivateUsage]\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 222, in _with_event_stream_buffer\n    async for event in stream:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2351, in _run_stream\n    async for event in _run_stream():\n        self.model_response.workspace_ref = ctx.deps.workspace_ref\n        yield event\n  File \"/home/user/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 2214, in _run_stream\n    raise exceptions.UnexpectedModelBehavior(\n        f'Model token limit ({ctx.state.last_max_tokens or \"provider default\"}) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.'\n    )\npydantic_ai.exceptions.UnexpectedModelBehavior: Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "UnexpectedModelBehavior: Model token limit (256) exceeded before any response was generated. Increase the `max_tokens` model setting, or simplify the prompt to result in a shorter response that will fit within the limit.",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

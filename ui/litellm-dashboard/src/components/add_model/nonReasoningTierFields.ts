@@ -12,7 +12,7 @@ export const nonReasoningTierFields = (
   classifierType: ClassifierType,
   value: ComplexityRouterConfigValue,
 ): Pick<ComplexityRouterConfigValue, "enable_non_reasoning_tier" | "tiers" | "plan_mode_min_tier"> => {
-  if (classifierType === "llm") {
+  if (classifierType === "llm" || classifierType === "jev") {
     return {
       enable_non_reasoning_tier: value.enable_non_reasoning_tier,
       tiers: value.tiers,
