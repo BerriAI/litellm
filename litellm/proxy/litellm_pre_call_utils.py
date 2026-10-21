@@ -469,6 +469,7 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logg
 _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "is_silent_experiment",
         "original_model_group",
         "previous_models",
         "request_retry_count",

@@ -8278,6 +8278,7 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
 
 _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
+    "is_silent_experiment": True,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
@@ -8312,6 +8313,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
 
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
+    assert "is_silent_experiment" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]

@@ -3124,6 +3124,8 @@ class Router:
         silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
+        if "litellm_metadata" in silent_kwargs and isinstance(silent_kwargs["litellm_metadata"], dict):
+            silent_kwargs["litellm_metadata"] = {**silent_kwargs["litellm_metadata"], "is_silent_experiment": True}
 
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)

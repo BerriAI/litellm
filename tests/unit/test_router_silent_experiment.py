@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import time
 from collections.abc import Callable, Mapping
@@ -280,6 +281,34 @@ async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_
     assert metadata_by_group["shadow-a"]["is_silent_experiment"] is True
     assert metadata_by_group["shadow-b"]["is_silent_experiment"] is True
     assert "is_silent_experiment" not in metadata_by_group["primary-model"]
+
+
+@pytest.mark.asyncio
+async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_litellm_metadata(recording_logger):
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        litellm_metadata={"user_api_key": "test-key"},
+    )
+    await _wait_for_all_successes(recording_logger, expected=3)
+
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    silent_by_group: Final = {
+        call["standard_logging_object"]["model_group"]: json.loads(
+            get_logging_payload(
+                kwargs=call,
+                response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+                start_time=now,
+                end_time=now,
+            )["metadata"]
+        )["is_silent_experiment"]
+        for call in recording_logger.success_kwargs
+    }
+    assert silent_by_group == {"primary-model": False, "shadow-a": True, "shadow-b": True}
 
 
 def test_multiple_shadow_targets_fan_out_sync(recording_logger):
