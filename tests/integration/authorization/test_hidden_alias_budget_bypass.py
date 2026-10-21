@@ -62,7 +62,7 @@ from integration.authorization._hidden_alias_budget import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 # $0 comes from litellm's own cost-map row (model_prices_and_context_window.json, added 2025-10-14 in 900a57f5b1f):
 # Lemonade is a local inference server, so there is no vendor price for the row to drift from. A row that gains a

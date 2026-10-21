@@ -5,13 +5,13 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeAlias, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeAlias, overload
 
 from fastapi import (
     APIRouter,
@@ -24,6 +24,7 @@ from fastapi import (
     Response,
 )
 from pydantic import TypeAdapter, ValidationError
+from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -52,7 +53,12 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_and_broadcast,
+    evict_local,
+    evict_shared,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
@@ -63,6 +69,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    delete_validated_team_rows,
     new_team,
     team_member_add,
     team_member_delete,
@@ -103,6 +110,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
 
@@ -316,9 +324,13 @@ async def _check_team_exists(team_id: str) -> LiteLLM_TeamTable:
     team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
     if not team:
-        raise HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
+        raise _group_not_found(team_id)
 
     return team
+
+
+def _group_not_found(team_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
 
 
 def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
@@ -481,10 +493,7 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
-    endpoints do, and the role is left untouched when the feature is off. The users'
-    rows are locked through ``USER_ROWS_LOCK_SQL`` before their teams are read, the
-    same lock a roster write takes, so a concurrent group push cannot change a
-    member's teams between the read and the role write.
+    endpoints do, and the role is left untouched when the feature is off.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -493,28 +502,46 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     ids: Final = tuple(dict.fromkeys(user_ids))
     if not ids:
         return
-    default_role: Final = _default_scim_user_role()
     async with prisma_client.tx(timeout=ROSTER_TX_TIMEOUT) as tx:
-        await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(ids))
-        rows: Final = await find_many_in(user_tx_db(tx), "user_id", ids)
-        team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams for row in rows)))
-        teams: Final = await find_many_in(team_tx_db(tx), "team_id", team_ids)
-        alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
-        resolved: Final = tuple(
-            (
-                row.user_id,
-                _resolve_scim_user_role(
-                    [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams],
-                    admin_group,
-                    default_role,
-                ),
-            )
-            for row in rows
+        await _write_scim_member_roles_tx(tx, ids, admin_group=admin_group)
+
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    evict_local(cache_keys=ids, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=ids, cache=user_api_key_cache)
+    await broadcast_evictions(cache_keys=ids)
+
+
+async def _write_scim_member_roles_tx(tx: "Prisma", user_ids: Sequence[str], *, admin_group: str) -> None:
+    """
+    Write each user's role resolved from the teams they are in, on ``tx``. The users'
+    rows are locked through ``USER_ROWS_LOCK_SQL`` before their teams are read, the
+    same lock a roster write takes, so a concurrent group push cannot change a
+    member's teams between the read and the role write.
+    """
+    if not user_ids:
+        return
+    default_role: Final = _default_scim_user_role()
+    await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(user_ids))
+    rows: Final = await find_many_in(user_tx_db(tx), "user_id", user_ids)
+    team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams for row in rows)))
+    teams: Final = await find_many_in(team_tx_db(tx), "team_id", team_ids)
+    alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
+    resolved: Final = tuple(
+        (
+            row.user_id,
+            _resolve_scim_user_role(
+                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams],
+                admin_group,
+                default_role,
+            ),
         )
-        for role in dict.fromkeys(role for _, role in resolved):
-            await tx.execute_raw(
-                _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
-            )
+        for row in rows
+    )
+    for role in dict.fromkeys(role for _, role in resolved):
+        await tx.execute_raw(
+            _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
+        )
 
 
 class _ResolvedUserMember(NamedTuple):
@@ -2271,6 +2298,217 @@ def _handle_multi_valued_attribute_update(path: str, op_type: str, value: object
     metadata[metadata_key] = dumped
 
 
+def _enterprise_extension_sub_path(path: str) -> str | None:
+    schema: Final = SCIM_ENTERPRISE_USER_SCHEMA
+    if path.casefold() == schema.casefold():
+        return ""
+    prefix: Final = f"{schema}:"
+    if path.casefold().startswith(prefix.casefold()):
+        return path[len(prefix) :]
+    return None
+
+
+def _scim_model_field_names(model_fields: Mapping[str, FieldInfo]) -> Mapping[str, str]:
+    return {
+        **{field_name.casefold(): field_name for field_name in model_fields},
+        **{
+            field.alias.casefold(): field_name
+            for field_name, field in model_fields.items()
+            if isinstance(field.alias, str)
+        },
+    }
+
+
+def _canonicalize_scim_model_data(
+    value: Mapping[str, object],
+    model_fields: Mapping[str, FieldInfo],
+) -> Mapping[str, object]:
+    field_names: Final = _scim_model_field_names(model_fields)
+    return {field_names.get(key.casefold(), key): field_value for key, field_value in value.items()}
+
+
+def _canonicalize_enterprise_data(value: Mapping[str, object]) -> Mapping[str, object]:
+    enterprise_data: Final = _canonicalize_scim_model_data(value, SCIMEnterpriseUser.model_fields)
+    manager: Final = enterprise_data.get("manager")
+    if isinstance(manager, str):
+        return {**enterprise_data, "manager": {"value": manager}}
+    if not isinstance(manager, dict):
+        return enterprise_data
+    return {
+        **enterprise_data,
+        "manager": _canonicalize_scim_model_data(
+            _JSON_OBJECT_ADAPTER.validate_python(manager),
+            SCIMUserManager.model_fields,
+        ),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidEnterpriseValue:
+    detail: str
+
+
+def _merge_enterprise_data(
+    existing: Mapping[str, object],
+    incoming: Mapping[str, object],
+    incoming_manager_is_object: bool,
+) -> Mapping[str, object]:
+    merged: Final[Mapping[str, object]] = {**existing, **incoming}
+    existing_manager: Final = existing.get("manager")
+    incoming_manager: Final = incoming.get("manager")
+    if incoming_manager_is_object and isinstance(existing_manager, dict) and isinstance(incoming_manager, dict):
+        existing_manager_data: Final = _canonicalize_scim_model_data(
+            _JSON_OBJECT_ADAPTER.validate_python(existing_manager),
+            SCIMUserManager.model_fields,
+        )
+        incoming_manager_data: Final = _JSON_OBJECT_ADAPTER.validate_python(incoming_manager)
+        return {**merged, "manager": {**existing_manager_data, **incoming_manager_data}}
+    return merged
+
+
+def _validate_enterprise_update(
+    value: Mapping[str, object],
+) -> Mapping[str, object] | None | _InvalidEnterpriseValue:
+    try:
+        enterprise: Final = SCIMEnterpriseUser.model_validate(value)
+    except ValidationError:
+        return _InvalidEnterpriseValue(detail="Invalid value for the enterprise extension")
+    dumped: Final = enterprise.model_dump(by_alias=True, exclude_none=True)
+    return dumped if dumped else None
+
+
+def _raise_invalid_enterprise_value(error: _InvalidEnterpriseValue) -> NoReturn:
+    raise HTTPException(status_code=400, detail={"error": error.detail})
+
+
+def _handle_enterprise_update(
+    sub_path: str,
+    op_type: str,
+    value: object,
+    existing_enterprise: Mapping[str, object],
+) -> Mapping[str, object] | None | _InvalidEnterpriseValue:
+    if op_type == "remove" and not sub_path:
+        return None
+
+    if not sub_path:
+        if not isinstance(value, dict):
+            return _InvalidEnterpriseValue(detail="The enterprise extension value must be an object")
+        incoming_value: Final = _JSON_OBJECT_ADAPTER.validate_python(value)
+        incoming: Final = _canonicalize_enterprise_data(incoming_value)
+        incoming_manager_is_object: Final = isinstance(
+            _canonicalize_scim_model_data(incoming_value, SCIMEnterpriseUser.model_fields).get("manager"),
+            dict,
+        )
+        return _validate_enterprise_update(
+            _merge_enterprise_data(existing_enterprise, incoming, incoming_manager_is_object)
+        )
+
+    path_parts: Final = sub_path.split(".")
+    if len(path_parts) == 1:
+        field_name: Final = _scim_model_field_names(SCIMEnterpriseUser.model_fields).get(sub_path.casefold())
+        if field_name is None:
+            return _validate_enterprise_update(existing_enterprise)
+        if op_type == "remove":
+            return _validate_enterprise_update(
+                {key: attr for key, attr in existing_enterprise.items() if key != field_name}
+            )
+        if value is None:
+            return _InvalidEnterpriseValue(detail=f"The {op_type} operation requires a 'value' member")
+        field_incoming: Final = _canonicalize_enterprise_data({field_name: value})
+        field_incoming_manager_is_object: Final = field_name == "manager" and isinstance(value, dict)
+        return _validate_enterprise_update(
+            _merge_enterprise_data(
+                existing_enterprise,
+                field_incoming,
+                field_incoming_manager_is_object,
+            )
+        )
+
+    if len(path_parts) == 2 and path_parts[0].casefold() == "manager":
+        manager_field: Final = _scim_model_field_names(SCIMUserManager.model_fields).get(path_parts[1].casefold())
+        if manager_field is None:
+            return _validate_enterprise_update(existing_enterprise)
+        existing_manager: Final = existing_enterprise.get("manager")
+        manager_data: Final[Mapping[str, object]] = (
+            _canonicalize_scim_model_data(
+                _JSON_OBJECT_ADAPTER.validate_python(existing_manager),
+                SCIMUserManager.model_fields,
+            )
+            if isinstance(existing_manager, dict)
+            else {}
+        )
+        if op_type == "remove":
+            removed_manager: Final[Mapping[str, object]] = {
+                key: attr for key, attr in manager_data.items() if key != manager_field
+            }
+            updated_enterprise: Final[Mapping[str, object]] = (
+                {**existing_enterprise, "manager": removed_manager}
+                if removed_manager
+                else {key: attr for key, attr in existing_enterprise.items() if key != "manager"}
+            )
+            return _validate_enterprise_update(updated_enterprise)
+        if value is None:
+            return _InvalidEnterpriseValue(detail=f"The {op_type} operation requires a 'value' member")
+        updated_manager: Final[Mapping[str, object]] = {**manager_data, manager_field: value}
+        return _validate_enterprise_update({**existing_enterprise, "manager": updated_manager})
+
+    return _validate_enterprise_update(existing_enterprise)
+
+
+def _enterprise_update_for_pathless_key(
+    key_and_value: tuple[str, object],
+    *,
+    op_type: str,
+) -> Iterator[tuple[str, str, object]]:
+    key, value = key_and_value
+    sub_path: Final = _enterprise_extension_sub_path(key)
+    if sub_path is not None:
+        yield sub_path, op_type, value
+
+
+def _enterprise_updates_for_operation(
+    op: SCIMPatchOperation,
+) -> Iterator[tuple[str, str, object]]:
+    path: Final = op.path.lower() if isinstance(op.path, str) else ""
+    value: Final[object] = TypeAdapter(object).validate_python(op.value)
+    if not path and isinstance(value, dict):
+        pathless_values: Final[Mapping[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(value)
+        yield from chain.from_iterable(
+            map(partial(_enterprise_update_for_pathless_key, op_type=op.op), pathless_values.items())
+        )
+        return
+    sub_path: Final = _enterprise_extension_sub_path(path)
+    if sub_path is not None:
+        yield sub_path, op.op, value
+
+
+def _enterprise_updates(operations: Sequence[SCIMPatchOperation]) -> Iterator[tuple[str, str, object]]:
+    yield from chain.from_iterable(map(_enterprise_updates_for_operation, operations))
+
+
+def _apply_enterprise_update(
+    state: Mapping[str, object] | None | _InvalidEnterpriseValue,
+    update: tuple[str, str, object],
+) -> Mapping[str, object] | None | _InvalidEnterpriseValue:
+    if isinstance(state, _InvalidEnterpriseValue):
+        return state
+    sub_path, op_type, value = update
+    existing_enterprise: Final[Mapping[str, object]] = {} if state is None else state
+    return _handle_enterprise_update(sub_path, op_type, value, existing_enterprise)
+
+
+def _apply_enterprise_updates(
+    updates: Sequence[tuple[str, str, object]],
+    stored_enterprise: object,
+) -> Mapping[str, object] | None | _InvalidEnterpriseValue:
+    initial_enterprise: Final[Mapping[str, object] | None] = (
+        _canonicalize_enterprise_data(_JSON_OBJECT_ADAPTER.validate_python(stored_enterprise))
+        if isinstance(stored_enterprise, dict)
+        else None
+    )
+    return reduce(_apply_enterprise_update, updates, initial_enterprise)
+
+
 def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: dict[str, object]) -> None:
     """Handle generic metadata operations for unknown paths."""
     if op_type == "remove":
@@ -2285,20 +2523,37 @@ def _apply_patch_ops(
 ) -> tuple[dict[str, object], set[str]]:
     """Apply patch operations and return update data and final team set."""
     update_data: Final[dict[str, object]] = {}
-    metadata: Final = existing_user.metadata or {}
-    scim_metadata: Final = metadata.get("scim_metadata", {})
+    stored_metadata: Final[object] = TypeAdapter(object).validate_python(existing_user.model_dump().get("metadata"))
+    metadata: Final = _JSON_OBJECT_ADAPTER.validate_python(stored_metadata) if isinstance(stored_metadata, dict) else {}
+    stored_scim_metadata: Final = metadata.get("scim_metadata")
+    scim_metadata: Final = (
+        _JSON_OBJECT_ADAPTER.validate_python(stored_scim_metadata) if isinstance(stored_scim_metadata, dict) else {}
+    )
+    enterprise_updates: Final = tuple(_enterprise_updates(patch_ops.Operations))
+    enterprise: Final[Mapping[str, object] | None | _InvalidEnterpriseValue] = (
+        _apply_enterprise_updates(
+            enterprise_updates,
+            metadata.get(SCIM_ENTERPRISE_METADATA_KEY),
+        )
+        if enterprise_updates
+        else None
+    )
+    if isinstance(enterprise, _InvalidEnterpriseValue):
+        _raise_invalid_enterprise_value(enterprise)
 
     teams_set: Final[set[str]] = set(existing_user.teams or [])
     replace_team_set: set[str] | None = None
 
     for op in patch_ops.Operations:
-        path = (op.path or "").lower()
+        path = op.path.lower() if isinstance(op.path, str) else ""
         value = op.value
         op_type = op.op
 
         # Handle SCIM operations without path where value contains the fields
         if not path and isinstance(value, dict):
-            for key, val in value.items():
+            for key, val in _JSON_OBJECT_ADAPTER.validate_python(value).items():
+                if _enterprise_extension_sub_path(key) is not None:
+                    continue
                 key_lower = key.lower()
                 if key_lower == "active":
                     _handle_active_update(op_type, val, metadata)
@@ -2309,7 +2564,7 @@ def _apply_patch_ops(
                 elif key_lower in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
                     _handle_multi_valued_attribute_update(key_lower, op_type, val, metadata)
                 elif key_lower == "name" and isinstance(val, dict):
-                    for name_key, name_val in val.items():
+                    for name_key, name_val in _JSON_OBJECT_ADAPTER.validate_python(val).items():
                         name_key_lower = name_key.lower()
                         if name_key_lower in ("givenname", "familyname"):
                             _handle_name_update(
@@ -2334,12 +2589,22 @@ def _apply_patch_ops(
             new_replace_set = _handle_group_operations(op_type, value, teams_set, op.path)
             if new_replace_set is not None:
                 replace_team_set = new_replace_set
+        elif _enterprise_extension_sub_path(path) is not None:
+            continue
         else:
             _handle_generic_metadata(path, op_type, value, metadata)
 
     final_team_set: Final = replace_team_set if replace_team_set is not None else teams_set
-    metadata["scim_metadata"] = scim_metadata
-    update_data["metadata"] = metadata
+    final_metadata: Final = (
+        {
+            **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},
+            "scim_metadata": scim_metadata,
+            **({SCIM_ENTERPRISE_METADATA_KEY: enterprise} if enterprise is not None else {}),
+        }
+        if enterprise_updates
+        else {**metadata, "scim_metadata": scim_metadata}
+    )
+    update_data["metadata"] = final_metadata
     return update_data, final_team_set
 
 
@@ -2812,7 +3077,8 @@ async def update_group(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_group(
-    group_id: str = Path(..., title="Group ID"),
+    group_id: Annotated[str, Path(title="Group ID")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Delete a group according to SCIM v2 protocol
@@ -2825,23 +3091,22 @@ async def delete_group(
         existing_team: Final = await _check_team_exists(group_id)
         raise_if_teams_hold_ptu_shares((group_id,), llm_router)
 
-        member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
-
-        # For each member, remove this team from their teams list
-        for member_id in member_ids:
-            user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": member_id})
-            if user:
-                current_teams = user.teams or []
-                if group_id in current_teams:
-                    new_teams = [t for t in current_teams if t != group_id]
-                    await _table(UserRepository(prisma_client)).update(
-                        where={"user_id": member_id}, data={"teams": new_teams}
-                    )
-
-        await _recompute_scim_member_roles(prisma_client, member_ids)
-
-        # Delete team
-        await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
+        admin_group: Final = await _get_scim_admin_group()
+        deleted: Final = await delete_validated_team_rows(
+            teams=(LiteLLM_TeamTable.model_validate(existing_team.model_dump()),),
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key=user_api_key_dict.api_key,
+                user_id=user_api_key_dict.user_id,
+            ),
+            litellm_changed_by=None,
+            before_commit=(
+                None if admin_group is None else partial(_write_scim_member_roles_tx, admin_group=admin_group)
+            ),
+        )
+        if group_id not in deleted.team_ids:
+            raise _group_not_found(group_id)
 
         return Response(status_code=204)
 

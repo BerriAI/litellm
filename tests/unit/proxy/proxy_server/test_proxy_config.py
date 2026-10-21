@@ -2381,6 +2381,30 @@ def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
     assert result == {"TEST_LOAD_ENV_X": "hello", "set": True, "len": 1}
 
 
+def test_ProxyConfig__load_environment_variables_warns_when_the_config_replaces_a_process_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setenv("TEST_LOAD_ENV_OVERRIDDEN", "from-process")
+    monkeypatch.setenv("TEST_LOAD_ENV_SAME", "same-value")
+    monkeypatch.delenv("TEST_LOAD_ENV_FRESH", raising=False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyConfig()._load_environment_variables(
+            {
+                "environment_variables": {
+                    "TEST_LOAD_ENV_OVERRIDDEN": "from-config",
+                    "TEST_LOAD_ENV_SAME": "same-value",
+                    "TEST_LOAD_ENV_FRESH": "fresh-value",
+                }
+            }
+        )
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert os.environ["TEST_LOAD_ENV_OVERRIDDEN"] == "from-config"
+    assert len(warnings) == 1
+    assert "TEST_LOAD_ENV_OVERRIDDEN" in warnings[0]
+    assert "from-process" not in warnings[0] and "from-config" not in warnings[0]
+    assert "TEST_LOAD_ENV_SAME" not in warnings[0] and "TEST_LOAD_ENV_FRESH" not in warnings[0]
+
+
 def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypatch):
     original_path = os.environ.get("PATH", "")
     pc = ProxyConfig()
@@ -2554,6 +2578,26 @@ async def test_load_config_rejects_non_boolean_deny_by_default(
     with pytest.raises(ValidationError, match=setting):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "yaml_value", ["files-api-2025-04-14", "[files-api-2025-04-14, 7]"], ids=["bare-string", "non-string-entry"]
+)
+async def test_load_config_rejects_a_malformed_vertex_drop_anthropic_betas_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str
+):
+    config_file: Final = tmp_path / "vertex_drop_betas.yaml"
+    config_file.write_text(
+        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
+        f"  vertex_ai_pass_through_drop_anthropic_betas: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match="vertex_ai_pass_through_drop_anthropic_betas"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):

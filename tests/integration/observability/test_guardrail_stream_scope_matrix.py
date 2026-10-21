@@ -38,6 +38,8 @@ from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from pydantic import TypeAdapter
 from websockets.asyncio.server import ServerConnection, serve
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
 Mode: TypeAlias = Literal["pre_call", "during_call", "post_call", "logging_only"]
 Scope: TypeAlias = Literal["streaming", "non_streaming"]

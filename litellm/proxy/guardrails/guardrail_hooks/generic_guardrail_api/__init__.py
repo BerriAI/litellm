@@ -44,6 +44,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             litellm_params, optional_params, "streaming_buffer_until_moderated"
         ),
         timeout=litellm_params.timeout,
+        num_retries=litellm_params.num_retries,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)
