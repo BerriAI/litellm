@@ -14,7 +14,6 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.types.llms.openai import (
     AllMessageValues,
     CacheWriteTokensDetails,
-    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -44,20 +43,24 @@ def _output_token_detail(details: object, field: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _normalize_input_tokens_details(details: object) -> InputTokensDetails:
-    if isinstance(details, InputTokensDetails):
-        return details
-    return InputTokensDetails.model_validate(details)
+def _raw_input_tokens_details(
+    usage_input: Mapping[str, object] | ResponseAPIUsage,
+) -> object | None:
+    if isinstance(usage_input, Mapping):
+        input_tokens_details: Final = usage_input.get("input_tokens_details")
+        return input_tokens_details if input_tokens_details is not None else usage_input.get("input_token_details")
+    return usage_input.input_tokens_details
 
 
 def _cache_creation_token_details(
-    details: CacheWriteTokensDetails | None,
+    details: object | None,
 ) -> CacheCreationTokenDetails | None:
     if details is None:
         return None
+    cache_write_tokens_details: Final[CacheWriteTokensDetails] = CacheWriteTokensDetails.model_validate(details)
     return CacheCreationTokenDetails(
-        ephemeral_5m_input_tokens=details.ttl_30m_tokens,
-        ephemeral_1h_input_tokens=details.ttl_12h_tokens,
+        ephemeral_5m_input_tokens=cache_write_tokens_details.ttl_30m_tokens,
+        ephemeral_1h_input_tokens=cache_write_tokens_details.ttl_12h_tokens,
     )
 
 
@@ -1246,6 +1249,7 @@ class ResponseAPILoggingUtils:
             return usage_input
         if isinstance(usage_input, dict) and not ResponseAPILoggingUtils.is_response_api_usage(usage_input):
             return Usage(**usage_input)
+        raw_input_tokens_details: Final[object | None] = _raw_input_tokens_details(usage_input)
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
             usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
@@ -1266,25 +1270,35 @@ class ResponseAPILoggingUtils:
         completion_tokens: Final[int] = response_api_usage.output_tokens or 0
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if response_api_usage.input_tokens_details:
-            input_tokens_details: Final[InputTokensDetails] = _normalize_input_tokens_details(
-                response_api_usage.input_tokens_details
-            )
-            cache_write_tokens_details: Final[CacheWriteTokensDetails | None] = (
-                input_tokens_details.cache_write_tokens_details
-            )
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                cached_tokens=input_tokens_details.cached_tokens,
-                audio_tokens=input_tokens_details.audio_tokens,
-                text_tokens=input_tokens_details.text_tokens,
-                image_tokens=input_tokens_details.image_tokens,
-                cached_tokens_details=input_tokens_details.cached_tokens_details,
-                video_tokens=input_tokens_details.video_tokens,
-                cache_write_tokens=input_tokens_details.cache_write_tokens,
-                cache_type=getattr(input_tokens_details, "cache_type", None),
-                web_search_requests=getattr(input_tokens_details, "web_search_requests", None),
-                google_maps_grounding_requests=getattr(input_tokens_details, "google_maps_grounding_requests", None),
-                cache_creation_token_details=_cache_creation_token_details(cache_write_tokens_details),
-            )
+            if isinstance(raw_input_tokens_details, dict):
+                dict_input_tokens_details: Final[Mapping[str, object]] = TypeAdapter(
+                    Mapping[str, object]
+                ).validate_python(raw_input_tokens_details)
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **dict_input_tokens_details,
+                    cache_creation_token_details=_cache_creation_token_details(
+                        dict_input_tokens_details.get("cache_write_tokens_details")
+                    ),
+                )
+            else:
+                input_tokens_details: Final = response_api_usage.input_tokens_details
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=getattr(input_tokens_details, "cached_tokens", None),
+                    audio_tokens=getattr(input_tokens_details, "audio_tokens", None),
+                    text_tokens=getattr(input_tokens_details, "text_tokens", None),
+                    image_tokens=getattr(input_tokens_details, "image_tokens", None),
+                    cached_tokens_details=getattr(input_tokens_details, "cached_tokens_details", None),
+                    video_tokens=getattr(input_tokens_details, "video_tokens", None),
+                    cache_write_tokens=getattr(input_tokens_details, "cache_write_tokens", None),
+                    cache_type=getattr(input_tokens_details, "cache_type", None),
+                    web_search_requests=getattr(input_tokens_details, "web_search_requests", None),
+                    google_maps_grounding_requests=getattr(
+                        input_tokens_details, "google_maps_grounding_requests", None
+                    ),
+                    cache_creation_token_details=_cache_creation_token_details(
+                        getattr(input_tokens_details, "cache_write_tokens_details", None)
+                    ),
+                )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(
             response_api_usage, "output_tokens_details", None

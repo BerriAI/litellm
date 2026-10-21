@@ -151,6 +151,20 @@ def test_responses_api_12h_cache_writes_use_the_12h_rate(local_model_cost_map, d
     assert breakdown["input_cost"] == pytest.approx(expected_input)
 
 
+def test_responses_api_dict_prompt_token_details_preserve_extra_fields():
+    usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+        {
+            "input_tokens": 12000,
+            "output_tokens": 200,
+            "total_tokens": 12200,
+            "input_tokens_details": {"cached_tokens": 4000, "character_count": 123},
+        }
+    )
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.character_count == 123
+
+
 def test_cache_fields_stay_unset_when_there_was_no_cache_activity(local_model_cost_map):
     """A request that neither read nor wrote the cache leaves both break-out fields
     off the breakdown, so they serialize as null rather than a misleading $0."""
