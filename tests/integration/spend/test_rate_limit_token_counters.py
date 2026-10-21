@@ -18,6 +18,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, held, object_value
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import owned_proxy
+from integration._support.redis_process import owned_redis
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 from redis import Redis
@@ -167,9 +168,10 @@ CELLS: Final = (
     Cell("tag_tpm", charged="tag", tag=lambda _model: {"tpm_limit": 100000}),
     Cell("key_tpm_reserved", charged="api_key", key=lambda _model: {"tpm_limit": 100000}),
     Cell(
-        "key_dynamic_tpm",
-        charged="api_key",
+        "key_dynamic_tpm_on_a_healthy_model",
+        charged="user",
         key=lambda _model: {"tpm_limit": 100000, "tpm_limit_type": "dynamic"},
+        user=lambda _model: {"rpm_limit": 1000},
     ),
 )
 
@@ -465,9 +467,7 @@ def master_key_request(scenario: Scenario, _user: str, body: Mapping[str, JsonVa
     return scenario.gateway.request("POST", "/v1/chat/completions", body)
 
 
-def header_mapped_service_key_request(
-    scenario: Scenario, user: str, body: Mapping[str, JsonValue]
-) -> httpx.Response:
+def header_mapped_service_key_request(scenario: Scenario, user: str, body: Mapping[str, JsonValue]) -> httpx.Response:
     return scenario.gateway.request(
         "POST", "/v1/chat/completions", body, key=scenario.key(), headers={USER_HEADER: user}
     )
@@ -495,17 +495,21 @@ def test_unchecked_traffic_counts_toward_the_user_limit_another_request_opened(
     limited_user: Callable[[Scenario, int], str],
     unchecked_request: Callable[[Scenario, str, Mapping[str, JsonValue]], httpx.Response],
 ) -> None:
-    redis_state: Final = {"REDIS_HOST": os.environ["REDIS_HOST"], "REDIS_PORT": os.environ["REDIS_PORT"]}
     with (
         wire_server(completion) as upstream,
-        owned_proxy(gateway, tmp_path, redis_state, config=config_with_user_header_mapping(tmp_path)) as candidate,
+        owned_redis(tmp_path / "redis") as private_redis,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"REDIS_HOST": private_redis.host, "REDIS_PORT": str(private_redis.port)},
+            config=config_with_user_header_mapping(tmp_path),
+        ) as candidate,
         candidate.scenario() as scenario,
-        redis_counters() as cache,
+        Redis(host=private_redis.host, port=private_redis.port) as cache,
     ):
         model: Final = scenario.model(api_base=upstream.url + "/v1")
         user: Final = limited_user(scenario, 100000)
         user_counter: Final = {"user": counter("user", user)}
-        cache.delete(counter("user", user), f"{{user:{user}}}:window")
 
         checked: Final = candidate.request(
             "POST",
