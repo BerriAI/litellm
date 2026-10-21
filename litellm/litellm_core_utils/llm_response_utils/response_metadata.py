@@ -4,6 +4,7 @@ from functools import reduce
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
@@ -101,6 +102,32 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+_HIDDEN_PARAMS_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _hidden_params_mapping(hidden_params: object) -> Mapping[str, object]:
+    try:
+        return _HIDDEN_PARAMS_DICT.validate_python(hidden_params)
+    except ValidationError:
+        return {}
+
+
+def _existing_provider_response_model(result: object) -> str | None:
+    """The pricing model a response already carries, like the decisions path sets, wins over the response model."""
+    hidden_params: Final[object] = getattr(result, "_hidden_params", None)
+    carried: Final[object] = _hidden_params_mapping(hidden_params).get("provider_response_model") or getattr(
+        hidden_params, "provider_response_model", None
+    )
+    return carried if isinstance(carried, str) and carried else None
+
+
+def _provider_response_model(result: object) -> str | None:
+    """The model the provider answered with, kept because the proxy later rewrites ``result.model`` to the alias the
+    client asked for and cost-map lookups for the standard logging payload would otherwise miss."""
+    model: Final = getattr(result, "model", None) if isinstance(result, ModelResponse) else None
+    return model if isinstance(model, str) and model else None
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -133,6 +160,8 @@ class ResponseMetadata:
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
+            "provider_response_model": _existing_provider_response_model(self.result)
+            or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
 

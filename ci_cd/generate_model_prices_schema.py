@@ -62,17 +62,6 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
 }
 
 OBJECT_KEYS: dict[str, JsonSchema] = {
-    "search_free_requests": {
-        "type": "object",
-        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
-        "required": ["count", "period", "shared_group"],
-        "additionalProperties": False,
-        "properties": {
-            "count": {"type": "integer", "minimum": 0},
-            "period": {"type": "string", "enum": ["day", "month"]},
-            "shared_group": {"type": "string", "pattern": "\\S"},
-        },
-    },
     "off_peak_pricing": {
         "type": "object",
         "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
@@ -101,6 +90,17 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "search_context_size_high": NONNEG_NUMBER,
         },
         "additionalProperties": False,
+    },
+    "search_free_requests": {
+        "type": "object",
+        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+        "required": ["count", "period", "shared_group"],
+        "additionalProperties": False,
+        "properties": {
+            "count": {"type": "integer", "minimum": 0},
+            "period": {"type": "string", "enum": ["day", "month"]},
+            "shared_group": {"type": "string", "pattern": "\\S"},
+        },
     },
     "guardrail_cost_per_unit": {
         "type": "object",
