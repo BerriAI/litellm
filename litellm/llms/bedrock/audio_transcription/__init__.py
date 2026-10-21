@@ -1,7 +1,9 @@
 import base64
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
@@ -14,7 +16,21 @@ from litellm.rust_bridge.transcription.native import (
     RustAtranscription,
     RustTranscription,
 )
-from litellm.types.utils import FileTypes, TranscriptionResponse
+from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageTokensObject
+
+
+class _RustTranscriptionResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    usage: TranscriptionUsageTokensObject | None = None
+
+
+def _transcription_response(result: Mapping[str, object]) -> TranscriptionResponse:
+    parsed: Final = _RustTranscriptionResult.model_validate(result)
+    response: Final = TranscriptionResponse(text=parsed.text)
+    response.usage = parsed.usage
+    return response
 
 
 class BedrockAudioTranscriptionRustDispatch:
@@ -64,7 +80,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
             call: Final = NativeCall(args=(), kwargs=fields, base={})
-            return TranscriptionResponse(**rust(call))
+            return _transcription_response(rust(call))
 
         return runtime.run(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
@@ -97,7 +113,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
             call: Final = NativeCall(args=(), kwargs=fields, base={})
-            return TranscriptionResponse(**await rust(call))
+            return _transcription_response(await rust(call))
 
         return await runtime.arun(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),

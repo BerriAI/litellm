@@ -11,6 +11,7 @@ from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRu
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.transcription.native import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
+from litellm.types.utils import TranscriptionUsageTokensObject
 
 MODEL: Final = "bedrock/mistral.voxtral-mini-3b-2507"
 AUDIO_FILE: Final = ("audio.wav", b"audio", "audio/wav")
@@ -67,6 +68,14 @@ class AsyncBridge:
     async def __call__(self, call: NativeCall) -> dict[str, object]:
         self.calls = (*self.calls, call)
         return {"text": "async rust"}
+
+
+class UsageBridge:
+    def __call__(self, call: NativeCall) -> dict[str, object]:
+        return {
+            "text": "rust",
+            "usage": {"type": "tokens", "input_tokens": 390, "output_tokens": 60, "total_tokens": 450},
+        }
 
 
 def dispatch_sync() -> litellm.TranscriptionResponse:
@@ -206,3 +215,21 @@ async def test_async_missing_native_binding_raises_without_python_fallback() -> 
             optional_params={},
             timeout=None,
         )
+
+
+def test_bedrock_transcription_bills_the_converse_token_usage() -> None:
+    NATIVE_TRANSCRIPTION.override(UsageBridge())
+
+    response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE)
+
+    model_info: Final = litellm.get_model_info(MODEL)
+    expected_cost: Final = 390 * (model_info.get("input_cost_per_token") or 0.0) + 60 * (
+        model_info.get("output_cost_per_token") or 0.0
+    )
+    assert response.usage == TranscriptionUsageTokensObject(
+        type="tokens", input_tokens=390, output_tokens=60, total_tokens=450
+    )
+    assert expected_cost > 0
+    assert litellm.completion_cost(
+        completion_response=response, model=MODEL, call_type="transcription"
+    ) == pytest.approx(expected_cost)

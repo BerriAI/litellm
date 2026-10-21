@@ -6,8 +6,8 @@ use litellm_auth_aws::{
 };
 use litellm_core_utils::core_helpers::json_type_name;
 use litellm_llms_types::{
-    formats::audio_transcription::AudioTranscriptionResponseData,
-    providers::bedrock::ConverseResponse,
+    formats::audio_transcription::{AudioTranscriptionResponseData, AudioTranscriptionUsage},
+    providers::bedrock::{ConverseResponse, ConverseUsage},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -132,6 +132,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         _model: &str,
         response_json: Value,
     ) -> Result<AudioTranscriptionResponseData, Error> {
+        let reports_usage = response_json.get("usage").is_some();
         let response: ConverseResponse =
             serde_json::from_value(response_json).map_err(|error| {
                 Error::InvalidResponse(format!("invalid Converse response: {error}").into())
@@ -145,6 +146,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         }
         Ok(AudioTranscriptionResponseData {
             text: response.content_text(),
+            usage: reports_usage.then(|| transcription_usage(&response.usage)),
         })
     }
 
@@ -199,16 +201,27 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     }
 }
 
+fn transcription_usage(usage: &ConverseUsage) -> AudioTranscriptionUsage {
+    AudioTranscriptionUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage
+            .total_tokens
+            .unwrap_or(usage.input_tokens + usage.output_tokens),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn no_env(_: &str) -> Option<String> {
         None
     }
 
-    #[test]
-    fn request_matches_python_shape() {
+    #[rstest]
+    fn request_sends_audio_and_instruction_without_system_block() {
         let params = Map::from_iter([
             ("language".to_string(), json!("en")),
             ("prompt".to_string(), json!("Speaker names")),
@@ -238,16 +251,34 @@ mod tests {
         );
     }
 
-    #[test]
-    fn response_concatenates_content_blocks() {
+    #[rstest]
+    #[case::reported_total(
+        json!({"inputTokens": 390, "outputTokens": 60, "totalTokens": 450}),
+        json!({"text": "hello world", "usage": {"type": "tokens", "input_tokens": 390, "output_tokens": 60, "total_tokens": 450}})
+    )]
+    #[case::derived_total(
+        json!({"inputTokens": 1, "outputTokens": 2}),
+        json!({"text": "hello world", "usage": {"type": "tokens", "input_tokens": 1, "output_tokens": 2, "total_tokens": 3}})
+    )]
+    fn response_carries_text_and_converse_usage(#[case] usage: Value, #[case] expected: Value) {
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_audio_transcription_response(
                 "model",
-                json!({"output": {"message": {"content": [{"text": "hello "}, {"text": "world"}]}}, "usage": {"inputTokens": 1, "outputTokens": 2}}),
+                json!({"output": {"message": {"content": [{"text": "hello "}, {"text": "world"}]}}, "usage": usage}),
             )
             .expect("response");
-        assert_eq!(result.text, "hello world");
-        assert_eq!(result.into_json(), json!({"text": "hello world"}));
+        assert_eq!(result.into_json(), expected);
+    }
+
+    #[rstest]
+    fn response_without_usage_reports_none() {
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+            .transform_audio_transcription_response(
+                "model",
+                json!({"output": {"message": {"content": [{"text": "hello"}]}}}),
+            )
+            .expect("response");
+        assert_eq!(result.into_json(), json!({"text": "hello"}));
     }
 
     #[test]
