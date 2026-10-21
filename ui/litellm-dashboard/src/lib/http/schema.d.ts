@@ -34912,6 +34912,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -34924,6 +34928,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -49394,6 +49402,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -49406,6 +49418,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */

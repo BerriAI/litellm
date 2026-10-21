@@ -26878,6 +26878,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -26990,6 +26991,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27041,6 +27043,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27087,6 +27090,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27129,6 +27133,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27219,6 +27224,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27280,6 +27286,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27339,6 +27346,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27425,6 +27433,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -27479,6 +27488,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -27525,6 +27535,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -27712,6 +27723,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -27779,6 +27791,7 @@
         "cache_read_input_token_cost_priority": 3.6e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
         "cache_read_input_token_cost_flex": 2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27834,6 +27847,7 @@
         "supports_web_search": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27890,6 +27904,7 @@
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "cache_read_input_token_cost_priority": 3.6e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -27940,6 +27955,7 @@
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 5.4e-06,
         "cache_read_input_token_cost_priority": 9e-08,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28001,6 +28017,7 @@
         "input_cost_per_audio_token_priority": 2.7e-06,
         "output_cost_per_token_priority": 1.62e-05,
         "cache_read_input_token_cost_priority": 2.7e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28064,6 +28081,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28123,6 +28141,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28182,6 +28201,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28328,6 +28348,7 @@
         "cache_read_input_token_cost_priority": 3.6e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
         "cache_read_input_token_cost_flex": 2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28389,6 +28410,7 @@
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "cache_read_input_token_cost_priority": 3.6e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28716,6 +28738,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28760,6 +28783,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28821,6 +28845,7 @@
         "supports_web_search": true,
         "supports_native_streaming": true,
         "tpm": 250000,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28970,6 +28995,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 8000000,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -29080,6 +29106,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29170,6 +29197,7 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29301,6 +29329,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 250000,
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -29504,6 +29533,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 800000,
+        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
@@ -29601,6 +29631,7 @@
         "supports_web_search": true,
         "supports_native_streaming": true,
         "tpm": 250000,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29661,6 +29692,7 @@
         "supports_web_search": true,
         "supports_native_streaming": true,
         "tpm": 250000,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29717,6 +29749,7 @@
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 5.4e-06,
         "cache_read_input_token_cost_priority": 9e-08,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29780,6 +29813,7 @@
         "input_cost_per_audio_token_priority": 2.7e-06,
         "output_cost_per_token_priority": 1.62e-05,
         "cache_read_input_token_cost_priority": 2.7e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29845,6 +29879,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29906,6 +29941,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -29967,6 +30003,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30062,6 +30099,7 @@
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
         "cache_read_input_token_cost_batches": 2e-07,
         "cache_read_input_token_cost_flex": 2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30125,6 +30163,7 @@
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
         "cache_read_input_token_cost_batches": 2e-07,
         "cache_read_input_token_cost_flex": 2e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30180,6 +30219,7 @@
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 5.4e-06,
         "cache_read_input_token_cost_priority": 9e-08,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30272,6 +30312,7 @@
         "input_cost_per_audio_token_priority": 2.7e-06,
         "output_cost_per_token_priority": 1.62e-05,
         "cache_read_input_token_cost_priority": 2.7e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30335,6 +30376,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30394,6 +30436,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30453,6 +30496,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -50523,6 +50567,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -50585,6 +50630,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -50645,6 +50691,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
