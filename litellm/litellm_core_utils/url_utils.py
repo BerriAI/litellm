@@ -23,7 +23,7 @@ import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -77,13 +77,13 @@ class _CallerHeadersView(TypedDict):
     headers: ReadOnly[dict[str, str]]
 
 
-# Globally-routable IPs that are cloud-internal. Everything else
-# non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented by
-# Python's ``ipaddress`` module). This list only holds IPs that are
-# publicly routable *and* point to cloud-fabric services reachable from
-# inside a VM via special in-fabric routing.
+# Cloud-internal IPs that ``ip.is_global`` can report as public. Everything
+# else non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented
+# by Python's ``ipaddress`` module). Older Python patch releases (3.12.2, for
+# one) treat most of 192.0.0.0/24 as global, so it is listed to block it everywhere.
 _CLOUD_METADATA_EXCEPTIONS: Final = [
     ip_network("168.63.129.16/32"),  # Azure Wire Server
+    ip_network("192.0.0.0/24"),
 ]
 
 _ALLOWED_SCHEMES: Final = ("http", "https")
@@ -127,6 +127,28 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
         raise ValueError(f"{field_name} is required")
 
     return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
+
+
+def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
+    stripped: Final = api_base.rstrip("/")
+    parts: Final = urlsplit(stripped)
+    if parts.scheme and not (parts.netloc or parts.path or parts.query or parts.fragment):
+        return api_base
+    if not parts.query or not parts.path.endswith("/"):
+        return stripped
+    url_before_query, _, query = stripped.partition("?")
+    return f"{url_before_query.rstrip('/')}?{query}"
+
+
+def join_api_base(api_base: str, route: str) -> str:
+    return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
+
+
+def ensure_api_route(api_base: str, route: str) -> str:
+    base: Final = _strip_trailing_slashes_keeping_the_scheme(api_base)
+    if urlsplit(base).path.endswith(f"/{route.lstrip('/')}"):
+        return base
+    return join_api_base(base, route)
 
 
 def _is_blocked_ip(addr: str) -> bool:

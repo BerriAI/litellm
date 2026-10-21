@@ -164,6 +164,11 @@ def compaction_pending(kwargs: Mapping[str, object] | None) -> bool:
     return isinstance(state, CompactionState) and state.config is not None and not _client_managed(kwargs or _EMPTY)
 
 
+def compaction_applied(kwargs: Mapping[str, object]) -> bool:
+    state: Final = kwargs.get(_STATE_KEY)
+    return isinstance(state, CompactionState) and state.summary is not None
+
+
 def _reject(model: str, reason: str) -> NoReturn:
     from litellm.exceptions import BadRequestError
 

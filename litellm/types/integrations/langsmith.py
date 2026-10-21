@@ -1,14 +1,15 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
-from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class LangsmithInputs(BaseModel):
+
+class LangsmithInputs(LiteLLMBaseModel):
     model: str | None = None
-    messages: list[Any] | None = None
+    messages: list[object] | None = None
     stream: bool | None = None
     call_type: str | None = None
     litellm_call_id: str | None = None
@@ -16,9 +17,9 @@ class LangsmithInputs(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     custom_llm_provider: str | None = None
-    input: list[Any] | None = None
+    input: list[object] | None = None
     log_event_type: str | None = None
-    original_response: Any | None = None
+    original_response: object | None = None
     response_cost: float | None = None
 
     # LiteLLM Virtual Key specific fields

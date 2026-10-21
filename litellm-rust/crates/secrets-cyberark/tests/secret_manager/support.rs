@@ -48,9 +48,21 @@ pub(super) fn client_identity_directory() -> tempfile::TempDir {
     directory
 }
 
+pub(super) fn from_environment(
+    environment: Arc<dyn Lookup + Send + Sync>,
+    enterprise_enabled: bool,
+) -> Result<CyberArkSecretManager, Error> {
+    CyberArkSecretManager::new(
+        &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        &Resolution::from(&HttpSettings::default()).config,
+        environment,
+        enterprise_enabled,
+    )
+}
+
 pub(super) fn manager(server: &MockServer, ttl: Duration) -> CyberArkSecretManager {
     CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         "admin".into(),

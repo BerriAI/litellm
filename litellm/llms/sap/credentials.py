@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,11 +11,13 @@ from threading import Lock
 from typing import Any, Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
 
@@ -29,6 +31,8 @@ SERVICE_KEY_ENV_VAR: Final = "AICORE_SERVICE_KEY"
 
 DEFAULT_HOME_PATH: Final = os.path.join(os.path.expanduser("~"), ".aicore")
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
@@ -39,7 +43,7 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     if isinstance(cur, str):
         # This shouldn't happen if service keys are pre-parsed correctly
         try:
-            cur = json.loads(cur)
+            cur = _DECODED_JSON.validate_python(json.loads(cur))
         except json.JSONDecodeError:
             verbose_logger.warning("SAP service key or VCAP service is a string but not valid JSON.")
             return None
@@ -76,7 +80,7 @@ def _load_vcap() -> dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
-def _get_vcap_service(label: str) -> dict[str, Any] | None:
+def _get_vcap_service(label: str) -> Mapping[str, object] | None:
     for services in _load_vcap().values():
         for svc in services:
             if svc.get("label") == label:
@@ -109,7 +113,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
     CredentialsValue(
         "base_url",
         ("serviceurls", "AI_API_URL"),
-        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith("/v2") else "/v2"),
+        transform_fn=lambda url: ensure_api_route(url, "v2"),
     ),
     CredentialsValue(
         "cert_url",
@@ -388,7 +392,7 @@ def _request_token(
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
                 return _bearer_token_and_expiry(resp)
-        handler = _get_httpx_client()
+        handler = get_httpx_client()
         resp = handler.post(auth_url, data=data, timeout=timeout)
         return _bearer_token_and_expiry(resp)
     except Exception as e:

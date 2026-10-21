@@ -1,3 +1,5 @@
+import type { components } from "@/lib/http/schema";
+
 export interface Tag {
   name: string;
   description?: string;
@@ -18,35 +20,10 @@ export interface Tag {
   };
 }
 
-export interface TagInfoRequest {
-  names: string[];
-}
-
-export interface TagNewRequest {
-  name: string;
-  description?: string;
-  models: string[];
-  max_budget?: number;
-  soft_budget?: number;
-  tpm_limit?: number;
-  rpm_limit?: number;
-  budget_duration?: string;
-}
-
-export interface TagUpdateRequest {
-  name: string;
-  description?: string;
-  models: string[];
-  max_budget?: number;
-  soft_budget?: number;
-  tpm_limit?: number;
-  rpm_limit?: number;
-  budget_duration?: string | null;
-}
-
-export interface TagDeleteRequest {
-  name: string;
-}
+export type TagInfoRequest = components["schemas"]["TagInfoRequest"];
+export type TagNewRequest = components["schemas"]["TagNewRequest"];
+export type TagUpdateRequest = components["schemas"]["TagUpdateRequest"];
+export type TagDeleteRequest = components["schemas"]["TagDeleteRequest"];
 
 // The API returns a dictionary of tags where the key is the tag name
 export type TagListResponse = Record<string, Tag>;

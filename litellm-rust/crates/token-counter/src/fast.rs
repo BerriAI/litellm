@@ -57,7 +57,7 @@ impl From<BackendError> for Error {
     fn from(error: BackendError) -> Self {
         match error {
             BackendError::Load(source) => Self::Load(source),
-            BackendError::Ranks(message) => Self::Ranks(message),
+            BackendError::Ranks(source) => Self::Ranks(source.into()),
             BackendError::UnicodeClasses => Self::UnicodeClasses,
             BackendError::Encode(source) => Self::Encode(source),
         }

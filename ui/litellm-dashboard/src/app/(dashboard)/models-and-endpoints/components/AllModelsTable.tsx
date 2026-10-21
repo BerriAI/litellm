@@ -1,5 +1,7 @@
 "use client";
 
+import { ROUTING_STATUS_FILTER_ID } from "../utils/routingStatus";
+
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Search, Settings } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -31,15 +33,23 @@ export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
+const ALL_PROXY_MODELS_LABEL = "All Proxy Models";
 
 const FILTER_LABELS: Record<string, string> = {
   [MODEL_NAME_COLUMN_ID]: "Public Model Name",
   [ACCESS_GROUPS_COLUMN_ID]: "Model Access Group",
+  [ROUTING_STATUS_FILTER_ID]: "Status",
 };
+
+const ROUTING_STATUS_FILTER_VALUES = {
+  all: "All",
+  active: "Active",
+  paused: "Paused",
+} as const;
 
 const VIEW_MODE_LABELS: Record<ModelViewMode, string> = {
   current_team: "Current Team Models",
-  all: "All Available Models",
+  all: ALL_PROXY_MODELS_LABEL,
 };
 
 export interface ModelsTableTeamOption {
@@ -79,6 +89,7 @@ interface AllModelsTableProps {
   onDeleteClick: (modelId: string) => void;
   onTogglePauseClick: (modelId: string, blocked: boolean) => void | Promise<void>;
   pausingModelId: string | null;
+  credentialLabels?: ReadonlyMap<string, string>;
 }
 
 function EmptyState() {
@@ -127,6 +138,7 @@ export function AllModelsTable({
   onDeleteClick,
   onTogglePauseClick,
   pausingModelId,
+  credentialLabels,
 }: AllModelsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -140,13 +152,24 @@ export function AllModelsTable({
       onDeleteClick,
       onTogglePauseClick,
       pausingModelId,
+      credentialLabels,
     };
     return getModelsTableColumns(columnDeps);
-  }, [userRole, userID, isViewOnly, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
+  }, [
+    userRole,
+    userID,
+    isViewOnly,
+    onModelIdClick,
+    onTeamIdClick,
+    onDeleteClick,
+    onTogglePauseClick,
+    pausingModelId,
+    credentialLabels,
+  ]);
 
   const modelGroupOptions = useMemo(
     () => [
-      { label: "All Models", value: ALL_MODEL_GROUPS_VALUE },
+      { label: ALL_PROXY_MODELS_LABEL, value: ALL_MODEL_GROUPS_VALUE },
       { label: "Wildcard Models (*)", value: WILDCARD_MODEL_GROUP_VALUE },
       ...availableModelGroups.map((group) => ({ label: group, value: group })),
     ],
@@ -165,6 +188,9 @@ export function AllModelsTable({
     const raw = String(value);
     if (columnId === MODEL_NAME_COLUMN_ID && raw === WILDCARD_MODEL_GROUP_VALUE) {
       return "Wildcard Models (*)";
+    }
+    if (columnId === ROUTING_STATUS_FILTER_ID) {
+      return ROUTING_STATUS_FILTER_VALUES[raw as keyof typeof ROUTING_STATUS_FILTER_VALUES] ?? raw;
     }
     return raw;
   };
@@ -286,6 +312,29 @@ export function AllModelsTable({
                     placeholder="Filter by Public Model Name"
                     emptyText="No models found"
                   />
+                </DataTableFilterField>
+                <DataTableFilterField label="Status">
+                  <Select
+                    value={(get(ROUTING_STATUS_FILTER_ID) as string) ?? "all"}
+                    onValueChange={(value) =>
+                      set(ROUTING_STATUS_FILTER_ID, value === "all" ? undefined : (value as "active" | "paused"))
+                    }
+                  >
+                    <SelectTrigger aria-label="Filter by status" className="w-full">
+                      {ROUTING_STATUS_FILTER_VALUES[
+                        (get(ROUTING_STATUS_FILTER_ID) as keyof typeof ROUTING_STATUS_FILTER_VALUES) ?? "all"
+                      ] ?? ROUTING_STATUS_FILTER_VALUES.all}
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(
+                        Object.keys(ROUTING_STATUS_FILTER_VALUES) as Array<keyof typeof ROUTING_STATUS_FILTER_VALUES>
+                      ).map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {ROUTING_STATUS_FILTER_VALUES[value]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </DataTableFilterField>
                 <DataTableFilterField label="Model Access Group">
                   <SearchSelect

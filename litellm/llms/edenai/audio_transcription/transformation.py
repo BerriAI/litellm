@@ -28,7 +28,7 @@ def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str,
     extras: Final = optional_params.get("extra_body")
     nested: Final = extras.items() if isinstance(extras, Mapping) else ()
     fields: Final = (*optional_params.items(), *nested, ("model", model))
-    return {key: value for key, value in fields if key != "extra_body"}  # mutable-ok: httpx form data
+    return {key: value for key, value in fields if key != "extra_body"}
 
 
 class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
@@ -69,7 +69,7 @@ class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         """Eden reports `duration` and `cost` on every body, so the Whisper default of `verbose_json`,
         which the gpt-4o-transcribe models reject, is not needed for cost tracking."""
         audio: Final = process_audio_file(audio_file)
-        files: Final = {"file": (audio.filename, audio.file_content, audio.content_type)}  # mutable-ok: httpx contract
+        files: Final = {"file": (audio.filename, audio.file_content, audio.content_type)}
         return AudioTranscriptionRequestData(data=_form_fields(model, optional_params), files=files)
 
     def transform_audio_transcription_response(self, raw_response: httpx.Response) -> TranscriptionResponse:

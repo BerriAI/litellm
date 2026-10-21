@@ -4,7 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 
 import { ToolRow } from "@/components/networking";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdCell, IdentityCell } from "@/components/shared/table_cells";
+import { DateCell, IdCell, IdentityCell, UserPopoverCell } from "@/components/shared/table_cells";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { PolicySelect } from "./PolicySelect";
@@ -126,6 +126,32 @@ export const getToolPoliciesTableColumns = ({
     filterFn: "equalsString",
     meta: { title: "Key Name" },
     cell: ({ row }) => <TruncatedText value={row.original.key_alias} className="block max-w-32 truncate" />,
+  },
+  {
+    id: "user",
+    accessorFn: (row) => row.user?.user_alias ?? row.user?.user_email ?? row.user?.user_id ?? "",
+    header: () => (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger render={<span>User</span>} />
+          <TooltipContent>
+            The user who owns the key that discovered this tool. Displays the first available value: User Alias, User
+            Email, or User ID.
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    ),
+    size: 160,
+    enableSorting: false,
+    meta: { title: "User" },
+    cell: ({ row }) => (
+      <UserPopoverCell
+        userAlias={row.original.user?.user_alias ?? null}
+        userEmail={row.original.user?.user_email ?? null}
+        userId={row.original.user?.user_id ?? null}
+        width={160}
+      />
+    ),
   },
   {
     id: "user_agent",

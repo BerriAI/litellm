@@ -72,20 +72,18 @@ impl ApiUrl<Complete> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn completion_appends_only_the_missing_path_suffix() {
-        for (base, expected) in [
-            ("https://example.test", "https://example.test/v1/ocr"),
-            ("https://example.test/v1", "https://example.test/v1/ocr"),
-            ("https://example.test/v1/ocr", "https://example.test/v1/ocr"),
-        ] {
-            let actual = ApiUrl::parse(base)
-                .and_then(|url| url.complete_path(&["v1", "ocr"]))
-                .map(|url| url.into_string())
-                .expect("url builds");
-            assert_eq!(actual, expected);
-        }
+    #[rstest]
+    #[case::root("https://example.test", "https://example.test/v1/ocr")]
+    #[case::version_prefix("https://example.test/v1", "https://example.test/v1/ocr")]
+    #[case::complete("https://example.test/v1/ocr", "https://example.test/v1/ocr")]
+    fn completion_appends_only_the_missing_path_suffix(#[case] base: &str, #[case] expected: &str) {
+        let actual = ApiUrl::parse(base)
+            .and_then(|url| url.complete_path(&["v1", "ocr"]))
+            .map(|url| url.into_string())
+            .expect("url builds");
+        assert_eq!(actual, expected);
     }
 
     #[test]

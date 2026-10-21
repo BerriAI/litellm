@@ -49,7 +49,7 @@ export const useUserEmailLookup = (userIds: readonly string[]) => {
       const ids = distinctIds.slice(0, USER_LIST_MAX_PAGE_SIZE);
       const response = await userListCall(accessToken!, ids, 1, ids.length);
       return Object.fromEntries(
-        response.users.filter((user) => Boolean(user.user_email)).map((user) => [user.user_id, user.user_email]),
+        response.users.flatMap((user) => (user.user_email ? [[user.user_id, user.user_email]] : [])),
       );
     },
     enabled: Boolean(accessToken) && distinctIds.length > 0 && canListUsers(userRole),
