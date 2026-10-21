@@ -50,9 +50,6 @@ def s3_peer(request: Request) -> Reply:
 
 
 @pytest.mark.covers("other.provider_wire.completions_and_responses_batch_records_upload_as_anthropic_user_messages")
-@pytest.mark.covers(
-    "other.provider_wire.bedrock.batch_file_completions_and_responses_records_reach_s3_as_user_messages"
-)
 def test_completions_and_responses_batch_records_upload_as_anthropic_user_messages(gateway: Gateway) -> None:
     with wire_server(s3_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -66,10 +63,11 @@ def test_completions_and_responses_batch_records_upload_as_anthropic_user_messag
             s3_endpoint_url=wire.url,
         )
         jsonl: Final = "\n".join(json.dumps(line, separators=(",", ":")) for line in INPUT_LINES) + "\n"
-        response: Final = gateway.request_multipart(
+        response: Final = gateway.client.post(
             "/v1/files",
-            {"purpose": "batch", "model": model},
-            {"file": ("in.jsonl", jsonl.encode(), "application/jsonl")},
+            data={"purpose": "batch", "model": model},
+            files={"file": ("in.jsonl", jsonl.encode(), "application/jsonl")},
+            headers={"Authorization": f"Bearer {gateway.key}"},
         )
         assert response.status_code == 200, response.text
         assert response.json()["object"] == "file" and response.json()["purpose"] == "batch", response.text
@@ -88,7 +86,9 @@ _SCHEMA: Final = {
 }
 
 
-@pytest.mark.covers("other.provider_wire.json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output")
+@pytest.mark.covers(
+    "other.provider_wire.json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output"
+)
 @pytest.mark.parametrize(
     "backend", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-4-8"], ids=["haiku_5_5", "opus_4_8"]
 )
@@ -118,10 +118,11 @@ def test_json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_nat
             s3_bucket_name=BUCKET,
             s3_endpoint_url=wire.url,
         )
-        response: Final = gateway.request_multipart(
+        response: Final = gateway.client.post(
             "/v1/files",
-            {"purpose": "batch", "model": model},
-            {"file": ("in.jsonl", (json.dumps(record) + "\n").encode(), "application/jsonl")},
+            data={"purpose": "batch", "model": model},
+            files={"file": ("in.jsonl", (json.dumps(record) + "\n").encode(), "application/jsonl")},
+            headers={"Authorization": f"Bearer {gateway.key}"},
         )
         assert response.status_code == 200, response.text
         (upload,) = wire.drain()
