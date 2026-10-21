@@ -5622,6 +5622,13 @@ DEVELOPER_KEY_ON_VIRTUAL_INDEX: Final = UserAPIKeyAuth(
         ),
         ("GET", "indexes/virtual-idx/docs/$count", None, "/indexes/real-idx/docs/$count"),
         ("GET", "indexes/virtual-idx", None, "/indexes/real-idx"),
+        ("GET", "indexes/virtual-idx/docs/virtual-idx", None, "/indexes/real-idx/docs/virtual-idx"),
+        (
+            "POST",
+            "indexes/virtual-idx/docs/search",
+            {"search": "*", "name": "virtual-idx"},
+            "/indexes/real-idx/docs/search",
+        ),
     ],
 )
 def test_azure_ai_search_virtual_index_reaches_azure_as_the_mapped_index(
@@ -5669,6 +5676,21 @@ def test_azure_ai_search_index_definition_put_names_the_mapped_index(
         assert (sent.method, sent.url.path) == ("PUT", "/indexes/real-idx")
         assert json.loads(sent.content) == {"name": upstream_name, "fields": fields}
 
+
+
+def test_azure_ai_search_index_delete_on_the_virtual_index_deletes_the_mapped_index(
+    azure_ai_search_virtual_index_client: Callable[[UserAPIKeyAuth], TestClient],
+) -> None:
+    client: Final = azure_ai_search_virtual_index_client(
+        UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        azure: Final = upstream.route(host="svc.search.windows.net").mock(return_value=httpx.Response(204))
+        response: Final = client.delete("/azure_ai/indexes/virtual-idx?api-version=2024-07-01")
+
+        assert response.status_code == 204
+        sent: Final = azure.calls.last.request
+        assert (sent.method, sent.url.path, sent.headers["api-key"]) == ("DELETE", "/indexes/real-idx", "search-admin-key")
 
 class TestAzureProxyRouteServiceLevelIndexCreate:
     """``POST /indexes`` carries no index name, so the managed-index branch cannot
