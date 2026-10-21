@@ -44,7 +44,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -130,7 +130,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <SavingsTiles results={results} isLoading={loading || isFetchingMore} />
+      <SavingsTiles results={results} isLoading={loading} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">

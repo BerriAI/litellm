@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -134,7 +134,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             Tuple of (rag_corpus_id, file_id)
         """
         if not self.project_id:
-            raise ValueError("vertex_project is required for Vertex AI RAG ingestion. Set it in vector_store config.")
+            raise RAGIngestBadRequestError(
+                "vertex_project is required for Vertex AI RAG ingestion. Set it in vector_store config."
+            )
 
         # Get or create RAG corpus
         rag_corpus_id = self.vector_store_config.get("vector_store_id")
@@ -186,7 +188,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         base_url: Final = get_vertex_base_url(self.location)
         url: Final = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
-        # Build request body with camelCase keys (Vertex AI API format)
         vector_db_config: Final = self.vector_store_config.get("vector_db_config")
         embedding_model: Final = self.vector_store_config.get("embedding_model")
         embedding_model_config: Final = (
@@ -447,7 +448,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         # Add max embedding requests per minute if specified
         max_embedding_qpm: Final = self.vector_store_config.get("max_embedding_requests_per_min")
 
-        # Build request body with camelCase keys (Vertex AI API format)
         chunking_config: Final = (
             {"chunkSize": chunk_size or 1024, "chunkOverlap": chunk_overlap or 200}
             if chunk_size or chunk_overlap

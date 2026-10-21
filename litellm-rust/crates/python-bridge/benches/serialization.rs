@@ -1,9 +1,8 @@
-use std::hint::black_box;
-use std::time::Duration;
+use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_host_python::{from_py, to_py};
+use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Value, json};
 
 const PAYLOAD_SIZES: &[(&str, usize)] = &[
@@ -25,7 +24,7 @@ fn former_json_roundtrip_from_py(py: Python<'_>, value: &Bound<'_, PyAny>) -> Va
 }
 
 fn pythonize_from_py(value: &Bound<'_, PyAny>) -> Value {
-    pythonize::depythonize(value).expect("payload should depythonize")
+    from_py(value).expect("payload should depythonize")
 }
 
 fn former_json_roundtrip_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
@@ -37,12 +36,10 @@ fn former_json_roundtrip_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
 }
 
 fn pythonize_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
-    pythonize::pythonize(py, value)
-        .expect("response should pythonize")
-        .unbind()
+    to_py(py, value).expect("response should pythonize")
 }
 
-fn serialization(c: &mut Criterion) {
+fn bridge_serialization(c: &mut Criterion) {
     Python::initialize();
     Python::attach(|py| {
         for &(label, payload_bytes) in PAYLOAD_SIZES {
@@ -98,6 +95,6 @@ criterion_group! {
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(4));
-    targets = serialization
+    targets = bridge_serialization
 }
 criterion_main!(benches);

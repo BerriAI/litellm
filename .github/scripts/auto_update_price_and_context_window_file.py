@@ -1,21 +1,23 @@
 import asyncio
 import json
+import math
 from types import MappingProxyType
-from typing import Final
+from typing import Any, Final
 
 import aiohttp
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 COST_MAP_PATHS: Final = (
     "model_prices_and_context_window.json",
     "litellm/model_prices_and_context_window_backup.json",
 )
-OPENROUTER_URL: Final = "https://openrouter.ai/api/v1/models"
 VERCEL_AI_GATEWAY_URL: Final = "https://ai-gateway.vercel.sh/v1/models"
 VERCEL_TYPE_TO_MODE: Final = MappingProxyType({"language": "chat", "embedding": "embedding"})
 
 
 class VercelPricing(BaseModel):
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
     input: float | None = None
     output: float | None = None
     input_cache_read: float | None = None
@@ -23,6 +25,8 @@ class VercelPricing(BaseModel):
 
 
 class VercelModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     id: str
     type: str
     context_window: int | None = None
@@ -49,11 +53,157 @@ async def fetch_data(url):
         print("Error fetching data from URL:", e)
         return None
 
+
+FRIENDLI_API_URL = "https://api.friendli.ai/serverless/v1/models"
+FRIENDLI_PROVIDER = "friendliai"
+
+INHERITABLE_BASE_KEYS = (
+    "supports_pdf_input",
+    "supports_assistant_prefill",
+    "supports_adaptive_thinking",
+    "supports_output_config",
+)
+
+REASONING_EFFORT_LEVEL_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _find_base_model_entry(base_model: str, local_data: dict) -> str | None:
+    if not base_model:
+        return None
+    bm_tail = base_model.split("/")[-1].lower()
+    if base_model in local_data:
+        return base_model
+    for key in local_data:
+        if key.startswith("sample_spec") or key == "fallback_generalizations":
+            continue
+        if key.split("/")[-1].lower() == bm_tail:
+            return key
+    return None
+
+
+def _reasoning_effort_levels(reasoning_options: list) -> list:
+    offered = {
+        val
+        for opt in reasoning_options or []
+        if opt.get("type") == "effort"
+        for val in opt.get("values", [])
+    }
+    return [level for level in REASONING_EFFORT_LEVEL_ORDER if level in offered]
+
+
+def _valid_token_price(value: object) -> bool:
+    try:
+        price = float(value)  # pyright: ignore[reportArgumentType]  # non-numeric values are rejected via the except
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(price) and price >= 0
+
+
+def _has_valid_token_prices(pricing: dict | None) -> bool:
+    prices = pricing or {}
+    return _valid_token_price(prices.get("input")) and _valid_token_price(prices.get("output"))
+
+
+def _pricing(pricing: dict) -> dict:
+    out: dict[str, Any] = {}
+    if not pricing:
+        return out
+    if "input" in pricing:
+        out["input_cost_per_token"] = float(pricing["input"])
+    if "output" in pricing:
+        out["output_cost_per_token"] = float(pricing["output"])
+    if "input_cache_read" in pricing and pricing["input_cache_read"] is not None:
+        out["cache_read_input_token_cost"] = float(pricing["input_cache_read"])
+    return out
+
+
+def _modality_flags(input_mods: list) -> dict:
+    mods = input_mods or []
+    has_image = "image" in mods
+    return {
+        "supports_vision": has_image,
+        "supports_image_input": has_image,
+        "supports_video_input": "video" in mods,
+    }
+
+
+def transform_friendli_data(data: list, local_data: dict) -> dict:
+    transformed: dict[str, dict] = {}
+    if not data:
+        return transformed
+    for model in data:
+        # An unpriced row must never wholesale-replace an already priced local entry:
+        # missing prices cost-calculate as zero, silently zeroing tracked spend
+        if not _has_valid_token_prices(model.get("pricing")):
+            continue
+        model_id = model["id"]
+        base_model = model.get("base_model") or ""
+        entry: dict[str, Any] = {
+            "litellm_provider": FRIENDLI_PROVIDER,
+        }
+
+        base_key = _find_base_model_entry(base_model, local_data)
+        if base_key:
+            base_entry = local_data[base_key]
+            for k in INHERITABLE_BASE_KEYS:
+                if k in base_entry:
+                    entry[k] = base_entry[k]
+
+        ctx = model.get("context_length")
+        if ctx is not None:
+            entry["max_input_tokens"] = int(ctx)
+        max_out = model.get("max_completion_tokens")
+        if max_out is not None:
+            entry["max_output_tokens"] = int(max_out)
+            entry["max_tokens"] = int(max_out)
+
+        pricing = _pricing(model.get("pricing", {}))
+        entry.update(pricing)
+        entry["supports_prompt_caching"] = "cache_read_input_token_cost" in pricing
+
+        reasoning = model.get("reasoning") is True
+        entry["supports_reasoning"] = reasoning
+        if reasoning:
+            entry["reasoning_effort_levels"] = _reasoning_effort_levels(
+                model.get("reasoning_options", [])
+            )
+
+        func = model.get("functionality", {})
+        entry["supports_function_calling"] = func.get("tool_call") is True
+        entry["supports_parallel_function_calling"] = func.get("parallel_tool_call") is True
+        is_struct = func.get("structured_output") is True
+        entry["supports_response_schema"] = is_struct
+        entry["supports_native_structured_output"] = is_struct
+        entry["supports_system_messages"] = func.get("system_messages") is True
+        entry["supports_tool_choice"] = func.get("tool_choice") is True
+
+        entry.update(_modality_flags(model.get("input_modalities", [])))
+
+        entry["mode"] = model.get("mode", "chat")
+
+        desc = model.get("description")
+        if desc:
+            entry["comment"] = desc
+
+        dep = model.get("deprecation_date")
+        if dep:
+            entry["deprecation_date"] = dep.split("T")[0]
+
+        entry["source"] = FRIENDLI_API_URL
+
+        transformed[f"{FRIENDLI_PROVIDER}/{model_id}"] = entry
+    return transformed
+
 # Synchronize local data with remote data
-def sync_local_data_with_remote(local_data, remote_data):
+def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset()):
     # Update existing keys in local_data with values from remote_data
+    # (replace_keys entries are swapped wholesale so a field the remote catalog
+    #  dropped, e.g. cache pricing, cannot survive as a stale value)
     for key in (set(local_data) & set(remote_data)):
-        local_data[key].update(remote_data[key])
+        if key in replace_keys:
+            local_data[key] = remote_data[key]
+        else:
+            local_data[key].update(remote_data[key])
 
     # Add new keys from remote_data to local_data
     for key in (set(remote_data) - set(local_data)):
@@ -64,48 +214,6 @@ def write_to_file(file_path: str, data: dict[str, object]) -> None:
         file.write(json.dumps(data, indent=4, ensure_ascii=False) + "\n")
     print(f"Wrote {file_path}.")
 
-
-# Update the existing models and add the missing models for OpenRouter
-def transform_openrouter_data(data):
-    transformed = {}
-    for row in data:
-        if float(row["pricing"]["prompt"]) < 0 or float(row["pricing"]["completion"]) < 0:
-            print(f"Skipping openrouter/{row['id']}: the catalog lists no usable per-token price for it.")
-            continue
-
-        # Add the fields 'max_tokens' and 'input_cost_per_token'
-        obj = {
-            "max_tokens": row["context_length"],
-            "input_cost_per_token": float(row["pricing"]["prompt"]),
-        }
-
-        # Add 'max_output_tokens' as a field if it is not None
-        if "top_provider" in row and "max_completion_tokens" in row["top_provider"] and row["top_provider"]["max_completion_tokens"] is not None:
-            obj['max_output_tokens'] = int(row["top_provider"]["max_completion_tokens"])
-
-        # Add the field 'output_cost_per_token'
-        obj.update({
-            "output_cost_per_token": float(row["pricing"]["completion"]),
-        })
-
-        # Add field 'input_cost_per_image' if it exists and is non-zero
-        if "pricing" in row and "image" in row["pricing"] and float(row["pricing"]["image"]) != 0.0:
-            obj['input_cost_per_image'] = float(row["pricing"]["image"])
-
-        # Add the fields 'litellm_provider' and 'mode'
-        obj.update({
-            "litellm_provider": "openrouter",
-            "mode": "chat"
-        })
-
-        # Add the 'supports_vision' field if the modality is 'multimodal'
-        if row.get('architecture', {}).get('modality') == 'multimodal':
-            obj['supports_vision'] = True
-
-        # Use a composite key to store the transformed object
-        transformed[f'openrouter/{row["id"]}'] = obj
-
-    return transformed
 
 def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
     mode: Final = VERCEL_TYPE_TO_MODE[model.type]
@@ -129,8 +237,10 @@ def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
     return {key: value for key, value in candidate.items() if value is not None}
 
 
-def transform_vercel_ai_gateway_data(data: list[dict[str, object]]) -> dict[str, dict[str, object]]:
-    models: Final = tuple(VercelModel.model_validate(row) for row in data if row.get("type") in VERCEL_TYPE_TO_MODE)
+def transform_vercel_ai_gateway_data(data: list[dict[str, object]] | None) -> dict[str, dict[str, object]]:
+    models: Final = tuple(
+        VercelModel.model_validate(row) for row in data or () if row.get("type") in VERCEL_TYPE_TO_MODE
+    )
     entries: Final = ((f"vercel_ai_gateway/{model.id}", _vercel_entry(model)) for model in models)
     return {key: entry for key, entry in entries if entry is not None}
 
@@ -154,12 +264,12 @@ def load_local_data(file_path):
 def main():
     local_data = load_local_data(COST_MAP_PATHS[0])
 
-    openrouter_data = transform_openrouter_data(asyncio.run(fetch_data(OPENROUTER_URL)))
     vercel_data = transform_vercel_ai_gateway_data(asyncio.run(fetch_data(VERCEL_AI_GATEWAY_URL)))
-    all_remote_data = {**openrouter_data, **vercel_data}
+    friendli_data = transform_friendli_data(asyncio.run(fetch_data(FRIENDLI_API_URL)), local_data)
+    all_remote_data = {**vercel_data, **friendli_data}
 
     if local_data and all_remote_data:
-        sync_local_data_with_remote(local_data, all_remote_data)
+        sync_local_data_with_remote(local_data, all_remote_data, replace_keys=frozenset(friendli_data))
         for path in COST_MAP_PATHS:
             write_to_file(path, local_data)
     else:

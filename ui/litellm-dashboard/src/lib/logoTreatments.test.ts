@@ -6,6 +6,12 @@ describe("logoTreatmentFor", () => {
     expect(logoTreatmentFor("/ui/assets/logos/github.svg")).toBe("invert");
   });
 
+  it("inverts the bundled LiteLLM monogram into the white brand mark on dark", () => {
+    expect(logoTreatmentFor("/litellm-asset-prefix/_next/static/media/litellm_monogram.16r2_rdj4dq8r.svg")).toBe(
+      "invert",
+    );
+  });
+
   it("marks a multicolor dark mark for a plate instead of inversion", () => {
     expect(logoTreatmentFor("/ui/assets/logos/fireworks.svg")).toBe("plate");
   });

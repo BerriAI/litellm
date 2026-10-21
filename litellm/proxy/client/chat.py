@@ -3,21 +3,37 @@ from collections.abc import Iterator
 from typing import Any, Final
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
 
-from .exceptions import UnauthorizedError
+from .exceptions import StreamError, UnauthorizedError
+
+_SSE_LINE: Final[TypeAdapter[bytes | bytearray]] = TypeAdapter(
+    bytes | bytearray, config=ConfigDict(arbitrary_types_allowed=True, strict=True, hide_input_in_errors=True)
+)
+
+
+def _raise_if_error_frame(chunk: object) -> None:
+    match chunk:
+        case {"error": object() as error} if error:
+            raise StreamError(error)
+        case _:
+            return
 
 
 class ChatClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 600):
         """
         Initialize the ChatClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 600, the OpenAI SDK default, since a completion
+                can legitimately take minutes)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -70,7 +86,7 @@ class ChatClient:
         url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages}
+        data: Final[dict[str, object]] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -96,7 +112,7 @@ class ChatClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -135,12 +151,13 @@ class ChatClient:
 
         Raises:
             UnauthorizedError: If the request fails with a 401 status code
+            StreamError: If the server ends the stream with an error event
             requests.exceptions.RequestException: If the request fails with any other error
         """
         url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages, "stream": True}
+        data: Final[dict[str, object]] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -161,22 +178,25 @@ class ChatClient:
         # Make streaming request
         session: Final = requests.Session()
         try:
-            response: Final = session.post(url, headers=self._get_headers(), json=data, stream=True)
+            response: Final = session.post(
+                url, headers=self._get_headers(), json=data, stream=True, timeout=self._timeout
+            )
             response.raise_for_status()
 
             # Parse SSE stream
             for line in response.iter_lines():
                 if line:
-                    line = line.decode("utf-8")
+                    line = _SSE_LINE.validate_python(line).decode("utf-8")
                     if line.startswith("data: "):
                         data_str = line[6:]  # Remove 'data: ' prefix
                         if data_str.strip() == "[DONE]":
                             break
                         try:
                             chunk = json.loads(data_str)
-                            yield chunk
                         except json.JSONDecodeError:
                             continue
+                        _raise_if_error_frame(chunk)
+                        yield chunk
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:

@@ -13,10 +13,12 @@ jobs:
   auto_update_price_and_context_window:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
+    env:
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: litellm_internal_staging
+          ref: ${{ env.BASE_BRANCH }}
           persist-credentials: false
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
@@ -36,15 +38,11 @@ jobs:
         if: steps.existing.outputs.open_pr == ''
         run: |
           uv run --frozen python .github/scripts/auto_update_price_and_context_window_file.py
-      - name: Regenerate JSON Schema
-        if: steps.existing.outputs.open_pr == ''
-        run: |
-          uv run --frozen python ci_cd/generate_model_prices_schema.py
       - name: Create Pull Request
         if: steps.existing.outputs.open_pr == ''
         run: |
           if git diff --quiet; then
-            echo "Price map already in sync with the OpenRouter and Vercel AI Gateway catalogs; no PR needed."
+            echo "Price map already in sync with the Vercel AI Gateway and Friendli catalogs; no PR needed."
             exit 0
           fi
           today="$(date +'%Y-%m-%d')"
@@ -52,14 +50,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json model_prices_and_context_window.schema.json
-          git commit -m "chore(models): sync openrouter and vercel_ai_gateway prices $today"
+          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          git commit -m "chore(models): sync vercel_ai_gateway and friendliai prices $today"
           gh auth setup-git
           git push origin "$branch"
           gh pr create \
-            --title "chore(models): sync openrouter and vercel_ai_gateway prices $today" \
-            --body "Automated sync of model_prices_and_context_window.json from the OpenRouter and Vercel AI Gateway model catalogs" \
+            --title "chore(models): sync vercel_ai_gateway and friendliai prices $today" \
+            --body "Automated sync of model_prices_and_context_window.json from the Vercel AI Gateway and Friendli model catalogs" \
             --head "$branch" \
-            --base litellm_internal_staging
+            --base "$BASE_BRANCH"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}

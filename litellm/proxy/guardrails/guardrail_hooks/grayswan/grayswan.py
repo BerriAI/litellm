@@ -2,9 +2,12 @@
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -14,17 +17,68 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
+
+
+class _GraySwanMonitorResponse(TypedDict):
+    """Body returned by Gray Swan's `/cygnal/monitor` endpoint."""
+
+    violation: ReadOnly[NotRequired[float | None]]
+    violated_rules: ReadOnly[NotRequired[list[object]]]
+    violated_rule_descriptions: ReadOnly[NotRequired[list[object]]]
+    mutation: ReadOnly[NotRequired[bool | None]]
+    ipi: ReadOnly[NotRequired[bool | None]]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _GraySwanMonitorHTTPResponse(Protocol):
+    def raise_for_status(self) -> object: ...
+
+    def json(self) -> _GraySwanMonitorResponse: ...
+
+
+class _GraySwanMonitorHTTPClient(Protocol):
+    async def post(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> _GraySwanMonitorHTTPResponse: ...
+
+
+class _MonitorMessage(TypedDict):
+    role: ReadOnly[str]
+    content: ReadOnly[NotRequired[str]]
+    tool_calls: ReadOnly[NotRequired[tuple[Mapping[str, object], ...]]]
+
+
+def _as_plain_dict(item: object) -> Mapping[str, object]:
+    if isinstance(item, Mapping):
+        return item
+    if isinstance(item, BaseModel):
+        return TypeAdapter(dict[str, object]).validate_python(item.model_dump(mode="json"))
+    return cast("Mapping[str, object]", item)  # cast-ok: wire rows are message/tool-call dicts
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -75,9 +129,11 @@ class GraySwanGuardrail(CustomGuardrail):
         streaming_sampling_rate: int = 5,
         fail_open: bool | None = True,
         guardrail_timeout: float | None = 30.0,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler: _GraySwanMonitorHTTPClient = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
 
         api_key_value: Final = api_key or os.getenv("GRAYSWAN_API_KEY")
         if not api_key_value:
@@ -174,7 +230,7 @@ class GraySwanGuardrail(CustomGuardrail):
             inputs: Dictionary containing:
                 - texts: List of texts to scan
                 - images: Optional list of images (not currently used by GraySwan)
-                - tool_calls: Optional list of tool calls (not currently used)
+                - tool_calls: Optional list of tool calls sent back by the model
             request_data: The original request data
             input_type: "request" for pre-call, "response" for post-call
             logging_obj: Optional logging object
@@ -194,7 +250,12 @@ class GraySwanGuardrail(CustomGuardrail):
         )
 
         texts: Final = inputs.get("texts", [])
-        if not texts:
+        response_tool_calls: Final = (
+            tuple(_as_plain_dict(call) for call in (inputs.get("tool_calls") or ()))
+            if input_type == "response" and inputs.get("tool_calls")
+            else ()
+        )
+        if not texts and not response_tool_calls:
             verbose_proxy_logger.debug("Gray Swan Guardrail: No texts to scan")
             return inputs
 
@@ -204,10 +265,31 @@ class GraySwanGuardrail(CustomGuardrail):
             input_type,
         )
 
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(self)
+        context, tools = (
+            self._post_call_context(request_data, logging_obj, scan_only_tool_results)
+            if input_type == "response"
+            else ((), None)
+        )
+
         # Convert texts to messages format for GraySwan API
         # Use "user" role for request content, "assistant" for response content
         role: Final = "assistant" if input_type == "response" else "user"
-        messages: Final = [{"role": role, "content": text} for text in texts]
+        merged_tail: Final = (
+            _MonitorMessage(role="assistant", content=texts[-1], tool_calls=response_tool_calls)
+            if len(texts) == 1 and response_tool_calls
+            else None
+        )
+        messages: Final = (
+            *context,
+            *(_MonitorMessage(role=role, content=text) for text in (texts[:-1] if merged_tail else texts)),
+            *((merged_tail,) if merged_tail else ()),
+            *(
+                (_MonitorMessage(role="assistant", tool_calls=response_tool_calls),)
+                if response_tool_calls and not merged_tail
+                else ()
+            ),
+        )
 
         # Get dynamic params from request metadata
         dynamic_body: Final = self.get_guardrail_dynamic_request_body_params(request_data) or {}
@@ -215,7 +297,7 @@ class GraySwanGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
 
         # Prepare and send payload
-        payload: Final = self._prepare_payload(messages, dynamic_body, request_data, logging_obj)
+        payload: Final = self._prepare_payload(messages, dynamic_body, request_data, logging_obj, tools=tools)
         if payload is None:
             return inputs
 
@@ -266,7 +348,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Legacy Test Interface (for backward compatibility)
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict) -> dict[str, Any]:
+    async def run_grayswan_guardrail(self, payload: dict[str, object]) -> _GraySwanMonitorResponse:
         """
         Run the GraySwan guardrail on a payload.
 
@@ -285,7 +367,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _process_grayswan_response(
         self,
-        response_json: dict,
+        response_json: _GraySwanMonitorResponse,
         data: dict | None = None,
         hook_type: GuardrailEventHooks | None = None,
     ) -> None:
@@ -385,7 +467,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan API interaction
     # ------------------------------------------------------------------
 
-    async def _call_grayswan_api(self, payload: dict) -> dict[str, Any]:
+    async def _call_grayswan_api(self, payload: dict[str, object]) -> _GraySwanMonitorResponse:
         """Call the GraySwan monitoring API."""
         headers: Final = self._prepare_headers()
 
@@ -406,7 +488,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _process_response_internal(
         self,
-        response_json: dict[str, Any],
+        response_json: _GraySwanMonitorResponse,
         request_data: dict,
         inputs: GenericGuardrailAPIInputs,
         is_output: bool,
@@ -528,14 +610,74 @@ class GraySwanGuardrail(CustomGuardrail):
                 forwarded_headers[str(key)] = str(value)
         return forwarded_headers or None
 
+    def _post_call_context(
+        self,
+        request_data: dict,
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        scan_only_tool_results: bool,
+    ) -> tuple[tuple[Mapping[str, object], ...], tuple[object, ...] | None]:
+        """Request conversation in OpenAI shape, scoped like the pre-call path.
+
+        Returns the scoped context messages plus the request's tool definitions,
+        or ``((), None)`` when the request surface cannot be resolved.
+        """
+        from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+        from litellm.llms import load_guardrail_translation_mappings
+
+        litellm_metadata: Final = request_data.get("litellm_metadata")
+        request_route: Final = (
+            litellm_metadata.get("user_api_key_request_route") if isinstance(litellm_metadata, Mapping) else None
+        )
+        route_call_types: Final = get_call_types_for_route(request_route) if isinstance(request_route, str) else None
+        call_type: Final = (
+            (route_call_types[0].value if route_call_types else None)
+            or (logging_obj.call_type if logging_obj is not None else None)
+            or getattr(request_data.get("litellm_logging_obj"), "call_type", None)
+        )
+        if not isinstance(call_type, str):
+            return (), None
+        try:
+            mapped: Final = CallTypes(call_type)
+        except ValueError:
+            return (), None
+        handler_cls: Final = load_guardrail_translation_mappings().get(mapped)
+        if handler_cls is None:
+            return (), None
+        try:
+            structured: Final = handler_cls().get_structured_messages(request_data) or ()
+        except Exception as exc:
+            verbose_proxy_logger.debug(
+                "Gray Swan Guardrail: could not resolve request context for call_type %s: %s",
+                call_type,
+                exc,
+            )
+            return (), None
+        indices: Final = scoped_structured_message_indices(
+            structured,
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=effective_skip_system_message_for_guardrail(self),
+            skip_tool=effective_skip_tool_message_for_guardrail(self),
+        )
+        if not indices:
+            return (), None
+        raw_tools: Final = request_data.get("tools")
+        tools: Final = (
+            tuple(raw_tools) if not scan_only_tool_results and isinstance(raw_tools, list) and raw_tools else None
+        )
+        return tuple(_as_plain_dict(structured[index]) for index in indices), tools
+
     def _prepare_payload(
         self,
-        messages: list[dict[str, str]],
+        messages: tuple[Mapping[str, object], ...],
         dynamic_body: dict,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> dict[str, Any] | None:
-        payload: Final[dict[str, Any]] = {"messages": messages}
+        *,
+        tools: tuple[object, ...] | None = None,
+    ) -> dict[str, object] | None:
+        payload: Final[dict[str, object]] = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
 
         categories: Final = dynamic_body.get("categories") or self.categories
         if categories:
@@ -563,13 +705,13 @@ class GraySwanGuardrail(CustomGuardrail):
                 {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
             )
         if cleaned_litellm_metadata:
-            sanitized: Final = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            sanitized: Final[object] = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
 
         return payload
 
-    def _format_violation_message(self, detection_info: Any, is_output: bool = False) -> str:
+    def _format_violation_message(self, detection_info: object, is_output: bool = False) -> str:
         """
         Format detection info into a user-friendly violation message.
 

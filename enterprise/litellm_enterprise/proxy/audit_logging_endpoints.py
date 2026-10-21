@@ -7,7 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -48,6 +48,18 @@ def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, objec
     }
 
 
+def _build_search_condition(search: str) -> dict[str, object]:
+    """Match a row whose id, changed_by, object_id, or changed_by_api_key equals the search value."""
+    return {
+        "OR": (
+            {"id": search},
+            {"changed_by": search},
+            {"object_id": search},
+            {"changed_by_api_key": search},
+        )
+    }
+
+
 @router.get(
     "/audit",
     tags=["Audit Logging"],
@@ -58,33 +70,37 @@ async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # Filter parameters
-    changed_by: Optional[str] = Query(
+    changed_by: str | None = Query(
         None, description="Filter by user or system that performed the action"
     ),
-    changed_by_api_key: Optional[str] = Query(
+    changed_by_api_key: str | None = Query(
         None, description="Filter by API key hash that performed the action"
     ),
-    action: Optional[str] = Query(
+    action: str | None = Query(
         None, description="Filter by action type (create, update, delete)"
     ),
-    table_name: Optional[str] = Query(
+    table_name: str | None = Query(
         None, description="Filter by table name that was modified"
     ),
-    object_id: Optional[str] = Query(
+    object_id: str | None = Query(
         None, description="Filter by ID of the object that was modified"
     ),
-    start_date: Optional[str] = Query(None, description="Filter logs after this date"),
-    end_date: Optional[str] = Query(None, description="Filter logs before this date"),
-    object_team_id: Optional[str] = Query(
+    start_date: str | None = Query(None, description="Filter logs after this date"),
+    end_date: str | None = Query(None, description="Filter logs before this date"),
+    object_team_id: str | None = Query(
         None,
         description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
     ),
-    object_key_hash: Optional[str] = Query(
+    object_key_hash: str | None = Query(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
     ),
+    search: str | None = Query(
+        None,
+        description="Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value",
+    ),
     # Sorting parameters
-    sort_by: Optional[str] = Query(
+    sort_by: str | None = Query(
         None,
         description="Column to sort by (e.g. 'updated_at', 'action', 'table_name')",
     ),
@@ -118,6 +134,11 @@ async def get_audit_logs(
         *([_build_json_field_or_condition("token", object_key_hash)] if object_key_hash else []),
     ]
 
+    and_conditions: Final[tuple[dict[str, object], ...]] = (
+        *json_field_conditions,
+        *((_build_search_condition(search),) if search else ()),
+    )
+
     # Build filter conditions
     where_conditions: Final[dict[str, object]] = {
         **({"changed_by": changed_by} if changed_by else {}),
@@ -126,14 +147,14 @@ async def get_audit_logs(
         **({"table_name": table_name} if table_name else {}),
         **({"object_id": object_id} if object_id else {}),
         **({"updated_at": date_filter} if start_date or end_date else {}),
-        **({"AND": json_field_conditions} if json_field_conditions else {}),
+        **({"AND": and_conditions} if and_conditions else {}),
     }
 
     order_by: Final[dict[str, str]] = (
         {sort_by: sort_order} if sort_by and isinstance(sort_by, str) else {"updated_at": sort_order}
     )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get paginated results
     audit_logs: Final = await audit_log_table.find_many(
@@ -195,7 +216,7 @@ async def get_audit_log_by_id(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get the audit log by ID
     audit_log: Final = await audit_log_table.find_unique(where={"id": id})

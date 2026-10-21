@@ -17,7 +17,7 @@ until they're actually needed.
 
 import importlib
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -57,10 +57,12 @@ from ._lazy_imports_registry import (
 )
 
 if TYPE_CHECKING:
-    from tiktoken import Encoding
+    import httpx
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-def get_litellm_globals() -> dict:
+def get_litellm_globals() -> dict[str, object]:
     """
     Get the globals dictionary of the litellm module.
 
@@ -70,7 +72,7 @@ def get_litellm_globals() -> dict:
     return sys.modules["litellm"].__dict__
 
 
-def _get_utils_globals() -> dict:
+def _get_utils_globals() -> dict[str, object]:
     """
     Get the globals dictionary of the utils module.
 
@@ -80,29 +82,22 @@ def _get_utils_globals() -> dict:
     return sys.modules["litellm.utils"].__dict__
 
 
+def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "float | httpx.Timeout | None":
+    """Read the configured `litellm.request_timeout` used for the module level http clients."""
+    return litellm_globals.get("request_timeout")
+
+
 # These are special lazy loaders for things that are used internally
 # They're separate from the main lazy import system because they have specific use cases
 
-# Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: "Encoding | None" = None
+
+def get_default_encoding() -> "Tokenizer":
+    from litellm.rust_bridge.tokenizer import get_encoding
+
+    return get_encoding("cl100k_base")
 
 
-def _get_default_encoding() -> "Encoding":
-    """
-    Lazily load and cache the default OpenAI encoding.
-
-    This avoids importing `litellm.litellm_core_utils.default_encoding` (and thus tiktoken)
-    at `litellm` import time. The encoding is cached after the first import.
-
-    This is used internally by utils.py functions that need the encoding but shouldn't
-    trigger its import during module load.
-    """
-    global _default_encoding
-    if _default_encoding is None:
-        from litellm.litellm_core_utils.default_encoding import encoding
-
-        _default_encoding = encoding
-    return _default_encoding
+_get_default_encoding = get_default_encoding
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
@@ -131,9 +126,10 @@ def _get_modified_max_tokens() -> "Callable[..., int | None]":
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
 _token_counter_new_func: "Callable[..., int] | None" = None
+_messages_reach_token_count_func: "Callable[..., bool] | None" = None
 
 
-def _get_token_counter_new() -> "Callable[..., int]":
+def get_token_counter_new() -> "Callable[..., int]":
     """
     Lazily load and cache the token_counter function (aliased as token_counter_new).
 
@@ -153,6 +149,24 @@ def _get_token_counter_new() -> "Callable[..., int]":
     return _token_counter_new_func
 
 
+_get_token_counter_new = get_token_counter_new
+
+
+def get_messages_reach_token_count() -> "Callable[..., bool]":
+    """Lazily load ``messages_reach_token_count`` for the same reason as ``get_token_counter_new``."""
+    global _messages_reach_token_count_func
+    if _messages_reach_token_count_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            messages_reach_token_count as _messages_reach_token_count_imported,
+        )
+
+        _messages_reach_token_count_func = _messages_reach_token_count_imported
+    return _messages_reach_token_count_func
+
+
+_get_messages_reach_token_count = get_messages_reach_token_count
+
+
 # ============================================================================
 # MAIN LAZY IMPORT SYSTEM
 # ============================================================================
@@ -163,7 +177,7 @@ def _get_token_counter_new() -> "Callable[..., int]":
 _LAZY_IMPORT_REGISTRY: dict[str, Callable[[str], object]] | None = None
 
 
-def _get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
+def get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
     """
     Build the registry that maps attribute names to their handler functions.
 
@@ -212,6 +226,9 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
     return _LAZY_IMPORT_REGISTRY
 
 
+_get_lazy_import_registry = get_lazy_import_registry
+
+
 class _AttributeView(TypedDict):
     """Holds one module attribute so the lazily fetched value is read back as ``object``."""
 
@@ -223,7 +240,7 @@ def _module_attribute(module: ModuleType, attr_name: str) -> object:
     return attribute["value"]
 
 
-def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> object:
+def _generic_lazy_import(name: str, import_map: Mapping[str, tuple[str, str]], category: str) -> object:
     """
     Generic function that handles lazy importing for most attributes.
 
@@ -435,8 +452,8 @@ def _lazy_import_http_handlers(name: str) -> object:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
         # Get timeout from module config (if set)
-        timeout = _globals.get("request_timeout")
-        params: Final = {"timeout": timeout, "client_alias": "module level aclient"}
+        async_timeout: Final = _get_module_level_client_timeout(_globals)
+        params: Final = {"timeout": async_timeout, "client_alias": "module level aclient"}
 
         # Create the client instance
         provider_id: Final = cast(Any, "litellm_module_level_client")
@@ -453,8 +470,8 @@ def _lazy_import_http_handlers(name: str) -> object:
         # Create a sync HTTP client
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-        timeout = _globals.get("request_timeout")
-        sync_client: Final = HTTPHandler(timeout=timeout)
+        sync_timeout: Final = _get_module_level_client_timeout(_globals)
+        sync_client: Final = HTTPHandler(timeout=sync_timeout)
 
         # Cache it
         _globals["module_level_client"] = sync_client
