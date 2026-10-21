@@ -2741,7 +2741,7 @@ _STUCK_PROVIDER_CHUNK_CAP: Final = 10 * litellm.REPEATED_STREAMING_CHUNK_LIMIT
 
 class _StuckProvider:
     def __init__(self) -> None:
-        self.closed = threading.Event()
+        self.closed_early = threading.Event()
         self.chunks_sent = 0
 
     def _next_chunk(self) -> ModelResponseStream:
@@ -2751,15 +2751,17 @@ class _StuckProvider:
     def sync_stream(self) -> Iterator[ModelResponseStream]:
         try:
             yield from (self._next_chunk() for _ in range(_STUCK_PROVIDER_CHUNK_CAP))
-        finally:
-            self.closed.set()
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
 
     async def async_stream(self) -> AsyncIterator[ModelResponseStream]:
         try:
             for _ in range(_STUCK_PROVIDER_CHUNK_CAP):
                 yield self._next_chunk()
-        finally:
-            self.closed.set()
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
 
 
 class _FailureRecorder(CustomLogger):
@@ -2786,7 +2788,7 @@ def _stuck_stream_wrapper(
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type=call_type,
-        start_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
         litellm_call_id=f"stuck-stream-{call_type}",
         function_id=f"stuck-stream-{call_type}",
         dynamic_failure_callbacks=[recorder],
@@ -2815,7 +2817,8 @@ async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_lo
     with pytest.raises(Exception, match="repeating the same chunk"):
         async for _ in wrapper:
             pass
-    assert provider.closed.is_set()
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
     chunks_sent_at_failure: Final = provider.chunks_sent
 
     with pytest.raises(StopAsyncIteration):
@@ -2836,7 +2839,8 @@ def test_sync_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_
     with pytest.raises(Exception, match="repeating the same chunk"):
         for _ in wrapper:
             pass
-    assert provider.closed.is_set()
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
     chunks_sent_at_failure: Final = provider.chunks_sent
     assert "repeating the same chunk" in recorder.failures.get(timeout=5)
 
