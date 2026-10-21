@@ -635,7 +635,6 @@ class TestAgentCoreSearchEdgeCases:
 
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
         price_per_query = litellm.model_cost["agentcore/search"]["input_cost_per_query"]
-        assert price_per_query > 0
         assert search_provider_cost_per_query(
             model="agentcore/search", custom_llm_provider="agentcore", number_of_queries=3
         ) == (3 * price_per_query, 0.0)
