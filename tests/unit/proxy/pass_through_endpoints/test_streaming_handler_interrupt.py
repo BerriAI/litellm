@@ -823,7 +823,7 @@ async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logg
     stashed: Final = logging_obj.model_call_details.get("combined_usage_object")
     assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 52
 
-    logging_obj.discard_partial_usage_for_failure()
+    logging_obj.carry_failed_attempt_usage()
     retry: Final = _anthropic_messages_attempt(
         logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
     )
@@ -848,7 +848,7 @@ async def test_every_dropped_attempt_logs_its_own_failure() -> None:
 
     await _drop_after_message_start(logging_obj, "msg_a1", 52)
     await _settle(recorder.failure_kwargs)
-    logging_obj.discard_partial_usage_for_failure()
+    logging_obj.carry_failed_attempt_usage()
     await _drop_after_message_start(logging_obj, "msg_a2", 9)
     await _settle(recorder.failure_kwargs, count=2)
 

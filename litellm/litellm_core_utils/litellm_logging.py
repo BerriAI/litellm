@@ -2448,12 +2448,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
-    def discard_partial_usage_for_failure(self) -> None:
-        """The router is about to open the next attempt of this request: the usage a superseded attempt
-        stashed here belongs to that attempt's own failure log, and the next attempt's log carries its own."""
-        self.model_call_details.pop("combined_usage_object", None)
-        self.model_call_details.pop("response_cost", None)
-
     def record_failure_after_earlier_rounds(
         self, earlier: BilledRoundsSpend, failed_usage: Usage, failed_cost: float
     ) -> None:

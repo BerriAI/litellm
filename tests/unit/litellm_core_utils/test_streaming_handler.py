@@ -4320,7 +4320,7 @@ async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_route
 
     with pytest.raises(MidStreamFallbackError):
         wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
-    logging_obj.discard_partial_usage_for_failure()
+    logging_obj.carry_failed_attempt_usage()
     await asyncio.wait_for(recorder.logged.wait(), timeout=10)
 
     assert recorder.failures == ((30, 1),)
