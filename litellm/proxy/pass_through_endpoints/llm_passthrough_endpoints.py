@@ -2160,6 +2160,26 @@ def is_azure_ai_search_service_level_index_create(method: str, endpoint: str) ->
     return path == "indexes" or path.endswith("/indexes")
 
 
+def azure_ai_search_endpoint_on_index(endpoint: str, index_name: str) -> str:
+    segments: Final = endpoint.split("/")
+    index_position: Final = segments.index("indexes") + 1
+    return "/".join((*segments[:index_position], index_name, *segments[index_position + 1 :]))
+
+
+_AZURE_AI_SEARCH_INDEX_DEFINITION: Final = TypeAdapter(Mapping[str, object])
+
+
+async def name_azure_ai_search_index_definition(
+    request: Request, endpoint: str, virtual_index: str, vector_store_index: str
+) -> None:
+    if endpoint.strip("/") != f"indexes/{virtual_index}":
+        return
+    index_definition: Final = _AZURE_AI_SEARCH_INDEX_DEFINITION.validate_python(await read_request_body(request))
+    if index_definition.get("name") != virtual_index:
+        return
+    safe_set_request_parsed_body(request, {**index_definition, "name": vector_store_index})
+
+
 async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> AsyncGenerator[bytes, None]:
     try:
         async for chunk in upstream:
@@ -2468,8 +2488,16 @@ async def azure_proxy_route(
                 base_target_url = _optional_str(litellm_params.get("api_base"))
                 if base_target_url is None:
                     raise Exception(f"API base not found for {part}")
-                return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
+                await name_azure_ai_search_index_definition(
+                    request=request,
                     endpoint=endpoint,
+                    virtual_index=part,
+                    vector_store_index=index_object.litellm_params.vector_store_index,
+                )
+                return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
+                    endpoint=azure_ai_search_endpoint_on_index(
+                        endpoint, index_object.litellm_params.vector_store_index
+                    ),
                     request=request,
                     fastapi_response=fastapi_response,
                     user_api_key_dict=user_api_key_dict,
