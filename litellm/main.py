@@ -2668,6 +2668,7 @@ def _complete_custom_openai(
         from litellm.llms.github_copilot.common_utils import (
             get_copilot_default_headers,
             pin_session_authorization,
+            with_openai_sdk_header_names,
         )
         from litellm.llms.github_copilot.per_user_auth import (
             require_github_copilot_user_session,
@@ -2683,7 +2684,7 @@ def _complete_custom_openai(
             )
         if user_session is not None:
             pin_session_authorization(copilot_headers, user_session.token)
-        extra_headers = copilot_headers
+        extra_headers = with_openai_sdk_header_names(copilot_headers)
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 

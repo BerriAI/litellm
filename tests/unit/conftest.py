@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same 
     image_handling as image_handling_module,
 )
 from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
+from litellm.llms.github_copilot import common_utils as github_copilot_common_utils_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
@@ -214,6 +215,8 @@ def _reset_aws_auth_caches() -> None:
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    github_copilot_common_utils_module._PLAN_API_BASES.flush_cache()
+    litellm_utils_module.ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
     _reset_aws_auth_caches()
 
 

@@ -9751,6 +9751,46 @@ def test_update_kwargs_with_deployment_no_tags():
     assert "tags" not in kwargs["metadata"]
 
 
+def _copilot_deployment_object(
+    token_dir: Path, monkeypatch: pytest.MonkeyPatch, **litellm_params: object
+) -> tuple[litellm.Router, Deployment | None]:
+    (token_dir / "access-token").write_text("shared-copilot-token")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/gpt-4.1",
+                    "api_base": "https://deployment.example.com/v1",
+                    **litellm_params,
+                },
+            }
+        ]
+    )
+    return router, router.get_deployment_by_model_group_name(model_group_name="copilot")
+
+
+def test_update_kwargs_with_deployment_drops_caller_api_base_for_a_copilot_deployment_object_with_drop_params(
+    tmp_path, monkeypatch
+):
+    router, deployment = _copilot_deployment_object(tmp_path, monkeypatch, drop_params=True)
+    kwargs: Final[dict[str, object]] = {"metadata": {}, "api_base": "https://caller.example.com"}
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert "api_base" not in kwargs
+
+
+def test_update_kwargs_with_deployment_refuses_caller_api_base_for_a_copilot_deployment_object(tmp_path, monkeypatch):
+    router, deployment = _copilot_deployment_object(tmp_path, monkeypatch)
+
+    with pytest.raises(litellm.BadRequestError, match="do not accept api_base from the caller"):
+        router._update_kwargs_with_deployment(
+            deployment=deployment, kwargs={"metadata": {}, "api_base": "https://caller.example.com"}
+        )
+
+
 @pytest.mark.asyncio
 async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
     router = Router(
@@ -29514,7 +29554,7 @@ def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lack
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": 4102444800}))
+    (tmp_path / "access-token").write_text("gho_test")
     model_list: Final = [
         {
             "model_name": "mixed-json-mode",

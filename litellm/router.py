@@ -88,6 +88,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
+    drops_unsupported_params,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -205,7 +206,9 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
+    DeploymentParamLookup,
     get_dynamic_litellm_params,
+    github_copilot_caller_endpoint_keys,
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
@@ -4771,8 +4774,40 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
-        for key in self._forwarded_alias_marker_keys_the_deployment_sets(
-            deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        deployment_litellm_params: Final = cast(  # cast-ok: a dict or LiteLLM_Params, both answer get
+            "DeploymentParamLookup", deployment["litellm_params"]
+        )
+        caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: router call kwargs are a str-keyed dict
+        caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_litellm_params, caller_kwargs)
+        router_defaults: Final = cast(  # cast-ok: router default params are a str-keyed dict
+            "Mapping[str, object]", self.default_litellm_params
+        )
+        call_drop_params: Final = next(
+            (
+                value
+                for value in (
+                    caller_kwargs.get("drop_params"),
+                    deployment_litellm_params.get("drop_params"),
+                    router_defaults.get("drop_params"),
+                )
+                if value is not None
+            ),
+            None,
+        )
+        if caller_endpoint_keys and not drops_unsupported_params(call_drop_params):
+            raise litellm.BadRequestError(
+                message=(
+                    f"GitHub Copilot deployments do not accept {' or '.join(caller_endpoint_keys)} from the caller. "
+                    "Set api_base on the deployment, or set drop_params to drop it"
+                ),
+                model=cast(str, deployment["model_name"]),  # cast-ok: every deployment carries a str model_name
+                llm_provider="github_copilot",
+            )
+        for key in (
+            *self._forwarded_alias_marker_keys_the_deployment_sets(
+                deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+            ),
+            *caller_endpoint_keys,
         ):
             kwargs.pop(key, None)
         defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params)

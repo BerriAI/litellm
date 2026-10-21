@@ -5,6 +5,7 @@ import itertools
 import random
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1521,20 +1522,18 @@ class TestPerUserCopilotAuthFailureCooldown:
         assert get_cooldown_deployments(router, parent_otel_span=None) == []
 
     @pytest.mark.asyncio
-    async def test_shared_mode_copilot_auth_failure_still_cools_down(self) -> None:
-        from litellm.llms.github_copilot.authenticator import Authenticator
-
+    async def test_shared_mode_copilot_auth_failure_still_cools_down(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        (tmp_path / "access-token").write_text("gho_shared")
         model_id: Final = "shared-mode"
-        with (
-            patch.object(Authenticator, "get_api_key", return_value="shared-copilot-token"),
-            patch.object(Authenticator, "get_api_base", return_value="https://api.githubcopilot.com"),
-        ):
-            router: Final = self._router(model_id, {"api_key": "sk-shared"})
-            self._callback(
-                router,
-                model_id,
-                litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o"),
-            )
+        router: Final = self._router(model_id, {"api_key": "sk-shared"})
+        self._callback(
+            router,
+            model_id,
+            litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o"),
+        )
         assert get_deployment_failures_for_current_minute(router, model_id) == 1
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
@@ -1568,21 +1567,17 @@ class TestPerUserCopilotAuthFailureCooldown:
         assert get_cooldown_deployments(router, parent_otel_span=None) == []
 
     @pytest.mark.asyncio
-    async def test_fallback_shared_mode_auth_failure_still_cools_down(self) -> None:
-        from litellm.llms.github_copilot.authenticator import Authenticator
-
+    async def test_fallback_shared_mode_auth_failure_still_cools_down(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        (tmp_path / "access-token").write_text("gho_shared")
         model_id: Final = "fallback-shared"
-        with (
-            patch.object(Authenticator, "get_api_key", return_value="shared-copilot-token"),
-            patch.object(Authenticator, "get_api_base", return_value="https://api.githubcopilot.com"),
-        ):
-            router: Final = self._router(model_id, {"api_key": "sk-shared"})
-            exception: Final = litellm.AuthenticationError(
-                "upstream rejected the shared token", "github_copilot", "gpt-4o"
-            )
-            exception.failed_deployment_id = model_id
+        router: Final = self._router(model_id, {"api_key": "sk-shared"})
+        exception: Final = litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o")
+        exception.failed_deployment_id = model_id
 
-            _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
 
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
@@ -1618,23 +1613,21 @@ class TestPerUserCopilotAuthFailureCooldown:
         assert get_cooldown_deployments(router, parent_otel_span=None) == []
 
     @pytest.mark.asyncio
-    async def test_fallback_rate_limit_on_shared_deployment_still_cools_down(self) -> None:
-        from litellm.llms.github_copilot.authenticator import Authenticator
-
+    async def test_fallback_rate_limit_on_shared_deployment_still_cools_down(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        (tmp_path / "access-token").write_text("gho_shared")
         model_id: Final = "fallback-shared-429"
-        with (
-            patch.object(Authenticator, "get_api_key", return_value="shared-copilot-token"),
-            patch.object(Authenticator, "get_api_base", return_value="https://api.githubcopilot.com"),
-        ):
-            router: Final = self._router(
-                model_id,
-                {"api_key": "sk-shared"},
-                allowed_fails_policy={"RateLimitErrorAllowedFails": 0},
-            )
-            exception: Final = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
-            exception.failed_deployment_id = model_id
+        router: Final = self._router(
+            model_id,
+            {"api_key": "sk-shared"},
+            allowed_fails_policy={"RateLimitErrorAllowedFails": 0},
+        )
+        exception: Final = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
+        exception.failed_deployment_id = model_id
 
-            _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
 
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
@@ -2943,9 +2936,7 @@ async def test_allowed_fails_cools_a_single_deployment(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
     policy_kwargs: Final = (
-        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}
-        if use_policy
-        else {"allowed_fails": 1}
+        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)} if use_policy else {"allowed_fails": 1}
     )
     router: Final = Router(
         model_list=[
@@ -2980,12 +2971,9 @@ def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(
     """A 429/401 from the caller's own Copilot seat is scoped to that user; it must
     not cool down the shared deployment for every other caller."""
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+    from litellm.llms.github_copilot.github_host import github_host_endpoints
 
-    session_kwargs = {
-        "github_copilot_user_session": GithubCopilotUserSession(
-            token="copilot-token", api_base="https://api.githubcopilot.com"
-        )
-    }
+    session_kwargs = {"github_copilot_user_session": GithubCopilotUserSession(token="gho_user", endpoints=github_host_endpoints("github.com"))}
     for exc, status in (
         (litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o"), 429),
         (litellm.AuthenticationError("copilot 401", "github_copilot", "gpt-4o"), 401),
