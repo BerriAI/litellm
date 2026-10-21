@@ -85,6 +85,7 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         item_cache_control: bool = False,
         client_response_ids: tuple[str, ...] = (),
+        tool_call_provider_fields: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -125,6 +126,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                 )
             )
 
@@ -150,6 +152,7 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
+        tool_call_provider_fields: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -182,6 +185,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                 )
             )
 
@@ -196,6 +200,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:

@@ -8,6 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -99,6 +100,9 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
+                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+                ),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -150,5 +154,8 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
+                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+                ),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

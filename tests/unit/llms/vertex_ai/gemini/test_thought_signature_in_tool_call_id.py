@@ -13,6 +13,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -529,9 +530,10 @@ async def test_messages_tool_use_keeps_thought_signature_kept_out_of_its_id(
 
 
 RESPONSES_WEATHER_TOOL: Final = {"type": "function", **WEATHER_TOOL["function"]}
+SHORT_IDS: Final = MappingProxyType({"thought_signature_in_tool_call_id": False})
 
 
-def _responses_function_call_items(stream: bool) -> list[object]:
+def _responses_function_call_items(stream: bool, request_params: Mapping[str, object] = SHORT_IDS) -> list[object]:
     with respx.mock:
         respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, stream))
         response: Final = litellm.responses(
@@ -540,7 +542,7 @@ def _responses_function_call_items(stream: bool) -> list[object]:
             tools=[RESPONSES_WEATHER_TOOL],
             stream=stream,
             api_key="test-gemini-key",
-            thought_signature_in_tool_call_id=False,
+            **request_params,
         )
         items: Final = (
             [event.item for event in response if event.type == "response.output_item.done"]
@@ -557,6 +559,60 @@ def test_responses_function_call_keeps_thought_signature_kept_out_of_its_id(stre
     assert len(function_calls) == 1
     assert _is_bounded(function_calls[0].call_id)
     assert function_calls[0].provider_specific_fields["thought_signature"] == LONG_SIGNATURE
+
+
+def test_streamed_function_call_carries_its_thought_signature_only_in_its_id_by_default():
+    function_calls: Final = _responses_function_call_items(True, {})
+
+    assert len(function_calls) == 1
+    assert get_thought_signature_from_tool({"id": function_calls[0].call_id}) == LONG_SIGNATURE
+    assert getattr(function_calls[0], "provider_specific_fields", None) is None
+
+
+def _deepseek_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "deepseek-v4-flash",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+        },
+    )
+
+
+@pytest.mark.parametrize("request_params", [{}, SHORT_IDS])
+def test_responses_function_call_provider_fields_reach_the_provider_only_with_short_ids(
+    request_params: Mapping[str, object],
+):
+    replayed_item: Final = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+        "provider_specific_fields": {"thought_signature": LONG_SIGNATURE},
+    }
+
+    with respx.mock:
+        route: Final = respx.post(url__regex=r"https://api\.deepseek\.com/.*").mock(return_value=_deepseek_answer())
+        litellm.responses(
+            model="deepseek/deepseek-v4-flash",
+            input=[
+                {"role": "user", "content": USER_TURN["content"]},
+                replayed_item,
+                {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 21}'},
+            ],
+            tools=[RESPONSES_WEATHER_TOOL],
+            api_key="test-deepseek-key",
+            **request_params,
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    sent_tool_calls: Final = list(chain.from_iterable(message.get("tool_calls") or () for message in sent_body["messages"]))
+    assert len(sent_tool_calls) == 1
+    assert ("provider_specific_fields" in sent_tool_calls[0]) is bool(request_params)
 
 
 @pytest.mark.parametrize("client_keeps_provider_fields", [True, False])

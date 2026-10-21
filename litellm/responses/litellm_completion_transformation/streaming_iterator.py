@@ -127,6 +127,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
+        tool_call_provider_fields: bool = False,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -134,6 +135,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
         self.litellm_metadata: dict | None = litellm_metadata or {}
+        self.tool_call_provider_fields: Final = tool_call_provider_fields
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -488,7 +490,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 sequence_number=self._sequence_number,
-                item=BaseLiteLLMOpenAIResponseObject(**item_kwargs, **_tool_call_provider_specific_fields(tc)),
+                item=BaseLiteLLMOpenAIResponseObject(
+                    **item_kwargs,
+                    **(_tool_call_provider_specific_fields(tc) if self.tool_call_provider_fields else {}),
+                ),
             )
             self._pending_tool_events.append(item_done_event)
 

@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mappin
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
@@ -381,18 +382,27 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             return assert_never(control)
 
 
-def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> GenericLiteLLMParams | None:
+@dataclass(frozen=True, slots=True)
+class _SupplementalProviderParams:
+    params: GenericLiteLLMParams | None
+    dropped_keys: frozenset[str] = frozenset()
+
+
+def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
     supplemental: Final = {key: kwargs[key] for key in OPTIONAL_KWARGS_KEYS if key in kwargs}
     if not supplemental:
-        return None
+        return _SupplementalProviderParams(params=None)
     try:
-        return GenericLiteLLMParams.model_validate(supplemental)
+        return _SupplementalProviderParams(params=GenericLiteLLMParams.model_validate(supplemental))
     except ValidationError as error:
         invalid: Final = tuple(detail for detail in error.errors() if detail["loc"])
         invalid_keys: Final = frozenset(str(detail["loc"][0]) for detail in invalid)
         if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
-            return GenericLiteLLMParams.model_validate(
-                {key: value for key, value in supplemental.items() if key not in invalid_keys}
+            return _SupplementalProviderParams(
+                params=GenericLiteLLMParams.model_validate(
+                    {key: value for key, value in supplemental.items() if key not in invalid_keys}
+                ),
+                dropped_keys=invalid_keys,
             )
         raise litellm.BadRequestError(
             message="; ".join(f"{detail['loc'][0]}: {detail['msg']}" for detail in invalid),
@@ -701,7 +711,7 @@ async def acompletion(
                 "str | None", request_kwargs.get("api_base")
             )
             or base_url,
-            litellm_params=_supplemental_provider_params(request_kwargs, model),
+            litellm_params=_supplemental_provider_params(request_kwargs, model).params,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -5446,6 +5456,9 @@ def completion(
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
+    supplemental_params: Final = _supplemental_provider_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), model)
+    for dropped_key in supplemental_params.dropped_keys:
+        kwargs.pop(dropped_key)
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
@@ -5682,10 +5695,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
-            litellm_params=_supplemental_provider_params(
-                routing_kwargs,
-                cast(str, model),  # cast-ok: model is the alias-resolved request model name
-            ),
+            litellm_params=supplemental_params.params,
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name

@@ -4318,6 +4318,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search_requested = False
         iterator._tool_search_call_ids = set()
+        iterator.tool_call_provider_fields = False
         return iterator
 
     def _make_text_chunk(self):

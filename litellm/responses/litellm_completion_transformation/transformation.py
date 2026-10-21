@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -327,17 +328,32 @@ def _dropped_cache_control(_: object) -> None:
     return None
 
 
-def _without_cache_control_key(item: object) -> object:
+def _without_keys(item: object, keys: frozenset[str]) -> object:
     if not isinstance(item, dict):
         return item
-    return {key: value for key, value in _STR_KEY_DICT_ADAPTER.validate_python(item).items() if key != "cache_control"}
+    return {key: value for key, value in _STR_KEY_DICT_ADAPTER.validate_python(item).items() if key not in keys}
+
+
+def _without_item_keys(input: str | ResponseInputParam, keys: frozenset[str]) -> str | ResponseInputParam:
+    if not keys or not isinstance(input, list):
+        return input
+    return cast(  # cast-ok: the same input items, each minus the given keys
+        ResponseInputParam, [_without_keys(item, keys) for item in input]
+    )
 
 
 def without_item_cache_control(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if not isinstance(input, list):
-        return input
-    return cast(  # cast-ok: the same input items, each minus its own cache_control key
-        ResponseInputParam, [_without_cache_control_key(item) for item in input]
+    return _without_item_keys(input, frozenset(("cache_control",)))
+
+
+def _dropped_item_keys(item_cache_control: bool, tool_call_provider_fields: bool) -> frozenset[str]:
+    return frozenset(
+        key
+        for key, kept in (
+            ("cache_control", item_cache_control),
+            ("provider_specific_fields", tool_call_provider_fields),
+        )
+        if not kept
     )
 
 
@@ -879,6 +895,7 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
+            tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
         )
 
         litellm_completion_request: dict = {
@@ -940,6 +957,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
+        tool_call_provider_fields: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -955,7 +973,9 @@ class LiteLLMCompletionResponsesConfig:
         assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
         provider gets its own chain-of-thought back instead of reading it as
         visible text. ``item_cache_control`` belongs to the same callers, when
-        the target keeps an input item's ``cache_control`` on the message.
+        the target keeps an input item's ``cache_control`` on the message, and
+        ``tool_call_provider_fields`` when the target reads a function call's
+        thought signature from ``provider_specific_fields`` instead of its id.
 
         Callers that only inspect the messages (token counting, rate limiting,
         guardrail scanning) leave both off, because they need every piece of text
@@ -978,7 +998,7 @@ class LiteLLMCompletionResponsesConfig:
 
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=input if item_cache_control else without_item_cache_control(input),
+                input=_without_item_keys(input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)),
                 replay_reasoning=replay_reasoning,
             )
         )
@@ -1021,6 +1041,7 @@ class LiteLLMCompletionResponsesConfig:
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
+            tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
