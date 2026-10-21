@@ -377,6 +377,6 @@ class PromptManager:
             for prompt_id, template in self.prompts.items()
         }
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, object]]) -> None:
+    def load_prompts_from_json_data(self, prompt_data: Mapping[str, Mapping[str, object]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""
-        self._load_prompts_from_json(prompt_data)
+        self._load_prompts_from_json({prompt_id: dict(entry) for prompt_id, entry in prompt_data.items()})

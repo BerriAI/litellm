@@ -355,7 +355,7 @@ class DotpromptManager(CustomPromptManagement):
         metadata: Final = json_data.get("metadata", {})
         self.prompt_manager.add_prompt(prompt_id, content, metadata)
 
-    def load_prompts_from_json(self, prompts_data: dict[str, dict[str, object]]) -> None:
+    def load_prompts_from_json(self, prompts_data: Mapping[str, Mapping[str, object]]) -> None:
         """Load multiple prompts from JSON data."""
         self.prompt_manager.load_prompts_from_json_data(prompts_data)
 

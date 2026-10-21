@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -35,14 +36,16 @@ class _RunwayMLTask(TypedDict, total=False):
 
     id: ReadOnly[str]
     status: ReadOnly[str]
-    output: ReadOnly[Sequence[str | Mapping[str, str]]]
-    failure: ReadOnly[str]
-    failureCode: ReadOnly[str]
+    output: ReadOnly[Sequence[str | Mapping[str, str | None]] | None]
+    failure: ReadOnly[str | None]
+    failureCode: ReadOnly[str | None]
+
+
+_RUNWAY_TASK_ADAPTER: Final = TypeAdapter(_RunwayMLTask)
 
 
 def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
-    task: Final[_RunwayMLTask] = response.json()
-    return task
+    return _RUNWAY_TASK_ADAPTER.validate_json(response.content)
 
 
 class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
