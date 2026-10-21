@@ -254,39 +254,45 @@ class KeyManagementEventHooks:
         litellm_changed_by: str | None = None,
     ) -> None:
         from litellm.proxy.management_helpers.audit_logs import (
-            create_audit_log_for_update,
+            create_audit_logs_for_updates,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if not is_audit_logging_enabled():
             return
-        for key in keys_being_deleted:
-            key_row = LiteLLM_VerificationToken.model_validate(key, from_attributes=True)
-            if key_row.token is None:
-                continue
-            _key_row = key_row.model_dump_json(exclude_none=True)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=key_row.token,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_key_row,
-                    )
-                )
+        changed_by: Final = get_audit_log_changed_by(
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+        key_rows: Final = (
+            LiteLLM_VerificationToken.model_validate(key, from_attributes=True) for key in keys_being_deleted
+        )
+        audit_rows: Final = tuple(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=changed_by,
+                changed_by_api_key=user_api_key_dict.token,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id=key_row.token,
+                action="deleted",
+                updated_values="{}",
+                before_value=key_row.model_dump_json(exclude_none=True),
             )
+            for key_row in key_rows
+            if key_row.token is not None
+        )
+        if not audit_rows:
+            return
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_logs_for_updates(audit_rows), name=f"{len(audit_rows)} deleted key audit logs"
+            )
+        )
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):

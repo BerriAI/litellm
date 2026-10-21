@@ -4,6 +4,7 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import json
+from collections.abc import Awaitable, Sequence
 from datetime import datetime, timezone
 from typing import Final, TypeVar
 
@@ -258,12 +259,19 @@ async def create_object_audit_log(
     )
 
 
-async def _insert_audit_log_row(repository: AuditLogRepository, request_data: LiteLLM_AuditLogs) -> None:
+async def _insert_audit_logs(insert: Awaitable[object], description: str) -> None:
     try:
-        await repository.table.create(data={**request_data.model_dump(exclude_none=True)})
+        await insert
     except Exception as e:
         # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error("Failed Creating audit log %s", e)
+        verbose_proxy_logger.error("Failed Creating %s %s", description, e)
+
+
+def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
+    values: Final = (("updated_values", request_data.updated_values), ("before_value", request_data.before_value))
+    return request_data.model_copy(
+        update={field: json.dumps(value) for field, value in values if isinstance(value, dict)}
+    )
 
 
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
@@ -279,15 +287,10 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         return
 
     verbose_proxy_logger.debug("creating audit log for %s", request_data)
-
-    if isinstance(request_data.updated_values, dict):
-        request_data.updated_values = json.dumps(request_data.updated_values)
-
-    if isinstance(request_data.before_value, dict):
-        request_data.before_value = json.dumps(request_data.before_value)
+    encoded: Final = _json_encoded(request_data)
 
     # Dispatch to external audit log callbacks regardless of DB availability
-    await _dispatch_audit_log_to_callbacks(request_data)
+    await _dispatch_audit_log_to_callbacks(encoded)
 
     if prisma_client is None:
         verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
@@ -295,7 +298,41 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     await track_audit_task(
         asyncio.create_task(
-            _insert_audit_log_row(AuditLogRepository(prisma_client), request_data),
-            name=_audit_task_name(request_data, "the database"),
+            _insert_audit_logs(
+                AuditLogRepository(prisma_client).table.create(data={**encoded.model_dump(exclude_none=True)}),
+                "audit log",
+            ),
+            name=_audit_task_name(encoded, "the database"),
+        )
+    )
+
+
+async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> None:
+    """Create audit logs for many objects with one insert."""
+    if not rows or not is_audit_logging_enabled():
+        return
+
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if premium_user is not True:
+        return
+
+    encoded: Final = tuple(_json_encoded(row) for row in rows)
+    for row in encoded:
+        await _dispatch_audit_log_to_callbacks(row)
+
+    if prisma_client is None:
+        verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
+        return
+
+    await track_audit_task(
+        asyncio.create_task(
+            _insert_audit_logs(
+                AuditLogRepository(prisma_client).table.create_many(
+                    data=tuple(row.model_dump(exclude_none=True) for row in encoded)
+                ),
+                f"{len(encoded)} audit logs",
+            ),
+            name=f"{len(encoded)} audit logs to the database",
         )
     )
