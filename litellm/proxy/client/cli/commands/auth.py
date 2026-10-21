@@ -13,7 +13,6 @@ from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
-from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     SYSTEM_KEYRING,
@@ -142,6 +141,8 @@ class CliAuthResult(TypedDict):
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+_PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 10
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -1033,10 +1034,12 @@ def print_token(ctx: click.Context):
 
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
-    contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); a
-    `lite login --pkce` token renews itself here first, and once a token
-    has expired for good, run the same `lite login` command again.
+    contain only the token, so all diagnostics go to stderr. The proxy
+    decides when its token expires: once the token is older than
+    `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h), it is checked against
+    the proxy and refused only if the proxy rejects it. A `lite login --pkce`
+    token renews itself here first, and once a token has expired for good,
+    run the same `lite login` command again.
     """
     vault: Final = context_secret_vault(ctx)
     token_data: Final = load_token(vault=vault)
@@ -1055,7 +1058,7 @@ def print_token(ctx: click.Context):
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
-    if not is_cli_token_fresh(token_data) and not renews:
+    if not renews and _token_expired(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
@@ -1111,8 +1114,32 @@ def whoami(ctx: click.Context):
     expires_at: Final = token_data.get("expires_at")
     if isinstance(expires_at, (int, float)):
         click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
-    elif age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+    elif _token_expired(token_data):
+        click.echo("Token expired. Run 'lite login' again.")
+
+
+def _token_expired(token_data: Mapping[str, object]) -> bool:
+    if is_cli_token_fresh(token_data):
+        return False
+    if isinstance(token_data.get("expires_at"), (int, float)):
+        return True
+    return _proxy_rejects_key(token_data)
+
+
+def _proxy_rejects_key(token_data: Mapping[str, object]) -> bool:
+    key: Final = token_data.get("key")
+    base_url: Final = token_data.get("base_url")
+    if not isinstance(key, str) or not isinstance(base_url, str):
+        return False
+    try:
+        response: Final = requests.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=_PROXY_KEY_CHECK_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException:
+        return False
+    return response.status_code == 401
 
 
 def _key_expiry_line(expires_at: float, renews: bool) -> str:
