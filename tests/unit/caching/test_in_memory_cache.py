@@ -68,6 +68,28 @@ def test_get_cache_reads_an_entry_another_reader_just_expired_as_a_miss() -> Non
     assert cache.other_reader_result is None
 
 
+class _ClockThatLetsAnotherReaderRunFirst:
+    cache: InMemoryCache | None = None
+    other_reader_result: object = "not run"
+
+    def __call__(self) -> float:
+        cache: Final = self.cache
+        if cache is not None:
+            self.cache = None
+            self.other_reader_result = cache.get_cache("tokenizer_failure")
+        return 100.0
+
+
+def test_get_cache_reads_an_entry_another_reader_expires_during_the_expiry_check_as_a_miss() -> None:
+    clock: Final = _ClockThatLetsAnotherReaderRunFirst()
+    cache: Final = InMemoryCache(clock=clock)
+    cache.set_cache("tokenizer_failure", "HF unavailable", ttl=-1)
+    clock.cache = cache
+
+    assert cache.get_cache("tokenizer_failure") is None
+    assert clock.other_reader_result is None
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
