@@ -327,7 +327,7 @@ def _count_effective_tokens(
 
 
 def system_to_text(
-    system: str | list[dict[str, object]] | None,
+    system: str | Sequence[Mapping[str, object]] | None,
 ) -> str:
     """Flatten an Anthropic-style ``system`` value into a single string for
     token counting. Returns ``""`` when ``system`` carries no text."""

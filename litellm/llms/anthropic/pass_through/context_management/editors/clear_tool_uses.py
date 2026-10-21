@@ -197,11 +197,11 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
 
 
 def _with_system(
-    messages: list[dict[str, object]], system: str | list[dict[str, object]] | None
-) -> list[dict[str, object]]:
+    messages: Sequence[Mapping[str, object]], system: str | Sequence[Mapping[str, object]] | None
+) -> Sequence[Mapping[str, object]]:
     """The messages to count: like the API, an ``input_tokens`` trigger counts the system prompt too."""
     system_text: Final = system_to_text(system)
-    return [{"role": "system", "content": system_text}, *messages] if system_text else messages
+    return ({"role": "system", "content": system_text}, *messages) if system_text else messages
 
 
 def _trigger_met(
@@ -209,7 +209,7 @@ def _trigger_met(
     model: str,
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,
-    system: str | list[dict[str, object]] | None,
+    system: str | Sequence[Mapping[str, object]] | None,
     counted_tool_uses: int,
 ) -> tuple[bool, int | None]:
     """Return (trigger_met, input_tokens if counted for reuse)."""
