@@ -10,7 +10,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Callable
 
 import yaml
@@ -46,6 +48,17 @@ DATASET_METADATA = {
     "agent": "princeton-nlp/SWE-bench@e48e2bd1e9fecd5bbd641e9414ac59da9f2e69f6 dev (sanitized)",
     "eval": "SWE-bench/SWE-bench@c6fe717fd7a4c3ac1daa4055a4fd082c6a1d28a2 dev",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptPaths:
+    run_root: Path
+    dataset_root: Path
+    eval_dataset: str
+    base_commits: Mapping[str, str]
+    image_digests: Mapping[str, str]
+    image_overlay_ids: Mapping[str, str]
+    dataset_metadata: Mapping[str, str]
 TOKEN_FIELDS = {
     "prompt": "prompt_tokens",
     "completion": "completion_tokens",
@@ -193,7 +206,13 @@ def _labels_by_task() -> dict[str, dict[str, object]]:
     return {row["task_id"]: row for row in entries if isinstance(row, dict) and isinstance(row.get("task_id"), str)}
 
 
-def _model_config(model: str, run_id: str, model_data: dict[str, object], base_url: str) -> dict[str, object]:
+def _model_config(
+    model: str,
+    run_id: str,
+    model_data: dict[str, object],
+    base_url: str,
+    run_root: Path = RUNS_ROOT,
+) -> dict[str, object]:
     return {
         "model": {
             "model_name": f"litellm_proxy/{model_data['gateway_model']}",
@@ -203,7 +222,7 @@ def _model_config(model: str, run_id: str, model_data: dict[str, object], base_u
                 float(model_data.get("cache_write", model_data["input"])),
             ),
             "output_usd_per_token": float(model_data["output"]),
-            "call_log_path": str(RUNS_ROOT / run_id / "calls.jsonl"),
+            "call_log_path": str(run_root / run_id / "calls.jsonl"),
         },
         "environment": {
             "run_args": ["--rm", "--label", "routing_poc=1", "--label", f"routing_poc_run={run_id}"],
@@ -256,7 +275,15 @@ def _report_status(report_dir: Path, task_id: str) -> str | None:
     return None
 
 
-def _grade(task_id: str, model: str, submission: str, run_id: str, run_dir: Path, env: dict[str, str]) -> tuple[str, float]:
+def _grade(
+    task_id: str,
+    model: str,
+    submission: str,
+    run_id: str,
+    run_dir: Path,
+    env: dict[str, str],
+    dataset_name: str = "SWE-bench/SWE-bench",
+) -> tuple[str, float]:
     if not submission.strip():
         return "skipped_empty_patch", 0.0
     eval_dir = run_dir / "eval"
@@ -280,7 +307,7 @@ def _grade(task_id: str, model: str, submission: str, run_id: str, run_dir: Path
         "-m",
         "swebench.harness.run_evaluation",
         "-d",
-        "SWE-bench/SWE-bench",
+        dataset_name,
         "-s",
         "dev",
         "-i",
@@ -359,13 +386,16 @@ def _attempt(
     category_jev: object,
     env: dict[str, str],
     base_url: str,
+    paths: AttemptPaths | None = None,
 ) -> dict[str, object]:
     started_at = _utc_now()
     started = time.monotonic()
     run_id = f"{task_id}__{model}__a{attempt}__{_timestamp()}"
-    run_dir = RUNS_ROOT / run_id
+    run_root: Final = paths.run_root if paths is not None else RUNS_ROOT
+    dataset_root: Final = paths.dataset_root if paths is not None else ROOT / "agent_dataset"
+    run_dir = run_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
-    config = _model_config(model, run_id, model_data, base_url)
+    config = _model_config(model, run_id, model_data, base_url, run_root)
     model_config_path = run_dir / "model.yaml"
     model_config_path.write_text(yaml.safe_dump(config, sort_keys=False))
     solve_dir = run_dir / "solve"
@@ -376,7 +406,7 @@ def _attempt(
         str(ROOT / ".venv" / "bin" / "mini-extra"),
         "swebench",
         "--subset",
-        str(ROOT / "agent_dataset"),
+        str(dataset_root),
         "--split",
         "train",
         "--filter",
@@ -423,7 +453,15 @@ def _attempt(
     calls = _calls(calls_path)
     cost_usd, cost_incomplete = sum_call_costs(calls)
     tokens = sum_call_tokens(calls)
-    eval_status, eval_latency_s = _grade(task_id, model, submission, run_id, run_dir, env)
+    eval_status, eval_latency_s = _grade(
+        task_id,
+        model,
+        submission,
+        run_id,
+        run_dir,
+        env,
+        paths.eval_dataset if paths is not None else "SWE-bench/SWE-bench",
+    )
     if eval_status == "skipped_empty_patch":
         success = False
     else:
@@ -438,7 +476,14 @@ def _attempt(
         cost_incomplete,
         emergency_disk_stop,
     )
-    base_commit, image_pins = _dataset_metadata(task_id)
+    if paths is None:
+        base_commit, image_digest = _dataset_metadata(task_id)
+        image_overlay_id: str | None = None
+    else:
+        image_name: Final = str(task.get("image"))
+        base_commit, image_digest = paths.base_commits[task_id], paths.image_digests.get(image_name, "")
+        image_overlay_id = paths.image_overlay_ids.get(image_name)
+    image_metadata: Final = {"image_overlay_id": image_overlay_id} if paths is not None else {}
     call_rows = [call for call in calls if call.get("event") == "call"]
     model_stats = info.get("model_stats")
     trajectory_calls = model_stats.get("api_calls") if isinstance(model_stats, dict) else None
@@ -458,9 +503,10 @@ def _attempt(
             "litellm": _package_version("litellm"),
             "python": os.sys.version.split()[0],
         },
-        "dataset": DATASET_METADATA,
+        "dataset": paths.dataset_metadata if paths is not None else DATASET_METADATA,
         "image": task.get("image"),
-        "image_digest": image_pins.get(str(task.get("image"))),
+        "image_digest": image_digest,
+        **image_metadata,
         "base_commit": base_commit,
         "exit_status": exit_status,
         "traj_api_calls": trajectory_calls,
@@ -488,7 +534,8 @@ def _attempt(
         "started_at": started_at,
         "finished_at": _utc_now(),
     }
-    append_jsonl(RUNS_PATH, result)
+    if paths is None:
+        append_jsonl(RUNS_PATH, result)
     return result
 
 

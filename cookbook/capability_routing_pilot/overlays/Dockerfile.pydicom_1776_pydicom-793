@@ -1,0 +1,3 @@
+FROM routing_poc/orig.pydicom_1776_pydicom-793:latest
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN /opt/miniconda3/envs/testbed/bin/pip check

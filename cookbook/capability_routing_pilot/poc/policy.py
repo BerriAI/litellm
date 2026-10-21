@@ -1,8 +1,10 @@
 import json
 import math
 import re
+from collections.abc import Mapping, Sequence
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Final
 
 from scipy.stats import beta
 
@@ -33,6 +35,140 @@ class Cell:
 class Decision:
     model: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class SpendSuccessCell:
+    total_spend_usd: float
+    successes: int
+    graded_tasks: int
+    score_usd_per_success: float | None
+    sparse: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityDecision:
+    model: str | None
+    category: str
+    reason: str
+
+
+def build_spend_success_map(
+    records: Sequence[Mapping[str, object]],
+    models: Sequence[str],
+    sparse_threshold: int = 3,
+) -> dict[str, dict[str, SpendSuccessCell]]:
+    task_models: Final[dict[tuple[str, str], list[Mapping[str, object]]]] = defaultdict(list)
+    for record in records:
+        task_id: Final = record.get("task_id")
+        model: Final = record.get("model")
+        if not isinstance(task_id, str) or not isinstance(model, str):
+            raise ValueError("training records require string task_id and model")
+        task_models[(task_id, model)].append(record)
+    task_outcomes_by_category: Final[dict[str, dict[str, list[tuple[float, bool, bool]]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    global_outcomes: Final[dict[str, list[tuple[float, bool, bool]]]] = defaultdict(list)
+    for (task_id, model), attempts in task_models.items():
+        categories: Final = {
+            parse_category(record.get("category_jev"))
+            for record in attempts
+        }
+        if len(categories) > 1:
+            raise ValueError(f"training category changed between attempts for {(task_id, model)}")
+        costs: Final = tuple(
+            float(cost)
+            for record in attempts
+            if isinstance((cost := record.get("cost_usd")), (int, float))
+            and not isinstance(cost, bool)
+            and math.isfinite(cost)
+            and cost >= 0
+        )
+        if len(costs) != len(attempts):
+            raise ValueError(f"training record has invalid cost for {(task_id, model)}")
+        graded: Final = tuple(record for record in attempts if record.get("error_class") != "infra")
+        if len(graded) > 1:
+            raise ValueError(f"duplicate graded attempts for {(task_id, model)}")
+        success: Final = bool(graded and graded[0].get("success") is True)
+        category: Final = next(iter(categories), "unknown")
+        outcome: Final = (sum(costs), bool(graded), success)
+        task_outcomes_by_category[category][model].append(outcome)
+        global_outcomes[model].append(outcome)
+    buckets: Final = {**task_outcomes_by_category, "global": global_outcomes}
+    return {
+        category: {
+            model: _spend_success_cell(
+                outcomes_by_model.get(model, ()),
+                sparse_threshold,
+            )
+            for model in models
+        }
+        for category, outcomes_by_model in buckets.items()
+    }
+
+
+def _spend_success_cell(
+    outcomes: Sequence[tuple[float, bool, bool]],
+    sparse_threshold: int,
+) -> SpendSuccessCell:
+    total_spend: Final = sum(outcome[0] for outcome in outcomes)
+    graded_tasks: Final = sum(outcome[1] for outcome in outcomes)
+    successes: Final = sum(outcome[2] for outcome in outcomes)
+    return SpendSuccessCell(
+        total_spend_usd=total_spend,
+        successes=successes,
+        graded_tasks=graded_tasks,
+        score_usd_per_success=total_spend / successes if successes else None,
+        sparse=graded_tasks < sparse_threshold,
+    )
+
+
+def choose_capability_model(
+    category: str | None,
+    score_map: Mapping[str, Mapping[str, SpendSuccessCell]],
+    models: Sequence[str],
+    classifier_failed: bool = False,
+) -> CapabilityDecision:
+    category_name: Final = parse_category(category)
+    fallback_reason: Final = (
+        "classifier_failure"
+        if classifier_failed or category is None
+        else "unknown_category"
+        if category_name == "unknown"
+        else "category_all_zero_success"
+    )
+    category_cells: Final = score_map.get(category_name, {})
+    category_has_success: Final = any(
+        (cell := category_cells.get(model)) is not None and cell.score_usd_per_success is not None
+        for model in models
+    )
+    selected_category: Final = (
+        category_name
+        if category is not None
+        and not classifier_failed
+        and category_name != "unknown"
+        and category_has_success
+        else "global"
+    )
+    reason: Final = (
+        "category_score"
+        if selected_category != "global"
+        else f"global_fallback:{fallback_reason}"
+    )
+    global_cells: Final = score_map.get(selected_category, {})
+    ranked: Final = tuple(
+        (cell.score_usd_per_success, model)
+        for model in models
+        if (cell := global_cells.get(model)) is not None and cell.score_usd_per_success is not None
+    )
+    if not ranked:
+        return CapabilityDecision(
+            model=None,
+            category=selected_category,
+            reason="unproven",
+        )
+    score, model = min(ranked)
+    return CapabilityDecision(model=model, category=selected_category, reason=reason)
 
 
 def parse_category(raw: object) -> str:

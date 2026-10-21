@@ -1,0 +1,39 @@
+{
+  "images": [
+    {
+      "task_id": "pylint-dev__astroid-1164",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-1164",
+      "upstream_registry_digest": "sha256:2aaa44d8f0abfaa47e2b7b378b204e2341d7a98525888c58f64ec83fced446eb",
+      "local_overlay_image_id": null,
+      "overlay_note": null
+    },
+    {
+      "task_id": "pylint-dev__astroid-2240",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-2240",
+      "upstream_registry_digest": "sha256:0bc107e0e3eedcf47322c8ed22ec961cf08b9b394688b0f1c86113378b4d768d",
+      "local_overlay_image_id": null,
+      "overlay_note": null
+    },
+    {
+      "task_id": "pydicom__pydicom-793",
+      "image": "swebench/sweb.eval.x86_64.pydicom_1776_pydicom-793",
+      "upstream_registry_digest": "sha256:9ad524560667adaa8367dad49c1dbad7aa9778c692c26c8c68edd507fe64f942",
+      "local_overlay_image_id": "sha256:cf79289615c0f96fbb827e8b4843d8d45f9a6c82fefcb3a2d982473dac1f6041",
+      "overlay_note": "LANG=C.UTF-8 LC_ALL=C.UTF-8"
+    },
+    {
+      "task_id": "pvlib__pvlib-python-1191",
+      "image": "swebench/sweb.eval.x86_64.pvlib_1776_pvlib-python-1191",
+      "upstream_registry_digest": "sha256:0678cd6b58ff5b69756945921942444856a5038f82da465259d5a49bf95e7aad",
+      "local_overlay_image_id": "sha256:c963b822ba3abd17a92d0160257a4b4e32b3067014b609d36da15b107107e6f3",
+      "overlay_note": "numpy==1.26.4"
+    },
+    {
+      "task_id": "pylint-dev__astroid-927",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_astroid-927",
+      "upstream_registry_digest": "sha256:9ca6c5ea2a9f260e64f7a2fca563fb60a6d2a58bff54f62a3fd3dc75937deba5",
+      "local_overlay_image_id": null,
+      "overlay_note": null
+    }
+  ]
+}

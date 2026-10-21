@@ -1,0 +1,84 @@
+{
+  "score": "total spend including failures / graded successes; unsmoothed",
+  "scores": {
+    "feature_implementation": {
+      "haiku-4.5": {
+        "graded_tasks": 1,
+        "score_usd_per_success": null,
+        "sparse": true,
+        "successes": 0,
+        "total_spend_usd": 0.2245135
+      },
+      "opus-5": {
+        "graded_tasks": 1,
+        "score_usd_per_success": null,
+        "sparse": true,
+        "successes": 0,
+        "total_spend_usd": 0.59072275
+      },
+      "sonnet-5": {
+        "graded_tasks": 1,
+        "score_usd_per_success": null,
+        "sparse": true,
+        "successes": 0,
+        "total_spend_usd": 0.404166
+      }
+    },
+    "global": {
+      "haiku-4.5": {
+        "graded_tasks": 5,
+        "score_usd_per_success": 0.9589136500000001,
+        "sparse": false,
+        "successes": 1,
+        "total_spend_usd": 0.9589136500000001
+      },
+      "opus-5": {
+        "graded_tasks": 5,
+        "score_usd_per_success": 2.715796,
+        "sparse": false,
+        "successes": 1,
+        "total_spend_usd": 2.715796
+      },
+      "sonnet-5": {
+        "graded_tasks": 5,
+        "score_usd_per_success": 0.99004815,
+        "sparse": false,
+        "successes": 2,
+        "total_spend_usd": 1.9800963
+      }
+    },
+    "repository_debugging": {
+      "haiku-4.5": {
+        "graded_tasks": 4,
+        "score_usd_per_success": 0.73440015,
+        "sparse": false,
+        "successes": 1,
+        "total_spend_usd": 0.73440015
+      },
+      "opus-5": {
+        "graded_tasks": 4,
+        "score_usd_per_success": 2.12507325,
+        "sparse": false,
+        "successes": 1,
+        "total_spend_usd": 2.12507325
+      },
+      "sonnet-5": {
+        "graded_tasks": 4,
+        "score_usd_per_success": 0.78796515,
+        "sparse": false,
+        "successes": 2,
+        "total_spend_usd": 1.5759303
+      }
+    }
+  },
+  "sparse_threshold_graded_tasks": 3,
+  "training_only": true,
+  "training_records": "runs.jsonl, read-only",
+  "training_task_ids": [
+    "pvlib__pvlib-python-1165",
+    "pvlib__pvlib-python-1395",
+    "pydicom__pydicom-1031",
+    "pylint-dev__astroid-1614",
+    "sqlfluff__sqlfluff-884"
+  ]
+}
