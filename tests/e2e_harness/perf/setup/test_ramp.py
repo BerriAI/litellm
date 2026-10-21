@@ -8,7 +8,7 @@ from memory_readings import RssCapture
 from setup.observe import Observation, evaluate, junit_properties
 from setup.performance_test_case import Limit, Ramp, ramped
 from setup.plan import build_plan
-from setup.ramp import StepReading, send_offsets, sustained_rps
+from setup.ramp import StepReading, send_offsets, step_properties, sustained_rps
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
@@ -103,4 +103,10 @@ def test_a_floor_fails_when_the_second_step_s_latency_breaks_it_and_the_properti
     rows, exceeded = evaluate(case, observation)
     assert exceeded == ["sustained_rps: observed 10.0000 < floor 20.0000"]
     assert {("perf_sustained_rps", 10.0), ("perf_sustained_rps_floor", 20.0)} <= set(junit_properties(rows))
+    assert dict(step_properties((first, second))) == {
+        "perf_ramp_step_10_gateway_added_p99": 0.5,
+        "perf_ramp_step_10_completed_rps": first.completed_rps,
+        "perf_ramp_step_20_gateway_added_p99": 3.0,
+        "perf_ramp_step_20_completed_rps": second.completed_rps,
+    }
     assert not evaluate(replace(case, limits=(Limit("sustained_rps", min=10),)), observation)[1]

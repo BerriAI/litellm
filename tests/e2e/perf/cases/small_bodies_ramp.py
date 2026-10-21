@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
-from setup.performance_test_case import Ramp, ramped
+from setup.performance_test_case import Limit, Ramp, ramped
 
 from cases.small_bodies_5rps import CASE as SMALL
 
@@ -20,5 +20,5 @@ CASE: Final = replace(
     SMALL,
     name="small_bodies_ramp",
     traffic=ramped(SMALL.traffic, RAMP, seed=13, concurrency=400),
-    limits=(),
+    limits=(Limit("sustained_rps", min=20),),
 )

@@ -43,6 +43,7 @@ from setup.performance_test_case import MockLatency, PerformanceTestCase
 from setup.plan import PlannedRequest, build_plan
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
+from setup.ramp import step_properties
 from setup.run import run_plan
 from setup.telemetry import read_gateway_telemetry
 
@@ -160,6 +161,7 @@ def test_perf_case(
         entry for entry in item.user_properties if not entry[0].startswith("perf_")
     ]  # rebind-ok: a --reruns retry replaces the first attempt's numbers instead of appending a second set
     item.user_properties.extend(junit_properties(rows))
+    item.user_properties.extend(step_properties(observation.steps()))
     print(render(case, observation, rows))
     if case.event_loop is not None:
         print(render_stalls(case.event_loop, stall_rows))
