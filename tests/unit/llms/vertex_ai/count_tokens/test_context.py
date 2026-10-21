@@ -1,12 +1,12 @@
 import asyncio
 import base64
 import logging
-import time
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 from typing import Final, Literal
 from unittest.mock import patch
 
@@ -73,7 +73,7 @@ _FUNCTION_DECLARATION: Final = {
     ids=("anthropic", "openai-chat", "responses"),
 )
 def test_function_tool_shapes_map_to_vertex_declarations(tool: JsonValue) -> None:
-    context: Final = vertex_gemini_count_context(system=None, tools=[tool])
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system=None, tools=[tool])
 
     assert isinstance(context, VertexGeminiCountContext)
     assert context.tools == (_FUNCTION_DECLARATION,)
@@ -82,7 +82,7 @@ def test_function_tool_shapes_map_to_vertex_declarations(tool: JsonValue) -> Non
 
 def test_long_anthropic_tool_name_is_truncated_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 70
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"name": name, "description": "Look up a value", "input_schema": _SCHEMA}],
     )
@@ -104,7 +104,7 @@ def test_long_anthropic_tool_name_is_truncated_for_vertex() -> None:
 
 def test_64_character_anthropic_tool_name_is_unchanged_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 53
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"name": name, "input_schema": _SCHEMA}],
     )
@@ -115,7 +115,7 @@ def test_64_character_anthropic_tool_name_is_unchanged_for_vertex() -> None:
 
 def test_long_openai_chat_tool_name_is_unchanged_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 70
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"type": "function", "function": {"name": name, "parameters": _SCHEMA}}],
     )
@@ -125,7 +125,7 @@ def test_long_openai_chat_tool_name_is_unchanged_for_vertex() -> None:
 
 
 def test_unknown_tools_are_omitted() -> None:
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"type": "web_search_preview"}, {"type": "computer_use"}],
     )
@@ -135,7 +135,7 @@ def test_unknown_tools_are_omitted() -> None:
 
 
 def test_text_block_system_instruction_keeps_one_part_per_block() -> None:
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=[{"type": "text", "text": "First instruction."}, {"type": "text", "text": "Second instruction."}],
         tools=None,
     )
@@ -145,14 +145,14 @@ def test_text_block_system_instruction_keeps_one_part_per_block() -> None:
 
 
 def test_string_system_instruction_maps_to_one_part() -> None:
-    context: Final = vertex_gemini_count_context(system="Follow this instruction.", tools=None)
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system="Follow this instruction.", tools=None)
 
     assert isinstance(context, VertexGeminiCountContext)
     assert context.system_instruction == {"parts": ({"text": "Follow this instruction."},)}
 
 
 def test_non_text_system_block_returns_an_error_value() -> None:
-    context: Final = vertex_gemini_count_context(
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=[{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
         tools=None,
     )
@@ -163,7 +163,7 @@ def test_non_text_system_block_returns_an_error_value() -> None:
 
 @pytest.mark.parametrize(("system", "tools"), ((None, None), ("", None), ([], [])))
 def test_empty_context_is_omitted(system: JsonValue | None, tools: JsonValue | None) -> None:
-    context: Final = vertex_gemini_count_context(system=system, tools=tools)
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system=system, tools=tools)
 
     assert isinstance(context, VertexGeminiCountContext)
     assert context.system_instruction is None
@@ -185,12 +185,39 @@ def test_anthropic_tools_count_the_same_declarations_inference_sends(tool: dict[
         optional_params={},
     )
 
-    context: Final = vertex_gemini_count_context(system=None, tools=[tool])
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system=None, tools=[tool])
 
     assert isinstance(context, VertexGeminiCountContext)
     assert context.tools is not None
     assert [tool_value["functionDeclarations"] for tool_value in context.tools] == [
         inference_tool["function_declarations"] for inference_tool in inference_tools
+    ]
+
+
+@pytest.mark.parametrize("model", ("gemini-3.8-flash", "gemini-2.5-flash"))
+@pytest.mark.parametrize("ids", (range(3), range(10**12, 10**12 + 200)), ids=("small-enum", "past-enum-budget"))
+def test_count_context_counts_the_integer_enums_inference_sends(model: str, ids: range) -> None:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "open_record",
+            "parameters": {
+                "type": "object",
+                "properties": {"record_id": {"type": "integer", "enum": list(ids)}},
+                "required": ["record_id"],
+            },
+        },
+    }
+    inference_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model=model, drop_params=False
+    )
+
+    context: Final = vertex_gemini_count_context(model=model, system=None, tools=[tool])
+
+    assert isinstance(context, VertexGeminiCountContext)
+    assert context.tools is not None
+    assert [tool_value["functionDeclarations"] for tool_value in context.tools] == [
+        inference_tool["function_declarations"] for inference_tool in inference_params["tools"]
     ]
 
 
@@ -206,7 +233,7 @@ def test_anthropic_tools_count_the_same_declarations_inference_sends(tool: dict[
     ids=("not-a-list", "non-object-tool", "string-schema", "list-parameters", "malformed-property"),
 )
 def test_invalid_tools_return_an_error_value(tools: JsonValue) -> None:
-    context: Final = vertex_gemini_count_context(system=None, tools=tools)
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system=None, tools=tools)
 
     assert isinstance(context, VertexGeminiCountContextError)
     assert "tools" in context.error_message
@@ -270,25 +297,37 @@ async def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: L
 _PNG_BYTES: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
-_DOWNLOAD_SECONDS: Final = 0.5
+_LOOP_PROOF_TIMEOUT_SECONDS: Final = 5
 
 
-class _SlowPngHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        time.sleep(_DOWNLOAD_SECONDS)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(_PNG_BYTES)))
-        self.end_headers()
-        self.wfile.write(_PNG_BYTES)
+@dataclass(frozen=True, slots=True)
+class _LoopProbe:
+    request_arrived: Event = field(default_factory=Event)
+    loop_ran: Event = field(default_factory=Event)
+    loop_ran_while_download_pending: Event = field(default_factory=Event)
 
-    def log_message(self, format: str, *args: object) -> None:
-        return None
+
+def _png_handler_waiting_for_loop(probe: _LoopProbe) -> type[BaseHTTPRequestHandler]:
+    class _PngHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            probe.request_arrived.set()
+            if probe.loop_ran.wait(_LOOP_PROOF_TIMEOUT_SECONDS):
+                probe.loop_ran_while_download_pending.set()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(_PNG_BYTES)))
+            self.end_headers()
+            self.wfile.write(_PNG_BYTES)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    return _PngHandler
 
 
 @contextmanager
-def _slow_png_server() -> Generator[str, None, None]:
-    with ThreadingHTTPServer(("127.0.0.1", 0), _SlowPngHandler) as server:
+def _png_server_waiting_for_loop(probe: _LoopProbe) -> Generator[str, None, None]:
+    with ThreadingHTTPServer(("127.0.0.1", 0), _png_handler_waiting_for_loop(probe)) as server:
         thread: Final = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -297,10 +336,9 @@ def _slow_png_server() -> Generator[str, None, None]:
             server.shutdown()
 
 
-async def _event_loop_wake_delay(nap_seconds: float) -> float:
-    started: Final = time.monotonic()
-    await asyncio.sleep(nap_seconds)
-    return time.monotonic() - started
+async def _run_loop_once_download_starts(probe: _LoopProbe) -> None:
+    assert await asyncio.to_thread(probe.request_arrived.wait, _LOOP_PROOF_TIMEOUT_SECONDS)
+    probe.loop_ran.set()
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
@@ -308,10 +346,11 @@ async def test_remote_image_downloads_without_blocking_the_event_loop(
     custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
-    with _slow_png_server() as base_url:
+    probe: Final = _LoopProbe()
+    with _png_server_waiting_for_loop(probe) as base_url:
         image_url: Final = f"{base_url}/{uuid.uuid4().hex}.png"
-        wake_delay, contents = await asyncio.gather(
-            _event_loop_wake_delay(0.05),
+        _, contents = await asyncio.gather(
+            _run_loop_once_download_starts(probe),
             gemini_count_contents(
                 (
                     {
@@ -338,7 +377,7 @@ async def test_remote_image_downloads_without_blocking_the_event_loop(
             ],
         }
     ]
-    assert wake_delay < _DOWNLOAD_SECONDS / 2
+    assert probe.loop_ran_while_download_pending.is_set()
 
 
 class _MissingImageHandler(BaseHTTPRequestHandler):

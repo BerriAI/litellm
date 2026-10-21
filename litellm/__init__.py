@@ -551,6 +551,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, ma
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+apply_search_free_tier: bool = False
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
 ] = {}  # Provider-specific or global cost margins. Examples:
@@ -1504,6 +1505,7 @@ from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
 from .systemone.main import *
+from .extraction.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1709,6 +1711,9 @@ if TYPE_CHECKING:
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.cloudflare.extraction.transformation import (
+        CloudflareExtractionConfig as CloudflareExtractionConfig,
     )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,

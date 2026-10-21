@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
 import pytest
@@ -27,7 +27,7 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -940,10 +940,17 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import (
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
+    _load_huggingface_tokenizer,
+    _select_tokenizer_helper,
+    claude_json_str,
+    encoding,
+)
 
 # Clear the cache at module load to ensure clean state
 _load_huggingface_tokenizer.cache_clear()
+_HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -955,6 +962,7 @@ class TestTokenizerSelection(unittest.TestCase):
         --dist=loadscope (tests from same file run on same worker).
         """
         _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
@@ -1038,6 +1046,69 @@ class TestTokenizerSelection(unittest.TestCase):
         finally:
             monkeypatch.undo()
 
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(
+        self, mock_from_pretrained: MagicMock
+    ):
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        try:
+            with patch("litellm.utils.time.monotonic", return_value=0.0):
+                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+                text: Final = "Count the tokens for this message."
+                expected: Final = len(encoding.encode(text, disallowed_special=()))
+
+                first_count: Final = litellm.token_counter(model=model, text=text)
+                first_attempts: Final = mock_from_pretrained.call_count
+                second_count: Final = litellm.token_counter(model=model, text=text)
+
+                assert first_attempts > 0
+                assert mock_from_pretrained.call_count == first_attempts
+                assert first_count == expected
+                assert second_count == expected
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
+    @patch("litellm.utils.time.monotonic", return_value=299.0)
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_retried_after_retry_window(
+        self, mock_from_pretrained: MagicMock, mock_monotonic: MagicMock
+    ):
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        try:
+            def from_pretrained_side_effect(_: str) -> object:
+                if mock_from_pretrained.call_count == 1:
+                    mock_monotonic.return_value = 322.0
+                    raise RuntimeError("HF unavailable")
+                return sentinel.tokenizer
+
+            mock_from_pretrained.side_effect = from_pretrained_side_effect
+            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+
+            first_result: Final = _select_tokenizer_helper(model)
+            assert first_result["type"] == "openai_tokenizer"
+            mock_monotonic.return_value = 323.0
+            second_result: Final = _select_tokenizer_helper(model)
+            assert second_result["type"] == "openai_tokenizer", "tokenizer was retried at t=323"
+            assert mock_from_pretrained.call_count == 1
+
+            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
+            third_result: Final = _select_tokenizer_helper(model)
+            assert third_result["type"] == "openai_tokenizer"
+            assert mock_from_pretrained.call_count == 1
+
+            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1
+            retried_result: Final = _select_tokenizer_helper(model)
+            assert retried_result["type"] == "huggingface_tokenizer"
+            assert retried_result["tokenizer"] is sentinel.tokenizer
+            assert mock_from_pretrained.call_count == 2
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
 
 _CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
 
@@ -1104,6 +1175,7 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
     _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
     start: Final = threading.Barrier(8)
 
     def first_tokenizer(_: int) -> object:
@@ -1114,6 +1186,44 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
         tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
 
     assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
+
+
+def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplog: pytest.LogCaptureFixture):
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    try:
+        with (
+            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")),
+            caplog.at_level("WARNING", logger="LiteLLM"),
+        ):
+            types: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
+        fallback_warnings: Final = [r for r in caplog.records if "token counts may be approximate" in r.getMessage()]
+        assert types == ("openai_tokenizer",) * 3
+        assert len(fallback_warnings) == 1
+    finally:
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
+
+def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    forked: Final = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=forked):
+            with pytest.raises(ForkedAfterNativeRuntimeStarted):
+                _select_tokenizer_helper(model)
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+            loaded: Final = _select_tokenizer_helper(model)
+        assert loaded["type"] == "huggingface_tokenizer"
+        assert loaded["tokenizer"] is sentinel.tokenizer
+    finally:
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
 
 def test_token_counter_with_anthropic_tool_use():
