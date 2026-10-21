@@ -64,5 +64,65 @@
       "tests/test_plotting.py::test_invalid_font"
     ],
     "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pyvista__pyvista-4329": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"vtk==9.2.6\"",
+    "cause": "The image resolved unpinned vtk to 9.4.2 (released 2025-03-28), which this pyvista version does not support. Gold and noop failed identically with VTK API errors. vtk 9.2.6 is the latest cp39 release on PyPI before the task created_at 2023-04-24. Pre-solve diagnostic in a throwaway container: 6 failed -> 6 passed (base checkout, failing PASS_TO_PASS subset)",
+    "evidence": [
+      "tests/test_grid.py::test_volume",
+      "tests/test_grid.py::test_init_from_structured",
+      "tests/test_grid.py::test_init_from_unstructured",
+      "tests/test_grid.py::test_surface_indices",
+      "tests/test_grid.py::test_extract_feature_edges"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pyvista__pyvista-4414": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"vtk==9.2.6\"",
+    "cause": "The image resolved unpinned vtk to 9.4.2 (released 2025-03-28), which this pyvista version does not support. Gold and noop failed identically with VTK API errors. vtk 9.2.6 is the latest cp39 release on PyPI before the task created_at 2023-05-12. Pre-solve diagnostic in a throwaway container: 5 failed, 55 errors -> 60 passed (gold applied, failing tests)",
+    "evidence": [
+      "tests/test_polydata.py::test_merge",
+      "tests/test_polydata.py::test_init_from_pdata",
+      "tests/test_polydata.py::test_init_from_arrays",
+      "tests/test_polydata.py::test_init_as_points",
+      "tests/test_polydata.py::test_init_as_points_from_list"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pyvista__pyvista-4311": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"vtk==9.2.6\"",
+    "cause": "The image resolved unpinned vtk to 9.4.2 (released 2025-03-28), which this pyvista version does not support. Gold and noop failed identically with VTK API errors. vtk 9.2.6 is the latest cp39 release on PyPI before the task created_at 2023-04-20. Pre-solve diagnostic in a throwaway container: 7 failed -> 7 passed (gold and test patch applied, failing tests)",
+    "evidence": [
+      "tests/filters/test_rectilinear_grid.py::test_to_tetrahedral_pass_cell_ids",
+      "tests/filters/test_rectilinear_grid.py::test_to_tetrahedral_pass_cell_data",
+      "tests/filters/test_rectilinear_grid.py::test_to_tetrahedral[5]",
+      "tests/filters/test_rectilinear_grid.py::test_to_tetrahedral[6]",
+      "tests/filters/test_rectilinear_grid.py::test_to_tetrahedral[12]"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pyvista__pyvista-4648": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"vtk==9.2.6\"",
+    "cause": "The image resolved unpinned vtk to 9.4.2 (released 2025-03-28), which this pyvista version does not support. Gold and noop failed identically with VTK API errors. vtk 9.2.6 is the latest cp39 release on PyPI before the task created_at 2023-07-11. Pre-solve diagnostic in a throwaway container: 48 failed, 12 passed -> 60 passed (gold and test patch applied, first 60 FAIL_TO_PASS+PASS_TO_PASS)",
+    "evidence": [
+      "tests/filters/test_dataset_filters.py::test_sample",
+      "tests/filters/test_dataset_filters.py::test_probe[None-True-True]",
+      "tests/filters/test_dataset_filters.py::test_probe[None-True-False]",
+      "tests/filters/test_dataset_filters.py::test_probe[None-False-True]",
+      "tests/filters/test_dataset_filters.py::test_probe[None-False-False]"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pyvista__pyvista-3675": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"vtk==9.2.2\"",
+    "cause": "The image resolved unpinned vtk to 9.4.2 (released 2025-03-28), which this pyvista version does not support. Gold and noop failed identically with VTK API errors. vtk 9.2.2 is the latest cp39 release on PyPI before the task created_at 2022-12-02. Pre-solve diagnostic in a throwaway container: 4 failed, 27 errors -> 31 passed (gold and test patch applied, failing FAIL_TO_PASS)",
+    "evidence": [
+      "tests/mappers/test_mapper.py::test_init",
+      "tests/mappers/test_mapper.py::test_scalar_range",
+      "tests/mappers/test_mapper.py::test_bounds",
+      "tests/mappers/test_mapper.py::test_lookup_table",
+      "tests/mappers/test_mapper.py::test_interpolate_before_map"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
   }
 }
