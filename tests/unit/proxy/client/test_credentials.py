@@ -1,16 +1,38 @@
 
 import time
+from typing import Final
+
 import pytest
 import requests
-
-
-
 import responses
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from litellm.proxy.client.credentials import CredentialsManagementClient
+from litellm.proxy.client.credentials import (
+    CredentialsManagementClient,
+    UserConnection,
+    UserConnectionDelete,
+    UserConnectionPoll,
+    UserConnections,
+    UserConnectionStart,
+)
 from litellm.proxy.client.exceptions import UnauthorizedError
 from litellm.proxy.credential_endpoints.endpoints import CredentialHelperUtils
 from litellm.types.utils import CredentialItem
+
+
+class _CapturedRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    headers: dict[str, str]
+    body: bytes | str | None
+    method: str | None
+    url: str | None
+
+
+class _CapturedCall(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    request: _CapturedRequest
 
 
 @pytest.fixture
@@ -316,3 +338,108 @@ def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
         client.list()
 
     assert time.monotonic() - started < 10
+
+
+@responses.activate
+def test_user_connection_methods_encode_names_send_auth_and_validate_responses(
+    client: CredentialsManagementClient,
+    base_url: str,
+    api_key: str,
+) -> None:
+    credential_name: Final = "my/ credential"
+    credential_path: Final = "my%2F%20credential"
+    start_payload: Final = {
+        "user_code": "ABCD-1234",
+        "verification_uri": "https://github.com/login/device",
+        "expires_in": 900,
+        "interval": 5,
+        "flow_handle": "encrypted-handle",
+    }
+    poll_payload: Final = {"status": "slow_down", "interval": 10, "github_login": None}
+    connections_payload: Final = {
+        "connections": [
+            {
+                "credential_name": credential_name,
+                "provider": "github_copilot",
+                "connected": True,
+                "github_login": "octocat",
+                "connected_at": "2025-01-19T12:00:00+00:00",
+            }
+        ]
+    }
+    delete_payload: Final = {"status": "disconnected"}
+    responses.add(
+        responses.POST,
+        f"{base_url}/credentials/{credential_path}/user_connection/start",
+        json=start_payload,
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        f"{base_url}/credentials/{credential_path}/user_connection/poll",
+        json=poll_payload,
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{base_url}/credentials/user_connections",
+        json=connections_payload,
+        status=200,
+    )
+    responses.add(
+        responses.DELETE,
+        f"{base_url}/credentials/{credential_path}/user_connection",
+        json=delete_payload,
+        status=200,
+    )
+
+    start: Final = client.start_user_connection(credential_name)
+    poll: Final = client.poll_user_connection(credential_name, "encrypted-handle")
+    connections: Final = client.list_user_connections()
+    deleted: Final = client.delete_user_connection(credential_name)
+    calls: Final = TypeAdapter(tuple[_CapturedCall, ...]).validate_python(responses.calls)
+
+    assert start == UserConnectionStart.model_validate(start_payload)
+    assert poll == UserConnectionPoll.model_validate(poll_payload)
+    assert connections == UserConnections.model_validate(connections_payload)
+    assert connections.connections == (
+        UserConnection.model_validate(connections_payload["connections"][0]),
+    )
+    assert deleted == UserConnectionDelete.model_validate(delete_payload)
+    assert tuple(call.request.headers["Authorization"] for call in calls) == (f"Bearer {api_key}",) * 4
+    assert calls[1].request.body == b'{"flow_handle": "encrypted-handle"}'
+    assert tuple(call.request.method for call in calls) == ("POST", "POST", "GET", "DELETE")
+    assert tuple(call.request.url for call in calls) == (
+        f"{base_url}/credentials/{credential_path}/user_connection/start",
+        f"{base_url}/credentials/{credential_path}/user_connection/poll",
+        f"{base_url}/credentials/user_connections",
+        f"{base_url}/credentials/{credential_path}/user_connection",
+    )
+
+
+@responses.activate
+def test_start_user_connection_raises_unauthorized_error(
+    client: CredentialsManagementClient,
+    base_url: str,
+) -> None:
+    responses.add(
+        responses.POST,
+        f"{base_url}/credentials/copilot/user_connection/start",
+        json={"detail": "An authenticated user is required"},
+        status=401,
+    )
+
+    with pytest.raises(UnauthorizedError):
+        client.start_user_connection("copilot")
+
+
+def test_user_connection_start_repr_omits_flow_handle() -> None:
+    start: Final = UserConnectionStart(
+        user_code="ABCD-1234",
+        verification_uri="https://github.com/login/device",
+        expires_in=900,
+        interval=5,
+        flow_handle="secret-handle",
+    )
+
+    assert "secret-handle" not in repr(start)
