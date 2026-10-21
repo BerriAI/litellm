@@ -860,6 +860,11 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str) -> bool:
+    model_name: Final = model.lower()
+    return "gemini" in model_name and "tts" in model_name
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.
