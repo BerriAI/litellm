@@ -553,6 +553,7 @@
             "completion",
             "embedding",
             "evaluation",
+            "extraction",
             "guardrail",
             "image_edit",
             "image_generation",
@@ -953,6 +954,33 @@
             }
           },
           "additionalProperties": false
+        },
+        "search_free_requests": {
+          "type": "object",
+          "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+          "required": [
+            "count",
+            "period",
+            "shared_group"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "period": {
+              "type": "string",
+              "enum": [
+                "day",
+                "month"
+              ]
+            },
+            "shared_group": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          }
         },
         "source": {
           "type": "string",

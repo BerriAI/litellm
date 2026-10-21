@@ -3551,6 +3551,30 @@ class TestOverrideOpenAIResponseModel:
 
         assert response_obj.model == "downstream-model"
 
+    def test_frozen_response_comes_back_as_a_copy_carrying_the_requested_model(self):
+        from litellm.types.extraction import ExtractionResponse
+
+        response_obj = ExtractionResponse.model_validate(
+            {
+                "model": "cloudflare/@cf/cloudflare/clairic",
+                "answers": {"vendor": {"type": "text", "value": "Acme Tools"}},
+                "truncated": False,
+                "usage": {"input_tokens": 52, "output_tokens": 0},
+            }
+        )
+        response_obj.set_hidden_params({"response_cost": 0.0000052})
+
+        stamped = _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="invoice-reader",
+            log_context="test_context",
+        )
+
+        assert isinstance(stamped, ExtractionResponse)
+        assert stamped.model == "invoice-reader"
+        assert stamped.answers == response_obj.answers
+        assert stamped.hidden_params["response_cost"] == 0.0000052
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""

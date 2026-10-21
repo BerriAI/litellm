@@ -91,6 +91,7 @@ CONNECTION_NAMES: Final = (
     "azure_ad_token_provider",
     "litellm_credential_name",
     "github_copilot_auth_type",
+    "github_copilot_host",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
     "fireworks_forward_user_id",

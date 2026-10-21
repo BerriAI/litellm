@@ -112,6 +112,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1171,6 +1172,8 @@ def get_usage_object(
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
+    if isinstance(completion_response, ExtractionResponse):
+        return _extraction_usage(completion_response.usage)
     if isinstance(completion_response, HttpxBinaryResponseContent):
         return completion_response.usage
     if usage_obj is None:
@@ -1227,6 +1230,14 @@ def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
     )
 
 
+def _extraction_usage(usage: ExtractionUsage) -> Usage:
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+    )
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
@@ -1234,6 +1245,7 @@ def _is_known_usage_objects(usage_obj):
         or isinstance(usage_obj, ResponseAPIUsage)
         or isinstance(usage_obj, DecisionsUsage)
         or isinstance(usage_obj, OpenAIDecisionUsage)
+        or isinstance(usage_obj, ExtractionUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1263,6 +1275,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
         return "send_message"
     elif isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return "adecisions"
+    elif isinstance(completion_response, ExtractionResponse):
+        return "aextraction"
 
     return call_type
 
@@ -1511,6 +1525,7 @@ def completion_cost(
     litellm_model_name: str | None = None,
     router_model_id: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    pricing_provider: str | None = None,
     ### SERVICE TIER ###
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
@@ -1531,6 +1546,8 @@ def completion_cost(
     """
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
+        if pricing_provider is not None:
+            custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
 
         if call_type == CallTypes.aresponses_websocket.value and isinstance(
             completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -1556,6 +1573,7 @@ def completion_cost(
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
                         base_model=base_model,
+                        pricing_provider=pricing_provider,
                         standard_built_in_tools_params=standard_built_in_tools_params,
                         litellm_model_name=litellm_model_name,
                         router_model_id=router_model_id,
@@ -1649,7 +1667,7 @@ def completion_cost(
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
-        for idx, (model, pricing_provider) in enumerate(potential_model_names):
+        for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -1670,6 +1688,8 @@ def completion_cost(
                         )
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
                         _usage = _decisions_usage(usage_obj).model_dump()
+                    elif isinstance(usage_obj, ExtractionUsage):
+                        _usage = _extraction_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -1716,7 +1736,9 @@ def completion_cost(
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
+                        custom_llm_provider = pricing_provider or hidden_params.get(
+                            "custom_llm_provider", custom_llm_provider or None
+                        )
                         region_name = hidden_params.get("region_name", region_name)
 
                 else:
@@ -2002,7 +2024,7 @@ def completion_cost(
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=_pricing_provider_for_cost_candidate(
-                        candidate_provider=pricing_provider,
+                        candidate_provider=candidate_pricing_provider,
                         request_provider=request_pricing_provider,
                         current_provider=custom_llm_provider,
                     ),
@@ -2106,7 +2128,7 @@ def completion_cost(
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
                             custom_llm_provider=_pricing_provider_for_cost_candidate(
-                                candidate_provider=pricing_provider,
+                                candidate_provider=candidate_pricing_provider,
                                 request_provider=request_pricing_provider,
                                 current_provider=custom_llm_provider,
                             ),
@@ -2193,7 +2215,8 @@ def response_cost_calculator(
     | Response
     | SearchResponse
     | DecisionsResponse
-    | OpenAIDecisionResponse,
+    | OpenAIDecisionResponse
+    | ExtractionResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -2219,6 +2242,8 @@ def response_cost_calculator(
         "adecisions",
         "systemone",
         "asystemone",
+        "extraction",
+        "aextraction",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
@@ -2229,6 +2254,7 @@ def response_cost_calculator(
     litellm_model_name: str | None = None,
     router_model_id: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    pricing_provider: str | None = None,
     ### SERVICE TIER ###
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
@@ -2269,6 +2295,7 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                pricing_provider=pricing_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
                 vertex_location=vertex_location,

@@ -166,6 +166,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     resolve_token_count_settings,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -17747,10 +17748,7 @@ def get_model_group_info(
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
-    unique_models: Final = []
-    for model in all_models_str:
-        if model not in unique_models:
-            unique_models.append(model)
+    unique_models: Final = tuple(dict.fromkeys(all_models_str))
 
     for model in unique_models:
         if model_group is not None and model_group != model:
@@ -17759,7 +17757,18 @@ def get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
+            model_groups.append(
+                ModelGroupInfoProxy.model_validate(
+                    {
+                        **_model_group_info.model_dump(),
+                        **model_group_custom_fields(
+                            llm_router.get_model_list_of_routed_group(
+                                resolve_model_group_alias(llm_router.model_group_alias, model) or model
+                            )
+                        ),
+                    }
+                )
+            )
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -18400,6 +18409,7 @@ async def login(request: Request):
     # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
     # one-shot cookie is cleared after use.
     from litellm.proxy.management_endpoints.ui_sso import (
+        read_return_to_cookie,
         set_session_token_cookie,
         sso_return_to_redirect,
     )
@@ -18411,7 +18421,7 @@ async def login(request: Request):
     # return_to is honored for EVERY sign-in branch, so the write and read sets cannot diverge: it
     # sets the token cookie on the same-origin arm and hands off via a one-time login code on the
     # cross-origin arm, and clears the one-shot cookie in both.
-    cp_return_to: Final = request.cookies.get("litellm_cp_return_to")
+    cp_return_to: Final = read_return_to_cookie(request)
     if cp_return_to:
         try:
             resumed = await sso_return_to_redirect(  # rebind-ok: pre-existing rebinding on a rename-only line
@@ -18435,7 +18445,7 @@ async def login(request: Request):
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     set_session_token_cookie(redirect_response, request, jwt_token)
-    if cp_return_to:
+    if "litellm_cp_return_to" in request.cookies:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
 
