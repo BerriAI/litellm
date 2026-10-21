@@ -3941,16 +3941,24 @@ def test_gemini_model_unknown_to_the_map_is_judged_by_the_version_in_its_name(
     [
         ({"mode": "chat"}, False),
         ({}, False),
+        ({"mode": "batch"}, False),
         ({"mode": "audio_speech"}, True),
         ({"mode": "chat", "supports_sampling_params": True}, True),
     ],
-    ids=["chat_row_without_flag", "row_without_mode", "non_chat_row_without_flag", "explicit_true"],
+    ids=[
+        "chat_row_without_flag",
+        "row_without_mode",
+        "batch_deployment_row_without_flag",
+        "non_chat_row_without_flag",
+        "explicit_true",
+    ],
 )
 def test_map_row_for_a_gemini_4_model_decides_before_the_version_rule(
     row: dict[str, object], forwarded: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An explicit flag always wins, a row silent on it is judged by the version, and a row for another
-    mode keeps forwarding because Google's notice covers the text models"""
+    """An explicit flag always wins, a row silent on it or stamped `mode: batch` by a proxy batch deployment
+    is judged by the version, and a row for another mode keeps forwarding because Google's notice covers
+    the text models"""
     from litellm.utils import get_optional_params
 
     monkeypatch.setitem(litellm.model_cost, "gemini-4-zeta", row)

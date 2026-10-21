@@ -448,7 +448,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
         and later accept the fields but ignore them, and a later generation will 400 on them.
         A chat model the map says nothing about is judged by the version in its name, so a model
-        newer than the map keeps the same contract; a non-chat row without the flag keeps forwarding.
+        newer than the map keeps the same contract. A batch deployment's rows are chat requests and
+        the proxy stamps its ``mode: batch`` onto the backend row, so that row is judged the same way;
+        a row for any other mode without the flag keeps forwarding.
         ``temperature`` and ``top_p`` leave ``get_supported_openai_params`` when the flag is off, so
         the shared unsupported-param check raises or drops them and ``allowed_openai_params`` still
         forwards them verbatim; ``top_k`` is a provider-specific kwarg that bypasses that check and
@@ -461,7 +463,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for row in matched:
             if isinstance(flag := row.get("supports_sampling_params"), bool):
                 return flag
-        if any(row.get("mode") not in (None, "chat") for row in matched):
+        if any(row.get("mode") not in (None, "chat", "batch") for row in matched):
             return True
         return not VertexGeminiConfig._google_ignores_sampling_params_by_version(bare)
 
