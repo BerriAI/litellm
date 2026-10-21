@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -28,7 +28,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -230,6 +230,274 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+_GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
+        "speaker_voice_configs": "speakerVoiceConfigs",
+        "voice_config": "voiceConfig",
+        "prebuilt_voice_config": "prebuiltVoiceConfig",
+        "voice_name": "voiceName",
+        "replicated_voice_config": "replicatedVoiceConfig",
+        "mime_type": "mimeType",
+        "voice_sample_audio": "voiceSampleAudio",
+        "language_code": "languageCode",
+        "speaker_alias": "speakerAlias",
+        "speaker_id": "speakerId",
+    }
+)
+
+
+_SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
+    normalized: Final[dict[str, object]] = {}  # mutable-ok: iterative traversal fills nested output without recursion
+
+    pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
+        list[tuple[dict[str, object] | list[object], Mapping[str, object] | list[object]]]
+    ] = [(normalized, value)]
+    while pending:
+        target, source = pending.pop()
+        items = source.items() if isinstance(source, Mapping) else enumerate(source)
+        for key, item in items:
+            if isinstance(source, Mapping):
+                if not isinstance(key, str):
+                    continue
+                normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
+            else:
+                normalized_key = len(target)
+
+            child: object
+            if (mapping_item := as_str_mapping(item)) is not None:
+                pending.append((child_mapping := dict[str, object](), mapping_item))
+                child = child_mapping
+            elif isinstance(item, list):
+                pending.append((child_items := list[object](), _SPEECH_CONFIG_ITEMS.validate_python(item)))
+                child = child_items
+            else:
+                child = (
+                    OPENAI_TO_GEMINI_TTS_VOICES.get(item.lower(), item)
+                    if normalized_key == "voiceName" and isinstance(item, str)
+                    else item
+                )
+
+            if isinstance(target, dict):
+                assert isinstance(normalized_key, str)
+                target[normalized_key] = child
+            else:
+                target.append(child)
+
+    return normalized
+
+
+def _gemini_speaker_voice_config(item: object) -> object:
+    speaker_config: Final = as_str_mapping(item)
+    if speaker_config is None:
+        return item
+    speaker: Final = speaker_config.get("speakerAlias")
+    voice_name: Final = speaker_config.get("speakerId")
+    if not isinstance(speaker, str) or not isinstance(voice_name, str):
+        return item
+    return {
+        **{key: value for key, value in speaker_config.items() if key not in ("speakerAlias", "speakerId")},
+        "speaker": speaker,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
+
+
+def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[str, object]:
+    multi_speaker_config: Final = as_str_mapping(config.get("multiSpeakerVoiceConfig"))
+    if multi_speaker_config is None:
+        return config
+    speaker_voice_configs: Final = multi_speaker_config.get("speakerVoiceConfigs")
+    if not isinstance(speaker_voice_configs, list):
+        return config
+    return {
+        **config,
+        "multiSpeakerVoiceConfig": {
+            **multi_speaker_config,
+            "speakerVoiceConfigs": [
+                _gemini_speaker_voice_config(item)
+                for item in _SPEECH_CONFIG_ITEMS.validate_python(speaker_voice_configs)
+            ],
+        },
+    }
+
+
+_GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
+
+_GEMINI_VOICE_CONFIG_FIELDS: Final = MappingProxyType(
+    {
+        "prebuiltVoiceConfig": frozenset({"voiceName"}),
+        "replicatedVoiceConfig": frozenset({"mimeType", "voiceSampleAudio"}),
+        "voice": None,
+    }
+)
+
+_GEMINI_SPEAKER_VOICE_CONFIG_FIELDS: Final = frozenset({"speaker", "voiceConfig"})
+
+
+def _known_leaf_fields(value: object, fields: frozenset[str] | None) -> object:
+    mapping: Final = as_str_mapping(value)
+    if fields is None or mapping is None:
+        return value
+    return {key: item for key, item in mapping.items() if key in fields}
+
+
+def _known_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_leaf_fields(item, _GEMINI_VOICE_CONFIG_FIELDS[key])
+        for key, item in mapping.items()
+        if key in _GEMINI_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_voice_config_fields(item) if key == "voiceConfig" else item
+        for key, item in mapping.items()
+        if key in _GEMINI_SPEAKER_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_configs(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_known_speaker_voice_config_fields(item) for item in _SPEECH_CONFIG_ITEMS.validate_python(value)]
+
+
+def _known_multi_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {key: _known_speaker_voice_configs(item) for key, item in mapping.items() if key == "speakerVoiceConfigs"}
+
+
+def _known_speech_config_field(key: str, value: object) -> object:
+    match key:
+        case "voiceConfig":
+            return _known_voice_config_fields(value)
+        case "multiSpeakerVoiceConfig":
+            return _known_multi_speaker_voice_config_fields(value)
+        case _:
+            return value
+
+
+def _known_gemini_speech_fields(
+    config: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    return {
+        key: _known_speech_config_field(key, item)
+        for key, item in config.items()
+        if key in _GEMINI_SPEECH_CONFIG_FIELDS
+    }
+
+
+_GEMINI_TTS_VOICE_KEYS: Final = frozenset(
+    {
+        "format",
+        "name",
+        "voice",
+        "voiceName",
+        "voice_name",
+        "languageCode",
+        "language_code",
+        "modelName",
+        "model_name",
+        "speechConfig",
+        "speech_config",
+        "voiceConfig",
+        "voice_config",
+        "multiSpeakerVoiceConfig",
+        "multi_speaker_voice_config",
+    }
+)
+
+
+_NAMED_UNKNOWN_VOICE_KEYS: Final = 10
+
+_NAMED_VOICE_KEY_CHARS: Final = 100
+
+
+def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
+    camel_config: Final = as_str_mapping(value.get("speechConfig"))
+    return camel_config if camel_config is not None else as_str_mapping(value.get("speech_config"))
+
+
+def named_voice_keys(keys: Sequence[str]) -> str:
+    named: Final = ", ".join(key[:_NAMED_VOICE_KEY_CHARS] for key in keys[:_NAMED_UNKNOWN_VOICE_KEYS])
+    unnamed_count: Final = len(keys) - _NAMED_UNKNOWN_VOICE_KEYS
+    return f"{named}, and {unnamed_count} more" if unnamed_count > 0 else named
+
+
+def reject_unknown_gemini_tts_voice_keys(
+    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
+) -> None:
+    nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
+    ignored_wrapper: Final = (
+        ("speech_config",)
+        if as_str_mapping(voice.get("speechConfig")) is not None and voice.get("speech_config") is not None
+        else ()
+    )
+    unknown_keys: Final = sorted(
+        {*(key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS), *ignored_wrapper}
+    )
+    if not unknown_keys or drops_unsupported_params(drop_params):
+        return
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support the voice keys {named_voice_keys(unknown_keys)}. Remove them, or set "
+            "drop_params to ignore them."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def normalize_gemini_speech_config(
+    value: Mapping[str, object], drop_unknown_fields: bool = False
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    speech_config: Final = {**_with_gemini_speaker_voice_configs(mapped_gemini_speech_config(value))}
+    return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
+
+
+def _merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object]:
+    nested_config: Final = _gemini_speech_config_wrapper(value)
+    if nested_config is None:
+        return value
+    return {
+        **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config")},
+        **nested_config,
+    }
+
+
+def mapped_gemini_speech_config(
+    value: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    normalized: Final = _normalize_gemini_speech_config_item(_merge_gemini_speech_config_wrapper(value))
+    speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
+    voice_name: Final = next(
+        (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
+        None,
+    )
+    if "voiceConfig" in speech_config or "multiSpeakerVoiceConfig" in speech_config or not isinstance(voice_name, str):
+        return speech_config
+    return {
+        **speech_config,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
 
 
 class VertexAIBaseConfig:
@@ -1237,7 +1505,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: dict) -> dict:
+    def _map_audio_params(
+        self, value: Mapping[str, object], drop_unknown_fields: bool = False
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
         {
@@ -1256,12 +1526,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
-        from litellm.types.llms.vertex_ai import (
-            PrebuiltVoiceConfig,
-            SpeechConfig,
-            VoiceConfig,
-        )
-
         # Validate audio format - Gemini TTS only supports pcm16
         audio_format: Final = value.get("format")
         if audio_format is not None and audio_format != "pcm16":
@@ -1271,22 +1535,46 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"Please set audio format to 'pcm16'."
             )
 
-        # Map OpenAI audio parameter to Gemini speech config
-        speech_config: Final[SpeechConfig] = {}
+        camel_speech_config: Final = value.get("speechConfig")
+        snake_speech_config: Final = value.get("speech_config")
+        speech_config_value: Final = (
+            camel_speech_config if isinstance(camel_speech_config, Mapping) else snake_speech_config
+        )
+        language_code: Final = value.get("language_code", value.get("languageCode"))
+        if isinstance(speech_config_value, Mapping):
+            return normalize_gemini_speech_config(value, drop_unknown_fields)
 
-        if "voice" in value:
-            voice: Final = value["voice"]
-            voice_name: Final = (
-                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
-            )
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
-            voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
-            speech_config["voiceConfig"] = voice_config
+        voice: Final = value.get("voice")
+        speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]
+        ] = (
+            {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice)
+                        if isinstance(voice, str)
+                        else voice,
+                    }
+                }
+            }
+            if "voice" in value
+            else {}
+        )
 
-        if "language_code" in value:
-            speech_config["languageCode"] = value["language_code"]
+        if language_code is not None:
+            return {
+                **speech_config_without_language,
+                "languageCode": language_code,
+            }
 
-        return cast(dict, speech_config)
+        return speech_config_without_language
+
+    def _map_chat_audio_params(
+        self, model: str, value: Mapping[str, object], drop_params: bool
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        if _gemini_speech_config_wrapper(value) is not None:
+            reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
+        return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
 
     def map_audio_params(
         self,
@@ -1351,7 +1639,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
-                optional_params["speechConfig"] = self._map_audio_params(value)
+                optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
