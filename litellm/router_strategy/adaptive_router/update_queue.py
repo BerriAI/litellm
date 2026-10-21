@@ -19,7 +19,8 @@ to the in-memory aggregator). Flush is async and batched.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Tuple
+from collections.abc import Mapping
+from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.repositories.table_repositories import (
@@ -27,8 +28,8 @@ from litellm.repositories.table_repositories import (
     AdaptiveRouterStateRepository,
 )
 
-StateKey = Tuple[str, str, str]  # (router_name, request_type, model_name)
-SessionKey = Tuple[str, str, str]  # (session_id, router_name, model_name)
+StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
+SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
 
 
 class AdaptiveRouterUpdateQueue:
@@ -38,8 +39,8 @@ class AdaptiveRouterUpdateQueue:
     """
 
     def __init__(self) -> None:
-        self._state_agg: Dict[StateKey, Dict[str, float]] = {}
-        self._session_agg: Dict[SessionKey, Dict[str, Any]] = {}
+        self._state_agg: dict[StateKey, dict[str, float]] = {}
+        self._session_agg: dict[SessionKey, Mapping[str, object]] = {}
         self._lock = asyncio.Lock()
         self._max_state_size_seen = 0
         self._max_session_size_seen = 0
@@ -55,9 +56,9 @@ class AdaptiveRouterUpdateQueue:
         delta_beta: float,
     ) -> None:
         """Aggregate a bandit-cell delta. Multiple deltas to the same cell sum."""
-        key: StateKey = (router_name, request_type, model_name)
+        key: Final[StateKey] = (router_name, request_type, model_name)
         async with self._lock:
-            current = self._state_agg.get(key)
+            current: Final = self._state_agg.get(key)
             if current is None:
                 self._state_agg[key] = {
                     "delta_alpha": delta_alpha,
@@ -68,8 +69,7 @@ class AdaptiveRouterUpdateQueue:
                 current["delta_alpha"] += delta_alpha
                 current["delta_beta"] += delta_beta
                 current["samples_added"] += 1
-            if len(self._state_agg) > self._max_state_size_seen:
-                self._max_state_size_seen = len(self._state_agg)
+            self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
     # ---- Hot-path: session snapshot --------------------------------------
 
@@ -78,28 +78,27 @@ class AdaptiveRouterUpdateQueue:
         session_id: str,
         router_name: str,
         model_name: str,
-        state_dict: Dict[str, Any],
+        state_dict: Mapping[str, object],
     ) -> None:
         """
         Last-write-wins per session row. The state_dict is a snapshot of the
         SessionState (signals counts + bookkeeping fields). The flusher will
         upsert this into LiteLLM_AdaptiveRouterSession.
         """
-        key: SessionKey = (session_id, router_name, model_name)
+        key: Final[SessionKey] = (session_id, router_name, model_name)
         async with self._lock:
             self._session_agg[key] = state_dict
-            if len(self._session_agg) > self._max_session_size_seen:
-                self._max_session_size_seen = len(self._session_agg)
+            self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Flushers (called by background task) ----------------------------
 
-    async def flush_state_to_db(self, prisma_client: Any) -> int:
+    async def flush_state_to_db(self, prisma_client: object) -> int:
         """
         Drain state aggregator and apply to LiteLLM_AdaptiveRouterState.
         Returns number of cells flushed.
         """
         async with self._lock:
-            batch = self._state_agg
+            batch: Final = self._state_agg
             self._state_agg = {}
 
         if not batch:
@@ -149,13 +148,13 @@ class AdaptiveRouterUpdateQueue:
 
         return len(batch)
 
-    async def flush_session_to_db(self, prisma_client: Any) -> int:
+    async def flush_session_to_db(self, prisma_client: object) -> int:
         """
         Drain session aggregator and upsert into LiteLLM_AdaptiveRouterSession.
         Returns number of session rows flushed.
         """
         async with self._lock:
-            batch = self._session_agg
+            batch: Final = self._session_agg
             self._session_agg = {}
 
         if not batch:
@@ -203,7 +202,7 @@ class AdaptiveRouterUpdateQueue:
 
     # ---- Observability ---------------------------------------------------
 
-    async def queue_size(self) -> Dict[str, int]:
+    async def queue_size(self) -> dict[str, int]:
         async with self._lock:
             return {
                 "state_pending": len(self._state_agg),

@@ -29,10 +29,10 @@ describe("CustomTooltip", () => {
     const inactive = render(
       <CustomTooltip active={false} payload={[metricsPayload("metrics.total_tokens", 1000)]} label="2026-01-15" />,
     );
-    expect(inactive.container.firstChild).toBeNull();
+    expect(inactive.container).toBeEmptyDOMElement();
 
     const empty = render(<CustomTooltip active={true} payload={[]} label="2026-01-15" />);
-    expect(empty.container.firstChild).toBeNull();
+    expect(empty.container).toBeEmptyDOMElement();
   });
 
   it("renders the label and title-cased category names without the metrics prefix", () => {
@@ -82,7 +82,7 @@ describe("ValueTooltip", () => {
 
   it("returns null when not active", () => {
     const { container } = render(<ValueTooltip active={false} payload={payload} label="2026-01-15" />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders label, series name, and locale-formatted value by default", () => {

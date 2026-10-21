@@ -1,9 +1,9 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
-import PipelineFlowBuilder, { PipelineInfoDisplay } from "./pipeline_flow_builder";
+import PipelineFlowBuilder, { FlowBuilderPage, PipelineInfoDisplay } from "./pipeline_flow_builder";
 import { GuardrailPipeline, PipelineStep } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
 
@@ -151,7 +151,7 @@ describe("PipelineFlowBuilder", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("Enter custom response..."), "x");
+    fireEvent.change(screen.getByPlaceholderText("Enter custom response..."), { target: { value: "x" } });
 
     expect(onChange.mock.calls[0][0].steps[0].modify_response_message).toBe("x");
   });
@@ -165,5 +165,29 @@ describe("PipelineFlowBuilder", () => {
     // guardrail is the one displayed is covered by the PipelineInfoDisplay tests above.
     expect(screen.getByText("Guardrail")).toBeInTheDocument();
     expect(screen.getAllByRole("combobox").length).toBeGreaterThan(0);
+  });
+});
+
+describe("FlowBuilderPage", () => {
+  it("renders its shell in flow with no stacking level, so it can never cover the portalled popup layer", () => {
+    const { container } = renderWithProviders(
+      <FlowBuilderPage
+        onBack={vi.fn()}
+        onSuccess={vi.fn()}
+        accessToken="sk-test"
+        availableGuardrails={guardrails}
+        createPolicy={vi.fn()}
+        updatePolicy={vi.fn()}
+      />,
+    );
+
+    const shell = container.firstElementChild as HTMLElement;
+    const shellClasses = shell.className.split(/\s+/);
+
+    expect(shell).toContainElement(screen.getByPlaceholderText("Policy name..."));
+    expect(shell).not.toHaveStyle({ position: "fixed" });
+    expect(shellClasses).not.toContain("fixed");
+    expect(window.getComputedStyle(shell).zIndex).not.toMatch(/\d/);
+    expect(shellClasses.filter((cls) => /^-?z-/.test(cls))).toEqual([]);
   });
 });

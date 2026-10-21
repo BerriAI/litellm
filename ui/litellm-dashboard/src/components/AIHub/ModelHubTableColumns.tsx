@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 export interface ModelHubData {
@@ -31,6 +32,7 @@ export interface ModelHubData {
   supports_function_calling: boolean;
   supported_openai_params?: string[];
   is_public_model_group: boolean;
+  description?: string;
   [key: string]: any;
 }
 
@@ -127,7 +129,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   },
   {
     id: "mode",
-    accessorKey: "mode",
+    accessorFn: (row) => (row.mode ? displayMode(row.mode) : ""),
     meta: { title: "Mode", className: "hidden lg:table-cell" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
     size: 110,
@@ -135,7 +137,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
     sortingFn: "alphanumeric",
     cell: ({ row }) =>
       row.original.mode ? (
-        <span className="font-mono text-xs text-muted-foreground">{row.original.mode}</span>
+        <span className="font-mono text-xs text-muted-foreground">{displayMode(row.original.mode)}</span>
       ) : (
         <span className="text-xs text-muted-foreground">-</span>
       ),
@@ -143,7 +145,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   {
     id: "max_input_tokens",
     accessorKey: "max_input_tokens",
-    meta: { title: "Tokens", className: "hidden lg:table-cell" },
+    meta: { title: "Tokens", className: "hidden lg:table-cell", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Tokens" />,
     size: 110,
     enableSorting: true,
@@ -165,7 +167,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   {
     id: "input_cost_per_token",
     accessorKey: "input_cost_per_token",
-    meta: { title: "Cost/1M", skeleton: "twoLine" },
+    meta: { title: "Cost/1M", skeleton: "twoLine", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Cost/1M" />,
     size: 110,
     enableSorting: true,

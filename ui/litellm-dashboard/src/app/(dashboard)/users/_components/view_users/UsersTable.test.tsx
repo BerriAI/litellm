@@ -3,7 +3,7 @@ import type { PaginationState, RowSelectionState, SortingState } from "@tanstack
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import { UserInfo } from "@/components/networking";
 
@@ -36,10 +36,11 @@ interface HarnessOverrides {
   rowCount?: number;
   isLoading?: boolean;
   selectionEnabled?: boolean;
+  canViewUserUsage?: boolean;
   onUserClick?: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser?: (user: UserInfo) => void;
   onResetPassword?: (userId: string) => void;
-  onSortingChange?: ReturnType<typeof vi.fn>;
+  onSortingChange?: Mock;
 }
 
 /**
@@ -51,6 +52,7 @@ function Harness({
   rowCount = 1,
   isLoading = false,
   selectionEnabled = false,
+  canViewUserUsage = true,
   onUserClick = vi.fn(),
   onDeleteUser = vi.fn(),
   onResetPassword = vi.fn(),
@@ -74,6 +76,7 @@ function Harness({
         isLoading={isLoading}
         possibleUIRoles={possibleUIRoles}
         teams={[]}
+        canViewUserUsage={canViewUserUsage}
         sorting={sorting}
         onSortingChange={(updater) => {
           setSorting(updater);
@@ -119,8 +122,14 @@ describe("UsersTable", () => {
       "Created At",
       "Updated At",
     ].forEach((header) => {
-      expect(headerRow.textContent).toContain(header);
+      expect(headerRow).toHaveTextContent(header);
     });
+  });
+
+  it("renders spend with two decimal places", () => {
+    render(<Harness data={[makeUser({ spend: 98.854 })]} />);
+
+    expect(screen.getByText("$98.85")).toBeInTheDocument();
   });
 
   // Sorting is server-side and the backend only accepts these five keys, so a sort
@@ -170,6 +179,27 @@ describe("UsersTable", () => {
     await user.click(await screen.findByTestId("user-action-edit"));
 
     expect(onUserClick).toHaveBeenCalledWith("user-1", true);
+  });
+
+  it("links the row menu to that user's usage when allowed", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await openRowMenu(user, "user-1");
+
+    expect(await screen.findByRole("menuitem", { name: "View usage" })).toHaveAttribute(
+      "href",
+      "/ui/usage?user=user-1",
+    );
+  });
+
+  it("hides the usage link when the viewer cannot view usage", async () => {
+    const user = userEvent.setup();
+    render(<Harness canViewUserUsage={false} />);
+
+    await openRowMenu(user, "user-1");
+
+    expect(screen.queryByRole("menuitem", { name: "View usage" })).not.toBeInTheDocument();
   });
 
   it("delegates delete and reset-password from the row menu", async () => {
@@ -245,7 +275,7 @@ describe("UsersTable", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-1"));
 
-      expect(screen.getByTestId("datatable-select-all")).toHaveAttribute("aria-checked", "mixed");
+      expect(screen.getByTestId("datatable-select-all")).toBePartiallyChecked();
     });
   });
 

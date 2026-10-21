@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -9,15 +9,15 @@ from .base import GuardrailConfigModel
 class RepelloAIGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     """Config model for the RepelloAI Argus guardrail."""
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="API key for the RepelloAI Argus service. Falls back to ARGUS_API_KEY or REPELLOAI_API_KEY.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="Base URL for the RepelloAI Argus API. Defaults to https://argusapi.repello.ai/sdk/v1",
     )
-    asset_id: Optional[str] = Field(
+    asset_id: str | None = Field(
         default=None,
         description="Repello asset ID whose dashboard policies are enforced. Required; the guardrail raises at init if it is missing.",
     )
@@ -36,8 +36,8 @@ class RepelloAIScanData(TypedDict, total=False):
     Only one of 'prompt' or 'response' is set per request.
     """
 
-    prompt: Optional[str]
-    response: Optional[str]
+    prompt: str | None
+    response: str | None
 
 
 class RepelloAIAnalyzeRequest(TypedDict, total=False):
@@ -48,18 +48,18 @@ class RepelloAIAnalyzeRequest(TypedDict, total=False):
 
 
 class RepelloAIViolatedPolicy(TypedDict, total=False):
-    policy_name: Optional[str]
-    policy_id: Optional[str]
-    action_taken: Optional[str]
-    scope: Optional[str]
-    details: Optional[dict[str, object]]
-    masked_result: Optional[str]
+    policy_name: str | None
+    policy_id: str | None
+    action_taken: str | None
+    scope: str | None
+    details: dict[str, object] | None
+    masked_result: str | None
 
 
 class RepelloAIAnalyzeResponse(TypedDict, total=False):
     """Response body returned by the RepelloAI Argus analyze endpoints."""
 
-    verdict: Optional[str]  # "blocked" | "flagged" | "passed"
-    request_id: Optional[str]
-    policies_violated: Optional[List[RepelloAIViolatedPolicy]]
-    policies_applied: Optional[List[dict[str, object]]]
+    verdict: str | None  # "blocked" | "flagged" | "passed"
+    request_id: str | None
+    policies_violated: list[RepelloAIViolatedPolicy] | None
+    policies_applied: list[dict[str, object]] | None

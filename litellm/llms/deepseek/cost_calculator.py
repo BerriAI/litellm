@@ -4,13 +4,11 @@ Cost calculator for DeepSeek Chat models.
 Handles prompt caching scenario.
 """
 
-from typing import Tuple
-
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

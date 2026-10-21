@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
 
 const MCP_CREDENTIALS_QUERY_KEY = "mcp-user-credentials";
@@ -83,7 +83,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
         (prev ?? []).filter((c) => c.server_id !== serverId),
       );
     } catch {
-      MessageManager.error("Failed to revoke connection. Please try again.");
+      toast.error("Failed to revoke connection. Please try again.");
     } finally {
       setRevoking((prev) => {
         const n = new Set(prev);

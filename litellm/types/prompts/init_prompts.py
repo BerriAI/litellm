@@ -1,8 +1,10 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class SupportedPromptIntegrations(str, Enum):
@@ -15,26 +17,26 @@ class SupportedPromptIntegrations(str, Enum):
     ARIZE_PHOENIX = "arize_phoenix"
 
 
-class PromptInfo(BaseModel):
+class PromptInfo(LiteLLMBaseModel):
     prompt_type: Literal["config", "db"]
-    environment: Optional[str] = "development"
+    environment: str | None = "development"
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
-class PromptLiteLLMParams(BaseModel):
-    prompt_id: Optional[str] = None
+class PromptLiteLLMParams(LiteLLMBaseModel):
+    prompt_id: str | None = None
     prompt_integration: str
 
-    api_base: Optional[str] = None
-    api_key: Optional[str] = None
+    api_base: str | None = None
+    api_key: str | None = None
 
-    provider_specific_query_params: Optional[Dict[str, Any]] = None
+    provider_specific_query_params: dict[str, Any] | None = None
 
-    ignore_prompt_manager_model: Optional[bool] = False
-    ignore_prompt_manager_optional_params: Optional[bool] = False
+    ignore_prompt_manager_model: bool | None = False
+    ignore_prompt_manager_optional_params: bool | None = False
 
-    dotprompt_content: Optional[str] = None
+    dotprompt_content: str | None = None
     """
     allows saving the dotprompt file content
     """
@@ -42,17 +44,17 @@ class PromptLiteLLMParams(BaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
-class PromptSpec(BaseModel):
+class PromptSpec(LiteLLMBaseModel):
     prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: PromptInfo
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    version: Optional[int] = None  # Version number for version history
-    environment: Optional[str] = "development"
-    created_by: Optional[str] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    version: int | None = None  # Version number for version history
+    environment: str | None = "development"
+    created_by: str | None = None
 
-    def __init__(self, **data):
+    def __init__(self, **data) -> None:
         if "prompt_info" not in data:
             data["prompt_info"] = PromptInfo(prompt_type="config")
         elif "prompt_info" in data:
@@ -61,17 +63,17 @@ class PromptSpec(BaseModel):
         super().__init__(**data)
 
 
-class PromptTemplateBase(BaseModel):
+class PromptTemplateBase(LiteLLMBaseModel):
     litellm_prompt_id: str
     content: str
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
-class PromptInfoResponse(BaseModel):
+class PromptInfoResponse(LiteLLMBaseModel):
     prompt_spec: PromptSpec
-    raw_prompt_template: Optional[PromptTemplateBase] = None
-    environments: Optional[List[str]] = None  # All environments this prompt is deployed to
+    raw_prompt_template: PromptTemplateBase | None = None
+    environments: list[str] | None = None  # All environments this prompt is deployed to
 
 
-class ListPromptsResponse(BaseModel):
-    prompts: List[PromptSpec]
+class ListPromptsResponse(LiteLLMBaseModel):
+    prompts: list[PromptSpec]

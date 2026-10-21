@@ -1,4 +1,9 @@
-import { Card, InputNumber, Radio, Slider, Space, Switch, Typography } from "antd";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import React from "react";
 import {
   AdaptiveEligible,
@@ -6,8 +11,6 @@ import {
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
-
-const { Text } = Typography;
 
 interface AdaptiveRoutingConfigProps {
   value: ComplexityRouterConfigValue;
@@ -45,84 +48,91 @@ const AdaptiveRoutingConfig: React.FC<AdaptiveRoutingConfigProps> = ({ value, on
 
   return (
     <>
-      <div className="flex items-center gap-2 mb-2">
-        <Switch checked={value.adaptive ?? false} onChange={handleAdaptiveToggle} />
-        <Text strong>Enable adaptive bandit selection</Text>
-      </div>
-      <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+      <Label className="mb-2">
+        <Switch checked={value.adaptive ?? false} onCheckedChange={handleAdaptiveToggle} />
+        <strong className="font-semibold">Enable adaptive bandit selection</strong>
+      </Label>
+      <span className="block text-xs text-muted-foreground">
         When disabled, each request always uses the model assigned to its classified tier.
-      </Text>
+      </span>
 
-      <Card className="bg-gray-50 mt-4">
-        <Text strong style={{ display: "block", marginBottom: 8 }}>
-          How Adaptive Routing Works
-        </Text>
-        <Text type="secondary" style={{ fontSize: 13 }}>
-          It learns from how each conversation actually goes: does the user have to rephrase or correct the model, does
-          it get stuck repeating itself, does it run out of tool calls, does the user seem satisfied. Combined with
-          cost, this live feedback shifts future routing toward the models that are actually working well, and improves
-          as more conversations come in. Until there&apos;s enough feedback, it defaults to the classified tier&apos;s
-          model.
-        </Text>
+      <Card className="bg-muted mt-4">
+        <CardContent>
+          <strong className="mb-2 block font-semibold">How Adaptive Routing Works</strong>
+          <span className="text-[13px] text-muted-foreground">
+            It learns from how each conversation actually goes: does the user have to rephrase or correct the model,
+            does it get stuck repeating itself, does it run out of tool calls, does the user seem satisfied. Combined
+            with cost, this live feedback shifts future routing toward the models that are actually working well, and
+            improves as more conversations come in. Until there&apos;s enough feedback, it defaults to the classified
+            tier&apos;s model.
+          </span>
+        </CardContent>
       </Card>
 
       {value.adaptive && (
         <div className="mt-4 space-y-4">
           <div>
-            <Text strong style={{ display: "block", marginBottom: 4 }}>
+            <strong className="mb-1 block font-semibold">
               Quality vs. Cost ({Math.round(adaptiveWeights.quality * 100)}% quality /{" "}
               {Math.round(adaptiveWeights.cost * 100)}% cost)
-            </Text>
+            </strong>
             <Slider
+              aria-label="Quality vs. Cost"
               min={0}
               max={100}
-              value={Math.round(adaptiveWeights.quality * 100)}
-              onChange={handleQualityWeightChange}
-              tooltip={{ formatter: (v) => `${v}% quality / ${100 - (v ?? 0)}% cost` }}
+              value={[Math.round(adaptiveWeights.quality * 100)]}
+              onValueChange={(next) => handleQualityWeightChange(Array.isArray(next) ? next[0] : next)}
             />
-            <Text type="secondary" style={{ fontSize: 12 }}>
+            <span className="text-xs text-muted-foreground">
               Higher quality weight favors more capable (pricier) models; higher cost weight favors cheaper models when
               the bandit has feedback to act on. Recommended: 30% quality / 70% cost split.
-            </Text>
+            </span>
           </div>
 
           <div>
-            <Text strong style={{ display: "block", marginBottom: 4 }}>
-              Eligible Model Pool
-            </Text>
-            <Radio.Group
+            <strong className="mb-1 block font-semibold">Eligible Model Pool</strong>
+            <RadioGroup
               value={adaptiveEligible}
-              onChange={(e) => handleAdaptiveEligibleChange(e.target.value)}
+              onValueChange={(eligible: unknown) => handleAdaptiveEligibleChange(eligible as AdaptiveEligible)}
               className="w-full"
             >
-              <Space direction="vertical" className="w-full">
-                <Radio value="all">
-                  <Text strong>All tiers (soft floor)</Text>{" "}
-                  <Text type="secondary">— router can pick across tiers, depending on the best fit for the prompt</Text>
-                </Radio>
-                <Radio value="classified_tier">
-                  <Text strong>Classified tier only</Text>{" "}
-                  <Text type="secondary">— router can only pick models within tier</Text>
-                </Radio>
-              </Space>
-            </Radio.Group>
+              <div className="flex w-full flex-col items-start gap-2">
+                <Label className="items-start font-normal leading-normal">
+                  <RadioGroupItem value="all" className="mt-0.5" />
+                  <span>
+                    <strong className="font-semibold">All tiers (soft floor)</strong>{" "}
+                    <span className="text-muted-foreground">
+                      — router can pick across tiers, depending on the best fit for the prompt
+                    </span>
+                  </span>
+                </Label>
+                <Label className="items-start font-normal leading-normal">
+                  <RadioGroupItem value="classified_tier" className="mt-0.5" />
+                  <span>
+                    <strong className="font-semibold">Classified tier only</strong>{" "}
+                    <span className="text-muted-foreground">— router can only pick models within tier</span>
+                  </span>
+                </Label>
+              </div>
+            </RadioGroup>
           </div>
 
           {adaptiveEligible === "all" && (
             <div>
-              <Text strong style={{ display: "block", marginBottom: 4 }}>
-                Tier Distance Penalty
-              </Text>
-              <InputNumber
+              <strong className="mb-1 block font-semibold">Tier Distance Penalty</strong>
+              <Input
+                type="number"
                 value={tierDistancePenalty}
-                onChange={handleTierDistancePenaltyChange}
+                onChange={(event) =>
+                  handleTierDistancePenaltyChange(event.target.value === "" ? null : event.target.valueAsNumber)
+                }
                 min={0}
                 step={0.1}
-                style={{ width: "100%" }}
+                className="w-full"
               />
-              <Text type="secondary" style={{ fontSize: 12 }}>
+              <span className="text-xs text-muted-foreground">
                 Score penalty applied per tier-step away from the classified tier.
-              </Text>
+              </span>
             </div>
           )}
         </div>

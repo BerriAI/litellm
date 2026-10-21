@@ -355,7 +355,7 @@ const MCPToolsViewer = ({
                   {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
                     <div className="mt-2">
                       <p className="flex items-center text-xs text-muted-foreground">
-                        <span className="mr-2 inline-block size-2 rounded-full bg-green-500" />
+                        <span className="mr-2 inline-block size-2 rounded-full bg-success" />
                         {Object.keys(passthroughHeaders).length} header(s) configured
                       </p>
                     </div>

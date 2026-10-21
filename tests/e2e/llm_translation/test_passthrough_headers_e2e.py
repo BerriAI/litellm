@@ -13,14 +13,16 @@ this specific request's header - not a stale or cached one - got there.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from pydantic import BaseModel, Field
 
 from e2e_config import unique_marker
 from e2e_http import AuthHeaders, NoBody, require_successful_call, unwrap
-from endpoints_client import MessagesResult
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import ChatMessage, KeyGenerateBody
+from models import AnthropicMessagesResponse, ChatMessage, KeyGenerateBody
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
@@ -78,7 +80,37 @@ def _create_passthrough(client: PassthroughClient, *, path: str) -> PassThroughE
     assert created.endpoints, "create returned no endpoints"
     endpoint = created.endpoints[0]
     assert endpoint.id, "created pass-through endpoint has no id"
+    _await_route_serving(client, path=path)
     return endpoint
+
+
+def _await_route_serving(client: PassthroughClient, *, path: str) -> None:
+    """Block until the data plane routes `path`, instead of 404ing on it.
+
+    POST /config/pass_through_endpoint is a control-plane write; the worker that
+    serves the route only registers it on its next config reload, so a call issued
+    right after the create gets a bare 404 that looks like a broken route rather
+    than in-flight propagation. Measured at ~18s on a live proxy.
+    """
+    deadline = time.monotonic() + client.proxy.poll_timeout
+    while True:
+        # Any non-404 means the route is registered; this probe deliberately sends
+        # no anthropic-version so it is rejected upstream rather than billing a
+        # real completion on every poll.
+        result = client.proxy.transport.send(
+            path,
+            headers=client.proxy.transport.master,
+            json=_messages_body(),
+        )
+        if result.status_code != 404:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"pass-through route {path!r} was created but never became routable on the "
+                f"data plane within {client.proxy.poll_timeout}s (config reload issue); "
+                f"last status {result.status_code}: {result.body[:200]}"
+            )
+        time.sleep(client.proxy.poll_interval)
 
 
 def _delete_passthrough(client: PassthroughClient, endpoint_id: str) -> None:
@@ -96,9 +128,23 @@ def _messages_body() -> AnthropicMessagesBody:
 
 
 class TestPassthroughHeaders:
+    @pytest.mark.skip(
+        reason="stage red: ALB sends custom passthrough paths to backend pods, which lack ANTHROPIC_API_KEY, "
+        "so the os.environ header forwards unresolved and Anthropic 401s; routing user-defined paths to the "
+        "gateway needs a product/infra decision (fixed path namespace or dynamic ingress)"
+    )
     @pytest.mark.covers(
         "other.config.passthrough.headers_forwarded",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_static_and_x_pass_headers_reach_upstream(
         self, client: PassthroughClient, resources: ResourceManager
@@ -128,8 +174,9 @@ class TestPassthroughHeaders:
             json=_messages_body(),
         )
         require_successful_call(result)
-        completion = MessagesResult.model_validate_json(result.body)
-        assert completion.text.strip(), (
+        completion = AnthropicMessagesResponse.model_validate_json(result.body)
+        text = "".join(block.text or "" for block in (completion.content or []))
+        assert text.strip(), (
             f"static x-api-key must reach Anthropic for the call to succeed at all; got {result.body[:300]}"
         )
 

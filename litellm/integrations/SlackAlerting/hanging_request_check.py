@@ -9,9 +9,10 @@ Notes:
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -20,6 +21,8 @@ from litellm.types.integrations.slack_alerting import (
     MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
     HangingRequestData,
 )
+
+_REQUEST_STATUS_TARGET: Final = "request_status"
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -49,7 +52,7 @@ class AlertingHangingRequestCheck:
 
     async def add_request_to_hanging_request_check(
         self,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ):
         """
         Add a request to the hanging request cache. This is the list of request_ids that gets periodicall checked for hanging requests
@@ -57,9 +60,9 @@ class AlertingHangingRequestCheck:
         if request_data is None:
             return
 
-        request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
-        model = request_data.get("model", "")
-        api_base: Optional[str] = None
+        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        model: Final = request_data.get("model", "")
+        api_base: str | None = None
 
         if request_data.get("deployment", None) is not None and isinstance(request_data["deployment"], dict):
             api_base = litellm.get_api_base(
@@ -67,7 +70,7 @@ class AlertingHangingRequestCheck:
                 optional_params=request_data["deployment"].get("litellm_params", {}),
             )
 
-        hanging_request_data = HangingRequestData(
+        hanging_request_data: Final = HangingRequestData(
             request_id=request_data.get("litellm_call_id", ""),
             model=model,
             api_base=api_base,
@@ -82,6 +85,7 @@ class AlertingHangingRequestCheck:
         )
         return
 
+    @with_service_target(_REQUEST_STATUS_TARGET)
     async def send_alerts_for_hanging_requests(self):
         """
         Send alerts for hanging requests
@@ -96,12 +100,12 @@ class AlertingHangingRequestCheck:
         if proxy_logging_obj.internal_usage_cache is None:
             return
 
-        hanging_requests = await self.hanging_request_cache.async_get_oldest_n_keys(
+        hanging_requests: Final = await self.hanging_request_cache.async_get_oldest_n_keys(
             n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
+            hanging_request_data: HangingRequestData | None = await self.hanging_request_cache.async_get_cache(
                 key=request_id,
             )
 
@@ -112,7 +116,7 @@ class AlertingHangingRequestCheck:
                 continue
 
             request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                key="request_status:{}".format(hanging_request_data.request_id),
+                key=f"request_status:{hanging_request_data.request_id}",
                 litellm_parent_otel_span=None,
                 local_only=True,
             )
@@ -166,7 +170,7 @@ class AlertingHangingRequestCheck:
         ################
         # Send the Alert on Slack
         ################
-        request_info = f"""Request Model: `{hanging_request_data.model}`
+        request_info: Final = f"""Request Model: `{hanging_request_data.model}`
 API Base: `{hanging_request_data.api_base}`
 Key Alias: `{hanging_request_data.key_alias}`
 Team Alias: `{hanging_request_data.team_alias}`"""

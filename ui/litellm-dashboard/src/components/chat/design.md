@@ -10,7 +10,7 @@ Tactical guide for building chat UI features. Copy patterns exactly — don't im
 
 - **Next.js 16** App Router, TypeScript
 - **Tailwind CSS v4** — utility classes only, no custom CSS except in `globals.css`
-- **shadcn/ui** — import from `@/components/ui/*`. Available today: `alert-dialog`, `badge`, `button`, `collapsible`, `dialog`, `input`, `label`, `popover`, `scroll-area`, `select`, `separator`, `skeleton`, `switch`, `table`, `tabs`, `tooltip`. **Not installed**: `Card`, `Textarea`, `sonner`. Don't reference them until they're actually added — see "Known gaps" below.
+- **shadcn/ui**: import from `@/components/ui/*`. Available today: `alert-dialog`, `badge`, `bubble`, `button`, `card`, `collapsible`, `dialog`, `input`, `input-group`, `label`, `popover`, `scroll-area`, `select`, `separator`, `sheet`, `skeleton`, `sonner`, `switch`, `table`, `tabs`, `textarea`, `tooltip`. Use these shared primitives when composing chat features
 - **lucide-react** — only icon library, no emoji in UI
 - System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`), inherited from `ChatShell`'s root
 
@@ -22,21 +22,21 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 ### Colors
 
-| Token                         | Tailwind class                        | Use                                                            |
-| ----------------------------- | ------------------------------------- | -------------------------------------------------------------- |
-| `--background`                | `bg-background`                       | Main content area, input surfaces                              |
-| `--foreground`                | `text-foreground`                     | Primary text                                                   |
-| `--card`                      | `bg-card`                             | Popover/dialog surfaces (no `<Card>` component yet — see gaps) |
-| `--muted`                     | `bg-muted`                            | Table header rows, subtle fills                                |
-| `--muted-foreground`          | `text-muted-foreground`               | Secondary/helper text, timestamps                              |
-| `--border`                    | `border-border` (or bare `border`)    | All 1px separators                                             |
-| `--primary`                   | `bg-primary` / `text-primary`         | Send button, checkmarks, active links                          |
-| `--destructive`               | `bg-destructive` / `text-destructive` | Delete, error actions                                          |
-| `--sidebar`                   | `bg-sidebar`                          | **Left sidebar background — use this, not `bg-secondary`**     |
-| `--sidebar-foreground`        | `text-sidebar-foreground`             | Sidebar text                                                   |
-| `--sidebar-accent`            | `bg-sidebar-accent`                   | Active/hover nav item fill                                     |
-| `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                           |
-| `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                            |
+| Token                         | Tailwind class                        | Use                                                        |
+| ----------------------------- | ------------------------------------- | ---------------------------------------------------------- |
+| `--background`                | `bg-background`                       | Main content area, input surfaces                          |
+| `--foreground`                | `text-foreground`                     | Primary text                                               |
+| `--card`                      | `bg-card`                             | Card, popover and dialog surfaces                          |
+| `--muted`                     | `bg-muted`                            | Table header rows, subtle fills                            |
+| `--muted-foreground`          | `text-muted-foreground`               | Secondary/helper text, timestamps                          |
+| `--border`                    | `border-border` (or bare `border`)    | All 1px separators                                         |
+| `--primary`                   | `bg-primary` / `text-primary`         | Send button, checkmarks, active links                      |
+| `--destructive`               | `bg-destructive` / `text-destructive` | Delete, error actions                                      |
+| `--sidebar`                   | `bg-sidebar`                          | **Left sidebar background — use this, not `bg-secondary`** |
+| `--sidebar-foreground`        | `text-sidebar-foreground`             | Sidebar text                                               |
+| `--sidebar-accent`            | `bg-sidebar-accent`                   | Active/hover nav item fill                                 |
+| `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                       |
+| `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                        |
 
 **Known gotcha — verified in `globals.css`:** `--accent`, `--secondary`, and `--muted` all resolve to the _identical_ OKLCH value in both light and dark themes. Using `bg-accent` for a "selected" state against a `bg-secondary` container is **invisible** — there is zero contrast. This bit us repeatedly in this exact sidebar. Rules:
 
@@ -176,7 +176,7 @@ If you need "shrink to fit content, cap at N px" rather than "always N px," you 
 
 ### Input / Textarea
 
-`Input` exists; `Textarea` does not (see gaps — until added, a plain `<textarea>` with `border-none outline-none resize-none` inside a bordered container, as in the chat composer, is the accepted exception).
+Use `Input` and `Textarea` from `@/components/ui`. The shared `ChatComposer` uses `InputGroupTextarea` and owns submission, cancellation and IME handling. Reuse it for new chat surfaces
 
 ```tsx
 import { Input } from "@/components/ui/input";
@@ -191,13 +191,30 @@ import { Label } from "@/components/ui/label";
 
 Errors go **below** the field. Never a toast for form validation.
 
-### Bordered surfaces (Card substitute)
+### Card
 
-No `Card` component is installed. Use a bordered div — this is already the documented pattern here, keep it:
+Use the installed Card primitives for grouped content and action reviews
 
 ```tsx
-<div className="border rounded-lg p-4 bg-card">{/* content */}</div>
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+<Card size="sm">
+  <CardHeader>
+    <CardTitle>Review changes</CardTitle>
+  </CardHeader>
+  <CardContent>{children}</CardContent>
+</Card>;
 ```
+
+### Messages and Markdown
+
+`ChatMessages` owns the shared list renderer. `ChatMessageContent` renders one message without a list wrapper so a transcript scroller can own each row. Both retain user editing, reasoning, tool output, copying and response metrics
+
+Use the official registry `Bubble` and `BubbleContent` primitives. User messages use the muted variant and end alignment. Assistant messages use the ghost variant at full available width. Keep paragraph spacing and list markers in the shared Markdown renderer. GFM tables use the shared Table primitives, which provide horizontal scrolling. Forward Markdown cell styles so column alignment survives rendering
+
+LiteAdmin passes `allowImages={false}` to show image descriptions without automatically requesting external image URLs from administrative answers. Other chat consumers retain image rendering by default
+
+Scrolling belongs to the conversation container. LiteAdmin uses official MessageScroller items with stable chronological IDs; a pending action and its result stay in the same row. Its inline action review is an explicit product exception to the AlertDialog confirmation pattern below
 
 ### Badge
 
@@ -289,7 +306,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 ### Toast / notifications
 
-**Gap:** `sonner` is not installed. This codebase currently uses `MessageManager` (antd-message-based) for toasts across the chat UI. Don't introduce a second toast mechanism — keep using `MessageManager` until `sonner` is added as a deliberate, separate change (see `AGENTS.md`).
+**Resolved:** `sonner` is installed and mounted from the root layout. Raise toasts through `toast` from `@/lib/toast`; don't introduce a second toast mechanism.
 
 ---
 
@@ -341,18 +358,15 @@ No max-width cap on panel content — matches the rest of the dashboard's own pa
 | `text-muted-foreground` for secondary text                            | `text-foreground/50`, `text-foreground/60`, `text-foreground/70`                    |
 | `AlertDialog` for destructive confirmations                           | Instant delete, or a hand-rolled confirm                                            |
 | Verify a prop/variant exists in `components/ui/*.tsx` before using it | Assume a shadcn prop exists because another shadcn app has it                       |
-| `MessageManager` for toasts (until sonner lands)                      | Introduce a second, competing toast library                                         |
+| `toast` from `@/lib/toast`, backed by the root sonner instance        | Introduce a second, competing toast library                                         |
 
 ---
 
 ## Known gaps (tracked, not blockers)
 
-These are real, current gaps in this codebase's shadcn setup — don't silently work around them by reinventing the missing piece with raw Tailwind; either use the documented substitute above or flag the addition as its own change:
+Card, Textarea and sonner are installed. Earlier versions of this document listed them as missing and encouraged parallel implementations; use the shared owners above
 
-1. **No `Card` component.** Substitute: bordered div (`border rounded-lg p-4 bg-card`), already the established pattern.
-2. **No `Textarea` component.** Substitute: raw `<textarea>` with `border-none outline-none resize-none`, only inside an already-bordered container (chat composer).
-3. **No `sonner`.** Substitute: existing `MessageManager`.
-4. **No shadcn `Sidebar` primitive block** (`SidebarProvider`/`SidebarMenu`/etc). Substitute: the "Sidebar nav item" pattern above, built from `Button variant="ghost"` + the `sidebar-*` tokens.
+The shadcn Sidebar primitive block (`SidebarProvider`/`SidebarMenu`/etc) is still absent. Use the "Sidebar nav item" pattern above, built from `Button variant="ghost"` and the `sidebar-*` tokens
 
 ## File Structure
 
@@ -360,7 +374,7 @@ These are real, current gaps in this codebase's shadcn setup — don't silently 
 src/components/chat/
   ChatShell.tsx          # Sidebar chrome (nav, collapse, conversation list), shared across all /chat/* routes
   ConversationList.tsx   # Date-grouped chat list + Cmd+K search
-  ChatMessages.tsx       # Message rendering (user, assistant, tool)
+  ChatMessages.tsx       # Shared list and single-message rendering (user, assistant, tool)
   MCPAppsPanel.tsx       # Integrations grid + detail view
   MCPConnectPicker.tsx   # MCP server toggle popover
   MCPCredentialsTab.tsx  # OAuth credentials table

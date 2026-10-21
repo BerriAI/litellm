@@ -2,9 +2,11 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -14,11 +16,14 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+
 
 class _PerplexitySearchRequestRequired(TypedDict):
     """Required fields for Perplexity Search API request."""
 
-    query: Union[str, List[str]]  # Required - search query or queries
+    query: str | list[str]  # Required - search query or queries
 
 
 class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
@@ -28,7 +33,7 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
     """
 
     max_results: int  # Optional - maximum number of results (1-20), default 10
-    search_domain_filter: List[str]  # Optional - list of domains to filter (max 20)
+    search_domain_filter: list[str]  # Optional - list of domains to filter (max 20)
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
@@ -42,11 +47,11 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -65,28 +70,26 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
-
-        # append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        resolved_api_base: Final = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
+        clean_api_base: Final = resolved_api_base.rstrip("/")
+        if clean_api_base.endswith("/search"):
+            return clean_api_base
+        return f"{clean_api_base}/search"
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Perplexity API format.
 
@@ -107,24 +110,24 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             Dict with typed request data following PerplexitySearchRequest spec
         """
-        request_data: PerplexitySearchRequest = {
+        request_data: Final[PerplexitySearchRequest] = {
             "query": query,
         }
 
         # Add optional parameters following Perplexity API spec (only if not None)
-        max_results = optional_params.get("max_results")
+        max_results: Final = optional_params.get("max_results")
         if max_results is not None:
             request_data["max_results"] = max_results
 
-        search_domain_filter = optional_params.get("search_domain_filter")
+        search_domain_filter: Final = optional_params.get("search_domain_filter")
         if search_domain_filter is not None:
             request_data["search_domain_filter"] = search_domain_filter
 
-        max_tokens_per_page = optional_params.get("max_tokens_per_page")
+        max_tokens_per_page: Final = optional_params.get("max_tokens_per_page")
         if max_tokens_per_page is not None:
             request_data["max_tokens_per_page"] = max_tokens_per_page
 
-        country = optional_params.get("country")
+        country: Final = optional_params.get("country")
         if country is not None:
             request_data["country"] = country
 
@@ -146,17 +149,20 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("snippet", ""),
-                date=result.get("date"),
-                last_updated=result.get("last_updated"),
+        results: Final = []
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("snippet", ""),
+                    "date": result.get("date"),
+                    "last_updated": result.get("last_updated"),
+                }
             )
             results.append(search_result)
 

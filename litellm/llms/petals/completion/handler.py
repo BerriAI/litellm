@@ -1,15 +1,17 @@
 import time
-from typing import Callable, Optional, Union
+import types
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.utils import ModelResponse, Usage
 
@@ -19,7 +21,7 @@ from ..common_utils import PetalsError
 def completion(
     model: str,
     messages: list,
-    api_base: Optional[str],
+    api_base: str | None,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -28,10 +30,10 @@ def completion(
     stream=False,
     litellm_params=None,
     logger_fn=None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
 ):
     ## Load Config
-    config = litellm.PetalsConfig.get_config()
+    config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.PetalsConfig.get_config())
     for k, v in config.items():
         if (
             k not in optional_params
@@ -40,17 +42,14 @@ def completion(
 
     if model in litellm.custom_prompt_dict:
         # check if the model has a registered custom prompt
-        model_prompt_details = litellm.custom_prompt_dict[model]
-        prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"],
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],
-            final_prompt_value=model_prompt_details["final_prompt_value"],
-            messages=messages,
+        model_prompt_details: Final = litellm.custom_prompt_dict[model]
+        prompt = render_custom_prompt_template(
+            template=model_prompt_details, messages=messages, model=model, llm_provider="petals"
         )
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
-    output_text: Optional[str] = None
+    output_text: str | None = None
     if api_base:
         ## LOGGING
         logging_obj.pre_call(
@@ -61,12 +60,12 @@ def completion(
                 "api_base": api_base,
             },
         )
-        data = {"model": model, "inputs": prompt, **optional_params}
+        data: Final = {"model": model, "inputs": prompt, **optional_params}
 
         ## COMPLETION CALL
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
-        response = client.post(api_base, data=data)
+            client = get_httpx_client()
+        response: Final = client.post(api_base, data=data)
 
         ## LOGGING
         logging_obj.post_call(
@@ -88,7 +87,7 @@ def completion(
 
     else:
         try:
-            from petals import AutoDistributedModelForCausalLM  # type: ignore
+            from petals import AutoDistributedModelForCausalLM
             from transformers import AutoTokenizer
         except Exception:
             raise Exception(
@@ -97,8 +96,8 @@ def completion(
 
         model = model
 
-        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
-        model_obj = AutoDistributedModelForCausalLM.from_pretrained(model)
+        tokenizer: Final = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
+        model_obj: Final = AutoDistributedModelForCausalLM.from_pretrained(model)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -108,10 +107,10 @@ def completion(
         )
 
         ## COMPLETION CALL
-        inputs = tokenizer(prompt, return_tensors="pt")["input_ids"]
+        inputs: Final = tokenizer(prompt, return_tensors="pt")["input_ids"]
 
         # optional params: max_new_tokens=1,temperature=0.9, top_p=0.6
-        outputs = model_obj.generate(inputs, **optional_params)
+        outputs: Final = model_obj.generate(inputs, **optional_params)
 
         ## LOGGING
         logging_obj.post_call(
@@ -124,14 +123,15 @@ def completion(
         output_text = tokenizer.decode(outputs[0])
 
     if output_text is not None and len(output_text) > 0:
-        model_response.choices[0].message.content = output_text  # type: ignore
+        model_response.choices[0].message.content = output_text
 
-    prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content")))
+    prompt_tokens: Final = len(encoding.encode(prompt))
+    response_message: Final = model_response.choices[0].message
+    completion_tokens: Final = len(encoding.encode(response_message.content))
 
     model_response.created = int(time.time())
     model_response.model = model
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,

@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { clearTokenCookies, getCookie, storeLoginToken } from "./cookieUtils";
 import { getToken, setToken } from "./mcpTokenStore";
@@ -170,6 +172,29 @@ describe("cookieUtils", () => {
       const cookieSpy = vi.spyOn(document, "cookie", "set");
       storeLoginToken("my-jwt-token");
       expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/ui"));
+      vi.restoreAllMocks();
+    });
+
+    it("should write the cookie with Secure on an https page", () => {
+      vi.stubGlobal("location", { ...window.location, protocol: "https:" });
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+
+      storeLoginToken("https-jwt");
+
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringMatching(/^token=https-jwt; .*; Secure$/));
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("should write the cookie without Secure on an http page", () => {
+      vi.stubGlobal("location", { ...window.location, protocol: "http:" });
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+
+      storeLoginToken("http-jwt");
+
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringMatching(/^token=http-jwt; /));
+      expect(cookieSpy).not.toHaveBeenCalledWith(expect.stringContaining("Secure"));
+      vi.unstubAllGlobals();
       vi.restoreAllMocks();
     });
   });

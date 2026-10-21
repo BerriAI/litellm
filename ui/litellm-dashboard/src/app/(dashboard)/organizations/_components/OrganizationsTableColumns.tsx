@@ -28,8 +28,8 @@ function OrganizationLimitsCell({ organization }: { organization: Organization }
   const { tpm_limit, rpm_limit } = getOrganizationBudget(organization);
   return (
     <div className="flex flex-col text-xs text-muted-foreground">
-      <span>TPM: {tpm_limit ? tpm_limit : "Unlimited"}</span>
-      <span>RPM: {rpm_limit ? rpm_limit : "Unlimited"}</span>
+      <span>TPM: {tpm_limit ?? "Unlimited"}</span>
+      <span>RPM: {rpm_limit ?? "Unlimited"}</span>
     </div>
   );
 }
@@ -129,7 +129,7 @@ export const getOrganizationsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
+    meta: { title: "Spend (USD)", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
     size: 120,
     enableSorting: true,
@@ -137,7 +137,7 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "max_budget",
-    meta: { title: "Budget (USD)" },
+    meta: { title: "Budget (USD)", numeric: true },
     header: "Budget (USD)",
     size: 120,
     enableSorting: false,
@@ -163,7 +163,7 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "members",
-    meta: { title: "Members" },
+    meta: { title: "Members", numeric: true },
     header: "Members",
     size: 100,
     enableSorting: false,
