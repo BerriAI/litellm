@@ -22,8 +22,12 @@ filter to all single-underscore names) makes a test fail.
 import pytest
 
 
-from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
-from litellm.types.utils import LlmProviders
+from litellm.llms.base_llm.batches.transformation import (
+    BaseBatchesCancelConfig,
+    BaseBatchesConfig,
+    BaseBatchesListConfig,
+)
+from litellm.types.utils import LiteLLMBatch, LlmProviders, OpenAIBatchListResponse
 
 
 # --------------------------------------------------------------------------- #
@@ -125,6 +129,62 @@ def test_subclass_missing_any_abstract_member_cannot_instantiate(missing_member)
     }
     namespace.pop(missing_member)
     Incomplete = type("Incomplete", (BaseBatchesConfig,), namespace)
+    with pytest.raises(TypeError):
+        Incomplete()
+
+
+# =========================================================================== #
+# Opt-in list / cancel capability ABCs
+# =========================================================================== #
+
+
+class _ListAndCancelBatchesConfig(_ConcreteBatchesConfig, BaseBatchesListConfig, BaseBatchesCancelConfig):
+    def transform_list_batches_request(self, after, limit, litellm_params):
+        return {"method": "GET", "url": "https://example.test/list", "headers": {}}
+
+    def transform_list_batches_response(self, model, raw_response, logging_obj, litellm_params):
+        return OpenAIBatchListResponse(data=(), first_id=None, last_id=None, has_more=False)
+
+    def transform_cancel_batch_request(self, batch_id, litellm_params):
+        return {"method": "POST", "url": f"https://example.test/{batch_id}/cancel", "headers": {}}
+
+    def transform_cancel_batch_response(self, model, raw_response, logging_obj, litellm_params):
+        return LiteLLMBatch(
+            id="b", object="batch", endpoint="/v1/chat/completions", input_file_id="f", completion_window="24h",
+            status="cancelled", created_at=0,
+        )
+
+
+def test_list_and_cancel_capable_subclass_is_a_batches_config():
+    instance = _ListAndCancelBatchesConfig()
+    assert isinstance(instance, BaseBatchesConfig)
+    assert isinstance(instance, BaseBatchesListConfig)
+    assert isinstance(instance, BaseBatchesCancelConfig)
+
+
+def test_plain_batches_config_carries_neither_capability():
+    instance = _ConcreteBatchesConfig()
+    assert not isinstance(instance, BaseBatchesListConfig)
+    assert not isinstance(instance, BaseBatchesCancelConfig)
+
+
+@pytest.mark.parametrize(
+    "base,missing_member",
+    [
+        (BaseBatchesListConfig, "transform_list_batches_request"),
+        (BaseBatchesListConfig, "transform_list_batches_response"),
+        (BaseBatchesCancelConfig, "transform_cancel_batch_request"),
+        (BaseBatchesCancelConfig, "transform_cancel_batch_response"),
+    ],
+)
+def test_capability_subclass_missing_its_member_cannot_instantiate(base, missing_member):
+    namespace = {
+        k: v
+        for k, v in {**_ConcreteBatchesConfig.__dict__, **_ListAndCancelBatchesConfig.__dict__}.items()
+        if not k.startswith("__")
+    }
+    namespace.pop(missing_member)
+    Incomplete = type("Incomplete", (base,), namespace)
     with pytest.raises(TypeError):
         Incomplete()
 

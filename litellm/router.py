@@ -196,6 +196,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     batch_create_routing,
+    batch_listing_provider,
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
@@ -7703,9 +7704,13 @@ class Router:
             raise Exception("Router not yet initialized.")
 
         async def try_retrieve_batch(model: DeploymentTypedDict):
+            provider: Final = batch_listing_provider(model)
+            if provider is None:
+                return None
             try:
-                # Update kwargs with the current model name or any other model-specific adjustments
-                return await litellm.alist_batches(**{**model["litellm_params"], **kwargs})
+                return await litellm.alist_batches(
+                    **{**model["litellm_params"], "custom_llm_provider": provider, **kwargs}
+                )
             except Exception:
                 return None
 
@@ -7727,6 +7732,9 @@ class Router:
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
                 final_results["data"].extend(result.data)
+                page_token = getattr(result, "next_page_token", None)
+                if page_token is not None:
+                    final_results["next_page_token"] = page_token
 
                 ## check 'has_more'
                 if getattr(result, "has_more", False) is True:
