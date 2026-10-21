@@ -25,7 +25,7 @@ use litellm_host::{
     protocol::Protocol,
 };
 use litellm_inference::{
-    RouteError,
+    Error,
     caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
 };
 use rstest::{fixture, rstest};
@@ -36,7 +36,7 @@ struct TestRoute;
 impl Protocol for TestRoute {
     type Request = Value;
     type Response = Value;
-    type Error = RouteError;
+    type Error = Error;
     type HostCall = Infallible;
     type Chunk = Bytes;
     type StreamHead = ();
@@ -204,7 +204,7 @@ async fn streamed(
                 .chunks(3)
                 .map(|bytes| Ok(Bytes::copy_from_slice(bytes)))
                 .collect::<Vec<_>>();
-            let ending = fail.then_some(Err(RouteError::Unsupported("test transport failure")));
+            let ending = fail.then_some(Err(Error::Unsupported("test transport failure")));
             Ok(CallOutput::Stream {
                 head: (),
                 chunks: stream::iter(chunks.into_iter().chain(ending)).boxed(),
@@ -215,7 +215,7 @@ async fn streamed(
     .unwrap()
 }
 
-async fn consume(output: OutputOf<TestRoute>) -> Result<Vec<u8>, RouteError> {
+async fn consume(output: OutputOf<TestRoute>) -> Result<Vec<u8>, Error> {
     let CallOutput::Stream { chunks, .. } = output else {
         panic!("expected a stream");
     };
@@ -315,7 +315,7 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
         None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err(RouteError::Unsupported("test provider failure"))
+            Err(Error::Unsupported("test provider failure"))
         },
     )
     .await;
@@ -467,8 +467,8 @@ struct CacheHitAccounting {
     reject: bool,
 }
 
-impl Interceptors<RouteError> for CacheHitAccounting {
-    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
+impl Interceptors<Error> for CacheHitAccounting {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let ResultSource::Cache { key } = facts.source else {
             panic!("expected cache source")
@@ -482,7 +482,7 @@ impl Interceptors<RouteError> for CacheHitAccounting {
         );
         self.key.set(key).unwrap();
         if self.reject {
-            return Err(RouteError::Unsupported("cache accounting rejected"));
+            return Err(Error::Unsupported("cache accounting rejected"));
         }
         Ok(())
     }
@@ -491,11 +491,11 @@ impl Interceptors<RouteError> for CacheHitAccounting {
         &self,
         wire: WireRequest,
         _: RequestContext,
-    ) -> Result<WireRequest, RouteError> {
+    ) -> Result<WireRequest, Error> {
         Ok(wire)
     }
 
-    async fn after_provider_response(&self, _: RawResponse) -> Result<(), RouteError> {
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -571,7 +571,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     if reject {
         assert!(matches!(
             result,
-            Err(RouteError::Unsupported("cache accounting rejected"))
+            Err(Error::Unsupported("cache accounting rejected"))
         ));
     } else {
         assert_eq!(result.unwrap(), expected);
@@ -590,7 +590,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
 impl Protocol for UnaryTestRoute {
     type Request = Value;
     type Response = Value;
-    type Error = RouteError;
+    type Error = Error;
     type HostCall = Infallible;
     type Chunk = Infallible;
     type StreamHead = Infallible;

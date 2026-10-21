@@ -523,3 +523,44 @@ async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
     else:
         assert "POST https://idp/ -> HTTP" in caplog.text
         assert {"denied":"denied", "invalid":"invalid response", "missing":"no access token"}[mode] in caplog.text
+
+
+@pytest.mark.parametrize("changed", [
+    {"client_id": "other-client"},
+    {"client_secret": SecretStr("other-secret")},
+    {"token_url": "https://other.example/token"},
+    {"scopes": ("read",)},
+    {"audience": "other-audience"},
+    {"upstream_resource": "https://other.example/mcp"},
+    {"token_endpoint_auth_method": "client_secret_basic"},
+    {"value_prefix": "Token"},
+])
+def test_subscription_identity_tracks_grant_configuration(changed):
+    config = ClientCredentialsConfig(
+        client_id="client", client_secret=SecretStr("secret"), token_url="https://idp.example/token",
+        scopes=("read", "write"), audience="audience", upstream_resource="https://upstream.example/mcp",
+        token_endpoint_auth_method="client_secret_post",
+    )
+
+    async def refetch(token: str) -> str | None:
+        return None
+
+    original = ClientCredentialsBearerAuth("first", refetch, config, granted_scopes=("read", "write"))
+    renewed = ClientCredentialsBearerAuth("second", refetch, config, granted_scopes=("write", "read"))
+    changed_auth = ClientCredentialsBearerAuth("second", refetch, config.model_copy(update=changed), granted_scopes=("read", "write"))
+    reduced = ClientCredentialsBearerAuth("second", refetch, config, granted_scopes=("read",))
+    assert original.subscription_identity is not None
+    assert original.subscription_identity == renewed.subscription_identity
+    assert original.subscription_identity != changed_auth.subscription_identity
+    assert original.subscription_identity != reduced.subscription_identity
+    assert ClientCredentialsBearerAuth("first", refetch, config).subscription_identity is None
+
+
+def test_subscription_identity_requires_managed_grant_metadata():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import HeaderCarrier
+
+    async def refetch(token: str) -> str | None:
+        return None
+
+    auth = ClientCredentialsBearerAuth("token", refetch, HeaderCarrier(), granted_scopes=("read",))
+    assert auth.subscription_identity is None

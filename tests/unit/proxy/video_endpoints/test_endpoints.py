@@ -28,7 +28,8 @@ mock's call args), and a brand-new kwarg added to this layer surfaces as a failu
 
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -41,7 +42,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
@@ -68,6 +71,29 @@ RESOLVED_MODELS: Dict[str, str] = {VIDEO_MODEL_ID: "azure-sora"}
 
 # Sentinel propagated by base_process for the passthrough endpoints.
 SENTINEL = object()
+
+
+def _video_with_empty_model_id(
+    hidden_params: dict[str, object] | None = None,
+) -> VideoObject:
+    video: Final[VideoObject] = VideoObject(
+        id=encode_video_id_with_provider("video_new456", "azure", ""),
+        object="video",
+        status="queued",
+    )
+    video.hidden_params = dict(hidden_params or {})
+    return video
+
+
+def _assert_id_resolves_to_deployment(response: object, *, deployment_id: str | None = None) -> None:
+    assert isinstance(response, VideoObject)
+    expected_deployment: Final = {} if deployment_id is None else {"deployment_id": deployment_id}
+    assert decode_video_id_with_provider(response.id) == {
+        "custom_llm_provider": "azure",
+        "model_id": VIDEO_MODEL_ID,
+        "video_id": "video_new456",
+        **expected_deployment,
+    }
 
 
 class FakeRequest:
@@ -105,6 +131,9 @@ class Harness:
         assert self.base_process.call_count == 1
         return dict(self.base_process.call_args.args[0].data)
 
+    def respond_with(self, response: object) -> None:
+        self.base_process.return_value = response  # pyright: ignore[reportAny]  # MagicMock subclasses Any in typeshed
+
     def route_type(self) -> str:
         return self.base_process.call_args.kwargs["route_type"]
 
@@ -115,9 +144,10 @@ def harness():
 
     router = MagicMock(spec=Router)
     resolve_model = MagicMock(
-        side_effect=lambda model_id: RESOLVED_MODELS.get(model_id)
+        side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )
     router.resolve_model_name_from_model_id = resolve_model
+    router.get_deployment.return_value = None
 
     read_body = AsyncMock(return_value={})
     batch_to_bytesio = AsyncMock(return_value=[b"filebytes"])
@@ -245,6 +275,36 @@ async def test_generation__input_reference_attached(harness):
 
 
 @pytest.mark.asyncio
+async def test_generation__restamps_id_with_asked_for_model_over_router_deployment_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
+
+    resp: Final = await call_generation(harness, body={"model": VIDEO_MODEL_ID, "prompt": "x"})
+
+    _assert_id_resolves_to_deployment(resp, deployment_id="deployment-uuid")
+
+
+@pytest.mark.asyncio
+async def test_generation__restamps_id_with_request_model_when_no_hidden_model_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await call_generation(harness, body={"model": VIDEO_MODEL_ID, "prompt": "x"})
+
+    _assert_id_resolves_to_deployment(resp)
+
+
+@pytest.mark.asyncio
+async def test_generation__unroutable_request_model_falls_back_to_router_deployment_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
+
+    resp: Final = await call_generation(harness, body={"model": "team-public-sora", "prompt": "x"})
+
+    assert isinstance(resp, VideoObject)
+    decoded: Final = decode_video_id_with_provider(resp.id)
+    assert decoded.get("model_id") == "deployment-uuid"
+    assert decoded.get("deployment_id") == "deployment-uuid"
+
+
+@pytest.mark.asyncio
 async def test_generation__exception_routed_through_handler(harness):
     harness.base_process.side_effect = ValueError("provider boom")
 
@@ -276,12 +336,30 @@ async def test_status__model_encoded_id_full_contract(harness):
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_status"
     # provider comes from the decoded id; model_id resolved to a model name.
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_status__restamps_response_id_with_decoded_model_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await call_status(harness, AZURE_VIDEO_ID)
+
+    _assert_id_resolves_to_deployment(resp)
+
+
+@pytest.mark.asyncio
+async def test_status__id_without_a_deployment_takes_the_deployment_that_answered_the_poll(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
+
+    resp: Final = await call_status(harness, AZURE_VIDEO_ID)
+
+    _assert_id_resolves_to_deployment(resp, deployment_id="deployment-uuid")
 
 
 @pytest.mark.asyncio
@@ -357,12 +435,58 @@ async def test_content__model_encoded_id(harness):
 
     await call_content(harness, AZURE_VIDEO_ID)
 
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", [call_status, call_content])
+async def test_status_and_content__hand_the_served_member_to_the_request_processor(harness, call):
+    """The id names the routing group a key may be scoped to, and the member that served the task, which is
+    the only one holding it. The processor pins the member once key and team aliases have been applied."""
+    router = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "k"}}
+            for name in ("wan3-a", "wan3-b")
+        ],
+        routing_groups=[{"group_name": "wan3", "models": ["wan3-a", "wan3-b"], "routing_strategy": "simple-shuffle"}],
+    )
+    harness.base_process.return_value = b"x"
+    video_id = encode_video_id_with_provider("task1", "dashscope", "wan3", served_model="wan3-b")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call(harness, video_id)
+
+    assert harness.processor_data()["model"] == "wan3"
+    assert harness.base_process.call_args.args[0].served_model == "wan3-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", [call_status, call_content])
+async def test_status_and_content__shared_provider_model_routes_to_the_creating_deployments_group(
+    harness: Harness, call: Callable[[Harness, str], Awaitable[object]]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+    harness.base_process.return_value = b"x"
+    video_id: Final = encode_video_id_with_provider("video_raw", "azure", "sora-2", deployment_id="dep-sora-shared")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call(harness, video_id)
+
+    assert harness.processor_data()["model"] == "sora-shared"
 
 
 # =========================================================================== #
@@ -389,7 +513,7 @@ async def test_edit__extracts_nested_video_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_edit"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     # nested video object is popped; its id becomes video_id; provider/model
     # derived from the encoded id.
     assert harness.processor_data() == {
@@ -398,6 +522,15 @@ async def test_edit__extracts_nested_video_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_edit__restamps_new_video_id_with_source_model_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await call_edit(harness, body={"prompt": "brighter", "video": {"id": AZURE_VIDEO_ID}})
+
+    _assert_id_resolves_to_deployment(resp)
 
 
 @pytest.mark.asyncio
@@ -449,6 +582,23 @@ async def test_edit__json_string_video_reference_from_form_field(harness):
     )
 
     assert harness.processor_data()["video_id"] == "video_plain"
+
+
+@pytest.mark.asyncio
+async def test_edit__uploaded_video_restamps_new_id_with_requested_model(harness: Harness) -> None:
+    import io
+
+    upload: Final = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
+    harness.read_body.return_value = {"model": VIDEO_MODEL_ID, "prompt": "make it nighttime", "video": upload}
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await endpoints.video_edit(
+        request=FakeRequest(raw_body=b"multipart"),
+        fastapi_response=Response(),
+        user_api_key_dict=_user(),
+    )
+
+    _assert_id_resolves_to_deployment(resp)
 
 
 @pytest.mark.asyncio
@@ -534,13 +684,22 @@ async def test_remix__model_encoded_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_remix"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "prompt": "new colors",
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_remix__restamps_new_video_id_with_source_model_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await call_remix(harness, AZURE_VIDEO_ID, body={"prompt": "new colors"})
+
+    _assert_id_resolves_to_deployment(resp)
 
 
 @pytest.mark.asyncio
@@ -644,7 +803,7 @@ async def test_get_character__encoded_id_full_contract(harness):
     resp = await call_get_character(harness, AZURE_CHARACTER_ID)
 
     assert harness.route_type() == "avideo_get_character"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     # character_id decoded to its inner value; provider/model from the encoded id.
     assert harness.processor_data() == {
         "character_id": "char_orig",
@@ -672,6 +831,20 @@ async def test_get_character__plain_id_defaults_openai_no_encode(harness):
     assert resp["id"] == "char_raw3"
 
 
+@pytest.mark.asyncio
+async def test_get_character__model_served_only_by_a_provider_wildcard_routes_through_it(harness: Harness) -> None:
+    router: Final = Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "key-w"}}]
+    )
+    harness.base_process.return_value = {"id": "char_raw4"}
+    character_id: Final = encode_character_id_with_provider("char_orig", "openai", "sora-2")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call_get_character(harness, character_id)
+
+    assert harness.processor_data()["model"] == "sora-2"
+
+
 # =========================================================================== #
 #   POST /v1/videos/extensions  -  video_extension                            #
 # =========================================================================== #
@@ -694,10 +867,19 @@ async def test_extension__extracts_nested_video_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_extension"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "prompt": "continue",
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_extension__restamps_new_video_id_with_source_model_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await call_extension(harness, body={"prompt": "continue", "video": {"id": AZURE_VIDEO_ID}})
+
+    _assert_id_resolves_to_deployment(resp)

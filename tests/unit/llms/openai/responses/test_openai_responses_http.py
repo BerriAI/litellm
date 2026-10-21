@@ -342,6 +342,133 @@ async def test_responses_converts_created_at_to_int_and_forwards_store() -> None
     assert request_body["store"] is True
 
 
+def test_chat_completion_bridges_responses_only_model_tools() -> None:
+    tools: Final = [
+        {"type": "web_search_preview"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ]
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_response_body("resp_bridge"))
+        )
+        response: Final = litellm.completion(
+            model="openai/gpt-5.5-pro",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": "Summarize this page."}],
+            tools=tools,
+        )
+        requests: Final = tuple(route.calls)
+
+    assert response.choices[0].message.content == _OUTPUT_TEXT
+    assert len(requests) == 1
+    request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
+    assert request_body["model"] == "gpt-5.5-pro"
+    assert request_body["tools"] == tools
+    assert request_body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Summarize this page."}],
+        }
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_codex_chat_completion_uses_responses_endpoint(sync_mode: bool) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-codex-mini-latest",
+                "litellm_params": {"model": "openai/gpt-5.3-codex", "api_key": "sk-test"},
+            }
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "Hey!"}]
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_response_body("resp_codex"))
+        )
+        response: Final = (
+            router.completion(model="openai-codex-mini-latest", messages=messages)
+            if sync_mode
+            else await router.acompletion(model="openai-codex-mini-latest", messages=messages)
+        )
+        requests: Final = tuple(route.calls)
+
+    assert response.choices[0].message.content == _OUTPUT_TEXT
+    assert len(requests) == 1
+    request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
+    assert request_body["model"] == "gpt-5.3-codex"
+    assert request_body["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hey!"}]}
+    ]
+
+
+def test_codex_chat_completion_stream_strips_cache_control_and_transforms_tools() -> None:
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Use tools carefully.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "Find the value."},
+    ]
+    tools: Final = [
+        {
+            "type": "function",
+            "cache_control": {"type": "ephemeral"},
+            "function": {
+                "name": "lookup_value",
+                "description": "Look up a value",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"],
+                },
+            },
+        }
+    ]
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_response_sse("resp_codex_stream")))
+        stream: Final = litellm.completion(
+            model="openai/gpt-5.3-codex",
+            api_key="sk-test",
+            messages=messages,
+            tools=tools,
+            stream=True,
+        )
+        chunks: Final = tuple(stream)
+        requests: Final = tuple(route.calls)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == _OUTPUT_TEXT
+    assert len(requests) == 1
+    request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
+    assert request_body["stream"] is True
+    assert request_body["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Use tools carefully."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the value."}]}
+    ]
+    assert request_body["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup_value",
+            "description": "Look up a value",
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"],
+            },
+            "strict": None,
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_responses_mcp_followup_forwards_approval_and_previous_id() -> None:
     mcp_tools: Final = [

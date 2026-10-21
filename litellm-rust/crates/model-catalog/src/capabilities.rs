@@ -9,6 +9,7 @@ pub enum Mode {
     AudioTranscription,
     Chat,
     Completion,
+    Decisions,
     Embedding,
     Evaluation,
     Guardrail,

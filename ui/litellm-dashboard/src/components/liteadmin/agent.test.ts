@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import { createGatewayClient } from "@/components/llm_calls/gateway_client";
 import { registerAuthHeaderNameGetter } from "@/lib/http/runtime";
-import { MAX_INPUT_LENGTH, resolveInferenceTarget, runLiteAdmin, type LiteAdminOptions } from "./agent";
+import {
+  getPreferredLiteAdminModel,
+  MAX_INPUT_LENGTH,
+  resolveInferenceTarget,
+  runLiteAdmin,
+  type LiteAdminOptions,
+} from "./agent";
 import type { ActionResult, LiteAdminAction } from "./operations";
 
 const { managementFetch } = vi.hoisted(() => ({ managementFetch: vi.fn<typeof fetch>() }));
@@ -117,6 +123,7 @@ describe("fixed management operations", () => {
     ["key_info", "/key/info", "GET", { key: keyHash }, false],
     ["key_create", "/key/generate", "POST", keyFields, true],
     ["key_update", "/key/update", "POST", { ...keyFields, key: keyHash }, true],
+    ["key_detach_from_team", "/key/update", "POST", { key: keyHash }, true],
     ["key_delete", "/key/delete", "POST", { keys: [keyHash] }, true],
     ["key_block", "/key/block", "POST", { key: keyHash }, true],
     ["key_unblock", "/key/unblock", "POST", { key: keyHash }, true],
@@ -232,6 +239,27 @@ describe("fixed management operations", () => {
       user_role: "internal_user",
       auto_create_key: false,
     });
+  });
+
+  it.each([true, false])("detaches only the team after approval=%s", async (approved) => {
+    const input = options();
+    input.confirm.mockResolvedValue(approved);
+    const model = transport([completion([call("key_detach_from_team", { key: keyHash })]), completion()]);
+    const running = runLiteAdmin(input, model.client);
+    if (approved) {
+      await running;
+      expect(JSON.parse(String(managementFetch.mock.calls[0][1]?.body))).toEqual({ key: keyHash, team_id: null });
+    } else {
+      await expect(running).rejects.toThrow("Action cancelled");
+      expect(managementFetch).not.toHaveBeenCalled();
+    }
+    expect(input.confirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        name: "key_detach_from_team",
+        arguments: { key: keyHash, team_id: null },
+        destructive: false,
+      }),
+    );
   });
 
   it("bounds team keys and forwards user searches through their actual endpoint parameters", async () => {
@@ -602,6 +630,39 @@ describe("inference destination", () => {
   it("rejects an HTTPS management downgrade even on an HTTP development page", () => {
     expect(
       resolveInferenceTarget("http://models.example", "https://management.example", "http://localhost/ui").baseUrl,
+    ).toBeNull();
+  });
+});
+
+describe("preferred LiteAdmin model", () => {
+  it("prefers the Anthropic provider over provider names inside other routes", () => {
+    const fallback = { model_group: "bedrock/anthropic.claude-sonnet-5-5", providers: ["bedrock"] };
+    const direct = { model_group: "claude-sonnet-5-5", providers: ["anthropic"] };
+    expect(getPreferredLiteAdminModel([fallback, direct])).toBe(direct.model_group);
+    expect(getPreferredLiteAdminModel([fallback])).toBe(fallback.model_group);
+  });
+
+  it.each([
+    "sonnet-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "bedrock/us.anthropic.claude-sonnet-5-5-v1:0",
+    "openrouter/anthropic/claude-sonnet-5.5",
+    "vertex_ai/claude-sonnet-5-5@default",
+    "azure_ai/claude-sonnet-5-5",
+  ])("uses an available Sonnet 5.5 route named %s", (model_group) => {
+    expect(getPreferredLiteAdminModel([{ model_group }])).toBe(model_group);
+  });
+
+  it("leaves the choice empty without an identifiable Sonnet 5.5 route", () => {
+    expect(getPreferredLiteAdminModel([])).toBeNull();
+    expect(
+      getPreferredLiteAdminModel([
+        { model_group: "claude-sonnet-5-50", providers: ["anthropic"] },
+        { model_group: "claude-sonnet-5-5other", providers: ["anthropic"] },
+        { model_group: "notclaude-sonnet-5-5", providers: ["anthropic"] },
+        { model_group: "chat-alias", providers: ["anthropic"] },
+        { model_group: "claude-sonnet-4-6", providers: ["anthropic"] },
+      ]),
     ).toBeNull();
   });
 });

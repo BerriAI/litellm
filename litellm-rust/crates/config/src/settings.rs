@@ -3,7 +3,7 @@ use std::fmt;
 use litellm_auth_types::SecretValue;
 use serde::Deserialize;
 
-use crate::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
+use crate::{AdditionalFields, Object, Spelled, Value, value::one_or_many};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,7 +18,7 @@ pub struct ClickHouseStoreSettings {
     pub kind: TracingStoreKind,
     pub url: Option<SecretValue>,
     pub database: Option<String>,
-    pub retention_days: Option<NumberOrString>,
+    pub retention_days: Option<Spelled<f64>>,
 }
 
 impl fmt::Debug for ClickHouseStoreSettings {
@@ -207,7 +207,7 @@ impl fmt::Debug for RouterSettings {
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct LiteLlmSettings {
-    pub ssl_verify: Option<Flag>,
+    pub ssl_verify: Option<Spelled<bool>>,
     pub ssl_certificate: Option<String>,
     pub ssl_security_level: Option<String>,
     pub ssl_ecdh_curve: Option<String>,
@@ -216,14 +216,17 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Flag>,
-    pub request_timeout: Option<NumberOrString>,
+    pub drop_params: Option<Spelled<bool>>,
+    pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<Object>,
-    pub callbacks: Option<OneOrMany<Value>>,
-    pub success_callback: Option<OneOrMany<Value>>,
-    pub failure_callback: Option<OneOrMany<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub callbacks: Option<Vec<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub success_callback: Option<Vec<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
     #[serde(flatten)]

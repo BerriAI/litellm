@@ -88,7 +88,7 @@ async def _persist_credential(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=expires_in,
-        scopes=list(scopes) if scopes else None,
+        scopes=list(scopes) if scopes is not None else None,
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
