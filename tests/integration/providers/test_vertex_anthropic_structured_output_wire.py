@@ -57,9 +57,6 @@ _AZURE_KEY: Final = "synthetic-azure-ai-key"
 _BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
 
 
-_DEPRECATED_OUTPUT_FORMAT: Final = "output_format: this field is deprecated, use output_config.format"
-
-
 _BAD_OUTPUT_CONFIG: Final = "output_config: Input should be a valid dictionary"
 
 
@@ -349,9 +346,9 @@ def _error(status: int, message: str) -> Reply:
 
 
 def _format_fault(body: Mapping[str, JsonValue], vertex: bool) -> str | None:
-    if vertex and "output_format" in body:
-        return _DEPRECATED_OUTPUT_FORMAT
-    output_config: Final = body.get("output_config")
+    output_config: Final = (
+        {"format": body["output_format"]} if vertex and "output_format" in body else body.get("output_config")
+    )
     if output_config is None:
         return None
     if not isinstance(output_config, dict):
@@ -465,9 +462,8 @@ def _json_tool_schema(delivery: _Delivery) -> dict[str, JsonValue]:
     return object_value(json_tool["input_schema"])
 
 
-def _folded_format(delivery: _Delivery) -> dict[str, JsonValue]:
-    assert "output_format" not in delivery.body, delivery.body
-    return object_value(object_value(delivery.body["output_config"])["format"])
+def _native_format(delivery: _Delivery) -> dict[str, JsonValue]:
+    return object_value(delivery.body["output_format"])
 
 
 def _marker(shape: str) -> tuple[str, str]:
@@ -672,5 +668,5 @@ def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_obj
         )
         assert _chat_content(response) == _payload(marker_hex), response.text
         sent: Final = _one_delivery(wire, marker_hex)
-        assert _folded_format(sent) == {"type": "json_schema", "schema": expected}, sent.body
+        assert _native_format(sent) == {"type": "json_schema", "schema": expected}, sent.body
         assert "tools" not in sent.body, sent.body
