@@ -203,13 +203,21 @@ def _config_base_for_health_check(
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
 
-def _model_info_for_mode_resolution(
-    model_info: Mapping[str, object], stored_params: Mapping[str, object], request_params: Mapping[str, object]
-) -> Mapping[str, object]:
+_STORED_MODEL_INFO_KEYS: Final = frozenset(("mode", "base_model"))
+_STORED_MODEL_PARAM_KEYS: Final = frozenset(("base_model",))
+
+
+def _request_swaps_the_model(stored_params: Mapping[str, object], request_params: Mapping[str, object]) -> bool:
     stored_model: Final = stored_params.get("model")
-    if stored_model is None or request_params.get("model") in (None, stored_model):
-        return model_info
-    return {key: value for key, value in model_info.items() if key != "mode"}
+    return stored_model is not None and request_params.get("model") not in (None, stored_model)
+
+
+def _without_stored_model_keys(
+    fields: Mapping[str, object], stored_model_keys: frozenset[str], *, request_swaps_the_model: bool
+) -> Mapping[str, object]:
+    if not request_swaps_the_model:
+        return fields
+    return {key: value for key, value in fields.items() if key not in stored_model_keys}
 
 
 def _string_mode_or_bad_request(params_mode: object) -> str | None:
@@ -2306,21 +2314,29 @@ async def test_model_connection(
         selected_by_id: Final = deployment_by_id is not None
         reject_server_owned_wif_fields(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
+        request_swaps_the_model: Final = _request_swaps_the_model(
+            _OBJECT_MAPPING.validate_python(config_litellm_params),
+            _OBJECT_MAPPING.validate_python(request_litellm_params),
+        )
         litellm_params = {
-            **_config_base_for_health_check(
-                config_litellm_params,
-                request_litellm_params,
-                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
-                selected_by_id=selected_by_id,
+            **_without_stored_model_keys(
+                _config_base_for_health_check(
+                    config_litellm_params,
+                    request_litellm_params,
+                    allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                    selected_by_id=selected_by_id,
+                ),
+                _STORED_MODEL_PARAM_KEYS,
+                request_swaps_the_model=request_swaps_the_model,
             ),
             **request_litellm_params,
         }
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
-        probe_model_info: Final = _model_info_for_mode_resolution(
+        probe_model_info: Final = _without_stored_model_keys(
             _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
-            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
-            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+            _STORED_MODEL_INFO_KEYS,
+            request_swaps_the_model=request_swaps_the_model,
         )
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),

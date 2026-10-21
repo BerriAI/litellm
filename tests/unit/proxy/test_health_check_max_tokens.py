@@ -846,6 +846,7 @@ def test_health_check_params_apply_to_non_chat_modes():
         ({}, {"model": "azure/gpt-audio-mini"}),
         ({}, {"model": "openai/gpt-audio-mini"}),
         ({"base_model": "azure/gpt-audio-mini"}, {"model": "azure/my-audio-deployment"}),
+        ({}, {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}),
         (
             {"base_model": "azure/gpt-4o-mini", "health_check_model": "azure/gpt-audio-mini"},
             {"model": "azure/my-text-deployment"},
@@ -873,6 +874,10 @@ def test_openai_and_azure_audio_chat_probe_asks_for_audio_output(
         (
             {"base_model": "azure/gpt-audio-mini", "health_check_model": "azure/gpt-4o-mini"},
             {"model": "azure/my-audio-deployment"},
+        ),
+        (
+            {"health_check_model": "azure/gpt-4o-mini"},
+            {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-mini"},
         ),
     ],
 )

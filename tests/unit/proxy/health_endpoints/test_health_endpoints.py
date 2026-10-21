@@ -903,6 +903,45 @@ async def test_test_model_connection_overridden_model_probe_params_follow_the_pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "deployment_model_info"),
+    [
+        ({"model": "azure/my-audio-deployment"}, {"id": "audio-id", "base_model": "azure/gpt-audio-1.5"}),
+        ({"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}, {"id": "audio-id"}),
+    ],
+    ids=["model_info.base_model", "litellm_params.base_model"],
+)
+@pytest.mark.parametrize(
+    ("request_params", "expects_audio_probe"),
+    [({}, True), ({"model": "azure/my-text-deployment"}, False)],
+    ids=["own model", "swapped model"],
+)
+async def test_test_model_connection_stored_audio_base_model_follows_the_stored_model(
+    deployment_params: Mapping[str, str],
+    deployment_model_info: Mapping[str, str],
+    request_params: Mapping[str, str],
+    expects_audio_probe: bool,
+):
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "custom-name-audio",
+            "litellm_params": {**deployment_params, "api_key": "fake-azure-key", "api_base": "https://x.openai.azure.com"},
+            "model_info": deployment_model_info,
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params=dict(request_params),
+            model_info={"id": "audio-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ("modalities" in ahealth_check.call_args.kwargs["model_params"]) is expects_audio_probe
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
 async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
     with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
