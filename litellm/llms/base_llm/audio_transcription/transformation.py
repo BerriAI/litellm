@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -37,6 +38,9 @@ class AudioTranscriptionRequestData:
 
 
 class BaseAudioTranscriptionConfig(BaseConfig, ABC):
+    def audio_file_context(self, audio_file: FileTypes) -> AbstractContextManager[FileTypes]:
+        return nullcontext(audio_file)
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         pass

@@ -320,6 +320,7 @@ LLM_CONFIG_NAMES: Final = (
     "TencentChatConfig",
     "LMStudioChatConfig",
     "FoundryLocalChatConfig",
+    "FoundryLocalAudioTranscriptionConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
@@ -1215,6 +1216,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "FoundryLocalChatConfig": (
         ".llms.foundry_local.chat.transformation",
         "FoundryLocalChatConfig",
+    ),
+    "FoundryLocalAudioTranscriptionConfig": (
+        ".llms.foundry_local.audio_transcription.transformation",
+        "FoundryLocalAudioTranscriptionConfig",
     ),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",

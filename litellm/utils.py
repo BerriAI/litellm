@@ -9674,6 +9674,8 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAudioTranscriptionConfig | None:
+        if provider == LlmProviders.FOUNDRY_LOCAL:
+            return litellm.FoundryLocalAudioTranscriptionConfig()
         model_cost_entry: Final = _get_model_cost_entry_for_provider_config(
             model=model,
             provider=provider,
