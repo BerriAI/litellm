@@ -12332,11 +12332,12 @@ async def model_list(
 
         # Get complete model list including wildcard routes if requested
         from litellm.proxy.auth.model_checks import get_complete_model_list
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
 
         all_models = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=proxy_model_list,
+            proxy_model_list=[*proxy_model_list, *typesafe_allowlist_model_names()],
             user_model=None,
             infer_model_from_keys=False,
             return_wildcard_routes=return_wildcard_routes or False,
