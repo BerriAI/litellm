@@ -200,6 +200,7 @@ def _open_upstream_connections(pid: int, upstream: str) -> int:
     )
 
 
+@pytest.mark.skip(reason="Needs OwnedProxy.replacing_worker, which this stable line's integration harness does not have")
 @pytest.mark.timeout(180)
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_sending_the_beta(gateway: Gateway, tmp_path: Path) -> None:
     calls: Final = _calls(20, stream=False)
