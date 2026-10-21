@@ -172,10 +172,6 @@ def test_deleting_a_key_revokes_it(gateway: Gateway, spelling: str) -> None:
 
 
 def test_deleting_a_key_revokes_it_on_a_warmed_peer(gateway: Gateway, peer: Gateway) -> None:
-    pytest.skip(
-        "BUG: POST /key/delete does not broadcast the key eviction, so a warmed peer keeps answering 200 for about "
-        "60 seconds until its in-memory cache TTL expires"
-    )
     backend: Final = "integration-keys-auth-delete"
     prompts: Final = (
         "delete warm primary " + uuid.uuid4().hex,

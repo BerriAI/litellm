@@ -3421,9 +3421,9 @@ async def delete_cache_key_objects(
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
     """
-    Evict a batch of key objects, for callers that delete keys in bulk rather than through
-    `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
-    cached after its row is gone keeps buying access until its TTL expires.
+    Evict a batch of key objects, for callers that delete keys in bulk. Auth resolves a cached key
+    object without re-reading its team, so a key left cached after its row is gone keeps buying
+    access until its TTL expires.
 
     Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
     token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
