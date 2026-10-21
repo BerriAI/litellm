@@ -8139,6 +8139,154 @@ class TestAzureSpeechRawBodyThroughRealAuth:
         assert "Invalid JSON payload" in response.text
 
 
+class _CountingCustomAuth:
+    def __init__(self) -> None:
+        self.api_keys_seen: list[str] = []
+
+    async def __call__(self, request: Request, api_key: str) -> UserAPIKeyAuth:
+        self.api_keys_seen.append(api_key)
+        return UserAPIKeyAuth(user_id=f"custom-auth-caller-{len(self.api_keys_seen)}")
+
+
+class _ServedCallerRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.served_user_ids: list[str | None] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
+        self.served_user_ids.append(user_api_key_dict.user_id)
+        return data
+
+
+class TestVertexPassthroughAuthenticatesOncePerRequest:
+    """Each Vertex pass-through request runs the proxy's auth once and is served as the caller that auth resolved"""
+
+    PROJECT: Final = "vertex-proj"
+    VIRTUAL_KEY: Final = "sk-vertex-caller"
+    GENERATE_CONTENT: Final = (
+        "v1/projects/vertex-proj/locations/us-central1/publishers/google/models/gemini-3.8-flash:generateContent"
+    )
+    DISCOVERY_SEARCH: Final = (
+        "v1/projects/vertex-proj/locations/global/collections/default_collection/engines/support-engine"
+        "/servingConfigs/default_search:search"
+    )
+
+    def _post(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        path: str,
+        headers: Mapping[str, str],
+        custom_auth: _CountingCustomAuth,
+        credential_locations: tuple[str, ...],
+    ) -> tuple[httpx.Response, _ServedCallerRecorder]:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+        from litellm.proxy.proxy_server import app
+
+        router: Final = PassthroughEndpointRouter()
+        for location in credential_locations:
+            router.add_vertex_credentials(
+                project_id=self.PROJECT, location=location, vertex_credentials="vertex-service-account"
+            )
+        recorder: Final = _ServedCallerRecorder()
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router", router
+        )
+        monkeypatch.delitem(app.dependency_overrides, user_api_key_auth, raising=False)
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        with (
+            patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
+                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+            ),
+            patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(Mock(token="google-access-token"), self.PROJECT),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                path, json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}, headers=dict(headers)
+            )
+        return response, recorder
+
+    @pytest.mark.parametrize("route_prefix", ["/vertex_ai", "/vertex-ai"])
+    def test_generate_content_runs_custom_auth_once_and_is_served_as_its_caller(
+        self, monkeypatch: pytest.MonkeyPatch, route_prefix: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        vertex_url: Final = f"https://us-central1-aiplatform.googleapis.com/{self.GENERATE_CONTENT}"
+        with respx.mock(assert_all_called=True) as upstream:
+            vertex: Final = upstream.post(vertex_url).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [
+                            {"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}
+                        ],
+                        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                    },
+                )
+            )
+
+            response, recorder = self._post(
+                monkeypatch,
+                f"{route_prefix}/{self.GENERATE_CONTENT}",
+                {"Authorization": f"Bearer {self.VIRTUAL_KEY}"},
+                custom_auth,
+                ("us-central1",),
+            )
+
+        assert response.status_code == 200, response.text
+        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert vertex.call_count == 1
+
+    def test_discovery_search_runs_custom_auth_once_and_is_served_as_its_caller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        with respx.mock(assert_all_called=True) as upstream:
+            discovery: Final = upstream.post(f"https://discoveryengine.googleapis.com/{self.DISCOVERY_SEARCH}").mock(
+                return_value=httpx.Response(200, json={"results": []})
+            )
+
+            response, recorder = self._post(
+                monkeypatch,
+                f"/vertex_ai/discovery/{self.DISCOVERY_SEARCH}",
+                {"Authorization": f"Bearer {self.VIRTUAL_KEY}"},
+                custom_auth,
+                ("global",),
+            )
+
+        assert (response.status_code, response.json()) == (200, {"results": []})
+        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert discovery.call_count == 1
+
+    def test_x_litellm_api_key_authenticates_once_and_is_never_forwarded_without_a_vertex_credential(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, _ = self._post(
+                monkeypatch,
+                f"/vertex_ai/{self.GENERATE_CONTENT}",
+                {"x-litellm-api-key": self.VIRTUAL_KEY},
+                custom_auth,
+                (),
+            )
+
+        assert response.status_code == 401, response.text
+        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert not google.called
+
+
 class TestTypeSafePassthroughRoute:
     @staticmethod
     def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
