@@ -236,10 +236,7 @@ def test_register_model_strips_none_litellm_provider():
         registered = litellm.model_cost.get(model_key)
         assert registered is not None, f"{model_key} should be in model_cost"
         # The key may be absent entirely, but if present it must not be None.
-        assert (
-            "litellm_provider" not in registered
-            or registered["litellm_provider"] is not None
-        )
+        assert "litellm_provider" not in registered or registered["litellm_provider"] is not None
         # Downstream consumers must accept this entry for any provider,
         # mirroring what the cost calculator does.
         assert _check_provider_match(registered, "openai") is True
@@ -297,9 +294,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
         # The strip must have removed the None-valued provider that
         # ``get_model_info`` returned. The key may be absent entirely, but
         # it must never be present with value ``None``.
-        assert "litellm_provider" not in registered or (
-            registered["litellm_provider"] is not None
-        ), (
+        assert "litellm_provider" not in registered or (registered["litellm_provider"] is not None), (
             "register_model failed to strip litellm_provider=None returned "
             f"by get_model_info, got {registered.get('litellm_provider')!r}"
         )
@@ -360,14 +355,8 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
         )
 
         registered = litellm.model_cost[registered_key]
-        assert (
-            registered.get("cache_creation_input_token_cost")
-            == builtin["cache_creation_input_token_cost"]
-        )
-        assert (
-            registered.get("cache_read_input_token_cost")
-            == builtin["cache_read_input_token_cost"]
-        )
+        assert registered.get("cache_creation_input_token_cost") == builtin["cache_creation_input_token_cost"]
+        assert registered.get("cache_read_input_token_cost") == builtin["cache_read_input_token_cost"]
         assert registered["litellm_provider"] == "bedrock"
 
         usage = Usage(
@@ -431,8 +420,7 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
             )
 
         assert any(
-            registered_key in record.message
-            and "cache_creation_input_token_cost" in record.message
+            registered_key in record.message and "cache_creation_input_token_cost" in record.message
             for record in caplog.records
         ), "expected a warning naming the unmapped key and the cache cost fields"
     finally:
@@ -619,17 +607,14 @@ def test_register_model_router_add_deployment_custom_pricing_applies():
         # the deployment's provider.
         from litellm.utils import _check_provider_match
 
-        registered_keys = [
-            k for k in (deployment_model, model_key) if k in litellm.model_cost
-        ]
+        registered_keys = [k for k in (deployment_model, model_key) if k in litellm.model_cost]
         assert registered_keys, (
-            "Router.add_deployment did not register custom pricing for "
-            f"{model_key} / {deployment_model}"
+            f"Router.add_deployment did not register custom pricing for {model_key} / {deployment_model}"
         )
         for k in registered_keys:
-            assert (
-                _check_provider_match(litellm.model_cost[k], "openai") is True
-            ), f"custom pricing for {k} was dropped by _check_provider_match"
+            assert _check_provider_match(litellm.model_cost[k], "openai") is True, (
+                f"custom pricing for {k} was dropped by _check_provider_match"
+            )
     finally:
         litellm.model_cost.pop(model_key, None)
         litellm.model_cost.pop(deployment_model, None)
@@ -646,12 +631,8 @@ def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
     """
     shared_key = "openai/text-embedding-3-small"
     deployment_id = "lit3991-wildcard-embed-zero"
-    snapshot = _snapshot_model_cost_entries(
-        [shared_key, "text-embedding-3-small", deployment_id]
-    )
-    builtin_input_cost = litellm.get_model_info(model=shared_key)[
-        "input_cost_per_token"
-    ]
+    snapshot = _snapshot_model_cost_entries([shared_key, "text-embedding-3-small", deployment_id])
+    builtin_input_cost = litellm.get_model_info(model=shared_key)["input_cost_per_token"]
     assert builtin_input_cost > 0
 
     try:
@@ -666,10 +647,9 @@ def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
             mock_response=[0.1, 0.2],
         )
 
-        assert (
-            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
-            == builtin_input_cost
-        ), "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        assert litellm.get_model_info(model=shared_key)["input_cost_per_token"] == builtin_input_cost, (
+            "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        )
         assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.0
         assert litellm.model_cost[deployment_id]["output_cost_per_token"] == 0.0
 
@@ -679,9 +659,7 @@ def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
             api_key="fake-key",
             mock_response=[0.1, 0.2],
         )
-        sibling_cost = litellm.completion_cost(
-            completion_response=sibling_response, call_type="embedding"
-        )
+        sibling_cost = litellm.completion_cost(completion_response=sibling_response, call_type="embedding")
         assert sibling_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(snapshot)
@@ -695,12 +673,8 @@ def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
     shared_key = "openai/text-embedding-3-small"
     deployment_id = "lit3991-wildcard-embed-custom"
     override_input_cost = 5e-05
-    snapshot = _snapshot_model_cost_entries(
-        [shared_key, "text-embedding-3-small", deployment_id]
-    )
-    builtin_input_cost = litellm.get_model_info(model=shared_key)[
-        "input_cost_per_token"
-    ]
+    snapshot = _snapshot_model_cost_entries([shared_key, "text-embedding-3-small", deployment_id])
+    builtin_input_cost = litellm.get_model_info(model=shared_key)["input_cost_per_token"]
     assert builtin_input_cost != override_input_cost
 
     try:
@@ -724,10 +698,7 @@ def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
             router_model_id=deployment_id,
         )
         assert request_cost == pytest.approx(10 * override_input_cost)
-        assert (
-            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
-            == builtin_input_cost
-        )
+        assert litellm.get_model_info(model=shared_key)["input_cost_per_token"] == builtin_input_cost
     finally:
         _restore_model_cost_entries(snapshot)
 
@@ -736,12 +707,8 @@ def test_completion_router_zero_pricing_does_not_clobber_builtin_pricing():
     """Same isolation as the embedding path, exercised through completion()."""
     shared_key = "openai/gpt-4o-mini"
     deployment_id = "lit3991-wildcard-chat-zero"
-    snapshot = _snapshot_model_cost_entries(
-        [shared_key, "gpt-4o-mini", deployment_id]
-    )
-    builtin_input_cost = litellm.get_model_info(model=shared_key)[
-        "input_cost_per_token"
-    ]
+    snapshot = _snapshot_model_cost_entries([shared_key, "gpt-4o-mini", deployment_id])
+    builtin_input_cost = litellm.get_model_info(model=shared_key)["input_cost_per_token"]
     assert builtin_input_cost > 0
 
     try:
@@ -756,10 +723,9 @@ def test_completion_router_zero_pricing_does_not_clobber_builtin_pricing():
             mock_response="hello back",
         )
 
-        assert (
-            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
-            == builtin_input_cost
-        ), "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        assert litellm.get_model_info(model=shared_key)["input_cost_per_token"] == builtin_input_cost, (
+            "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        )
         assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.0
     finally:
         _restore_model_cost_entries(snapshot)
@@ -782,10 +748,7 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
             mock_response=[0.1, 0.2],
         )
 
-        assert (
-            litellm.model_cost[model_key]["input_cost_per_token"]
-            == override_input_cost
-        )
+        assert litellm.model_cost[model_key]["input_cost_per_token"] == override_input_cost
         cost = litellm.completion_cost(
             completion_response=response,
             model=model_key,
@@ -1745,9 +1708,7 @@ def test_rerank_custom_pricing_global_and_register_model(monkeypatch: pytest.Mon
                 api_key="fake-cohere-key",
             )
             assert response.response_cost == pytest.approx(0.005)
-            calc_cost = litellm.completion_cost(
-                completion_response=response, model=custom_model, call_type="rerank"
-            )
+            calc_cost = litellm.completion_cost(completion_response=response, model=custom_model, call_type="rerank")
             assert calc_cost == pytest.approx(0.005)
     finally:
         _restore_model_cost_entries(snapshot)
@@ -1777,9 +1738,7 @@ def test_embedding_custom_pricing_global_and_register_model(monkeypatch: pytest.
         )
         assert response.response_cost is not None
         assert response.response_cost > 0
-        calc_cost = litellm.completion_cost(
-            completion_response=response, model=custom_model, call_type="embedding"
-        )
+        calc_cost = litellm.completion_cost(completion_response=response, model=custom_model, call_type="embedding")
         assert calc_cost == pytest.approx(response.response_cost)
     finally:
         _restore_model_cost_entries(snapshot)
@@ -1814,9 +1773,7 @@ def test_rerank_per_request_custom_pricing():
 
 
 @pytest.mark.asyncio
-async def test_rerank_router_deployment_custom_pricing(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-):
+async def test_rerank_router_deployment_custom_pricing(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     try:
@@ -1851,4 +1808,3 @@ async def test_rerank_router_deployment_custom_pricing(
         assert public_response.response_cost == pytest.approx(0.004)
     finally:
         litellm.in_memory_llm_clients_cache.flush_cache()
-

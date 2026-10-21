@@ -805,7 +805,9 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        resolved_fallback_model_info: Final = model_info or cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_fallback_model_info: Final = model_info or cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         if _has_token_or_tiered_pricing(resolved_fallback_model_info):
             return generic_cost_per_token(
                 model=model,
@@ -2061,7 +2063,11 @@ def completion_cost(
                     model_info=(
                         deployment_model_info
                         if (
-                            (deployment_model_info := _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id))
+                            (
+                                deployment_model_info := _deployment_model_info(
+                                    litellm_logging_obj, custom_pricing, router_model_id
+                                )
+                            )
                             and (
                                 call_type in _RERANK_CALL_TYPES
                                 or deployment_model_info.get("input_cost_per_token") is not None

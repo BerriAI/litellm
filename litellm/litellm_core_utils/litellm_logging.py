@@ -2765,7 +2765,11 @@ class Logging(LiteLLMLoggingBaseClass):
         elif "response_cost" in hidden_params and not use_custom_pricing_for_model(self):
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0 and not use_custom_pricing_for_model(self):
+        elif (
+            (existing_cost := self.model_call_details.get("response_cost")) is not None
+            and existing_cost != 0
+            and not use_custom_pricing_for_model(self)
+        ):
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
             # Do not preserve 0 from failure_handler on intermediate router retries.
