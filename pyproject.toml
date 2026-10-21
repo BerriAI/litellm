@@ -290,7 +290,7 @@ ci = [
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
-    "claude-agent-sdk==0.1.44",
+    "claude-agent-sdk==0.2.165",
     "google-cloud-speech==2.40.0",
 ]
 healthcheck = [

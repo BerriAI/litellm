@@ -833,6 +833,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -959,6 +971,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1132,6 +1145,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "object",
                     "additionalProperties": {"type": "number"},
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "search_context_cost_per_query": {
                     "type": "object",
                     "properties": {
@@ -1144,16 +1167,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "web_search_billing_unit": {
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
-                },
-                "search_free_requests": {
-                    "type": "object",
-                    "properties": {
-                        "count": {"type": "integer", "minimum": 1},
-                        "period": {"type": "string", "enum": ["day", "month"]},
-                        "shared_group": {"type": "string"},
-                    },
-                    "required": ["count", "period", "shared_group"],
-                    "additionalProperties": False,
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -4394,7 +4407,11 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+@pytest.mark.parametrize("rate", (0.0, 0.000123))
+@pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
+def test_reapply_runtime_registrations_replays_register_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
+) -> None:
     """
     register_model is the documented way to override pricing for a model. A
     price-data reload swaps litellm.model_cost for a freshly fetched catalog,
@@ -4425,10 +4442,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
                 "openai/gpt-4o": {
                     "litellm_provider": "openai",
                     "mode": "chat",
-                    "input_cost_per_token": 0.000123,
+                    "input_cost_per_token": rate,
                 }
             }
         )
+
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": True, "input_cost_per_token": None}})
+        litellm.register_model(
+            {"openai/gpt-4o": {"input_cost_per_token": str(updated_rate) if updated_rate is not None else None}}
+        )
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
         litellm.model_cost = {
             "openai/gpt-4o": {
@@ -4441,7 +4464,9 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         _invalidate_model_cost_lowercase_map()
         reapply_runtime_model_cost_registrations()
 
-        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        expected_rate: Final = rate if updated_rate is None else updated_rate
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
+        assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
         litellm.model_cost = saved_model_cost
@@ -8189,9 +8214,17 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
+        elif v["litellm_provider"] in (
+            "sagemaker",
+            "bedrock_converse",
+            "coralbricks",
+            "inferenceapis",
+            "microsoft_365_copilot",
+            "openinfer",
+            "scaledown",
+        ):
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -9337,6 +9370,7 @@ def my_pre_call_rule(input: str):
     return True
 
 
+
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
     """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
     step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
@@ -9365,3 +9399,21 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, key: {"litellm_provider": "bedrock_converse", "mode": "chat"}}
+    )
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()

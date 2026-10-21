@@ -62,6 +62,17 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
 }
 
 OBJECT_KEYS: dict[str, JsonSchema] = {
+    "search_free_requests": {
+        "type": "object",
+        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+        "required": ["count", "period", "shared_group"],
+        "additionalProperties": False,
+        "properties": {
+            "count": {"type": "integer", "minimum": 0},
+            "period": {"type": "string", "enum": ["day", "month"]},
+            "shared_group": {"type": "string", "pattern": "\\S"},
+        },
+    },
     "off_peak_pricing": {
         "type": "object",
         "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
@@ -91,17 +102,6 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         },
         "additionalProperties": False,
     },
-    "search_free_requests": {
-        "type": "object",
-        "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
-        "required": ["count", "period", "shared_group"],
-        "additionalProperties": False,
-        "properties": {
-            "count": {"type": "integer", "minimum": 0},
-            "period": {"type": "string", "enum": ["day", "month"]},
-            "shared_group": {"type": "string", "pattern": "\\S"},
-        },
-    },
     "guardrail_cost_per_unit": {
         "type": "object",
         "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
@@ -122,8 +122,9 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         "properties": {
             "model": NON_BLANK_STRING,
             "region": NON_BLANK_STRING,
+            "litellm_provider": {"type": "string", "enum": ["bedrock", "bedrock_mantle"]},
         },
-        "description": "Model that counts tokens for this one, and the AWS region its count API runs in.",
+        "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in.",
     },
 }
 
