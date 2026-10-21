@@ -439,6 +439,7 @@ from litellm.utils import (
     ModelResponse,
     Rules,
     TextCompletionResponse,
+    TextCompletionStreamWrapper,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -5825,32 +5826,79 @@ class Router:
         is_async: bool | None = False,
         **kwargs,
     ):
-        messages: Final = [{"role": "user", "content": prompt}]
-        try:
-            kwargs["model"] = model
-            kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+        kwargs["model"] = model
+        kwargs["prompt"] = prompt
+        kwargs["original_function"] = self._text_completion
+        self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)  # pyright: ignore[reportUnknownMemberType]  # dynamic router kwargs
 
-            # pick the one that is available (lowest TPM/RPM)
-            deployment: Final = self.get_available_deployment(
+        return self.function_with_fallbacks(**kwargs)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # dynamic fallback
+
+    def _text_completion(
+        self,
+        model: str,
+        prompt: str,
+        **kwargs: object,  # kwargs-ok: router fallback callbacks receive provider-specific endpoint options
+    ) -> TextCompletionResponse | ModelResponse | CustomStreamWrapper | TextCompletionStreamWrapper:
+        model_name = None  # rebind-ok: pre-init so the except block can count failures before a deployment is selected
+        deployment = None  # rebind-ok: pre-init so the except block can stamp errors when selection fails
+        try:
+            verbose_router_logger.debug("Inside _text_completion()- model: %s; kwargs: %s", model, kwargs)
+            deployment = self.get_available_deployment(  # rebind-ok: set after a deployment is selected
                 model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
+                messages=[{"role": "user", "content": prompt}],
+                specific_deployment=cast(  # cast-ok: router-only option has no typed schema
+                    bool | None, kwargs.pop("specific_deployment", None)
+                ),
                 request_kwargs=kwargs,
             )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
 
             data: Final = deployment["litellm_params"].copy()
-            for k, v in self.default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
+            model_name = data["model"]  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: dynamic deployment payload
 
-            # call via litellm.completion()
-            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
+            potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs)
+            dynamic_api_key: Final = kwargs.get("api_key", None)
+            model_client: Final = (
+                None
+                if (
+                    dynamic_api_key is not None
+                    and potential_model_client is not None
+                    and dynamic_api_key != potential_model_client.api_key
+                )
+                else potential_model_client
+            )
+
+            self.total_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # untyped call counter
+
+            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            ## only run if model group given, not model id
+            if model in self.model_names or not self.has_model_id(model):
+                self.routing_strategy_pre_call_checks(deployment=deployment)  # pyright: ignore[reportUnknownMemberType]  # untyped deployment
+
+            response: Final = litellm.text_completion(
+                **without_router_only_kwargs(  # pyright: ignore[reportUnknownArgumentType]  # dynamic request payload
+                    {
+                        **data,
+                        "prompt": prompt,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
+                )
+            )
         except Exception as e:
-            raise e
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)  # pyright: ignore[reportUnknownArgumentType]  # dynamic deployment
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
+            if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)  # pyright: ignore[reportUnknownArgumentType]  # dynamic deployment
+            self._stamp_retry_skip_deployment_id(e, kwargs)
+            raise
+        else:
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)  # pyright: ignore[reportUnknownArgumentType]  # dynamic deployment
+            return response
 
     async def atext_completion(
         self,
