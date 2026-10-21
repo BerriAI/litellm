@@ -5762,17 +5762,26 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
 
 
 class _ChannelSubscription:
+    """Marks a message done when the subscriber comes back for the next one, so ``messages.join()``
+    returns once every delivered message has been applied"""
+
     def __init__(self) -> None:
         self.messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self._holding_message = False
 
     async def subscribe(self, *channels: str) -> None:
         return None
 
     async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, object] | None:
+        if self._holding_message:
+            self._holding_message = False
+            self.messages.task_done()
         try:
-            return await asyncio.wait_for(self.messages.get(), timeout)
+            message: Final = await asyncio.wait_for(self.messages.get(), timeout)
         except asyncio.TimeoutError:
             return None
+        self._holding_message = True
+        return message
 
     async def aclose(self) -> None:
         return None
@@ -5821,6 +5830,9 @@ class _SharedCoordinationRedis:
         for subscription in self._subscriptions:
             subscription.messages.put_nowait({"type": "message", "data": message.encode()})
 
+    async def until_every_subscriber_applied_its_messages(self) -> None:
+        _ = await asyncio.gather(*(subscription.messages.join() for subscription in self._subscriptions))
+
 
 def _owned_key_row(hashed_token: str) -> LiteLLM_VerificationToken:
     return LiteLLM_VerificationToken(
@@ -5852,13 +5864,6 @@ def _prisma_with_key_row(key_row: LiteLLM_VerificationToken) -> AsyncMock:
     return prisma_client
 
 
-async def _until_evicted(cache: UserApiKeyCache, hashed_token: str) -> None:
-    for _ in range(200):
-        if cache.get_cache(key=hashed_token) is None:
-            return
-        await asyncio.sleep(0.01)
-
-
 @pytest.mark.asyncio
 async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """Auth serves key objects cache-first, so a peer worker that is not told about the delete keeps
@@ -5886,7 +5891,7 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeyp
                 user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
             ),
         )
-        await _until_evicted(peer_worker_cache, hashed_token)
+        await coordination_redis.until_every_subscriber_applied_its_messages()
     finally:
         await peer_subscriber.stop()
 
@@ -5929,7 +5934,7 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
                 user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
             ),
         )
-        await _until_evicted(peer_worker_cache, hashed_token)
+        await coordination_redis.until_every_subscriber_applied_its_messages()
     finally:
         await peer_subscriber.stop()
 
