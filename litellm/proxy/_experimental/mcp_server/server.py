@@ -2720,7 +2720,12 @@ if MCP_AVAILABLE:
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
 
-            request_capacity: Final = _mcp_setup_request_capacity(mcp_method, user_api_key_auth)
+            charged_method: Final = (
+                _jsonrpc_request_method(await peek.full_body())
+                if mcp_method is None and peek is not None and len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                else mcp_method
+            )
+            request_capacity: Final = _mcp_setup_request_capacity(charged_method, user_api_key_auth)
             try:
                 async with (
                     session_lock if session_lock is not None else contextlib.nullcontext(),

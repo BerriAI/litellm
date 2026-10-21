@@ -3282,6 +3282,7 @@ async def _streamable_mcp_request_runner(
 
     dispatch: Final = AsyncMock()
     session_manager: Final = MagicMock()
+    session_manager.max_request_body_size = server.session_manager_stateless.max_request_body_size
     session_manager.handle_request = dispatch
     monkeypatch.setattr(server, "_SESSION_MANAGERS_INITIALIZED", True)
     monkeypatch.setattr(server, "session_manager_stateless", session_manager)
@@ -3298,14 +3299,18 @@ async def _streamable_mcp_request_runner(
 
     monkeypatch.setattr(server, "_gateway_initialize_instructions_request_scope", no_initialize_scope)
 
-    async def request(method: str) -> None:
-        body: Final = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": method,
-                **({"id": 1} if method != "notifications/initialized" else {}),
-            }
-        ).encode()
+    async def request(method: str, request_body: bytes | None = None) -> None:
+        body: Final = (
+            request_body
+            if request_body is not None
+            else json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    **({"id": 1} if method != "notifications/initialized" else {}),
+                }
+            ).encode()
+        )
         scope: Final[Scope] = {
             "type": "http",
             "method": "POST",
@@ -3336,6 +3341,31 @@ async def test_streamable_mcp_setup_requests_obey_virtual_key_rpm_limit(monkeypa
         assert rate_limit_error.value.status_code == 429
         assert rate_limit_error.value.headers.get("retry-after") is not None
         assert dispatch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_virtual_key_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-setup-rpm-key", rpm_limit=1)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("tools/list")
+        oversized_body: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "params": {"_meta": {"pad": "x" * 5000}},
+                "method": "tools/list",
+            }
+        ).encode()
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
 
 
 @pytest.mark.asyncio
