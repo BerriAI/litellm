@@ -9,6 +9,7 @@
 
 
 import asyncio
+import copy
 import json
 import re
 import threading
@@ -31,11 +32,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.litellm_core_utils.core_helpers import (
-    attribute_items,
-    attribute_or_none,
-    safe_deep_copy,
-)
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -1196,8 +1193,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Masks the input and output before logging to langfuse, datadog, etc.
         Operates on a defensive copy of result so the client-facing response is not modified in-place (#47605).
         """
+        result_for_logging: Final[object] = (
+            copy.deepcopy(result) if call_type in {"completion", "acompletion"} else result
+        )
         if call_type in {"completion", "acompletion"}:  # /chat/completions requests
-            result_for_logging: Final[object] = safe_deep_copy(result)
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
@@ -1267,9 +1266,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     mode="mask",
                 )
 
-            return kwargs, result_for_logging
-
-        return kwargs, result
+        return kwargs, result_for_logging
 
     async def async_post_call_success_hook(
         self,

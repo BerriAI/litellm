@@ -686,6 +686,53 @@ async def test_logging_hook_does_not_mutate_client_request_or_response(presidio_
     assert response is not result_response
 
 
+@pytest.mark.asyncio
+async def test_logging_hook_anthropic_format_does_not_mutate_client_response(presidio_guardrail):
+    """
+    Issue #47605: Presidio guardrail in logging_only mode must not mutate Anthropic
+    native response dicts in place.
+    """
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "claude-3-opus",
+    }
+    anthropic_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Sure, your card is 4111-1111-1111-1111"}],
+    }
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=anthropic_response,
+        call_type="completion",
+    )
+
+    assert isinstance(result_response, dict)
+    assert "[CREDIT_CARD]" in result_response["content"][0]["text"]
+    assert "4111-1111-1111-1111" in anthropic_response["content"][0]["text"]
+    assert "[CREDIT_CARD]" not in anthropic_response["content"][0]["text"]
+    assert anthropic_response is not result_response
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_no_messages_returns_gracefully(presidio_guardrail):
+    test_kwargs = {"model": "gpt-4"}
+    response = ModelResponse(id="1")
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+    assert result_kwargs == test_kwargs
+
+
 
 @pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
