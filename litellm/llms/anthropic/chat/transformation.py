@@ -2941,7 +2941,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: mirrors override contract
         response_format_schema: ResponseFormatSchema | None = None,
     ) -> LitellmMessage | None:
-        return cls._convert_tool_response_to_message(tool_calls, response_format_schema=response_format_schema)
+        return cls._convert_tool_response_to_message(tool_calls, response_format_schema)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicError(
