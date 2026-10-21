@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -995,3 +995,134 @@ async def test_guardrails_only_and_skip_guardrails_are_mutually_exclusive(
             guardrails_only=True,
             skip_guardrails=True,
         )
+
+
+class _NamedHook(CustomLogger):
+    def __init__(self, name: str, seen: list[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.seen = seen
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(self.name)
+        return data
+
+
+class _NamedEnforcer(_NamedHook):
+    enforces_request_content = True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(self.name)
+        return data
+
+
+class _NamedGuardrail(CustomGuardrail):
+    def __init__(self, name: str, seen: list[str], default_on: bool = True, run_in_parallel: bool = False) -> None:
+        super().__init__(guardrail_name=name, event_hook=GuardrailEventHooks.pre_call, default_on=default_on)
+        self.seen = seen
+        self.run_in_parallel = run_in_parallel
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(self.guardrail_name)
+        return data
+
+
+def _callbacks(spec: str, seen: list[str]) -> list[CustomLogger]:
+    def build(name: str) -> CustomLogger:
+        if name.startswith("enforcer"):
+            return _NamedEnforcer(name, seen)
+        if name.startswith("off-guardrail"):
+            return _NamedGuardrail(name, seen, default_on=False)
+        if name.startswith("parallel-guardrail"):
+            return _NamedGuardrail(name, seen, run_in_parallel=True)
+        if name.startswith("guardrail"):
+            return _NamedGuardrail(name, seen)
+        return _NamedHook(name, seen)
+
+    return [build(name) for name in spec.split()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callbacks", "expected"),
+    [
+        pytest.param("hook-a guardrail hook-b", ["hook-a", "check", "guardrail", "hook-b"], id="guardrail"),
+        pytest.param("hook-a enforcer hook-b", ["hook-a", "check", "enforcer", "hook-b"], id="content-enforcer"),
+        pytest.param(
+            "off-guardrail hook-a guardrail hook-b",
+            ["hook-a", "check", "guardrail", "hook-b"],
+            id="guardrail-that-does-not-apply",
+        ),
+        pytest.param(
+            "hook-a parallel-guardrail hook-b",
+            ["hook-a", "hook-b", "check", "parallel-guardrail"],
+            id="parallel-guardrail",
+        ),
+        pytest.param("hook-a hook-b", ["hook-a", "hook-b", "check"], id="no-guardrail"),
+        pytest.param("", ["check"], id="no-callbacks"),
+    ],
+)
+async def test_before_guardrails_runs_once_right_before_the_first_guardrail(
+    proxy_logging, make_user_api_key_auth, monkeypatch, callbacks, expected
+):
+    seen: Final = list[str]()
+    monkeypatch.setattr(litellm, "callbacks", _callbacks(callbacks, seen))
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+
+    async def check(request: dict) -> None:
+        seen.append("check")
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+        before_guardrails=check,
+    )
+
+    assert seen == expected
+
+
+@pytest.mark.asyncio
+async def test_before_guardrails_runs_before_a_guardrail_pipeline(proxy_logging, make_user_api_key_auth, monkeypatch):
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+    seen: Final = list[str]()
+    monkeypatch.setattr(litellm, "callbacks", _callbacks("hook-a guardrail-in-pipeline", seen))
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    pipeline: Final = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="guardrail-in-pipeline")])
+
+    async def check(request: dict) -> None:
+        seen.append("check")
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("policy", pipeline)]},
+        },
+        call_type="acompletion",
+        before_guardrails=check,
+    )
+
+    assert seen == ["check", "guardrail-in-pipeline", "hook-a"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_before_guardrails_stops_the_walk(proxy_logging, make_user_api_key_auth, monkeypatch):
+    seen: Final = list[str]()
+    monkeypatch.setattr(litellm, "callbacks", _callbacks("hook-a guardrail hook-b", seen))
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+
+    async def reject(request: dict) -> None:
+        raise HTTPException(status_code=400, detail="model cannot route")
+
+    with pytest.raises(HTTPException, match="model cannot route"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="acompletion",
+            before_guardrails=reject,
+        )
+
+    assert seen == ["hook-a"]
