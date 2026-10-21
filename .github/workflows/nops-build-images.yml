@@ -1,0 +1,72 @@
+name: nOps image build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: nops-build-images-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  build:
+    if: github.repository == 'nops-io/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gateway, backend, migrations, ui]
+    env:
+      REPOSITORY: litellm-${{ matrix.component }}
+      TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve registry
+        id: registry
+        run: |
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "image=${registry}/${REPOSITORY}:${TAG}" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
+          if aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${REPOSITORY}:${TAG} is already in ECR, skipping build"
+          fi
+
+      - name: Build
+        if: steps.registry.outputs.exists != 'true'
+        env:
+          IMAGE: ${{ steps.registry.outputs.image }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg LITELLM_RELEASE_TAG="$TAG" \
+            -f "${COMPONENT}/Dockerfile" -t "$IMAGE" .
+
+      - name: Push
+        if: steps.registry.outputs.exists != 'true'
+        env:
+          IMAGE: ${{ steps.registry.outputs.image }}
+        run: docker push "$IMAGE"
+
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.registry.outputs.image }}
+        run: echo "\`${IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
