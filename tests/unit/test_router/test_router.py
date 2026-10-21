@@ -23,7 +23,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import APIConnectionError, Router
@@ -93,7 +93,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem
+from litellm.types.utils import CallTypes, CredentialItem, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -7889,6 +7889,29 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
+def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
+    router = litellm.Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}}])
+    summary: Final = "The user planned a Tokyo trip."
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": summary}),
+    }
+    history: Final = [
+        {"role": "user", "content": "Plan a Tokyo trip. " * 200},
+        {"role": "assistant", "content": "Day one, Asakusa. " * 200},
+    ]
+    next_turn: Final = {"role": "user", "content": "And Osaka?"}
+
+    compacted_tokens: Final = router._count_pre_call_check_tokens(
+        messages=None, input=[*history, compaction_item, next_turn]
+    )
+
+    assert compacted_tokens == router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": summary}, next_turn]
+    )
+
+
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     """
     When neither messages nor input is provided (e.g. endpoints without prompt text),
@@ -15195,7 +15218,7 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
 
 
 _FLAT_ATTEMPT_RECORD_KEYS = frozenset(
-    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+    {"model_group", "deployment_id", "model", "base_model", "exception_type", "exception_string", "attempted_retries"}
 )
 _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
 
@@ -16726,6 +16749,7 @@ class _AnthropicMessagesFakeByteStream:
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
         self.closed_as_superseded = False
+        self.close_contexts: tuple[bool, ...] = ()
 
     def __aiter__(self):
         return self
@@ -16736,6 +16760,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.close_contexts = (*self.close_contexts, closing_superseded_attempt())
         self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
@@ -17979,6 +18004,51 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+class _AnthropicMessagesRetryStashRecorder:
+    def __init__(self) -> None:
+        self.observed: tuple[Usage | None, ...] = ()
+
+    def record(self, usage: Usage | None) -> None:
+        self.observed = (*self.observed, usage)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
+    """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
+    router: Final = _anthropic_messages_retry_router(num_retries=1)
+    logging_obj: Final = LiteLLMLogging(
+        model="glm",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="retry-own-usage",
+        function_id="retry-own-usage",
+    )
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
+    stash_recorder: Final = _AnthropicMessagesRetryStashRecorder()
+    usage_adapter: Final = TypeAdapter(Usage | None)
+
+    def retry_stream() -> _AnthropicMessagesFakeByteStream:
+        stash_recorder.record(
+            usage_adapter.validate_python(logging_obj.model_call_details.get("combined_usage_object"))
+        )
+        return _anthropic_messages_retried_stream()
+
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
+
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_logging_obj=logging_obj
+    )
+    body: Final = tuple([chunk async for chunk in stream])
+
+    assert stash_recorder.observed == (None,)
+    assert body == (_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong"))
+    assert "response_cost" not in logging_obj.model_call_details
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
     """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
@@ -18001,6 +18071,7 @@ async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_o
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert superseded_closed_when_retry_opened == [True]
+    assert superseded.close_contexts[0] is True
 
 
 @pytest.mark.asyncio
@@ -29668,3 +29739,135 @@ def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch: py
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["only"]
+
+
+@pytest.mark.parametrize(
+    ("deployment_stream_options", "default_stream_options", "request_stream_options", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, None, None, 1),
+        (None, {"include_usage": True}, None, 1),
+        ({"include_usage": True}, None, {"include_usage": True}, 0),
+        (None, None, {"include_usage": True}, 0),
+    ],
+    ids=["deployment-config", "router-default", "request-over-deployment", "request-only"],
+)
+@pytest.mark.asyncio
+async def test_router_configured_stream_usage_keeps_a_choice_on_the_usage_chunk(
+    deployment_stream_options: dict[str, bool] | None,
+    default_stream_options: dict[str, bool] | None,
+    request_stream_options: dict[str, bool] | None,
+    usage_chunk_choice_count: int,
+):
+    deployment_params: Final = {"model": "openai/gpt-5-mini", "api_key": "fake", "mock_response": "hi there"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": (
+                    deployment_params
+                    if deployment_stream_options is None
+                    else {**deployment_params, "stream_options": deployment_stream_options}
+                ),
+            }
+        ],
+        default_litellm_params=None if default_stream_options is None else {"stream_options": default_stream_options},
+    )
+    request_kwargs: Final = {} if request_stream_options is None else {"stream_options": request_stream_options}
+
+    response: Final = await router.acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], stream=True, **request_kwargs
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert getattr(chunks[-1], "usage", None) is not None
+    assert len(chunks[-1].choices) == usage_chunk_choice_count
+    assert all(len(chunk.choices) == 1 for chunk in chunks[:-1])
+
+
+@pytest.mark.parametrize(
+    ("stream_options", "marked_injected"),
+    [({"include_usage": True}, True), (None, False)],
+    ids=["include-usage", "no-stream-options"],
+)
+def test_update_kwargs_with_deployment_reads_stream_options_from_pydantic_litellm_params(
+    stream_options: dict[str, bool] | None, marked_injected: bool
+):
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+    from litellm.types.router import LiteLLM_Params
+
+    kwargs: Final[dict[str, object]] = {"stream": True, "metadata": {}}
+    Router()._update_kwargs_with_deployment(
+        deployment={
+            "model_name": "gpt-5-mini",
+            "litellm_params": LiteLLM_Params(model="openai/gpt-5-mini", api_key="fake-key", stream_options=stream_options),
+            "model_info": {"id": "pydantic-params"},
+        },
+        kwargs=kwargs,
+    )
+
+    assert (kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True) is marked_injected
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_streams_tokens():
+    """After a mid-stream hop, a disconnect bills the primary's relayed text plus the fallback's, not the fallback alone."""
+    import json
+
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    def _relayed_iterator(text: str) -> ResponsesAPIStreamingIterator:
+        logging_obj: Final = MagicMock(spec=LiteLLMLogging)
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.completion_start_time = None
+        iterator: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.4",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+            request_data={"model": "gpt-5.4", "input": "Hi"},
+            custom_llm_provider="openai",
+        )
+        created: Final = {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1700000000.0,
+            "model": "gpt-5.4",
+            "status": "in_progress",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+        iterator._process_chunk(json.dumps({"type": "response.created", "sequence_number": 0, "response": created}))
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_1",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": text,
+                }
+            )
+        )
+        return iterator
+
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k"}}]
+    )
+    primary: Final = _relayed_iterator("Once upon a time there was a lighthouse keeper")
+    fallback: Final = _relayed_iterator("who lit the lamp")
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+    primary_tokens: Final = primary.partial_response_on_disconnect().response.usage.output_tokens
+    fallback_tokens: Final = fallback.partial_response_on_disconnect().response.usage.output_tokens
+
+    assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens
+
+    wrapped.adopt_fallback_headers(fallback)
+
+    assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
