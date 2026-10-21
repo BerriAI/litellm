@@ -578,6 +578,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
+    thought_signature_in_tool_call_id: bool | None = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 

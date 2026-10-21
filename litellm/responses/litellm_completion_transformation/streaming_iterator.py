@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from typing import Any, Final, cast
 
@@ -80,6 +80,15 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     return tuple(
         item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
     )
+
+
+def _tool_call_objects(tool_calls: object) -> tuple[object, ...]:
+    return tuple(tool_calls) if isinstance(tool_calls, list) else ()
+
+
+def _tool_call_provider_specific_fields(tool_call: object) -> Mapping[str, object]:
+    fields: Final[object] = getattr(tool_call, "provider_specific_fields", None)
+    return {"provider_specific_fields": fields} if fields else {}
 
 
 def _delta_has_signed_thinking_block(delta: object) -> bool:
@@ -404,10 +413,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         except Exception:
             tool_calls = None
 
-        if not tool_calls or not isinstance(tool_calls, list):
-            return
-
-        for tc in tool_calls:
+        for tc in _tool_call_objects(tool_calls):
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
             if not call_id_raw:
                 continue
@@ -482,7 +488,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 sequence_number=self._sequence_number,
-                item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
+                item=BaseLiteLLMOpenAIResponseObject(**item_kwargs, **_tool_call_provider_specific_fields(tc)),
             )
             self._pending_tool_events.append(item_done_event)
 

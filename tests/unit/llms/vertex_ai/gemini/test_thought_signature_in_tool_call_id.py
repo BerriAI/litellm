@@ -474,3 +474,109 @@ def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
     function_responses: Final = [part["function_response"] for part in parts if "function_response" in part]
     assert [part["thoughtSignature"] for part in function_calls] == [LONG_SIGNATURE]
     assert [response["name"] for response in function_responses] == ["get_weather"]
+
+
+ANTHROPIC_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+
+
+def _is_tool_use_start(event: Mapping[str, object]) -> bool:
+    block: Final = event.get("content_block")
+    return event.get("type") == "content_block_start" and isinstance(block, dict) and block.get("type") == "tool_use"
+
+
+async def _messages_tool_use_blocks(stream: bool) -> list[Mapping[str, object]]:
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, stream))
+        response: Final = await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[USER_TURN],
+            model="gemini/gemini-3.5-flash",
+            tools=[ANTHROPIC_WEATHER_TOOL],
+            stream=stream,
+            api_key="test-gemini-key",
+            thought_signature_in_tool_call_id=False,
+        )
+        if not stream:
+            return [block for block in response["content"] if block["type"] == "tool_use"]
+        relayed: Final = b"".join([chunk async for chunk in response])
+    events: Final = [json.loads(line.removeprefix(b"data: ")) for line in relayed.splitlines() if line.startswith(b"data:")]
+    return [event["content_block"] for event in events if _is_tool_use_start(event)]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_tool_use_keeps_thought_signature_kept_out_of_its_id(
+    stream: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tool_uses: Final = await _messages_tool_use_blocks(stream)
+
+    assert len(tool_uses) == 1
+    assert BOUNDED_TOOL_CALL_ID.fullmatch(tool_uses[0]["id"])
+    assert tool_uses[0]["provider_specific_fields"]["signature"] == LONG_SIGNATURE
+
+
+RESPONSES_WEATHER_TOOL: Final = {"type": "function", **WEATHER_TOOL["function"]}
+
+
+def _responses_function_call_items(stream: bool) -> list[object]:
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, stream))
+        response: Final = litellm.responses(
+            model="gemini/gemini-3.5-flash",
+            input=USER_TURN["content"],
+            tools=[RESPONSES_WEATHER_TOOL],
+            stream=stream,
+            api_key="test-gemini-key",
+            thought_signature_in_tool_call_id=False,
+        )
+        items: Final = (
+            [event.item for event in response if event.type == "response.output_item.done"]
+            if stream
+            else response.output
+        )
+    return [item for item in items if getattr(item, "type", None) == "function_call"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_responses_function_call_keeps_thought_signature_kept_out_of_its_id(stream: bool):
+    function_calls: Final = _responses_function_call_items(stream)
+
+    assert len(function_calls) == 1
+    assert BOUNDED_TOOL_CALL_ID.fullmatch(function_calls[0].call_id)
+    assert function_calls[0].provider_specific_fields["thought_signature"] == LONG_SIGNATURE
+
+
+@pytest.mark.parametrize("configured_value", ["false", "False", 0, False])
+def test_deployment_setting_given_as_a_string_or_number_keeps_ids_bounded(configured_value: object):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-agentcore",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.5-flash",
+                    "api_key": "test-gemini-key",
+                    "thought_signature_in_tool_call_id": configured_value,
+                },
+            }
+        ]
+    )
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        response: Final = router.completion(model="gemini-agentcore", messages=[USER_TURN], tools=[WEATHER_TOOL])
+
+    assert BOUNDED_TOOL_CALL_ID.fullmatch(response.choices[0].message.tool_calls[0].id)
+
+
+def test_deployment_setting_rejects_a_value_that_is_not_a_boolean():
+    with pytest.raises(ValueError, match="thought_signature_in_tool_call_id"):
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-agentcore",
+                    "litellm_params": {"model": "gemini/gemini-3.5-flash", "thought_signature_in_tool_call_id": "maybe"},
+                }
+            ]
+        )
