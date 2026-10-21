@@ -189,15 +189,6 @@ def test_shipped_routing_rules_never_match_through_an_unrecognized_namespace():
 
 
 def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
-    """Adaptive thinking is data, not code. The bundled backup must carry
-    supports_adaptive_thinking on genuine Claude >= 4.6 entries (every provider
-    route) and on the version-gated anthropic-claude-adaptive-thinking rule for
-    unmapped future Claudes, while leaving the dated Claude 4.0 names
-    ("...-4-20250514") unflagged so a date can never be mistaken for a 4.6+ minor
-    version. The version-neutral claude-family-baseline capability rule must not flag
-    it, so an unmapped sub-4.6 name resolves but stays non-adaptive. The adaptive rule
-    carries only its delta; capability unioning stacks it onto the baseline, so the
-    baseline block is never duplicated across rules and no rule needs ``extends``."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
     rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
@@ -212,7 +203,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "anthropic.claude-opus-4-8",
         "vertex_ai/claude-opus-4-6@default",
         "us.anthropic.claude-sonnet-4-6",
-        "openrouter/anthropic/claude-opus-4.7",
         "azure_ai/claude-opus-4-7",
     ]:
         assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive

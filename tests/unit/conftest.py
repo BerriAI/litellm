@@ -2,10 +2,10 @@ import asyncio
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 import boto3
 import httpx
@@ -44,17 +44,25 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
-from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import (
+    reload_beta_headers_config,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
-from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import (
+    factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
-from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
-from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from litellm.llms.gemini.chat import (
+    transformation as gemini_chat_transformation_module,  # noqa: E402  # same import-time dependency
+)
+from litellm.proxy.db import (
+    tool_registry_writer as tool_registry_writer_module,  # noqa: E402  # same import-time dependency
+)
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -244,7 +252,9 @@ def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
-    original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
+    original_clients: Final = {
+        name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__
+    }
     original_loggers: Final = {
         logger: (logger.level, logger.disabled, logger.propagate, list(logger.handlers), list(logger.filters))
         for logger in ALL_LOGGERS
@@ -302,6 +312,22 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, NativeStructuredOutputKey], None]:
+    def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
+        entry: Final = litellm.model_cost[model_cost_key]
+        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        litellm.get_model_info.cache_clear()
+
+    return set_flags
 
 
 @pytest.fixture

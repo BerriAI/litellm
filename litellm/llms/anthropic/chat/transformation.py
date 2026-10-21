@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import time
@@ -6,7 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -24,7 +25,18 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_fragment_ref,
+    schema_grammar_branch_count,
+    schema_has_lookaround_pattern,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_optional_property_count,
+    schema_string_formats,
+    schema_union_property_count,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -35,8 +47,14 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
-from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.base_utils import (
+    ResponseFormatSchema,
+    as_json_object,
+    response_format_schema,
+    type_to_response_format_param,
+    unwrap_response_format_envelope,
+)
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -137,6 +155,12 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+_NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
+    ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
+)
+NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
+NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
+NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -540,7 +564,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         grammar Anthropic compiles the schema into, so the API rejects them with a
         400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
         property 'uniqueItems' is not supported"):
-        - maxItems/minItems/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
+        - maxItems/minItems above 1/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
         - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
         - minLength/maxLength: string constraints
         - minProperties/maxProperties/patternProperties/propertyNames: object constraints
@@ -597,7 +621,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
-        unsupported_fields: Final = set(constraint_labels)
+        min_items: Final = schema.get("minItems")
+        enforced_min_items: Final = (
+            isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
+        )
+        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -605,7 +633,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # PYTHONHASHSEED and stay cache-friendly.
         constraint_descriptions: Final[list] = []
         for field, label in constraint_labels.items():
-            if field not in schema:
+            if field not in schema or field not in unsupported_fields:
                 continue
             value = schema[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
@@ -640,7 +668,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key == "properties" and isinstance(value, dict):
+            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
             elif key == "items" and isinstance(value, dict):
                 result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
@@ -652,6 +680,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            elif key == "$ref" and isinstance(value, str):
+                result[key] = schema_fragment_ref(value)
             elif key == "oneOf" and isinstance(value, list):
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.
@@ -663,7 +693,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object":
+        if is_object_schema(result):
             result["additionalProperties"] = False
 
         return result
@@ -1340,32 +1370,60 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
+    @staticmethod
+    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+        unpacked: Final = copy.deepcopy(dict(json_schema))
+        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
+        if isinstance(defs, dict) and defs:
+            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return unpacked
+
+    @staticmethod
+    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        if (
+            schema_has_unresolvable_ref(json_schema)
+            or schema_has_open_object(json_schema)
+            or schema_has_lookaround_pattern(json_schema)
+            or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
+            or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
+            or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
+            or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
+        ):
+            return None
+        return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
+
+    def uses_native_structured_output(self, model: str) -> bool:
+        return AnthropicConfig._supports_model_capability(
+            model, "supports_native_structured_output", self._resolved_provider
+        )
+
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        open_object_takes_forced_json_tool: Final = (
+            json_schema is not None
+            and schema_has_open_object(json_schema)
+            and not self.is_thinking_requested(request_params)
+            and not self.is_thinking_enabled(dict(request_params))
+            and not request_params.get("tools")
+            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+        )
+        return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
-        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
+        json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-
-        # Resolve $ref/$defs before filtering — Anthropic doesn't support
-        # external schema references (e.g., /$defs/CalendarEvent).
-        import copy
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            DEFS_MAX_INLINED_BYTES,
-            unpack_defs,
-        )
-
-        json_schema = copy.deepcopy(json_schema)
-        defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
-        if defs:
-            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-
-        # Filter out unsupported fields for Anthropic's output_format API
-        filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
-
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=filtered_schema,
-        )
+        native_schema: Final = self.native_output_format_schema(json_schema)
+        if native_schema is None:
+            return None
+        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
@@ -1530,10 +1588,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if AnthropicConfig._supports_model_capability(
+                if self.uses_native_structured_output_for_schema(
                     model,
-                    "supports_native_structured_output",
-                    self._resolved_provider,
+                    self._extract_json_schema_from_response_format(value),
+                    REQUEST_PARAMS.validate_python(non_default_params),
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
@@ -1685,7 +1743,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             _input_schema.update(cast(AnthropicInputSchema, json_schema))
 
-        _tool: Final = AnthropicMessagesTool(name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema)
+        _tool: Final = AnthropicMessagesTool(
+            name=RESPONSE_FORMAT_TOOL_NAME,
+            input_schema=_input_schema,
+        )
         return _tool
 
     def should_strip_billing_metadata(self) -> bool:
@@ -2138,6 +2199,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         json_mode: bool | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> tuple[
         LitellmMessage | None,
         list[ChatCompletionToolCallChunk],
@@ -2157,11 +2219,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_tool: Final = tool_calls[json_indices[0]]
             if json_tool.get("function", {}).get("arguments") is None:
                 return None, tool_calls, None
-            _message: Final = AnthropicConfig._convert_tool_response_to_message(tool_calls=[json_tool])
+            _message: Final = AnthropicConfig._convert_tool_response_to_message(
+                tool_calls=[json_tool], response_format_schema=response_format_schema
+            )
             return _message, [], None
 
         first_json: Final = tool_calls[json_indices[0]]
-        json_msg: Final = AnthropicConfig._convert_tool_response_to_message([first_json])
+        json_msg: Final = AnthropicConfig._convert_tool_response_to_message(
+            [first_json], response_format_schema=response_format_schema
+        )
         extra_content: Final[str | None] = json_msg.content if json_msg is not None else None
         filtered_tools: Final = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
@@ -2597,6 +2663,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         prefix_prompt: str | None = None,
         speed: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ):
         _hidden_params: Final[dict] = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(dict(raw_response.headers))
@@ -2654,6 +2721,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
             json_mode=json_mode,
             tool_calls=tool_calls,
+            response_format_schema=response_format_schema,
         )
         merged_text = text_content or ""
         if json_extra_content:
@@ -2670,6 +2738,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if json_mode_message is not None:
             completion_response["stop_reason"] = "stop"
+            if thinking_blocks:
+                json_mode_message.thinking_blocks = thinking_blocks
+                json_mode_message.reasoning_content = reasoning_content
             _message = json_mode_message
 
         model_response.choices[0].message = _message
@@ -2762,12 +2833,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
             tool_name_reverse_map=tool_name_reverse_map,
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
         )
         return model_response
 
     @staticmethod
     def _convert_tool_response_to_message(
         tool_calls: list[ChatCompletionToolCallChunk],
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> LitellmMessage | None:
         """
         In JSON mode, Anthropic API returns JSON schema as a tool call, we need to convert it to a message to follow the OpenAI format
@@ -2775,21 +2848,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         ## HANDLE JSON MODE - anthropic returns single function call
         json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
+        if json_mode_content_str is None:
+            return None
         try:
-            if json_mode_content_str is not None:
-                args: Final = json.loads(json_mode_content_str)
-                if isinstance(args, dict) and (values := args.get("values")) is not None:
-                    _message = litellm.Message(content=json.dumps(values))
-                    return _message
-                else:
-                    # a lot of the times the `values` key is not present in the tool response
-                    # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-                    _message = litellm.Message(content=json.dumps(args))
-                    return _message
-        except json.JSONDecodeError:
+            payload: Final[object] = json.loads(json_mode_content_str)
+        except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
-        return None
+        if response_format_schema is not None:
+            return litellm.Message(
+                content=json.dumps(
+                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                )
+            )
+        # a lot of the times the `values` key is not present in the tool response
+        # relevant issue: https://github.com/BerriAI/litellm/issues/6741
+        payload_object: Final = as_json_object(payload)
+        values: Final = None if payload_object is None else payload_object.get("values")
+        return litellm.Message(content=json.dumps(payload if values is None else values))
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicError(
@@ -2797,6 +2873,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
+
+
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class JsonModeRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tools: object = None
+
+    def tool_schema(self) -> ResponseFormatSchema | None:
+        try:
+            tools: Final = _REQUEST_TOOLS.validate_python(self.tools)
+        except ValidationError:
+            return None
+        json_tool: Final = next((tool for tool in tools if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME), None)
+        return None if json_tool is None else response_format_schema(json_tool.get("input_schema"))
 
 
 def _valid_user_id(user_id: str) -> bool:
