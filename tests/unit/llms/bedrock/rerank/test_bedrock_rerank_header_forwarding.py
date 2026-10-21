@@ -6,6 +6,8 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 """
 
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -15,7 +17,9 @@ from pydantic import ValidationError
 import litellm
 from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
+from litellm.llms.bedrock.rerank.transformation import BedrockRerankConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.rerank import RerankBilledUnits
 
 
 @pytest.fixture(autouse=True)
@@ -565,3 +569,37 @@ async def test_bedrock_arerank_rejects_non_object_bodies(payload: object):
         await _rerank_through_transport(payload, is_async=True)
 
     assert "sensitive-document" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("usage_fields", "expected_billed_units"),
+    (
+        pytest.param({}, {"search_units": 1}, id="missing-usage"),
+        pytest.param({"usage": {}}, {}, id="empty-usage"),
+        pytest.param({"usage": {"search_units": 1, "cost": None}}, {"search_units": 1, "cost": None}, id="null-cost"),
+        pytest.param({"usage": {"search_units": 1, "cost": 0.0}}, {"search_units": 1, "cost": 0.0}, id="free"),
+        pytest.param(
+            {
+                "usage": {
+                    "search_units": 2,
+                    "total_tokens": 7,
+                    "input_tokens": 5,
+                    "output_tokens": 2,
+                    "cost": 0.001,
+                    "extra": 9,
+                }
+            },
+            {"search_units": 2, "total_tokens": 7, "cost": 0.001},
+            id="charged-with-token-counts",
+        ),
+    ),
+)
+def test_bedrock_rerank_preserves_billed_units(
+    usage_fields: Mapping[str, object], expected_billed_units: RerankBilledUnits
+) -> None:
+    response: Final = BedrockRerankConfig().transform_response(
+        {"results": [{"index": 0, "relevanceScore": 0.9}], **usage_fields}
+    )
+
+    assert response.meta is not None
+    assert response.meta["billed_units"] == expected_billed_units
