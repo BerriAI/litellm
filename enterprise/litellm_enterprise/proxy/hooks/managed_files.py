@@ -27,7 +27,7 @@ import httpx
 from fastapi import HTTPException
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -359,6 +359,8 @@ class _ManagedResourceDatabase(Protocol):
     @property
     def litellm_managedfiletable(self) -> _ManagedFileTableActions: ...
 
+    async def query_raw(self, query: str, *args: object) -> object: ...
+
     @property
     def litellm_managedobjecttable(self) -> _ManagedObjectTableActions: ...
 
@@ -384,6 +386,75 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 def _managed_file_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedFileTableActions:
     return prisma_client.db.litellm_managedfiletable
+
+
+class _ListedFileRow(Protocol):
+    @property
+    def unified_file_id(self) -> str: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+    @property
+    def model_mappings(self) -> Mapping[str, object]: ...
+
+    @property
+    def storage_backend(self) -> str | None: ...
+
+
+class _ScopedFileRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    unified_file_id: str
+    file_object: JsonValue = None
+    model_mappings: Mapping[str, JsonValue]
+    storage_backend: str | None = None
+
+
+_SCOPED_FILE_ROWS: Final = TypeAdapter(tuple[_ScopedFileRow, ...])
+
+
+def _owner_condition(owner_filter: Mapping[str, object]) -> tuple[str, tuple[str, ...]]:
+    match owner_filter:
+        case {"OR": [{"created_by": str() as user_id}, {"team_id": str() as team_id}]}:
+            return '("created_by" = $1 OR "team_id" = $2)', (user_id, team_id)
+        case {"created_by": str() as user_id}:
+            return '"created_by" = $1', (user_id,)
+        case {"team_id": str() as team_id}:
+            return '"team_id" = $1', (team_id,)
+        case _:
+            return ("FALSE", ()) if owner_filter else ("TRUE", ())
+
+
+async def _scoped_file_rows(
+    prisma_client: _ManagedResourcePrismaClient,
+    owner_filter: Mapping[str, object],
+    model_mapping_keys: frozenset[str],
+    cursor_id: str | None,
+    direction: Literal["asc", "desc"],
+    take: int,
+) -> tuple[_ScopedFileRow, ...]:
+    owner_condition, owner_params = _owner_condition(owner_filter)
+    keys_param: Final = len(owner_params) + 1
+    comparison: Final = "<" if direction == "desc" else ">"
+    cursor_condition: Final = (
+        f'AND ("created_at", "unified_file_id") {comparison} (SELECT "created_at", "unified_file_id" '
+        f'FROM "LiteLLM_ManagedFileTable" WHERE "unified_file_id" = ${keys_param + 1}) '
+        if cursor_id
+        else ""
+    )
+    order: Final = direction.upper()
+    rows: Final = await prisma_client.db.query_raw(
+        'SELECT "unified_file_id", "file_object", "model_mappings", "storage_backend" FROM "LiteLLM_ManagedFileTable" '
+        f'WHERE {owner_condition} AND ("model_mappings" ?| ${keys_param}::text[] OR "storage_backend" IS NOT NULL) '
+        f'{cursor_condition}ORDER BY "created_at" {order}, "unified_file_id" {order} '
+        f"LIMIT ${keys_param + (2 if cursor_id else 1)}",
+        *owner_params,
+        sorted(model_mapping_keys),
+        *((cursor_id,) if cursor_id else ()),
+        take,
+    )
+    return _SCOPED_FILE_ROWS.validate_python(rows)
 
 
 def _iter_provider_file_id_pairs(
@@ -2262,12 +2333,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         every file on the proxy still reads one bounded page at a time.
         ``after`` pages toward older files and ``before`` toward newer ones,
         each page still ordered newest first.
-        ``purpose`` is applied after parsing, because the managed file table
-        keeps it inside the ``file_object`` blob instead of a column, and
-        ``model_scope`` keeps only files whose ``model_mappings``, a JSON
-        column, name one of its deployment ids or model names, or for a
-        storage-backed file a model name the router sends to the listed
-        provider. Rows
+        ``model_scope`` is applied in the query, so only rows whose
+        ``model_mappings`` name one of its deployment ids or model names, and
+        storage-backed rows, leave the database; a storage-backed row then
+        stays only when its model name is one the router sends to the listed
+        provider. ``purpose`` is applied after parsing, because the managed
+        file table keeps it inside the ``file_object`` blob instead of a
+        column. Rows
         whose blob will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
@@ -2276,9 +2348,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         scan has to continue past it, the chunk widens to
         ``FILE_LIST_CONTINUATION_CHUNK_SIZE``, so the walk costs one query per
         that many rows instead of one per page. That bound is per query, not
-        per request: the work is still linear in the rows the caller owns, and
-        a filter matching nothing reads every one of them, each chunk through
-        the owner and creation-time indexes instead of a table scan.
+        per request: a ``purpose`` filter matching nothing still reads every
+        row that passes the query.
         """
         validate_file_list_limit(limit)
         validate_file_list_purpose(purpose)
@@ -2317,22 +2388,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         matches: Final[List[OpenAIFileObject]] = []
         cursor_id = cursor
         chunk_size = page_size + 1
-        direction: Final = "asc" if before else "desc"
+        direction: Final[Literal["asc", "desc"]] = "asc" if before else "desc"
 
         while len(matches) <= page_size:
             cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
-            chunk = await _managed_file_table(self.prisma_client).find_many(
-                where=owner_filter,
-                take=chunk_size,
-                order=[{"created_at": direction}, {"unified_file_id": direction}],
-                **cursor_args,
+            chunk: Sequence[_ListedFileRow] = (
+                await _scoped_file_rows(
+                    self.prisma_client, owner_filter, model_scope.model_mapping_keys, cursor_id, direction, chunk_size
+                )
+                if model_scope is not None
+                else await _managed_file_table(self.prisma_client).find_many(
+                    where=owner_filter,
+                    take=chunk_size,
+                    order=[{"created_at": direction}, {"unified_file_id": direction}],
+                    **cursor_args,
+                )
             )
             matches.extend(
                 _public_file_object(parsed_file_object, row.unified_file_id)
                 for row in chunk
                 if (
-                    model_scope is None
-                    or model_scope.holds(row.model_mappings, stored=row.storage_backend is not None)
+                    model_scope is None or model_scope.holds(row.model_mappings, stored=row.storage_backend is not None)
                 )
                 and (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
                 and (purpose is None or parsed_file_object.purpose == purpose)

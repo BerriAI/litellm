@@ -4985,6 +4985,37 @@ class _ManagedFileTableOverRows:
         rows: Final = ordered_rows[start:]
         return rows if take is None else rows[:take]
 
+    async def query_raw(self, query, *params):
+        keys_index: Final = next(index for index, param in enumerate(params) if isinstance(param, list))
+        owner_ids: Final = frozenset(params[:keys_index])
+        model_mapping_keys: Final = frozenset(params[keys_index])
+        cursor_id: Final = params[keys_index + 1] if len(params) == keys_index + 3 else None
+        ordered_rows: Final = [
+            row
+            for row in (self.rows[::-1] if '"created_at" ASC' in query else self.rows)
+            if not owner_ids or {row.created_by, row.team_id} & owner_ids
+        ]
+        start: Final = (
+            0
+            if cursor_id is None
+            else 1 + next(index for index, row in enumerate(ordered_rows) if row.unified_file_id == cursor_id)
+        )
+        listed_rows: Final = [
+            row
+            for row in ordered_rows[start:]
+            if not model_mapping_keys.isdisjoint(row.model_mappings)
+            or ('"storage_backend" IS NOT NULL' in query and row.storage_backend is not None)
+        ]
+        return [
+            {
+                "unified_file_id": row.unified_file_id,
+                "file_object": row.file_object,
+                "model_mappings": row.model_mappings,
+                "storage_backend": row.storage_backend,
+            }
+            for row in listed_rows[: params[-1]]
+        ]
+
 
 def _setup_unscoped_list_files_route_over_real_hook(
     mocker, monkeypatch, llm_router: Router, rows
@@ -5006,7 +5037,9 @@ def _setup_unscoped_list_files_route_over_real_hook(
     managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
-    managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)
+    managed_file_table = _ManagedFileTableOverRows(rows)
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    managed_files.prisma_client.db.query_raw = managed_file_table.query_raw
 
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
@@ -6282,6 +6315,37 @@ def test_require_managed_files_lists_the_callers_files_on_the_named_provider_or_
     assert response.status_code == 200, response.text
     assert [file["id"] for file in response.json()["data"]] == expected_ids
     provider_list.assert_not_awaited()
+
+
+def test_require_managed_files_lists_a_teammates_files_on_the_provider_and_no_other_teams(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row(
+                "unified-teammate", created_by="teammate", team_id="team-a", model_mappings={"gpt-3.5-turbo-id": "f-1"}
+            ),
+            _managed_file_row("unified-own", model_mappings={"gpt-3.5-turbo-id": "f-2"}),
+            _managed_file_row(
+                "unified-other-team", created_by="outsider", team_id="team-b", model_mappings={"gpt-3.5-turbo-id": "f-3"}
+            ),
+        ],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user", team_id="team-a"
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/openai/v1/files", {}, {})
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-teammate", "unified-own"]
 
 
 def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:
