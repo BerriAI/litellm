@@ -4985,7 +4985,7 @@ class _ManagedFileTableOverRows:
         rows: Final = ordered_rows[start:]
         return rows if take is None else rows[:take]
 
-    async def query_raw(self, query, *params):
+    async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
         keys_index: Final = next(index for index, param in enumerate(params) if isinstance(param, list))
         owner_ids: Final = frozenset(params[:keys_index])
         model_mapping_keys: Final = frozenset(params[keys_index])
