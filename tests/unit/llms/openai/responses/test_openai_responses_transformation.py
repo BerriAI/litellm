@@ -4300,6 +4300,31 @@ def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_
     assert _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=False)) == input
 
 
+def _openai_model_the_cost_map_knows_without_a_breakpoint_flag() -> str:
+    entries: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(litellm.model_cost)
+    return next(
+        name
+        for name, entry in entries.items()
+        if entry.get("litellm_provider") == "openai"
+        and "supports_prompt_cache_breakpoint" not in entry
+        and not name.startswith(("gpt-", "ft:"))
+    )
+
+
+@pytest.mark.parametrize(
+    "known_model",
+    (_openai_model_the_cost_map_knows_without_a_breakpoint_flag, lambda: "ft:gpt-4o-mini-2024-07-18:my-org::abc123"),
+    ids=("cost-map-model-without-flag", "fine-tune-of-older-gpt"),
+)
+def test_a_valid_marker_is_dropped_under_drop_params_on_a_model_known_to_lack_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, known_model: Callable[[], str]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    dropped: Final = _transformed_input_for(known_model(), input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
 @pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
 def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_breakpoint_support(
     monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig

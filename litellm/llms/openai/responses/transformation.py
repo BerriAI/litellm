@@ -1,4 +1,4 @@
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -223,6 +223,11 @@ def _item_with_wire_safe_prompt_cache_breakpoints(item: object, keeps_markers: b
         for key, value in fields.items()
         if key != "prompt_cache_breakpoint"
     }
+
+
+def _input_carries_marker(items: Iterable[object]) -> bool:
+    item_fields: Final = (_json_object_or_none(item) for item in items)
+    return any(_carries_prompt_cache_breakpoint(fields) for fields in item_fields if fields is not None)
 
 
 def _carries_prompt_cache_breakpoint(fields: Mapping[str, object]) -> bool:
@@ -613,7 +618,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _input_with_wire_safe_prompt_cache_breakpoints(
         self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
     ) -> str | ResponseInputParam:
-        if not isinstance(input, list) or not _drops_params(litellm_params):
+        if not isinstance(input, list) or not _drops_params(litellm_params) or not _input_carries_marker(input):
             return input
         keeps_markers: Final = self._keeps_prompt_cache_breakpoints(model=model, litellm_params=litellm_params)
         wire_safe_items: Final = [_item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input]
@@ -773,7 +778,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR:
             return tools
-        gate_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
+        gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
             if self._rejects_top_level_schema_combinators(gate_model)
@@ -787,6 +792,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         bare_model: Final = model.split("/")[-1]
         base_model: Final = bare_model.split(":")[1] if bare_model.startswith("ft:") else bare_model
         return base_model.startswith(_MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS)
+
+    @staticmethod
+    def _combinator_gate_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+        model_info: Final[object] = getattr(litellm_params, "model_info", None)
+        base_model: Final[object] = model_info.get("base_model") if isinstance(model_info, dict) else None
+        return base_model if isinstance(base_model, str) and base_model else model
 
     @staticmethod
     def _declared_base_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
