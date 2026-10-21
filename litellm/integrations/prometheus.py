@@ -419,10 +419,13 @@ def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     caller's identity token that a token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
-    credential_fields: Final = proxy_server_request.get("credential_fields")
+    caller_credential_fields: Final = proxy_server_request.get("caller_credential_fields")
     logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
     return (
-        (isinstance(credential_fields, tuple) and any(field in credential_fields for field in _CALLER_TRANSPORT_FIELDS))
+        (
+            isinstance(caller_credential_fields, tuple)
+            and any(field in caller_credential_fields for field in _CALLER_TRANSPORT_FIELDS)
+        )
         or _sent_a_provider_credential_or_endpoint(_logged_fields(proxy_server_request.get("body")))
         or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True

@@ -2336,6 +2336,7 @@ async def add_litellm_data_to_request(
         "method": request.method,
         "headers": _logging_safe_headers,
         "body": None,  # filled in post-strip; see below
+        "credential_fields": tuple(sorted(name for name in _TRANSPORT_ONLY_CREDENTIAL_KEYS if name in data)),
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
 
@@ -2421,8 +2422,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers
     )
-    credential_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
-    data["proxy_server_request"]["credential_fields"] = credential_fields  # rebind-ok: data is an out-param
+    caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
+    data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)

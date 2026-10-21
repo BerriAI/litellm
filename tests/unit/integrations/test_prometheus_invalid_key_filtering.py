@@ -218,7 +218,7 @@ class TestSkipMetricsValidation:
     @pytest.mark.parametrize(
         "logged_call,expected",
         [
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("api_key",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("api_key",)}}}, True),
             (
                 {
                     "litellm_params": {
@@ -230,10 +230,17 @@ class TestSkipMetricsValidation:
                 True,
             ),
             ({"standard_logging_object": {"metadata": {"used_client_oauth_token": True}}}, True),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("headers",)}}}, True),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("provider_specific_header",)}}}, True),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ()}}}, False),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": "api_key"}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("headers",)}}}, True),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"caller_credential_fields": ("provider_specific_header",)}
+                    }
+                },
+                True,
+            ),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ()}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": "api_key"}}}, False),
             ({"standard_logging_object": {"metadata": {"used_client_oauth_token": False}}}, False),
             ({"litellm_params": {"proxy_server_request": {"body": {"azure_ad_token": "caller-token"}}}}, True),
             (
@@ -254,8 +261,16 @@ class TestSkipMetricsValidation:
                 False,
             ),
             ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("extra_headers",)}}}, True),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("organization",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("extra_headers",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("organization",)}}}, True),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"credential_fields": ("headers",), "caller_credential_fields": ()}
+                    }
+                },
+                False,
+            ),
             (
                 {
                     "litellm_params": {
@@ -280,6 +295,7 @@ class TestSkipMetricsValidation:
             "malformed-extra-body",
             "caller-supplied-extra-headers",
             "caller-supplied-organization",
+            "headers-that-cannot-change-provider-auth",
             "extra-headers-not-stamped-by-the-proxy",
         ],
     )

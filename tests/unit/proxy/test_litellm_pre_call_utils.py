@@ -988,7 +988,7 @@ FORWARD_PROVIDER_AUTH_HEADERS: Final = {
         "proxy-forwarding-nothing",
     ],
 )
-async def test_credential_fields_name_every_field_that_carries_a_caller_header_or_credential(
+async def test_caller_credential_fields_name_every_field_that_carries_a_caller_header_or_credential(
     sent: dict[str, object],
     request_headers: dict[str, str],
     general_settings: dict[str, object],
@@ -996,7 +996,7 @@ async def test_credential_fields_name_every_field_that_carries_a_caller_header_o
 ) -> None:
     updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
 
-    assert updated["proxy_server_request"]["credential_fields"] == expected
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
 
 
 @pytest.mark.asyncio
@@ -1005,7 +1005,7 @@ async def test_credential_fields_name_every_field_that_carries_a_caller_header_o
     [({}, ()), ({"x-caller-trace": "trace-1"}, ("headers",))],
     ids=["user-information-only", "user-information-and-caller-header"],
 )
-async def test_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
+async def test_caller_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
     monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], expected: tuple[str, ...]
 ) -> None:
     monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
@@ -1013,6 +1013,59 @@ async def test_credential_fields_ignore_the_user_information_the_proxy_adds_to_f
     updated: Final = await _request_data_added_by_the_proxy({}, request_headers, FORWARD_PROVIDER_AUTH_HEADERS)
 
     assert updated["headers"]["x-litellm-user_api_key_user_id"] == "test-user"
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ("headers",)),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        ({"organization": "org-caller"}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ()),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            (),
+        ),
+    ],
+    ids=[
+        "anthropic-version-in-headers",
+        "anthropic-version-in-provider-specific-header",
+        "organization",
+        "api-key-in-extra-headers",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-provider-auth-header",
+    ],
+)
+async def test_credential_fields_name_the_stripped_fields_the_caller_sent(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
     assert updated["proxy_server_request"]["credential_fields"] == expected
 
 
