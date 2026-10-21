@@ -393,25 +393,32 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
     @pytest.mark.parametrize(
         "model,custom_llm_provider",
         [
-            ("azure/gpt-6-sol", "azure"),
-            ("azure/gpt-6-luna", "azure"),
-            ("azure/eu/gpt-6-sol", "azure"),
-            ("azure/eu/gpt-6-luna", "azure"),
-            ("azure_ai/gpt-6-sol", "azure_ai"),
-            ("azure_ai/gpt-6-luna", "azure_ai"),
+            ("azure/gpt-6-astra", "azure"),
+            ("azure/us/gpt-6-astra", "azure"),
+            ("azure/eu/gpt-6-astra", "azure"),
+            ("azure_ai/gpt-6-astra", "azure_ai"),
         ],
     )
-    def test_the_azure_entry_advertises_the_same_levels_as_openai(
+    def test_an_azure_hosted_deployment_advertises_the_levels_both_its_routes_accept(
         self, local_model_cost_map, model, custom_llm_provider
     ):
-        from litellm.utils import get_model_info_helper
+        """Verified live on 2026-10-01 against a Foundry gpt-6-astra deployment (model
+        gpt-6-astra-2026-09-03): none returns 400 unsupported_value on chat and on Responses, naming
+        low, medium, high and xhigh as the levels it takes; Responses also honors max with reasoning
+        tokens billed while chat refuses it, as OpenAI's chat does. The flag is route-blind, so the
+        row keeps max off and the advertised set stops at the level every route accepts.
+        Earlier evidence (2026-09-05, commit e79f3ec5205) had none accepted on chat; the deployment
+        no longer behaves that way."""
+        from litellm.utils import _get_model_info_helper
 
-        azure_info = dict(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
-        openai_info = dict(get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
 
-        assert resolve_supported_reasoning_efforts(
-            azure_info, deployment_is_mapped=True
-        ) == resolve_supported_reasoning_efforts(openai_info, deployment_is_mapped=True)
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        )
 
 
 class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
