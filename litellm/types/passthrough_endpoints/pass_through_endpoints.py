@@ -1,5 +1,7 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import Field
 from typing_extensions import TypedDict
@@ -26,6 +28,21 @@ LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_thro
 LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__"
 
 SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardedClientText:
+    text: str
+    recorded: Mapping[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class RefusedClientText:
+    code: int
+    reason: str
+
+
+ClientTextDecision: TypeAlias = ForwardedClientText | RefusedClientText
 
 
 class BackgroundResponseSettlement(str, Enum):

@@ -64,6 +64,17 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
+from litellm.llms.elevenlabs.common_utils import (
+    ELEVENLABS_API_KEY_HEADER,
+    ElevenLabsTextToSpeechStream,
+    elevenlabs_tts_client_text,
+    elevenlabs_tts_is_priced,
+    elevenlabs_tts_recorded_upstream_frame,
+    elevenlabs_tts_registry_key,
+    elevenlabs_tts_requested_model,
+    elevenlabs_tts_websocket_target,
+    is_elevenlabs_voice_id,
+)
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
@@ -110,6 +121,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    WebsocketFramePolicy,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -3341,6 +3353,7 @@ class _WebsocketRelay(Protocol):
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        frame_policy: WebsocketFramePolicy = ...,
     ) -> None: ...
 
 
@@ -3500,6 +3513,92 @@ async def deepgram_listen_websocket_route(
         endpoint=websocket.url.path,
         accept_websocket=False,
     )
+
+
+_ELEVENLABS_WS_MISSING_KEY_REASON: Final = (
+    "Required 'ELEVENLABS_API_KEY' in environment to make pass-through calls to ElevenLabs."
+)
+_ELEVENLABS_WS_VOICE_ID_REASON: Final = "voice_id may only contain letters, digits, '_' and '-'"
+_ELEVENLABS_WS_UNPRICED_REASON: Final = (
+    "No per-character price for '{registry_key}': add it to the model cost map to enable it"
+)
+_ELEVENLABS_TTS_FRAME_POLICY: Final = WebsocketFramePolicy(
+    client_text=elevenlabs_tts_client_text,
+    recorded_upstream_frame=elevenlabs_tts_recorded_upstream_frame,
+)
+
+
+async def elevenlabs_tts_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket,
+        model=elevenlabs_tts_requested_model(websocket.url.query),
+        api_key_headers=("api-key", ELEVENLABS_API_KEY_HEADER),
+    )
+
+
+async def _elevenlabs_tts_websocket(
+    websocket: WebSocket,
+    voice_id: str,
+    stream: ElevenLabsTextToSpeechStream,
+    user_api_key_dict: UserAPIKeyAuth,
+    relay: _WebsocketRelay,
+) -> None:
+    elevenlabs_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.ELEVENLABS.value,
+        region_name=None,
+    )
+    if elevenlabs_api_key is None:
+        await websocket.close(code=1011, reason=_ELEVENLABS_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    if not is_elevenlabs_voice_id(voice_id):
+        await websocket.close(code=1008, reason=_ELEVENLABS_WS_VOICE_ID_REASON)
+        return
+
+    target: Final = elevenlabs_tts_websocket_target(
+        api_base=get_secret_str("ELEVENLABS_API_BASE"),
+        voice_id=voice_id,
+        stream=stream,
+        query_string=websocket.url.query,
+    )
+    if not elevenlabs_tts_is_priced(target):
+        await websocket.close(
+            code=1008,
+            reason=_ELEVENLABS_WS_UNPRICED_REASON.format(registry_key=elevenlabs_tts_registry_key(target)),
+        )
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={ELEVENLABS_API_KEY_HEADER: elevenlabs_api_key},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+        frame_policy=_ELEVENLABS_TTS_FRAME_POLICY,
+    )
+
+
+@router.websocket("/elevenlabs/v1/text-to-speech/{voice_id}/stream-input")
+async def elevenlabs_tts_stream_input_websocket_route(
+    websocket: WebSocket,
+    voice_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(elevenlabs_tts_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    await _elevenlabs_tts_websocket(websocket, voice_id, "stream-input", user_api_key_dict, relay)
+
+
+@router.websocket("/elevenlabs/v1/text-to-speech/{voice_id}/multi-stream-input")
+async def elevenlabs_tts_multi_stream_input_websocket_route(
+    websocket: WebSocket,
+    voice_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(elevenlabs_tts_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    await _elevenlabs_tts_websocket(websocket, voice_id, "multi-stream-input", user_api_key_dict, relay)
 
 
 class BaseOpenAIPassThroughHandler:

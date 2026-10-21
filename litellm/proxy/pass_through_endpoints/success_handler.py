@@ -1,14 +1,16 @@
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -28,6 +30,9 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
     DeepgramListenPassthroughLoggingHandler,
+)
+from .llm_provider_handlers.elevenlabs_tts_passthrough_logging_handler import (
+    ElevenLabsTextToSpeechPassthroughLoggingHandler,
 )
 from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
     FalAIPassthroughLoggingHandler,
@@ -62,6 +67,44 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
         return httpx_response.text
     except httpx.ResponseNotRead:
         return ""
+
+
+AudioWebsocketRoute: TypeAlias = Literal["deepgram_listen", "elevenlabs_tts"]
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def _audio_websocket_route(url_route: str) -> AudioWebsocketRoute | None:
+    if DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
+        return "deepgram_listen"
+    if ElevenLabsTextToSpeechPassthroughLoggingHandler.is_elevenlabs_tts_websocket_route(url_route):
+        return "elevenlabs_tts"
+    return None
+
+
+def _audio_websocket_handler_result(
+    route: AudioWebsocketRoute,
+    httpx_response: httpx.Response,
+    request_body: Mapping[str, object],
+    upstream_frames: Sequence[Mapping[str, object]],
+    logging_obj: LiteLLMLoggingObj,
+    kwargs: Mapping[str, object],
+) -> PassThroughEndpointLoggingTypedDict:
+    match route:
+        case "deepgram_listen":
+            return DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+                websocket_messages=tuple(message for message in upstream_frames if isinstance(message, dict)),
+                logging_obj=logging_obj,
+                upstream_url=str(httpx_response.request.url),
+                kwargs=kwargs,
+            )
+        case "elevenlabs_tts":
+            return ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+                request_body=request_body,
+                upstream_frame_count=len(upstream_frames),
+                logging_obj=logging_obj,
+                upstream_url=str(httpx_response.request.url),
+                kwargs=kwargs,
+            )
 
 
 class PassThroughEndpointLogging:
@@ -385,21 +428,17 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        elif DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
-            deepgram_handler_result: Final = (
-                DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
-                    websocket_messages=tuple(
-                        message
-                        for message in (response_body if isinstance(response_body, list) else ())
-                        if isinstance(message, dict)
-                    ),
-                    logging_obj=logging_obj,
-                    upstream_url=str(httpx_response.request.url),
-                    kwargs=kwargs,
-                )
+        elif (audio_websocket_route := _audio_websocket_route(url_route)) is not None:
+            audio_websocket_result: Final = _audio_websocket_handler_result(
+                route=audio_websocket_route,
+                httpx_response=httpx_response,
+                request_body=_REQUEST_BODY.validate_python(request_body),
+                upstream_frames=response_body if isinstance(response_body, list) else (),
+                logging_obj=logging_obj,
+                kwargs=kwargs,
             )
-            standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
-            kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+            standard_logging_response_object = audio_websocket_result["result"]  # rebind-ok: elif-chain
+            kwargs = audio_websocket_result["kwargs"]  # rebind-ok: elif-chain contract
         elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
             fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
                 response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
