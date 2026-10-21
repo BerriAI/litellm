@@ -5,9 +5,13 @@ Tests for Serper Search API integration.
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.llms.serper.search.transformation import SerperSearchConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -192,6 +196,85 @@ class TestSerperSearch:
 
             assert response.object == "search"
             assert len(response.results) == 0
+
+
+def _transform(payload: object) -> SearchResponse:
+    return SerperSearchConfig().transform_search_response(
+        raw_response=httpx.Response(200, json=payload), logging_obj=None
+    )
+
+
+def test_serper_organic_results_keep_provider_order_and_ignore_other_sections():
+    response = _transform(
+        {
+            "searchParameters": {"q": "litellm", "type": "search", "engine": "google"},
+            "knowledgeGraph": {"title": "LiteLLM", "attributes": {"Founded": "2023"}},
+            "organic": [
+                {
+                    "title": "LiteLLM",
+                    "link": "https://example.com/litellm",
+                    "snippet": "Call every LLM API",
+                    "date": "Jan 15, 2025",
+                    "position": 1,
+                    "sitelinks": [{"title": "Docs", "link": "https://example.com/docs"}],
+                },
+                {"title": "Docs", "link": "https://example.com/docs", "snippet": "Docs", "position": 2},
+                {"title": "Blog", "link": "https://example.com/blog", "snippet": "Blog", "date": None},
+            ],
+            "peopleAlsoAsk": [{"question": "What is LiteLLM?", "title": "FAQ", "link": "https://example.com/faq"}],
+            "credits": 1,
+        }
+    )
+
+    assert response.object == "search"
+    assert response.results == [
+        SearchResult(
+            title="LiteLLM", url="https://example.com/litellm", snippet="Call every LLM API", date="Jan 15, 2025"
+        ),
+        SearchResult(title="Docs", url="https://example.com/docs", snippet="Docs"),
+        SearchResult(title="Blog", url="https://example.com/blog", snippet="Blog"),
+    ]
+
+
+def test_serper_result_without_optional_fields_gets_empty_defaults():
+    assert _transform({"organic": [{"position": 1}]}).results == [SearchResult(title="", url="", snippet="")]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"organic": []}, {"organic": ""}, {"organic": {}}, {"message": "Unauthorized.", "statusCode": 403}],
+)
+def test_serper_response_without_organic_results_is_empty(payload):
+    assert _transform(payload).results == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("title", None), ("title", 7), ("link", None), ("snippet", ["snippet"]), ("date", 1736899200)],
+)
+def test_serper_result_with_field_of_wrong_type_is_rejected(field, value):
+    result = {"title": "T", "link": "https://example.com", "snippet": "S", field: value}
+
+    with pytest.raises(ValidationError):
+        _transform({"organic": [result]})
+
+
+def test_serper_result_with_several_fields_of_wrong_type_reports_every_field():
+    result = {"title": 7, "link": None, "snippet": ["snippet"], "date": 1736899200}
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"organic": [result]})
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
+
+
+def test_serper_malformed_result_is_rejected_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"organic": results})
+
+    assert "429" not in str(exc_info.value)
 
 
 @pytest.fixture(autouse=True)

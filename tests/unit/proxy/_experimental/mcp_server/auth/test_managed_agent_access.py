@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from litellm.proxy import proxy_server
 from litellm.proxy._experimental.mcp_server import mcp_server_manager
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.auth import auth_checks
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
@@ -112,6 +112,41 @@ async def test_access_groups_cap_agent_servers_without_granting_new_ones(
     assert tuple(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == expected
     if "slack" not in expected:
         assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == []
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_tool_ceiling_reads_the_admitted_policy_not_the_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.common_utils import registry_read_through
+
+    groups: Final = {
+        "stale": LiteLLM_AccessGroupTable(
+            access_group_id="stale", access_group_name="Stale", access_mcp_server_ids=["slack"]
+        ),
+        "current": LiteLLM_AccessGroupTable(
+            access_group_id="current",
+            access_group_name="Current",
+            access_mcp_server_ids=["slack"],
+            mcp_tool_permissions={"slack": ["read"]},
+        ),
+    }
+
+    async def load_group(access_group_id: str, **_: object) -> LiteLLM_AccessGroupTable:
+        return groups[access_group_id]
+
+    monkeypatch.setattr(auth_checks, "get_access_object", load_group)
+    auth: Final = actor(("read", "write"))
+    assert auth.managed_agent_policy is not None
+    stale_registry_row: Final = auth.managed_agent_policy.model_copy(update={"access_group_ids": ["stale"]})
+    monkeypatch.setattr(
+        registry_read_through, "get_agent_with_read_through", AsyncMock(return_value=stale_registry_row)
+    )
+    auth.managed_agent_policy = auth.managed_agent_policy.model_copy(update={"access_group_ids": ["current"]})
+
+    assert tuple(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == ("slack",)
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == ["read"]
 
 
 @pytest.mark.asyncio
@@ -400,9 +435,9 @@ async def test_delegation_never_borrows_another_teams_server_or_tools(
             team_id=name,
             models=[],
             members_with_roles=[{"user_id": "human", "role": "user"}],
-            object_permission=permission if name == "selected" else LiteLLM_ObjectPermissionTable(
-                object_permission_id="other-grant", mcp_servers=["slack", "linear"]
-            ),
+            object_permission=permission
+            if name == "selected"
+            else LiteLLM_ObjectPermissionTable(object_permission_id="other-grant", mcp_servers=["slack", "linear"]),
         )
         for name in ("selected", "other")
     }
@@ -439,7 +474,9 @@ async def test_managed_mcp_rejects_unavailable_authoritative_entitlements(
     )
     auth: Final = actor(None)
     assert auth.managed_agent_policy is not None
-    auth.managed_agent_policy = auth.managed_agent_policy.model_copy(update={"object_permission": permission.model_dump()})
+    auth.managed_agent_policy = auth.managed_agent_policy.model_copy(
+        update={"object_permission": permission.model_dump()}
+    )
     auth.requires_fresh_policy = True
     with pytest.raises(HTTPException) as failure:
         await MCPRequestHandler.get_allowed_tools_for_server("slack", auth)
@@ -484,6 +521,7 @@ async def test_managed_agent_mcp_access_is_capped_at_the_invoking_callers_grants
         "_apply_user_tool_ceiling",
         AsyncMock(side_effect=lambda tools, _server_id, _auth: tools),
     )
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=LiteLLM_TeamTable(team_id="callers")))
 
     auth: Final = actor(("read", "write"))
     auth.agent_caller = AgentCaller(user_id="alice", team_id="callers")
@@ -496,25 +534,34 @@ async def test_managed_agent_mcp_access_is_capped_at_the_invoking_callers_grants
 @pytest.mark.parametrize("fresh", [False, True])
 @pytest.mark.parametrize("caller_kind", ["team", "user"])
 async def test_caller_mcp_revocation_uses_fresh_policy(
-    monkeypatch: pytest.MonkeyPatch, fresh: bool, caller_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh: bool,
+    caller_kind: str,
 ) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
     from litellm.types.agents import AgentCaller
 
     cached_permission: Final = LiteLLM_ObjectPermissionTable(
-        object_permission_id="caller-permission", mcp_servers=["slack", "linear"],
+        object_permission_id="caller-permission",
+        mcp_servers=["slack", "linear"],
         mcp_tool_permissions={"slack": ["read", "write"]},
     )
     current_permission: Final = LiteLLM_ObjectPermissionTable(
-        object_permission_id="caller-permission", mcp_servers=["slack"],
+        object_permission_id="caller-permission",
+        mcp_servers=["slack"],
         mcp_tool_permissions={"slack": ["read"]},
     )
     team: Final = LiteLLM_TeamTable(
-        team_id="caller", object_permission_id="caller-permission", object_permission=current_permission,
+        team_id="caller",
+        object_permission_id="caller-permission",
+        object_permission=current_permission,
     )
     user: Final = LiteLLM_UserTable(
-        user_id="caller", teams=[], object_permission_id="caller-permission", object_permission=current_permission,
+        user_id="caller",
+        teams=[],
+        object_permission_id="caller-permission",
+        object_permission=current_permission,
     )
     database: Final = MagicMock()
     database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
@@ -531,13 +578,16 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
     auth.agent_caller = AgentCaller(team_id="caller") if caller_kind == "team" else AgentCaller(user_id="caller")
 
     assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == ({"slack"} if fresh else {"slack", "linear"})
-    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (["read"] if fresh else ["read", "write"])
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (
+        ["read"] if fresh else ["read", "write"]
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fresh", [False, True])
 async def test_caller_team_outage_cannot_remove_authoritative_server_ceiling(
-    monkeypatch: pytest.MonkeyPatch, fresh: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh: bool,
 ) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.agents import AgentCaller

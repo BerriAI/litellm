@@ -420,6 +420,9 @@ class QualifireGuardrail(CustomGuardrail):
             verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
