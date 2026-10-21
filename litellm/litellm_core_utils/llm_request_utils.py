@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Final, cast
 
 import litellm
@@ -153,26 +153,30 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     if custom_llm_provider not in litellm.models_by_provider:
         return []
 
-    known_models: Final = litellm.models_by_provider.get(custom_llm_provider, [])
-    model_costs: Final = []
+    known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
+    chat_rows: Final = _chat_row_costs(known_models, custom_llm_provider)
+    return [model for model, _, _ in sorted(chat_rows, key=_billed_rows_cheapest_first_then_free)[:n]]
 
-    for model in known_models:
+
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
+    for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
-        model_costs.append((model, _cost))
-
-    model_costs.sort(key=_paid_rows_cheapest_first_then_unpriced)
-    return [model for model, _ in model_costs[:n]]
+        cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
+        yield model, cost, _billed_at_zero(model_info)
 
 
-def _paid_rows_cheapest_first_then_unpriced(model_cost: tuple[str, float]) -> tuple[bool, float]:
-    _, cost = model_cost
-    return (cost == 0, cost)
+def _billed_at_zero(model_info: Mapping[str, object]) -> bool:
+    return not any(isinstance(value, int | float) and value > 0 for key, value in model_info.items() if "cost" in key)
+
+
+def _billed_rows_cheapest_first_then_free(model_cost: tuple[str, float, bool]) -> tuple[bool, float]:
+    _, cost, free = model_cost
+    return (free, cost)
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:

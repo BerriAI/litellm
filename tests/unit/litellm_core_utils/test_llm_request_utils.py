@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from typing import Final
 
 import httpx
@@ -140,40 +139,30 @@ def test_ensure_extra_body_is_safe_returns_non_dict_unchanged():
     assert result is extra_body
 
 
-PAID_VERTEX_CHAT_ROW: Final = "fake-paid-vertex-chat"
-UNPRICED_VERTEX_CHAT_ROW: Final = "fake-unpriced-vertex-chat"
+PICKER_PROVIDER: Final = "fake_picker_provider"
 
 
 @pytest.fixture
-def vertex_chat_rows_paid_and_unpriced() -> Iterator[None]:
-    fake_rows: Final = {
-        PAID_VERTEX_CHAT_ROW: {
-            "litellm_provider": "vertex_ai-language-models",
-            "mode": "chat",
-            "input_cost_per_token": 1e-12,
-            "output_cost_per_token": 1e-12,
-        },
-        UNPRICED_VERTEX_CHAT_ROW: {
-            "litellm_provider": "vertex_ai-language-models",
-            "mode": "chat",
-            "input_cost_per_token": 0.0,
-            "output_cost_per_token": 0.0,
-        },
+def provider_rows_listed_most_expensive_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows: Final = {
+        "free-chat": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
+        "pricey-chat": {"input_cost_per_token": 3e-12, "output_cost_per_token": 3e-12, "mode": "chat"},
+        "cheapest-embedding": {"input_cost_per_token": 1e-13, "mode": "embedding"},
+        "cheap-chat": {"input_cost_per_token": 1e-12, "output_cost_per_token": 1e-12, "mode": "chat"},
+        "per-character-chat": {"input_cost_per_character": 1e-12, "output_cost_per_character": 1e-12, "mode": "chat"},
     }
-    litellm.register_model(fake_rows, persist_across_reloads=False)
-    try:
-        yield
-    finally:
-        for name in fake_rows:
-            litellm.model_cost.pop(name, None)
-            litellm.vertex_language_models.discard(name)
-        litellm.add_known_models(model_cost_map={})
+    for name, row in rows.items():
+        monkeypatch.setitem(litellm.model_cost, name, {**row, "litellm_provider": PICKER_PROVIDER})
+    monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
 
 
-def test_pick_cheapest_chat_models_puts_unpriced_rows_after_every_paid_row(
-    vertex_chat_rows_paid_and_unpriced: None,
+def test_pick_cheapest_chat_models_orders_per_token_cost_with_rows_billed_at_zero_last(
+    provider_rows_listed_most_expensive_first: None,
 ) -> None:
-    picks: Final = pick_cheapest_chat_models_from_llm_provider("vertex_ai", n=3)
-
-    assert picks[0] == PAID_VERTEX_CHAT_ROW
-    assert UNPRICED_VERTEX_CHAT_ROW not in picks
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
+        "per-character-chat",
+        "cheap-chat",
+        "pricey-chat",
+        "free-chat",
+    ]
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == ["per-character-chat", "cheap-chat"]
