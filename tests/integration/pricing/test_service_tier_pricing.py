@@ -263,9 +263,7 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
         assert not set(LONG_CONTEXT_PRICING).intersection(body), body
 
 
-BUNDLED_COST_MAP: Final = (
-    Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
-)
+BUNDLED_COST_MAP: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
 CUSTOM_STANDARD_INPUT_RATE: Final = 0.001
 CUSTOM_STANDARD_OUTPUT_RATE: Final = 0.002
 

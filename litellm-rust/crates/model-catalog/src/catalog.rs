@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::{IntegrityViolation, InvalidDocument, Problem};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::wire::{EntryWire, Fields};
+
+const SAMPLE_SPEC: &str = "sample_spec";
+const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
 
 /// How far a registry may shrink against the one it replaces.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,14 +32,30 @@ pub struct ModelMatch<'a> {
     pub entry: &'a ModelEntry,
 }
 
+/// A top-level value that is not a model entry, at its index in the document.
+#[derive(Debug)]
+struct Section {
+    index: usize,
+    key: String,
+    value: Value,
+}
+
+/// A top-level value of the document as written.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum Written<'a> {
+    Entry(&'a Fields),
+    Section(&'a Value),
+}
+
 /// A registry document read entry by entry. A bad entry keeps its raw fields and its problems are
 /// listed, so the caller decides what to serve.
 #[derive(Debug)]
 pub struct Catalog {
     entries: IndexMap<String, ModelEntry>,
+    sections: Vec<Section>,
     aliases: IndexMap<String, String>,
     lowercase_keys: HashMap<String, String>,
-    sample_spec: Option<Value>,
     fallback_generalizations: Option<FallbackGeneralizations>,
     problems: Vec<Problem>,
 }
@@ -63,23 +83,31 @@ impl ModelEntry {
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Self, InvalidDocument> {
-        let mut document: IndexMap<String, Value> = serde_json::from_slice(body)?;
-        let sample_spec = document.shift_remove("sample_spec");
-        let fallback_generalizations = document
-            .shift_remove("fallback_generalizations")
-            .map(serde_json::from_value)
-            .transpose()?;
-        if document.is_empty() {
+        let document: IndexMap<String, Value> = serde_json::from_slice(body)?;
+        if document.keys().all(|key| is_section(key)) {
             return Err(InvalidDocument::Empty);
         }
 
         let mut problems = Vec::new();
+        let mut sections = Vec::new();
         let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
-        for (name, value) in document {
-            let Value::Object(fields) = value else {
-                problems.push(Problem::NotAnObject { model: name });
-                continue;
+        for (index, (name, value)) in document.into_iter().enumerate() {
+            let fields = match value {
+                Value::Object(fields) if !is_section(&name) => fields,
+                value => {
+                    if !is_section(&name) {
+                        problems.push(Problem::NotAnObject {
+                            model: name.clone(),
+                        });
+                    }
+                    sections.push(Section {
+                        index,
+                        key: name,
+                        value,
+                    });
+                    continue;
+                }
             };
             let wire = EntryWire::read(&fields);
             if let Some(aliases) = wire.attributes.aliases.clone() {
@@ -121,6 +149,14 @@ impl Catalog {
             }
         }
 
+        let fallback_generalizations = sections
+            .iter()
+            .find(|section| section.key == FALLBACK_GENERALIZATIONS)
+            .and_then(|section| {
+                FallbackGeneralizations::deserialize(&section.value)
+                    .map_err(|error| problems.push(Problem::FallbackGeneralizations { error }))
+                    .ok()
+            });
         let lowercase_keys = entries
             .keys()
             .chain(aliases.keys())
@@ -128,11 +164,25 @@ impl Catalog {
             .collect();
         Ok(Self {
             entries,
+            sections,
             aliases,
             lowercase_keys,
-            sample_spec,
             fallback_generalizations,
             problems,
+        })
+    }
+
+    /// Every top-level key with its value as the document wrote it, in document order.
+    pub fn written(&self) -> impl Iterator<Item = (&str, Written<'_>)> {
+        let mut sections = self.sections.iter().peekable();
+        let mut entries = self.entries.iter();
+        (0..self.entries.len() + self.sections.len()).map_while(move |index| {
+            match sections.next_if(|section| section.index == index) {
+                Some(section) => Some((section.key.as_str(), Written::Section(&section.value))),
+                None => entries
+                    .next()
+                    .map(|(name, entry)| (name.as_str(), Written::Entry(&entry.fields))),
+            }
         })
     }
 
@@ -212,11 +262,18 @@ impl Catalog {
         &self.aliases
     }
     pub fn sample_spec(&self) -> Option<&Value> {
-        self.sample_spec.as_ref()
+        self.sections
+            .iter()
+            .find(|section| section.key == SAMPLE_SPEC)
+            .map(|section| &section.value)
     }
     pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
         Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
     }
+}
+
+fn is_section(key: &str) -> bool {
+    key == SAMPLE_SPEC || key == FALLBACK_GENERALIZATIONS
 }
 
 fn unknown_timezone(name: &str, model: &Model) -> Option<Problem> {

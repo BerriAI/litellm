@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.azure_ai.anthropic.messages_transformation import (
     AzureAnthropicMessagesConfig,
 )
@@ -452,13 +453,8 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
     cache. Every mapped azure_ai entry the rule matches must carry the flag."""
     import re
 
-    import litellm
 
-    cost_map_path = os.path.join(
-        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
-    )
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = GetModelCostMap.load_local_model_cost_map()
     rules = cost_map["fallback_generalizations"]["rules"]
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

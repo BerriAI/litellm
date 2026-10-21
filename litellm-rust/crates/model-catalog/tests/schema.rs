@@ -1,8 +1,6 @@
 #![cfg(feature = "schema")]
 
-use std::path::Path;
-
-use litellm_model_catalog::{model_entry_json_schema, registry_json_schema};
+use litellm_model_catalog::{BUNDLED_REGISTRY, model_entry_json_schema, registry_json_schema};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -11,9 +9,7 @@ fn schema() -> Value {
 }
 
 fn checked_in_catalog() -> Value {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../model_prices_and_context_window.json");
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    serde_json::from_slice(BUNDLED_REGISTRY).unwrap()
 }
 
 fn registry_validator() -> jsonschema::Validator {
@@ -25,7 +21,6 @@ fn registry_validator() -> jsonschema::Validator {
 }
 
 #[test]
-#[ignore]
 fn generated_registry_schema_validates_checked_in_catalog() {
     let catalog = checked_in_catalog();
     let validator = registry_validator();
@@ -65,7 +60,6 @@ fn generated_registry_schema_rejects_invalid_entries(#[case] entry: Value) {
 }
 
 #[test]
-#[ignore]
 fn generated_schema_covers_catalog_fields() {
     let catalog = checked_in_catalog();
     let schema = schema();

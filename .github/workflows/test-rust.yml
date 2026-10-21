@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"
@@ -38,6 +39,7 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"

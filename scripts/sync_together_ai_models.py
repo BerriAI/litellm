@@ -3,7 +3,7 @@
 Pulls ``GET https://api.together.ai/v1/models?serverless`` plus the deprecations doc, maps API fields onto
 registry fields, merges the reviewed capability rules below for everything the API cannot express, and diffs
 the result against the registry. Dry run (the default) prints the diff summary and the generated PR body;
-``--write`` applies the changes to the root cost map and its ``litellm/`` backup copy.
+``--write`` applies the changes to the root cost map.
 
 Policy highlights:
 - Prices arrive per 1M tokens with float artifacts and are normalized to clean per-token values.
@@ -34,10 +34,7 @@ DEPRECATIONS_URL: Final = "https://docs.together.ai/docs/deprecations.md"
 PROVIDER: Final = "together_ai"
 PREFIX: Final = "together_ai/"
 SOURCE_URL: Final = "https://docs.together.ai/docs/serverless-models"
-COST_MAP_RELPATHS: Final = (
-    "model_prices_and_context_window.json",
-    "litellm/model_prices_and_context_window_backup.json",
-)
+COST_MAP_RELPATH: Final = "model_prices_and_context_window.json"
 
 TYPE_TO_MODE: Final = MappingProxyType({"chat": "chat", "embedding": "embedding", "moderation": "chat"})
 
@@ -519,7 +516,7 @@ def main(argv: Sequence[str]) -> int:
     )
     doc: Final = parse_deprecations(markdown)
 
-    cost_map_path: Final = args.repo_root / COST_MAP_RELPATHS[0]
+    cost_map_path: Final = args.repo_root / COST_MAP_RELPATH
     cost_map: Final = json.loads(cost_map_path.read_text())
     outcome: Final = compute_sync(cost_map, catalog, doc)
     body: Final = render_pr_body(outcome)
@@ -527,8 +524,7 @@ def main(argv: Sequence[str]) -> int:
     if args.pr_body_file is not None:
         args.pr_body_file.write_text(body)
     if args.write and outcome.has_changes:
-        for relpath in COST_MAP_RELPATHS:
-            (args.repo_root / relpath).write_text(_serialize(outcome.cost_map))
+        cost_map_path.write_text(_serialize(outcome.cost_map))
     print(render_summary(outcome))
     print()
     print(body)

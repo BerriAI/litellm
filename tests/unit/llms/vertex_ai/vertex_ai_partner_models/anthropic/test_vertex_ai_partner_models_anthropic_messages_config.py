@@ -1,12 +1,11 @@
 import copy
-import json
-import os
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -801,11 +800,8 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
     cache. Every mapped vertex_ai entry the rule matches must carry the flag."""
     import re
 
-    import litellm
 
-    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = GetModelCostMap.load_local_model_cost_map()
     rules = cost_map["fallback_generalizations"]["rules"]
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

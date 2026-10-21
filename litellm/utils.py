@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge._native import ModelRegistry
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
 
@@ -9018,11 +9019,7 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 @lru_cache(maxsize=1)
 def get_bundled_model_cost_map() -> dict[str, Any]:
-    try:
-        model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
-    except Exception:
-        return {}
+    return ModelRegistry.bundled().to_dict()
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map

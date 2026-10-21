@@ -95,7 +95,6 @@ CI = [".github/workflows/test-unit.yml"]
         ("client", BACKEND + CLIENT, "run"),
         ("ui", BACKEND + CLIENT, "run"),
         ("cost-map-only", ["model_prices_and_context_window.json"], "run"),
-        ("cost-map-only", ["litellm/model_prices_and_context_window_backup.json"], "run"),
         ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
         (
             "cost-map-only",

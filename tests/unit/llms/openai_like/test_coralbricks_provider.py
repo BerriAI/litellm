@@ -378,37 +378,18 @@ def test_coralbricks_rows_are_listed_for_wildcard_expansion():
     assert set(litellm.get_valid_models(custom_llm_provider="coralbricks")) == catalog
 
 
-def test_coralbricks_cost_map_backup_mirrors_main():
-    main_map: Final = json.loads(
-        (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
-    )
-    backup_map: Final = json.loads(
-        (Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text()
-    )
-    main_keys: Final = {key for key in main_map if key.startswith("coralbricks/")}
-    backup_keys: Final = {key for key in backup_map if key.startswith("coralbricks/")}
-    assert main_keys and main_keys == backup_keys
-    for key in main_keys:
-        assert backup_map[key] == main_map[key]
-
-
 def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
     providers_json: Final = json.loads(
         (Path(litellm.__file__).parent / "llms" / "openai_like" / "providers.json").read_text()
     )
     declared: Final = providers_json["coralbricks"]["supported_endpoints"]
-    cost_map_paths: Final = (
-        Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json",
-        Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json",
+    cost_map: Final = json.loads(
+        (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
     )
-    for cost_map_path in cost_map_paths:
-        cost_map: Final = json.loads(cost_map_path.read_text())
-        coralbricks_rows: Final = {
-            key: row for key, row in cost_map.items() if key.startswith("coralbricks/")
-        }
-        assert coralbricks_rows
-        for row in coralbricks_rows.values():
-            assert row["supported_endpoints"] == declared
+    coralbricks_rows: Final = {key: row for key, row in cost_map.items() if key.startswith("coralbricks/")}
+    assert coralbricks_rows
+    for row in coralbricks_rows.values():
+        assert row["supported_endpoints"] == declared
 
 
 def _billed_chat_cost(model_id: str) -> float:
