@@ -402,7 +402,11 @@ class LiteLLM:
 
 
 class Chat:
-    def __init__(self, params, router_obj: "Router | None"):
+    def __init__(
+        self,
+        params: dict[str, object],  # mutable-ok: pops the acompletion flag in place
+        router_obj: "Router | None",
+    ):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
@@ -482,6 +486,7 @@ async def acompletion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -659,6 +664,7 @@ async def acompletion(
         "service_tier": service_tier,
         "store": store,
         "prompt_cache_key": prompt_cache_key,
+        "prompt_cache_retention": prompt_cache_retention,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -5348,6 +5354,7 @@ def completion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -5470,6 +5477,7 @@ def completion(
             service_tier=service_tier,
             store=store,
             prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
             base_url=base_url,
             api_version=api_version,
             api_key=api_key,
@@ -5835,6 +5843,7 @@ def completion(
             "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_retention": prompt_cache_retention,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
@@ -5971,6 +5980,7 @@ def completion(
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     "github_copilot_auth_type",
+                    "github_copilot_host",
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
@@ -9135,7 +9145,7 @@ async def ahealth_check(
 
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -9239,6 +9249,7 @@ async def acount_tokens(
                     request_model=model,
                     tools=tools,
                     system=system,
+                    messages_format="openai",
                 )
                 if result is not None and not result.error:
                     return result

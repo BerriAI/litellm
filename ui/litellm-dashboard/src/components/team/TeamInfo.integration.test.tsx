@@ -816,3 +816,44 @@ describe("TeamInfoView - member budget reset prompt", () => {
     expect(screen.getByRole("option", { name: "claude-haiku-4-5" })).toBeInTheDocument();
   });
 });
+
+describe("TeamInfoView - model rate limit picker", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    editTeam: false,
+  };
+
+  beforeEach(() => {
+    seedDefaultMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("offers access-group models, not no-default-models, in the model rate limit picker", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["no-default-models"],
+        access_group_models: ["claude-haiku-4-5"],
+      }) as TeamData,
+    );
+
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4o", "claude-haiku-4-5"]} premiumUser />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /add model limit/i }));
+    await user.click(screen.getByPlaceholderText("Select model"));
+
+    expect(await screen.findByRole("option", { name: "claude-haiku-4-5" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "no-default-models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "gpt-4o" })).not.toBeInTheDocument();
+  });
+});

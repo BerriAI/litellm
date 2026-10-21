@@ -1,7 +1,9 @@
 import asyncio, importlib, os, uuid
 import json
+import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping
+import threading
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -13,14 +15,17 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    _log_gemini_sampling_params_deprecated,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
@@ -2118,6 +2123,207 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     assert request_params["tools"] == [
         {"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}
     ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-2.5-flash", {"type": "integer"}),
+    ],
+)
+def test_gemini_tool_mapping_sends_integer_enums_to_gemini_3_and_keeps_caller_tools(
+    model: str, expected_level: dict[str, object]
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    caller_tools: Final = deepcopy(tools)
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent_level: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"]
+    assert sent_level == expected_level
+    assert tools == caller_tools
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-flash-latest", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-1.5-pro", {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_sends_integer_enums_to_gemini_3(model: str, expected_level: dict[str, object]) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
+
+
+def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> None:
+    level_schema: Final = {"type": "object", "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}}}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "function", "function": {"name": "set_priority", "parameters": level_schema}}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "task", "schema": level_schema}},
+        },
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+        allow_integer_enums=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"] == {
+        "type": "integer"
+    }
+    assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
+
+
+_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+
+
+def _ten_digit_integer_enum_tool(name: str, value_count: int) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("value_counts", "integer_enums_sent"),
+    [
+        ((_TEN_DIGIT_VALUES_IN_BUDGET,), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET + 1,), False),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2 + 1), False),
+    ],
+    ids=["one-tool-at-budget", "one-tool-over-budget", "two-tools-at-budget", "two-tools-over-budget"],
+)
+def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_the_enum_budget(
+    value_counts: tuple[int, ...], integer_enums_sent: bool
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [_ten_digit_integer_enum_tool(f"tool_{i}", count) for i, count in enumerate(value_counts)]
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    sent_levels: Final = [
+        declaration["parameters"]["properties"]["level"]
+        for declaration in request_params["tools"][0]["function_declarations"]
+    ]
+    assert sent_levels == [
+        (
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(count)]}
+            if integer_enums_sent
+            else {"type": "integer"}
+        )
+        for count in value_counts
+    ]
+
+
+def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> None:
+    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_CHARACTERS // 10)]
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "set_priority",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": names},
+                    "level": {"type": "integer", "enum": [1, 2, 5]},
+                },
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model="gemini-3.8-flash", drop_params=False
+    )
+
+    sent_properties: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+    assert sent_properties["level"] == {"type": "integer"}
+    assert sent_properties["name"]["enum"] == names
+
+
+@pytest.mark.parametrize(
+    ("value_count", "expected_level"),
+    [
+        (
+            _TEN_DIGIT_VALUES_IN_BUDGET,
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(_TEN_DIGIT_VALUES_IN_BUDGET)]},
+        ),
+        (_TEN_DIGIT_VALUES_IN_BUDGET + 1, {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_drops_integer_enums_past_the_enum_budget(
+    value_count: int, expected_level: dict[str, object]
+) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
 
 
 def test_vertex_ai_transform_parts():
@@ -6487,6 +6693,155 @@ def test_supported_reasoning_efforts_still_map(model):
             drop_params=False,
         )
         assert "thinkingConfig" in result
+
+
+@pytest.fixture
+def fresh_sampling_deprecation_cache() -> Iterator[None]:
+    _log_gemini_sampling_params_deprecated.cache_clear()
+    yield
+    _log_gemini_sampling_params_deprecated.cache_clear()
+
+
+def _mapped_gemini_3_models() -> tuple[str, ...]:
+    return tuple(sorted(name for name in GetModelCostMap.loaded_model_cost_map() if name.startswith("gemini-3")))
+
+
+def _deprecation_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.2), ("top_p", 0.9), ("top_k", 5)))
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_per_model(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    first, second = _mapped_gemini_3_models()[:2]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = tuple(
+            config.map_openai_params(
+                non_default_params={param: value}, optional_params={}, model=model, drop_params=True
+            )
+            for model in (first, first, first, second)
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert f"({first})" in deprecations[0]
+    assert f"({second})" in deprecations[1]
+    assert all(m[param] == value for m in mapped)
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
+    model: Final = _mapped_gemini_3_models()[0]
+
+    def map_sampling_params() -> None:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+        )
+
+    racing_call: Final = threading.Thread(target=map_sampling_params)
+
+    def start_racing_call_while_first_warning_logs(record: logging.LogRecord) -> bool:
+        if "DeprecationWarning" in record.getMessage() and racing_call.ident is None:
+            racing_call.start()
+            racing_call.join(timeout=0.5)
+        return True
+
+    verbose_logger.addFilter(start_racing_call_while_first_warning_logs)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            map_sampling_params()
+            racing_call.join()
+    finally:
+        verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
+
+    assert len(_deprecation_messages(caplog)) == 1
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unmapped: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(100))
+    mapped: Final = _mapped_gemini_3_models()[0]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in (*unmapped, mapped) * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert all(name not in deprecations[0] for name in unmapped)
+    assert f"({mapped})" in deprecations[1]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_names_models_cataloged_only_under_vertex_ai(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    vertex_only: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name in catalog
+        if name.startswith("vertex_ai/gemini-3")
+        and name.removeprefix("vertex_ai/") not in catalog
+        and f"gemini/{name.removeprefix('vertex_ai/')}" not in catalog
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=vertex_only, drop_params=True
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert f"({vertex_only})" in deprecations[0]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_names_priced_at_runtime_shares_one_notice(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    priced: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(20))
+    for name in priced:
+        monkeypatch.setitem(
+            litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            f"gemini/{name}",
+            {"input_cost_per_token": 1e-7, "output_cost_per_token": 1e-7, "litellm_provider": "gemini"},
+        )
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in priced * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert all(name not in deprecations[0] for name in priced)
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
+def test_gemini_2_5_sampling_params_log_no_deprecation(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model=f"gemini-2.5-flash-{uuid.uuid4().hex}",
+            drop_params=True,
+        )
+
+    assert mapped[param] == value
+    assert not any("DeprecationWarning" in r.getMessage() for r in caplog.records)
 
 
 def _generate_content_body() -> dict:

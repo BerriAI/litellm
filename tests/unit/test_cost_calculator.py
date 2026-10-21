@@ -357,6 +357,72 @@ def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
 
 
+@pytest.mark.parametrize("region", ["eu", "us"])
+@pytest.mark.parametrize(
+    ("alias", "dated"),
+    [
+        ("o1", "o1-2024-12-17"),
+        ("o3", "o3-2025-04-16"),
+        ("o3-mini", "o3-mini-2025-01-31"),
+        ("o4-mini", "o4-mini-2025-04-16"),
+        ("gpt-4o", "gpt-4o-2024-11-20"),
+        ("gpt-4o-mini", "gpt-4o-mini-2024-07-18"),
+    ],
+)
+def test_completion_cost_bills_undated_azure_data_zone_base_model_at_its_dated_rate(
+    _local_model_cost_map: None, region: str, alias: str, dated: str
+) -> None:
+    """LIT-9812: a deployment with base_model azure/eu/o3 (undated, like the global azure/o3) must bill the EU
+    Data Zone rate of its latest dated row, not $0 and not the global rate"""
+    dated_info: Final = litellm.model_cost[f"azure/{region}/{dated}"]
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model=dated, choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-data-zone-deployment",
+        custom_llm_provider="azure",
+        base_model=f"azure/{region}/{alias}",
+    )
+
+    assert cost == pytest.approx(
+        usage.prompt_tokens * dated_info["input_cost_per_token"]
+        + usage.completion_tokens * dated_info["output_cost_per_token"]
+    )
+
+
+def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-9812: a deployment whose base_model is an undated name only a capability rule matches must not
+    stop the ladder at $0 when the response names a priced model"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/gpt-9.9-2026-01-01": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9-2026-01-01", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-eu-deployment",
+        custom_llm_provider="azure",
+        base_model="azure/eu/gpt-9.9",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
 def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
     _local_model_cost_map: None,
 ) -> None:
