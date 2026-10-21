@@ -3968,11 +3968,16 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         config_path: Path,
         litellm_settings: dict[str, object],
         name: str = "JSON_LOGS",
-        from_config_file_path_env: bool = False,
+        config_file_path_env: Path | None = None,
     ) -> str | None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
         config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
         mock_proxy_config: Final = MagicMock()
-        mock_proxy_config.return_value.get_config = AsyncMock(return_value=yaml.safe_load(config_path.read_text()))
+        mock_proxy_config.return_value.is_yaml = ProxyConfig().is_yaml
+        mock_proxy_config.return_value.get_config = AsyncMock(
+            side_effect=lambda config_file_path: yaml.safe_load(Path(config_file_path).read_text())
+        )
         mock_proxy_module: Final = MagicMock(
             app=MagicMock(),
             ProxyConfig=mock_proxy_config,
@@ -3984,8 +3989,8 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
             for k, v in os.environ.items()
             if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT", "CONFIG_FILE_PATH")
         }
-        config_env: Final = {"CONFIG_FILE_PATH": str(config_path)} if from_config_file_path_env else {}
-        config_args: Final = [] if from_config_file_path_env else ["--config", str(config_path)]
+        config_env: Final = {} if config_file_path_env is None else {"CONFIG_FILE_PATH": str(config_file_path_env)}
+        config_args: Final = ["--config", str(config_path)] if config_file_path_env is None else []
         with (
             patch.dict(os.environ, {**clean_env, **config_env}, clear=True),
             patch.dict(
@@ -4021,7 +4026,18 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         monkeypatch.setattr(litellm, "json_logs", False)
         monkeypatch.setattr(litellm, "suppress_startup_output", False)
         settings: Final[dict[str, object]] = {"json_logs": True, "suppress_startup_output": True}
-        assert self._env_after_boot(tmp_path / "config.yaml", settings, name, from_config_file_path_env=True) == "true"
+        config_path: Final = tmp_path / "config.yaml"
+        assert self._env_after_boot(config_path, settings, name, config_file_path_env=config_path) == "true"
+
+    @pytest.mark.parametrize(("config_file", "env_file"), [("config.yaml", "missing.yaml"), ("config.json", "config.json")])
+    def test_a_CONFIG_FILE_PATH_workers_skip_is_skipped_by_the_cli_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_file: str, env_file: str
+    ) -> None:
+        """Workers load CONFIG_FILE_PATH only when it names a YAML file, and a boot with any other value starts,
+        so the CLI reads nothing from it either instead of failing the boot."""
+        monkeypatch.setattr(litellm, "json_logs", False)
+        settings: Final[dict[str, object]] = {"json_logs": True}
+        assert self._env_after_boot(tmp_path / config_file, settings, config_file_path_env=tmp_path / env_file) is None
 
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:

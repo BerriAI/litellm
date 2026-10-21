@@ -1224,7 +1224,10 @@ def run_server(
     if validate_config is True:
         ProxyInitializationHelpers.run_config_validation(config)
         return
-    env_config_file_path: Final = (os.environ.get("CONFIG_FILE_PATH") or None) if config is None else None
+    env_config_file: Final = os.environ.get("CONFIG_FILE_PATH") if config is None else None
+    env_config_file_path: Final = (
+        env_config_file if env_config_file and ProxyConfig().is_yaml(config_file_path=env_config_file) else None
+    )
     held_prisma_notice: Final = (
         _print_or_hold_enforce_prisma_migration_check_notice(
             reads_config_file=config is not None or env_config_file_path is not None,
