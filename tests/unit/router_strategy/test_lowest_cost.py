@@ -101,3 +101,42 @@ async def test_async_log_success_event_counts_a_response_with_no_completion_toke
     )
 
     assert _recorded_minute_counters(cache) == {"tpm": 12, "rpm": 1}
+
+
+_TWO_DOLLARS_PER_TOKEN = {"input_cost_per_token": 1.0, "output_cost_per_token": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "azure_litellm_params, base_model",
+    [
+        ({"model": "azure/my-gpt4-deploy"}, "azure/gpt-4.1"),
+        ({"model": "azure/gpt-4.1"}, "azure/not-a-real-model"),
+    ],
+    ids=["base_model_priced", "unmapped_base_model_falls_back_to_deployment_model"],
+)
+async def test_cost_based_routing_prices_an_azure_deployment_through_its_base_model(
+    azure_litellm_params: dict, base_model: str
+):
+    handler = LowestCostLoggingHandler(router_cache=DualCache())
+    healthy_deployments = [
+        {
+            "model_name": "gpt-4.1",
+            "litellm_params": {"model": "openai/gpt-4.1", **_TWO_DOLLARS_PER_TOKEN},
+            "model_info": {"id": "openai-two-dollars"},
+        },
+        {
+            "model_name": "gpt-4.1",
+            "litellm_params": azure_litellm_params,
+            "model_info": {"id": "azure-cost-map-priced", "base_model": base_model},
+        },
+    ]
+
+    picked = await handler.async_get_available_deployments(
+        model_group="gpt-4.1", healthy_deployments=healthy_deployments
+    )
+
+    assert picked is not None and picked["model_info"]["id"] == "azure-cost-map-priced", (
+        "a cost-map priced Azure deployment must beat a $2 per token deployment, "
+        "it loses only when it is scored at the $10 unmapped default"
+    )
