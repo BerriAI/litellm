@@ -121,7 +121,7 @@ export function ModelMaxBudgetEditor({
   const blurb = (
     <div className="text-xs text-muted-foreground">
       {premiumUser
-        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model."
+        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Type an access group or a pattern like claude-opus* to share one budget across every model it covers."
         : MODEL_MAX_BUDGET_PREMIUM_HINT}
     </div>
   );
@@ -163,8 +163,9 @@ export function ModelMaxBudgetEditor({
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
                 value={entry.model}
                 onValueChange={(model) => updateEntry(entry.id, { model })}
-                placeholder="Select model"
+                placeholder="Select a model or type a pattern"
                 emptyText="No models found"
+                customValueHint="Access group or model pattern"
                 disabled={!premiumUser}
               />
             </div>

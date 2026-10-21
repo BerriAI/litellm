@@ -1,5 +1,6 @@
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT, ModelMaxBudgetEditor, type ModelMaxBudget } from "./ModelMaxBudgetEditor";
 
 const STORED: ModelMaxBudget = { "gpt-4o": { budget_limit: 5, time_period: "30d" } };
@@ -65,5 +66,28 @@ describe("ModelMaxBudgetEditor with an enterprise license", () => {
     renderEditor(true, {});
 
     expect(addButton()).toBeEnabled();
+  });
+});
+
+describe("ModelMaxBudgetEditor model families", () => {
+  it("stores a typed pattern that matches no listed model as one budget entry", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{}}
+        onChange={onChange}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    const modelField = screen.getByPlaceholderText("Select a model or type a pattern");
+    await user.type(modelField, "claude-opus*");
+    await user.click(await screen.findByRole("option", { name: /claude-opus\*/ }));
+    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "10" } });
+
+    expect(onChange).toHaveBeenLastCalledWith({ "claude-opus*": { budget_limit: 10, time_period: "30d" } });
   });
 });

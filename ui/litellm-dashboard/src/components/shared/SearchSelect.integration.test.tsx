@@ -63,6 +63,21 @@ describe("SearchSelect", () => {
     expect(onValueChange).toHaveBeenLastCalledWith("team-3");
   });
 
+  it("offers the typed text as a value only when the caller accepts custom values", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    const { rerender } = render(<SearchSelect options={OPTIONS} onValueChange={onValueChange} />);
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    fireEvent.change(input, { target: { value: "team-*" } });
+    expect(screen.queryByRole("option", { name: /team-\*/ })).not.toBeInTheDocument();
+
+    rerender(<SearchSelect options={OPTIONS} onValueChange={onValueChange} customValueHint="Custom value" />);
+    fireEvent.change(input, { target: { value: "team-*" } });
+    await user.click(await screen.findByRole("option", { name: /team-\*/ }));
+    expect(onValueChange).toHaveBeenLastCalledWith("team-*");
+  });
+
   it("filters the options client-side as you type", async () => {
     const user = userEvent.setup();
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
