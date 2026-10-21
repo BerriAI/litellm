@@ -5124,7 +5124,9 @@ class Router:
             raise priority_error(model=model, message=request_priority.message)
         return request_priority, {key: value for key, value in kwargs.items() if key != "priority"}
 
-    def priority_header_update(self, model: str, kwargs: Mapping[str, object], header: str | None) -> Mapping[str, str]:
+    def priority_header_update(
+        self, model: str, kwargs: Mapping[str, object], header: str | None
+    ) -> Mapping[str, int | str]:
         return priority_header_fields(header, drops_params=lambda: self._drops_params(model=model, kwargs=kwargs))
 
     def _drops_params(self, model: str, kwargs: Mapping[str, object]) -> bool:

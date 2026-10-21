@@ -155,6 +155,8 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
+    "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
 ]
 
 

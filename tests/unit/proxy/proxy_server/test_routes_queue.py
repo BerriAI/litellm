@@ -175,8 +175,9 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
         (5, "0", {"priority": 5}, 0),
         (5, "0", {}, 0),
         (None, "high", {"priority": 1, "drop_params": True}, 1),
+        (None, "", {"priority": 1}, 1),
     ],
-    ids=("header-beats-body", "header-only", "drop-params-keeps-body"),
+    ids=("header-beats-body", "header-only", "drop-params-keeps-body", "empty-header-keeps-body"),
 )
 def test_queue_chat_completions_queues_at_the_priority_header(
     client,
