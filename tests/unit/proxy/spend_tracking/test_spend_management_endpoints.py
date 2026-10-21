@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 from datetime import timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8180,3 +8181,84 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+@pytest.mark.parametrize(("page", "matched"), ((1, True), (2, True), (1, False)))
+def test_spend_logs_project_filter_binds_ids_to_count_and_page(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, page: int, matched: bool
+) -> None:
+    projects: Final = ("fixture-project", "x') OR TRUE --")
+    row: Final = {
+        "request_id": "fixture-bound-log",
+        "team_id": "fixture-team",
+        "user": "fixture-member",
+        "metadata": {"user_api_key_project_id": projects[0], "cache_read_input_tokens": 0},
+    }
+    expected_rows: Final = [row] if matched and page == 1 else []
+    query: Final = AsyncMock(side_effect=([{"total_count": int(matched)}], expected_rows))
+    monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    params: Final = (
+        ("team_id", "fixture-team"),
+        ("user_id", "fixture-member"),
+        ("start_date", "2026-01-01 00:00:00"),
+        ("end_date", "2026-01-02 00:00:00"),
+        ("group_by_session", "false"),
+        ("page_size", "1"),
+        ("page", str(page)),
+        *(("project_ids", project) for project in projects),
+    )
+    response: Final = client.get("/spend/logs/v2", params=params)
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["data"] == expected_rows, body
+    assert body["total"] == int(matched), body
+    assert body["page"] == page and body["page_size"] == 1, body
+    assert body["project_filter"] == {"version": 1, "project_ids": list(projects)}, body
+    assert query.await_count == 2
+    for call in query.await_args_list:
+        sql, *values = call.args
+        assert "jsonb_typeof(metadata->'user_api_key_project_id') = 'string'" in sql
+        predicate: Final = re.search(r"metadata->>'user_api_key_project_id' = ANY\(\$(\d+)::text\[\]\)", sql)
+        assert predicate is not None, sql
+        assert values[int(predicate.group(1)) - 1] == list(projects)
+        assert all(project not in sql for project in projects), sql
+        assert "fixture-team" in values and "fixture-member" in values, values
+    assert query.await_args_list[-1].args[-2:] == (1, page - 1)
+
+
+@pytest.mark.parametrize(
+    ("path", "extra"),
+    (
+        ("/spend/logs/ui", {}),
+        ("/spend/logs/v2", {"group_by_session": "true"}),
+        ("/spend/logs/v2", {"session_cursor": "fixture-cursor"}),
+        ("/spend/logs/v2", {"project_ids": ""}),
+        ("/spend/logs/v2", {"project_ids": " "}),
+    ),
+)
+def test_spend_logs_project_filter_rejects_invalid_requests_before_query(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, extra: dict[str, str]
+) -> None:
+    query: Final = AsyncMock()
+    monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    response: Final = client.get(
+        path,
+        params={
+            "start_date": "2026-01-01 00:00:00",
+            "end_date": "2026-01-02 00:00:00",
+            "project_ids": "fixture-project",
+            **extra,
+        },
+    )
+    assert response.status_code == 400, response.text
+    query.assert_not_awaited()
