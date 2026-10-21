@@ -426,7 +426,8 @@ def _log_remap(
     logged_deployment_id: Final = _single_line(deployment_id)
     logged_model_group: Final = _single_line(model_group)
     logged_deployment_model: Final = _single_line(deployment_model)
-    verbose_logger.info(
+    log: Final = verbose_logger.info if sent_level is not None else verbose_logger.warning
+    log(
         "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
         logged_requested_level,
         logged_sent_level,

@@ -669,6 +669,17 @@ class TestResolveDeploymentReasoningEffort:
             "reasoning_effort_rounding": "up",
         }
 
+    def test_a_dropped_level_logs_a_warning_where_a_remap_logs_info(self, caplog: pytest.LogCaptureFixture) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent("none", {"reasoning_effort_levels": ["low", "high"]}, drop_params=True)
+        _sent("medium")
+
+        assert [record.levelno for record in caplog.records] == [logging.WARNING, logging.INFO]
+        assert "reasoning_effort none sent as None" in caplog.records[0].getMessage()
+
 
 class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
     @pytest.mark.parametrize(

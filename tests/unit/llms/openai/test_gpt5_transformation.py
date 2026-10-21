@@ -1600,7 +1600,7 @@ def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_the_fix(
     caplog: pytest.LogCaptureFixture, custom_llm_provider: str, level: str
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        params = litellm.get_optional_params(
+        params: Final = litellm.get_optional_params(
             model="gpt-5.6-terra-ptu",
             custom_llm_provider=custom_llm_provider,
             reasoning_effort=level,
@@ -1608,7 +1608,7 @@ def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_the_fix(
         )
 
     assert "reasoning_effort" not in params
-    drop_warnings = [
+    drop_warnings: Final = [
         record.getMessage()
         for record in caplog.records
         if record.levelno == logging.WARNING and "reasoning_effort" in record.getMessage()
@@ -1622,7 +1622,7 @@ def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_the_fix(
 
 def test_a_reasoning_effort_the_level_gate_forwards_logs_no_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        params = litellm.get_optional_params(
+        params: Final = litellm.get_optional_params(
             model="gpt-5.6-terra-ptu",
             custom_llm_provider="azure",
             reasoning_effort="medium",

@@ -17,9 +17,9 @@ from .gpt_transformation import OpenAIGPTConfig
 _GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
 
 DROP_REFUSED_REASONING_EFFORT_WARNING: Final = (
-    "Dropping reasoning_effort=%r for model=%r (drop_params=True) because the model map does not mark that level "
-    "supported for %r. If the deployment supports it, set model_info.base_model to its underlying model or add "
-    "the level to model_info.reasoning_effort_levels."
+    "Dropping %s=%r for model=%r (drop_params=True) because the model map does not mark that level supported for "
+    "%r. If the deployment supports it, add the level to model_info.reasoning_effort_levels, or set "
+    "model_info.base_model when the deployment name is not its underlying model."
 )
 
 
@@ -351,6 +351,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if litellm.drop_params or drop_params:
                 verbose_logger.warning(
                     DROP_REFUSED_REASONING_EFFORT_WARNING,
+                    "reasoning_effort",
                     requested_effort,
                     model,
                     self._model_map_lookup_name(model),
