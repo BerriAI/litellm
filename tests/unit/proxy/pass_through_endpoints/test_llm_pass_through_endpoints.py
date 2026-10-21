@@ -2142,7 +2142,6 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
-
     @pytest.mark.asyncio
     async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2183,6 +2182,7 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(error)
 
         assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
@@ -5558,7 +5558,9 @@ class TestAzureProxyRouteCrossIndexAuthorization:
 
 
 @pytest.fixture
-def azure_ai_search_virtual_index_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[UserAPIKeyAuth], TestClient]]:
+def azure_ai_search_virtual_index_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[Callable[[UserAPIKeyAuth], TestClient]]:
     from litellm.proxy import proxy_server
     from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
     from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
@@ -5677,7 +5679,6 @@ def test_azure_ai_search_index_definition_put_names_the_mapped_index(
         assert json.loads(sent.content) == {"name": upstream_name, "fields": fields}
 
 
-
 def test_azure_ai_search_index_delete_on_the_virtual_index_deletes_the_mapped_index(
     azure_ai_search_virtual_index_client: Callable[[UserAPIKeyAuth], TestClient],
 ) -> None:
@@ -5690,7 +5691,12 @@ def test_azure_ai_search_index_delete_on_the_virtual_index_deletes_the_mapped_in
 
         assert response.status_code == 204
         sent: Final = azure.calls.last.request
-        assert (sent.method, sent.url.path, sent.headers["api-key"]) == ("DELETE", "/indexes/real-idx", "search-admin-key")
+        assert (sent.method, sent.url.path, sent.headers["api-key"]) == (
+            "DELETE",
+            "/indexes/real-idx",
+            "search-admin-key",
+        )
+
 
 class TestAzureProxyRouteServiceLevelIndexCreate:
     """``POST /indexes`` carries no index name, so the managed-index branch cannot
