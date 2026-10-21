@@ -1385,7 +1385,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 verdict_settled = True
                 if _is_redundant_scan(end_scan_key, last_scan_key) and not _owes_ended_scan(
-                    endpoint_translation, guardrail_to_apply, responses_so_far, last_scan_key
+                    endpoint_translation, resolved_guardrail, responses_so_far, last_scan_key
                 ):
                     verbose_proxy_logger.debug(
                         "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
