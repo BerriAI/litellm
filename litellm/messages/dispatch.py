@@ -58,7 +58,7 @@ def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -
     stream_timeout: Final = kwargs.get("stream_timeout")
     if fields.get("stream") is not True or stream_timeout is None:
         return kwargs
-    return {**kwargs, "timeout": stream_timeout}
+    return {**{key: value for key, value in kwargs.items() if key != "stream_timeout"}, "timeout": stream_timeout}
 
 
 def _public_request(
