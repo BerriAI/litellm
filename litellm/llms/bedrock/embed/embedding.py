@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
@@ -61,6 +62,9 @@ def _sign_get_request(
     request: Final = AWSRequest(method="GET", url=url, data=None, headers=headers)
     SigV4Auth(credentials, "bedrock", aws_region_name).add_auth(request)
     return request.prepare()
+
+
+_OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 def _without_region_path(model: str) -> str:
@@ -417,14 +421,15 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        region_from_model: Final = split_bedrock_region_path(model)[0]
+        model_id_param: Final = _OPTIONAL_STR.validate_python(optional_params.pop("model_id", None))
+        region_from_model: Final = split_bedrock_region_path(model)[0] if model_id_param is None else None
         model_path: Final = _without_region_path(model)
         credentials, aws_region_name = self._load_credentials(
             optional_params, bearer_token=bedrock_bearer_token(api_key), region_from_model=region_from_model
         )
 
         ### TRANSFORMATION ###
-        unencoded_model_id: Final = optional_params.pop("model_id", None) or model_path
+        unencoded_model_id: Final = model_id_param or model_path
         modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
             optional_params={"aws_region_name": aws_region_name},
@@ -433,7 +438,9 @@ class BedrockEmbedding(BaseAWSLLM):
         )
         has_async_invoke: Final = "async_invoke/" in model_path
         bedrock_model: Final = model_path.replace("async_invoke/", "", 1)
-        response_model: Final = model.replace("async_invoke/", "", 1)
+        response_model: Final = (
+            model.replace("async_invoke/", "", 1) if region_from_model is None else f"{aws_region_name}/{bedrock_model}"
+        )
         provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
         if provider is None:
             raise Exception(
