@@ -16,7 +16,7 @@ import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
 from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows, scratch_database
-from integration._support.database_relay import database_relay
+from integration._support.database_relay import database_relay, plaintext_database_url
 from integration._support.openai_wire import answering_model_discovery, posted_targets
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.responses_stream import data_frames, spend_row, sse_events
@@ -480,7 +480,7 @@ def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row
     with (
         scratch_database() as database_url,
         database_relay(database_url, _SPEND_LOG_INSERT) as (relay, relayed_url),
-        owned_proxy(gateway, tmp_path, {"DATABASE_URL": relayed_url}, workers=2) as candidate,
+        owned_proxy(gateway, tmp_path, {"DATABASE_URL": plaintext_database_url(relayed_url)}, workers=2) as candidate,
         ExitStack() as wires,
         candidate.scenario() as scenario,
         ThreadPoolExecutor(max_workers=len(cases)) as pool,
