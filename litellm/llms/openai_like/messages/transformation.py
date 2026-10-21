@@ -1,6 +1,7 @@
 from typing import Any, Final
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -33,6 +34,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         super().__init__()
         self._cache_control_ttl: Final = cache_control_ttl
 
+    def is_native_messages_route(self) -> bool:
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],
@@ -59,6 +63,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
             optional_params=optional_params,
             messages=messages,
             beta_map_provider=LlmProviders.OPENAI_LIKE.value,
+            drop_params=litellm_params.get("drop_params") is True,  # pyright: ignore[reportUnknownMemberType]  # the litellm params arrive as a bare dict
         )
         return merged, api_base
 
@@ -109,7 +114,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         if base.endswith("/v1/messages"):
             return base
         base = base.removesuffix("/v1")
-        return f"{base}/v1/messages"
+        return join_api_base(base, "v1/messages")
 
 
 class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
@@ -131,6 +136,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def supports_safeguards(self) -> bool:
+        return False
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key

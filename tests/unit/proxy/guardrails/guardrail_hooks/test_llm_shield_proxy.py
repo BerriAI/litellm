@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1975,6 +1976,20 @@ class TestProxyWiring:
 
 
 class TestStreamUsage:
+    @pytest.mark.asyncio
+    async def test_trailing_flush_survives_a_usage_chunk_with_no_choices(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        held: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Mail [EMAI"))])
+        usage_chunk: Final = ModelResponseStream(
+            choices=[], usage=Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+        )
+
+        out: Final = await _restore_stream(guardrail, [held, usage_chunk])
+
+        assert out[1] is not None and out[1].choices == []
+        assert [chunk.choices[0].delta.content for chunk in out[2:]] == ["[EMAI"]
+        assert all(getattr(chunk, "usage", None) is None for chunk in out[2:])
+
     @pytest.mark.asyncio
     async def test_trailing_flush_does_not_repeat_usage(self):
         """With n>=2 and include_usage, the last chunk carries usage; a flush copied from it must not.
