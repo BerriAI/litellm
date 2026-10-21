@@ -26,6 +26,13 @@ class TestDashScopeRerankURL:
         url = self.config.get_complete_url(api_base=None, model="qwen3-rerank")
         assert url == DEFAULT_RERANK_URL
 
+    def test_domain_root_remaps_to_rerank_route(self):
+        url = self.config.get_complete_url(
+            api_base="https://llm-abc123.cn-beijing.maas.aliyuncs.com",
+            model="qwen3-rerank",
+        )
+        assert url == "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
+
     def test_chat_shaped_base_remaps_to_rerank_route(self):
         url = self.config.get_complete_url(
             api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",

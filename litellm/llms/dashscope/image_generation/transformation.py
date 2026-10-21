@@ -39,6 +39,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ImageObject, ImageResponse
 
+from ..common_utils import (
+    DASHSCOPE_CHAT_COMPATIBLE_PATH,
+    DASHSCOPE_IMAGE_PATH,
+    resolve_dashscope_endpoints,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -51,8 +57,6 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-
-CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
 OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
@@ -113,8 +117,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
+        endpoints: Final = resolve_dashscope_endpoints(api_base)
+        if endpoints is not None:
+            return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
+
         image_api_base: Final = (
-            api_base if api_base and not api_base.rstrip("/").endswith(CHAT_COMPATIBLE_MODE_PATH) else None
+            None
+            if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH)
+            else api_base
         )
         return self._resolve_image_api_base(image_api_base)
 
