@@ -1,12 +1,17 @@
 """Unit tests for semantic guard route loading and content filtering."""
 
 import os
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
+from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import SemanticGuardRouteLoader
+from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.semantic_guard import SemanticGuardrail
+
+
 class TestRouteLoader:
     """Tests for SemanticGuardRouteLoader — YAML loading and route building."""
 
@@ -476,3 +481,83 @@ class TestContentFilterPromptInjectionTemplate:
             input_type="request",
         )
         assert result is None or result["texts"][0] == sentence
+
+
+def test_build_routes_empty() -> None:
+    routes: Final = SemanticGuardRouteLoader.build_routes(
+        route_templates=None,
+        custom_routes_file=None,
+        custom_routes=None,
+    )
+
+    assert routes == []
+
+
+def test_build_routes_from_template() -> None:
+    routes: Final = SemanticGuardRouteLoader.build_routes(
+        route_templates=["prompt_injection"],
+        custom_routes_file=None,
+        custom_routes=None,
+        global_threshold=0.75,
+    )
+
+    assert len(routes) == 1
+    assert routes[0].name == "prompt_injection"
+    assert len(routes[0].utterances) > 20
+    assert routes[0].score_threshold == 0.75
+
+
+def test_build_routes_with_custom_inline() -> None:
+    routes: Final = SemanticGuardRouteLoader.build_routes(
+        route_templates=["prompt_injection"],
+        custom_routes_file=None,
+        custom_routes=[
+            {
+                "route_name": "custom_test",
+                "description": "Test route",
+                "utterances": ["test utterance one", "test utterance two"],
+                "similarity_threshold": 0.8,
+            }
+        ],
+        global_threshold=0.75,
+    )
+
+    assert tuple(route.name for route in routes) == ("prompt_injection", "custom_test")
+    assert routes[1].score_threshold == 0.8
+
+
+def test_build_routes_with_sql_injection() -> None:
+    routes: Final = SemanticGuardRouteLoader.build_routes(
+        route_templates=["sql_injection"],
+        custom_routes_file=None,
+        custom_routes=None,
+        global_threshold=0.75,
+    )
+
+    assert len(routes) == 1
+    assert routes[0].name == "sql_injection"
+    assert len(routes[0].utterances) > 20
+    assert routes[0].score_threshold == 0.78
+
+
+def test_build_routes_combined_templates() -> None:
+    routes: Final = SemanticGuardRouteLoader.build_routes(
+        route_templates=["prompt_injection", "sql_injection"],
+        custom_routes_file=None,
+        custom_routes=None,
+        global_threshold=0.75,
+    )
+
+    assert tuple(route.name for route in routes) == ("prompt_injection", "sql_injection")
+
+
+def test_empty_routes_raises() -> None:
+    with pytest.raises(ValueError, match="no routes configured"):
+        SemanticGuardrail(
+            guardrail_name="test",
+            llm_router=MagicMock(),
+            embedding_model="text-embedding-3-small",
+            similarity_threshold=0.75,
+            route_templates=None,
+            custom_routes=None,
+        )

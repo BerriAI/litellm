@@ -17,9 +17,11 @@ NEXT: Final = Migration(
     "CREATE TABLE migration_next (id int PRIMARY KEY); INSERT INTO migration_next VALUES (2);",
 )
 FATAL: Final = Migration(COMPLETE.name, "DO $$ BEGIN RAISE EXCEPTION 'MIGRATION_TEST_FATAL'; END $$;")
-GATED: Final = Migration(
-    COMPLETE.name, f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
+_GATED_SQL: Final = (
+    f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
 )
+GATED: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '10s';\n{_GATED_SQL}")
+GATED_WITH_SHORT_LOCK_TIMEOUT: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '2s';\n{_GATED_SQL}")
 
 
 @step("Start {count} proxy containers on the test database")
@@ -36,6 +38,25 @@ def assert_completed(database: Database, migration: Migration = COMPLETE) -> Non
         '_prisma_migrations WHERE migration_name = %s',
         (migration.name,),
     ) == ((True, True, 1),), "Expected exactly one successful SQL execution"
+    assert database.query("SELECT id FROM migration_effect") == ((1,),)
+
+
+@step("Check that migration {migration.name} rolled back lock timeouts and completed exactly once")
+def assert_completed_after_lock_timeouts(database: Database, migration: Migration) -> None:
+    rows: Final = database.query(
+        "SELECT finished_at IS NOT NULL, rolled_back_at IS NOT NULL, applied_steps_count FROM "
+        "_prisma_migrations WHERE migration_name = %s ORDER BY started_at",
+        (migration.name,),
+    )
+    finished: Final = tuple(row for row in rows if row[0])
+    rolled_back: Final = tuple(row for row in rows if row[1])
+    assert finished == ((True, False, 1),), "Expected exactly one completed migration attempt"
+    assert rolled_back and all(row == (False, True, 0) for row in rolled_back), (
+        "Expected every failed migration attempt to be rolled back"
+    )
+    assert all(is_finished != is_rolled_back for is_finished, is_rolled_back, _ in rows), (
+        "Expected every migration attempt to be either completed or rolled back"
+    )
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
 
 

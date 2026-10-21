@@ -1,6 +1,5 @@
 import json
 import math
-import socket
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.ports import allocate_port
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
@@ -21,6 +21,13 @@ import litellm
 
 _API_KEY: Final = "synthetic-decisions-key"
 _ENV_KEY: Final = "synthetic-decisions-env-key"
+_AZURE_AI_ENTRA_SCENARIO: Final = "providers"
+_AZURE_AI_ENTRA_TOKEN: Final = "synthetic-decisions-entra-token"
+_AZURE_AI_MISSING_CREDENTIALS_MESSAGE: Final = (
+    "Missing Azure AI credentials - set an API key (`api_key` or AZURE_AI_API_KEY), or Entra ID / OAuth "
+    "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed "
+    "identity with `litellm.enable_azure_ad_token_refresh = True`)"
+)
 _PASS_THROUGH_MODEL: Final = "gpt-6-luna"
 _PASS_THROUGH_AUTHORIZATION: Final = "Bearer customer-held-upstream-key"
 _PASS_THROUGH_NEIGHBOUR: Final = "decisions-beside-a-pass-through"
@@ -83,6 +90,7 @@ _PROVIDERS: Final = (
         "perplexity/pplx-decider-v1-27b",
     ),
     _Provider("typesafe", "typesafe/jev-1.13.0", "/v1/systemone", "jev-1.13.0", _API_KEY, False, "typesafe/jev-1.13.0"),
+    _Provider("nace", "nace/drex-v2.0", "/v1/systemone", "drex-v2.0", _API_KEY, False, "nace/drex-v2.0"),
     _Provider(
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -96,8 +104,19 @@ _PROVIDERS: Final = (
     _Provider(
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
     ),
+    _Provider("laya", "laya/english", "/v1/systemone", "english", None, False, "laya/english"),
     _Provider(
-        "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
+        "bespoke", "bespoke/nimble-latest", "/v1/systemone", "nimble-latest", None, False, "bespoke/nimble-latest"
+    ),
+    _Provider("hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None),
+    _Provider(
+        "fireworks_ai",
+        "fireworks_ai/accounts/fireworks/routers/rune",
+        "/v1/systemone",
+        "accounts/fireworks/routers/rune",
+        _API_KEY,
+        False,
+        "fireworks_ai/accounts/fireworks/routers/rune",
     ),
     _Provider(
         "cloudflare",
@@ -122,7 +141,7 @@ _PROVIDERS: Final = (
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
-_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
 _UNSUPPORTED_PROVIDER_MODEL: Final = "anthropic/claude-opus-5-5"
 _CONNECTION_ERROR: Final = "litellm.APIConnectionError"
@@ -222,10 +241,54 @@ def _assert_connection_error(response: httpx.Response) -> None:
     assert _GENERIC_API_ERROR not in response.text, response.text
 
 
-def _free_closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+def test_azure_ai_entra_auth_reaches_the_scripted_upstream_for_both_decisions_routes(
+    gateway: Gateway, scenario: Scenario
+) -> None:
+    provider: Final = next(provider for provider in _PROVIDERS if provider.name == "azure_ai")
+    handle: Final = register_scenario(
+        _AZURE_AI_ENTRA_SCENARIO,
+        JsonResponse(content_type="application/json", body=_answer_body(provider)),
+    )
+    scenario.cleanups.callback(delete_scenario, handle)
+    model: Final = "azure_ai/decision-1-entra"
+    body: Final = {"model": model, "state": _STATE, "questions": _QUESTIONS}
+    decisions_body: Final = {
+        "model": model,
+        "input": "The export job hangs at 99%",
+        "questions": [{"type": "predicate", "name": "defect", "instructions": "Is this a defect?"}],
+    }
+
+    no_credentials_body: Final = {**body, "model": "azure_ai/decision-1-no-credentials"}
+    systemone_auth_error: Final = gateway.request("POST", "/v1/systemone", no_credentials_body)
+    assert systemone_auth_error.status_code == 401, systemone_auth_error.text
+    assert _AZURE_AI_MISSING_CREDENTIALS_MESSAGE in string_value(
+        object_value(object_value(systemone_auth_error.json())["error"])["message"]
+    )
+    no_credentials_decisions_body: Final = {
+        **decisions_body,
+        "model": "azure_ai/decision-1-no-credentials",
+    }
+    decisions_auth_error: Final = gateway.request("POST", "/v1/decisions", no_credentials_decisions_body)
+    assert decisions_auth_error.status_code == 401, decisions_auth_error.text
+    assert _AZURE_AI_MISSING_CREDENTIALS_MESSAGE in string_value(
+        object_value(object_value(decisions_auth_error.json())["error"])["message"]
+    )
+    assert not _upstream_calls(gateway, handle)
+
+    systemone_response: Final = gateway.request("POST", "/v1/systemone", body)
+    assert systemone_response.status_code == 200, systemone_response.text
+    decisions_response: Final = gateway.request("POST", "/v1/decisions", decisions_body)
+    assert decisions_response.status_code == 200, decisions_response.text
+
+    calls: Final = _upstream_calls(gateway, handle)
+    assert tuple(string_value(call["authorization"]) for call in calls) == (
+        f"Bearer {_AZURE_AI_ENTRA_TOKEN}",
+        f"Bearer {_AZURE_AI_ENTRA_TOKEN}",
+    )
+    assert tuple(string_value(call["path"]) for call in calls) == (
+        "/providers/microsoft/v1/systemone",
+        "/providers/microsoft/v1/systemone",
+    )
 
 
 def _pass_through_config(directory: Path, pass_through_target: str, native_api_base: str) -> Path:
@@ -278,7 +341,7 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gat
             row["api_base"],
             row["prompt_tokens"],
             row["completion_tokens"],
-        ) == ("success", "adecisions", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
+        ) == ("success", "asystemone", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
 
 
@@ -339,7 +402,7 @@ async def test_sdk_sync_and_async_clients_send_the_same_request(gateway: Gateway
         synchronous: Final = litellm.decisions(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
-        asynchronous: Final = await litellm.adecisions(
+        asynchronous: Final = await litellm.asystemone(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
         for response in (synchronous, asynchronous):
@@ -418,8 +481,8 @@ def test_request_body_api_base_is_refused_like_chat_without_an_upstream_call(gat
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
-        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
-        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
+        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
+        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
         assert 400 <= decisions.status_code < 500, decisions.text
         assert decisions.status_code == chat.status_code, (decisions.text, chat.text)
         assert _upstream_calls(gateway, handle) == []
@@ -507,7 +570,7 @@ def test_upstream_errors_keep_their_status_and_log_an_unbilled_failure(gateway: 
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert (row["status"], row["call_type"], row["model_group"], _number(row["spend"])) == (
             "failure",
-            "adecisions",
+            "asystemone",
             model,
             0.0,
         )
@@ -529,7 +592,7 @@ def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway, pr
         handle: Final = _register(scenario, _answer_body(provider))
         healthy: Final = _deployment(scenario, handle, provider)
         dead: Final = scenario.model(
-            model=provider.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=provider.api_key
+            model=provider.model, api_base=f"http://127.0.0.1:{allocate_port()}", api_key=provider.api_key
         )
         failed: Final = _decide(gateway, dead, num_retries=0)
         _assert_connection_error(failed)
@@ -543,7 +606,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+        dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
         chat_model: Final = scenario.model(model=_OPENROUTER_CHAT_MODEL, api_base=dead_api_base, api_key=_API_KEY)
         decisions_model: Final = scenario.model(model=_OPENROUTER.model, api_base=dead_api_base, api_key=_API_KEY)
         chat: Final = _chat(gateway, chat_model, num_retries=0)
@@ -559,7 +622,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
 
 
 async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gateway: Gateway) -> None:
-    dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+    dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
     with pytest.raises(litellm.APIConnectionError):
         litellm.completion(
             model=_OPENROUTER_CHAT_MODEL,
@@ -574,14 +637,16 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
             api_base=dead_api_base,
             api_key=_API_KEY,
         )
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.APIConnectionError) as decisions_error:
         litellm.decisions(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
-    with pytest.raises(litellm.APIConnectionError):
-        await litellm.adecisions(
+    assert decisions_error.value.llm_provider == "openrouter"
+    with pytest.raises(litellm.APIConnectionError) as systemone_error:
+        await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
+    assert systemone_error.value.llm_provider == "openrouter"
 
 
 def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_every_supported_provider(

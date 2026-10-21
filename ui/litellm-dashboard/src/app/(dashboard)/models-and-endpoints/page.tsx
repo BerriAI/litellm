@@ -2,10 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
@@ -27,18 +29,25 @@ import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceD
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type ModelTabSlug =
-  | "add"
-  | "auto-routers"
-  | "llm-credentials"
-  | "pass-through"
-  | "health"
-  | "retry-settings"
-  | "model-group-alias"
-  | "access-group-budgets"
-  | "price-data";
+const MODEL_TAB_SLUGS = [
+  "add",
+  "auto-routers",
+  "llm-credentials",
+  "pass-through",
+  "health",
+  "retry-settings",
+  "model-group-alias",
+  "access-group-budgets",
+  "price-data",
+] as const;
+
+type ModelTabSlug = (typeof MODEL_TAB_SLUGS)[number];
 
 const BASE_TAB_KEY = "all-models";
+
+const TAB_KEYS = [BASE_TAB_KEY, ...MODEL_TAB_SLUGS] as const;
+
+const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
@@ -87,7 +96,8 @@ export default function ModelsAndEndpointsPage() {
   const { modelId, teamId, close } = useModelDetailRouting();
   const { availableModelAccessGroups, allModelsOnProxy } = useModelDashboardData();
 
-  const [activeKey, setActiveKey] = useState<string>(BASE_TAB_KEY);
+  const [requestedTab, setRequestedTab] = useUrlTab(TAB_KEYS, BASE_TAB_KEY);
+  const [, setPrefillParams] = useQueryStates(PREFILL_URL_PARAMS);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -123,6 +133,18 @@ export default function ModelsAndEndpointsPage() {
     ],
     [canCreate, canViewAutoRouters, isAdmin, isInternalUser, isViewOnly],
   );
+
+  const visibleKeys: readonly string[] = visibleSlugs.map((slug) => slug || BASE_TAB_KEY);
+  const activeKey = visibleKeys.includes(requestedTab) ? requestedTab : BASE_TAB_KEY;
+
+  const handleTabChange = (key: string) => {
+    const next = TAB_KEYS.find((tabKey) => tabKey === key);
+    if (next === undefined) {
+      return;
+    }
+    setRequestedTab(next);
+    void setPrefillParams({ provider: null, litellm_model: null });
+  };
 
   const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
@@ -178,9 +200,7 @@ export default function ModelsAndEndpointsPage() {
           </div>
         </div>
 
-        {!isViewOnly && (
-          <DecisionModelsBanner onAddModel={canCreate && !modelId ? () => setActiveKey("add") : undefined} />
-        )}
+        {!isViewOnly && <DecisionModelsBanner />}
 
         {modelId ? (
           <ModelInfoView
@@ -194,7 +214,7 @@ export default function ModelsAndEndpointsPage() {
             modelAccessGroups={availableModelAccessGroups}
           />
         ) : (
-          <Tabs value={activeKey} onValueChange={setActiveKey}>
+          <Tabs value={activeKey} onValueChange={handleTabChange}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">

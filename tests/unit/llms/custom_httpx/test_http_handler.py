@@ -14,9 +14,11 @@ from unittest.mock import MagicMock, patch
 import certifi
 import httpx
 import pytest
+import respx
 from aiohttp import ClientSession, TCPConnector
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -1474,13 +1476,13 @@ class _RetryClientHandler(AsyncHTTPHandler):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
 async def test_connection_error_retry_forwards_content(method: str):
-    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped", request=request)
+        raise httpx.ConnectError("connection dropped", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
-        captured.append(request.content)
+        captured.append((request.method, request.content))
         return httpx.Response(200, request=request)
 
     first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
@@ -1488,10 +1490,59 @@ async def test_connection_error_retry_forwards_content(method: str):
     async with first, retry:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-        body = b'{"post": ["run1"]}'
+        body: Final = b'{"post": ["run1"]}'
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-        assert captured == [body], "the retried request must carry the same content= body"
+        assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "patch"])
+async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
+    retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        retried_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
+
+        assert retried_requests == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body: Final = b'{"a":1}'
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert response.status_code == 200
+        assert captured == [(method.upper(), body)]
         await handler.close()
 
 
@@ -2051,3 +2102,73 @@ def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_cont
     assert isinstance(selected, ssl.SSLContext)
     assert selected.verify_mode == ssl.CERT_NONE
     assert selected.check_hostname is False
+
+
+def _ollama_ssl_messages() -> list[dict[str, str]]:
+    return [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+
+
+def _ollama_generate_route(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    final: Final = {"model": "llama3.1", "response": "", "done": True, "prompt_eval_count": 2, "eval_count": 1}
+    if stream:
+        return respx_mock.post("http://ollama.test:11434/api/generate").respond(
+            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False}) + "\n" + json.dumps(final) + "\n",
+            headers={"content-type": "application/x-ndjson"},
+        )
+    return respx_mock.post("http://ollama.test:11434/api/generate").respond(json={**final, "response": "Sunny"})
+
+
+def _cached_clients_verify_modes(
+    cache: LLMClientCache, client_type: type[HTTPHandler | AsyncHTTPHandler]
+) -> tuple[ssl.VerifyMode, ...]:
+    return tuple(
+        client.client._transport._pool._ssl_context.verify_mode
+        for client in cache.cache_dict.values()
+        if isinstance(client, client_type)
+    )
+
+
+def test_ollama_ssl_verify_false_builds_a_client_that_skips_certificate_checks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    route: Final = _ollama_generate_route(respx_mock, stream=False)
+
+    response: Final = litellm.completion(
+        model="ollama/llama3.1",
+        messages=_ollama_ssl_messages(),
+        api_base="http://ollama.test:11434",
+        ssl_verify=False,
+    )
+
+    assert route.call_count == 1
+    assert response.choices[0].message.content == "Sunny"
+    assert _cached_clients_verify_modes(client_cache, HTTPHandler) == (ssl.CERT_NONE,)
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_async_ollama_ssl_verify_false_builds_a_client_that_skips_certificate_checks(
+    stream: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _ollama_generate_route(respx_mock, stream=stream)
+
+    response: Final = await litellm.acompletion(
+        model="ollama/llama3.1",
+        messages=_ollama_ssl_messages(),
+        api_base="http://ollama.test:11434",
+        ssl_verify=False,
+        stream=stream,
+    )
+    text: Final = (
+        "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert route.call_count == 1
+    assert text == "Sunny"
+    assert _cached_clients_verify_modes(client_cache, AsyncHTTPHandler) == (ssl.CERT_NONE,)
