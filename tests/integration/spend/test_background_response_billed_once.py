@@ -1,16 +1,23 @@
 import asyncio
+import base64
 import json
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from itertools import chain
 from typing import Final
 
+import httpx
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, held, list_value, object_value, string_value
 from integration._support.database import read_rows, write_rows
+from integration._support.otlp_sink import decode_spans
 from integration._support.upstream import delete_scenario, register_scenario
+from integration._support.wire import Request, wire_server
 from integration.caching.response_cache_case import entry_key, redis_store
+from integration.security._callback_traffic import langfuse_sink
+from integration.security._sinks import Recorder
 from integration.spend._background_responses import (
     ATTRIBUTION_COLUMNS,
     CONCURRENT_READS,
@@ -59,7 +66,7 @@ from integration.spend._background_responses import (
 )
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.responses import Response
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
@@ -611,6 +618,59 @@ def test_a_background_response_bills_the_end_user_who_created_it_once(gateway: G
         assert _charged_end_users(upstream.model_id) == [end_user]
 
 
+def _project_spend(project_id: str) -> float:
+    rows: Final = read_rows('SELECT spend FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (project_id,))
+    return number(rows[0]["spend"])
+
+
+def _next_create(scenario: Scenario, key: str, model: str) -> httpx.Response:
+    response: Final = scenario.gateway.request(
+        "POST", "/v1/responses", {"model": model, "input": PROMPT, "background": True, "store": False}, key=key
+    )
+    if response.status_code == 200:
+        scenario.cleanups.callback(forget_row, string_value(object_value(response.json())["id"]))
+    return response
+
+
+def _key_budget(scenario: Scenario, budget_owner: str, model_budget: JsonValue) -> Mapping[str, JsonValue]:
+    if budget_owner == "key":
+        return {"model_max_budget": model_budget}
+    if budget_owner == "user":
+        return {"user_id": scenario.user(model_max_budget=model_budget)}
+    if budget_owner == "budget_tier":
+        return {"budget_id": scenario.budget(model_max_budget=model_budget)}
+    return {}
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("budget_owner", ["key", "team", "user", "budget_tier"])
+def test_a_billed_background_response_counts_toward_its_creators_project_and_model_budget(
+    gateway: Gateway, budget_owner: str
+) -> None:
+    with gateway.scenario() as scenario:
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        model_budget: Final[JsonValue] = {upstream.model: {"max_budget": PRICE / 2, "budget_duration": "1d"}}
+        team_id: Final = scenario.team(**({"model_max_budget": model_budget} if budget_owner == "team" else {}))
+        project_id: Final = scenario.project(team_id)
+        key: Final = scenario.key(
+            team_id=team_id, project_id=project_id, **_key_budget(scenario, budget_owner, model_budget)
+        )
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        read: Final = read_response(gateway, key, response_id)
+        assert (read,) in (settling_reads("completed", 1), free_reads("completed", 1))
+        eventually(
+            lambda: (key_spend(key), _project_spend(project_id)),
+            lambda spends: spends[0] > 0 and costs(spends[0])(spends[1]),
+            seconds=SPEND_LANDING_SECONDS,
+        )
+        refused: Final = eventually(
+            lambda: _next_create(scenario, key, upstream.model),
+            lambda response: response.status_code != 200,
+            seconds=SPEND_LANDING_SECONDS,
+        )
+        assert f"exceeded budget for model={upstream.model}" in refused.text, refused.text
+
+
 @pytest.mark.timeout(240)
 def test_the_read_that_settles_a_background_response_splits_its_charge_into_input_and_output(
     gateway: Gateway,
@@ -769,3 +829,78 @@ def test_a_client_cannot_make_a_background_create_free_by_forging_the_managed_ma
         scenario.cleanups.callback(forget_row, response_id)
         assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
         assert_charged_exactly(lambda: key_spend(key), PRICE)
+
+
+LANGFUSE_PUBLIC_KEY: Final = "pk-lf-background"
+LANGFUSE_SECRET_KEY: Final = "sk-lf-background"
+LANGFUSE_TRACES_PATH: Final = "/api/public/otel/v1/traces"
+LANGFUSE_COST: Final = "langfuse.observation.cost_details"
+_LANGFUSE_COST_DETAILS: Final = TypeAdapter(dict[str, float])
+
+
+def _langfuse_callback(host: str) -> dict[str, JsonValue]:
+    return {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {
+            "langfuse_public_key": LANGFUSE_PUBLIC_KEY,
+            "langfuse_secret_key": LANGFUSE_SECRET_KEY,
+            "langfuse_host": host,
+        },
+    }
+
+
+def _key_with_its_own_logging(scenario: Scenario, langfuse_url: str) -> str:
+    return scenario.key(metadata={"logging": [_langfuse_callback(langfuse_url)]})
+
+
+def _key_in_a_team_with_logging(scenario: Scenario, langfuse_url: str) -> str:
+    team_id: Final = scenario.team()
+    added: Final = scenario.gateway.request("POST", f"/team/{team_id}/callback", _langfuse_callback(langfuse_url))
+    assert added.status_code == 200, added.text
+    return scenario.key(team_id=team_id)
+
+
+LOGGING_ON: Final[Mapping[str, Callable[[Scenario, str], str]]] = {
+    "the_key": _key_with_its_own_logging,
+    "the_team": _key_in_a_team_with_logging,
+}
+
+
+def _trace_exports(langfuse: Recorder) -> tuple[Request, ...]:
+    return tuple(request for request in langfuse.requests() if request.target.startswith(LANGFUSE_TRACES_PATH))
+
+
+def _exported_costs(langfuse: Recorder) -> tuple[float, ...]:
+    spans: Final = tuple(
+        chain.from_iterable(
+            decode_spans(export.body, export.headers.get("content-type", "")) for export in _trace_exports(langfuse)
+        )
+    )
+    return tuple(
+        _LANGFUSE_COST_DETAILS.validate_json(string_value(span["attributes"][LANGFUSE_COST]))["total"]
+        for span in spans
+        if LANGFUSE_COST in span["attributes"]
+    )
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("logging_on", LOGGING_ON.keys())
+def test_the_billed_cost_reaches_the_langfuse_project_set_on_the_creating_key_or_team(
+    gateway: Gateway, logging_on: str
+) -> None:
+    with wire_server(langfuse_sink) as wire, gateway.scenario() as scenario:
+        langfuse: Final = Recorder(wire)
+        key: Final = LOGGING_ON[logging_on](scenario, wire.url)
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        exported: Final = eventually(
+            lambda: _exported_costs(langfuse),
+            lambda costs: pytest.approx(PRICE) in costs,
+            seconds=SPEND_LANDING_SECONDS,
+        )
+        assert [cost for cost in exported if cost > 0] == [pytest.approx(PRICE)]
+        credentials: Final = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
+        assert {export.headers.get("authorization") for export in _trace_exports(langfuse)} == {f"Basic {credentials}"}

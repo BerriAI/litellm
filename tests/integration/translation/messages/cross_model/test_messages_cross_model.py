@@ -3,14 +3,11 @@ from dataclasses import replace
 from typing import Final
 
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, object_value
+from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.bases.anthropic import (
-    CLAUDE_SONNET_5_5_RESPONSE_FIELDS,
-    CLAUDE_SONNET_5_5_TEST_CASE,
-)
+from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
 from integration.translation.messages.bases.azure_ai import (
     CLAUDE_SONNET_5_5_TEST_CASE as AZURE_CLAUDE_SONNET_5_5_TEST_CASE,
 )
@@ -20,18 +17,6 @@ from integration.translation.response_scenarios import text_completion, two_mess
 from integration.translation.runner import assert_provider_request, assert_translation
 
 GPT_6_1_SOL_TWO_MESSAGES_BEFORE_TOOLS_TEST_CASE: Final = two_messages_before_tools(GPT_6_1_SOL_TEST_CASE)
-CLAUDE_SONNET_5_5_CROSS_MODEL_NATIVE_TEST_CASE: Final = replace(
-    CLAUDE_SONNET_5_5_TEST_CASE,
-    scenario="cross_model_rich_request",
-    mock_provider_response={
-        **CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
-        "usage": object_value(CLAUDE_SONNET_5_5_RESPONSE_FIELDS["usage"]),
-    },
-    expected_litellm_response={
-        **CLAUDE_SONNET_5_5_TEST_CASE.expected_litellm_response,
-        "usage": object_value(CLAUDE_SONNET_5_5_RESPONSE_FIELDS["usage"]),
-    },
-)
 AZURE_CLAUDE_SONNET_5_5_CROSS_MODEL_TEST_CASE: Final = replace(
     AZURE_CLAUDE_SONNET_5_5_TEST_CASE,
     scenario="cross_model_rich_request",
@@ -40,14 +25,10 @@ AZURE_CLAUDE_SONNET_5_5_CROSS_MODEL_TEST_CASE: Final = replace(
         **CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_request,
         "system": [{"type": "text", "text": CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_request["system"]}],
     },
-    mock_provider_response={
-        **CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
-        "usage": object_value(CLAUDE_SONNET_5_5_RESPONSE_FIELDS["usage"]),
-    },
+    mock_provider_response=CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
     expected_litellm_response={
         **CLAUDE_SONNET_5_5_TEST_CASE.expected_litellm_response,
         "model": "azure_ai/claude-sonnet-5-5",
-        "usage": object_value(CLAUDE_SONNET_5_5_RESPONSE_FIELDS["usage"]),
     },
 )
 
@@ -63,7 +44,7 @@ def test_messages_keep_the_same_public_contract_on_native_and_bridged_routes(
     assert {key: value for key, value in case.litellm_request.items() if key != "model"} == {
         key: value for key, value in CLAUDE_SONNET_5_5_TEST_CASE.litellm_request.items() if key != "model"
     }
-    native: Final = assert_translation(CLAUDE_SONNET_5_5_CROSS_MODEL_NATIVE_TEST_CASE, gateway, provider)
+    native: Final = assert_translation(CLAUDE_SONNET_5_5_TEST_CASE, gateway, provider)
     compared: Final = assert_translation(case, gateway, provider)
     assert messages_structure(compared) == messages_structure(native)
 

@@ -1,7 +1,9 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
 import asyncio
+import datetime
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -155,6 +157,7 @@ def test_streaming_logging_obj_carries_call_type_into_model_call_details():
         litellm_params=None,
         metadata=None,
         proxy_server_request=None,
+        start_time=datetime.datetime(2026, 10, 20, 12, 0, 0),
     )
 
     assert logging_obj.model_call_details["call_type"] == "asend_message_streaming"
@@ -352,6 +355,7 @@ async def _seed_shared_a2a_client(
     rpc_reply=_RPC_REPLY,
     rpc_stream_events=None,
     provider: str = httpxSpecialProvider.A2AProvider,
+    recorder: _RequestRecorder | None = None,
 ) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
@@ -359,10 +363,12 @@ async def _seed_shared_a2a_client(
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
     headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply, rpc_stream_events=rpc_stream_events)
+    active_recorder: Final = recorder or _RequestRecorder(
+        card=card, rpc_reply=rpc_reply, rpc_stream_events=rpc_stream_events
+    )
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
-    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(active_recorder))
     await owned_client.aclose()
 
     litellm.in_memory_llm_clients_cache.set_cache(
@@ -374,8 +380,8 @@ async def _seed_shared_a2a_client(
     )
     assert seeded is handler, "cache key drifted from get_async_httpx_client; these tests would test nothing"
 
-    recorder.client = handler.client
-    return recorder
+    active_recorder.client = handler.client
+    return active_recorder
 
 
 @pytest.fixture
@@ -679,6 +685,43 @@ class _UsageRecorder(CustomLogger):
         self.logged.set()
 
 
+class _CardServedAtRecorder(_RequestRecorder):
+    def __init__(self) -> None:
+        super().__init__(rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+        self.card_served_at: datetime.datetime | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and self.card_served_at is None:
+            self.card_served_at = datetime.datetime.now()
+        return super().__call__(request)
+
+
+@pytest.mark.asyncio
+async def test_streamed_send_is_timed_from_before_the_agent_card_fetch(
+    isolated_client_cache: LLMClientCache, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.a2a_protocol import main as a2a_main
+
+    card_recorder: Final = _CardServedAtRecorder()
+    await _seed_shared_a2a_client(recorder=card_recorder)
+    logger: Final = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", [logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    request: Final = SendStreamingMessageRequest(
+        id="reply",
+        params=MessageSendParams(
+            message={"messageId": "m-user", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    _ = [chunk async for chunk in a2a_main.asend_message_streaming(request=request, api_base="http://127.0.0.1:9")]
+    await asyncio.wait_for(logger.logged.wait(), timeout=10)
+
+    assert card_recorder.card_served_at is not None
+    assert logger.payload["startTime"] <= card_recorder.card_served_at.timestamp()
+
+
 @pytest.mark.asyncio
 async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
     from tests.large_text import text
@@ -742,6 +785,7 @@ def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
         },
         metadata={"user_api_key": "hashed"},
         proxy_server_request={"url": "http://localhost:4000"},
+        start_time=datetime.datetime(2026, 10, 20, 12, 0, 0),
     )
 
     expected = {

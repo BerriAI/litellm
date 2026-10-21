@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -108,6 +108,27 @@ def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_reje
     )
     assert "include" not in responses_kwargs
     assert "reasoning" in responses_kwargs
+
+
+@pytest.mark.parametrize(
+    "model, provider, summary",
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", "bedrock_mantle", "auto"),
+        ("openai/gpt-5.6-luna", "openai", "detailed"),
+    ],
+)
+def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
+) -> None:
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        thinking={"type": "enabled", "budget_tokens": 4096},
+        extra_kwargs={"custom_llm_provider": provider},
+    )
+    assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
@@ -553,6 +574,91 @@ def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_rea
     )
 
     assert marked == unmarked
+
+
+MALFORMED_TEXT_BLOCKS: Final = [
+    pytest.param({"type": "text", "text": None}, id="null"),
+    pytest.param({"type": "text", "text": 7}, id="number"),
+]
+
+
+def _tool_result_turn_with(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_log",
+                    "content": [{"type": "text", "text": "build ok"}, text_block, {"type": "text", "text": "done"}],
+                }
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=_tool_result_turn_with(text_block),
+        )
+
+    assert rejected.value.status_code == 400
+    assert "tool_result toolu_log content.1.text: Input should be a valid string" in rejected.value.message
+
+
+def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
+    tool_use_id: Final = "toolu_" + "x" * 4096
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [{"type": "text", "text": None}] * 2048,
+                }
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
+
+    assert rejected.value.status_code == 400
+    assert f"tool_result {tool_use_id} content.0.text: Input should be a valid string" in rejected.value.message
+    assert rejected.value.message.count(tool_use_id) == 1
+
+
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str, object]) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs={**OPENAI_API, "drop_params": True},
+        max_tokens=1024,
+        messages=_tool_result_turn_with(text_block),
+    )
+
+    assert responses_kwargs["input"] == [
+        {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"},
+    ]
+
+
+def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs=OPENAI_API,
+        max_tokens=1024,
+        messages=_tool_result_turn_with({"type": "text"}),
+    )
+
+    assert responses_kwargs["input"] == [
+        {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"},
+    ]
 
 
 REASONING_MODEL: Final = "gpt-bridge-reasoning-cost"

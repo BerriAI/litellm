@@ -43,6 +43,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
 ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
@@ -695,6 +697,54 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
             )
             == []
         )
+
+
+@pytest.mark.timeout(600)
+def test_per_user_authorization_code_token_is_read_back_from_the_database_by_a_fresh_proxy_without_redis(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "cold" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "cold-client", "client_secret": "cold-secret", "scopes": ["tools.call"]},
+        )
+        owner_id: Final = scenario.user()
+        owner: Final = scenario.key(user_id=owner_id, object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        redeemed: Final = _redeem(gateway, alias, owner, client_id, code, pkce)
+        assert redeemed.status_code == 200, redeemed.text
+        token: Final = _issued_token(redeemed.json())
+        stored: Final = read_rows(
+            'SELECT credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE user_id = %s AND server_id = %s',
+            (owner_id, identity),
+        )
+        assert len(stored) == 1, stored
+        stored_bytes: Final = base64.urlsafe_b64decode(str(stored[0]["credential_b64"]))
+        assert token.encode() not in stored_bytes, "stored token is plaintext"
+        config: Final = tmp_path / "no_redis.yaml"
+        config.write_text(
+            "general_settings:\n"
+            "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+            "  store_model_in_db: true\n"
+        )
+        peer.drain()
+        with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
+            called: Final = call_tool(cold, owner, identity, f"{alias}-add", ADD)
+            assert called.status_code == 200, called.text
+        assert _authorizations(peer) == (f"Bearer {token}".encode(),)
 
 
 def test_authorization_request_without_pkce_is_refused_before_reaching_the_authorization_server(
