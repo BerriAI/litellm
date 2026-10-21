@@ -2914,7 +2914,7 @@ def supports_httpx_timeout(custom_llm_provider: str) -> bool:
     if custom_llm_provider in supported_providers:
         return True
 
-    return Falsereturn False
+    return False
 
 
 def supports_system_messages(model: str, custom_llm_provider: str | None) -> bool:
