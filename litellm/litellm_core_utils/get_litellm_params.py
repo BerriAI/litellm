@@ -27,6 +27,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_external_id",
         "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_control_plane_endpoint",
         "aws_bedrock_project_id",
     }
 )
@@ -76,6 +77,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "use_xai_oauth",
             "github_copilot_auth_type",
+            "github_copilot_host",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             "responses_api_version",

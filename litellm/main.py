@@ -112,6 +112,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -230,6 +231,7 @@ from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
+from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
@@ -400,7 +402,11 @@ class LiteLLM:
 
 
 class Chat:
-    def __init__(self, params, router_obj: "Router | None"):
+    def __init__(
+        self,
+        params: dict[str, object],  # mutable-ok: pops the acompletion flag in place
+        router_obj: "Router | None",
+    ):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
@@ -480,6 +486,7 @@ async def acompletion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -657,6 +664,7 @@ async def acompletion(
         "service_tier": service_tier,
         "store": store,
         "prompt_cache_key": prompt_cache_key,
+        "prompt_cache_retention": prompt_cache_retention,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -1660,16 +1668,8 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
             )
         api_key = AzureFoundryModelInfo.get_api_key(api_key)
 
-        # Ensure the URL ends with /v1/messages for Anthropic
         if api_base:
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/messages"):
-                if "/anthropic" in api_base:
-                    parts: Final = api_base.split("/anthropic", 1)
-                    api_base = parts[0] + "/anthropic"
-                else:
-                    api_base = api_base + "/anthropic"
-                api_base = api_base + "/v1/messages"
+            api_base = azure_anthropic_messages_url(api_base)
 
         response = azure_anthropic_chat_completions.completion(
             model=model,
@@ -2889,8 +2889,8 @@ def _complete_anthropic_text(
 
     # Check if we should disable automatic URL suffix appending
     disable_url_suffix: Final = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
-    if api_base is not None and not disable_url_suffix and not api_base.endswith("/v1/complete"):
-        api_base += "/v1/complete"
+    if api_base is not None and not disable_url_suffix:
+        api_base = ensure_api_route(api_base, "v1/complete")
     elif disable_url_suffix:
         verbose_logger.debug("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix")
 
@@ -2945,8 +2945,8 @@ def _complete_anthropic(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
     # Check if we should disable automatic URL suffix appending
     disable_url_suffix: Final = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
-    if api_base is not None and not disable_url_suffix and not api_base.endswith("/v1/messages"):
-        api_base += "/v1/messages"
+    if api_base is not None and not disable_url_suffix:
+        api_base = ensure_api_route(api_base, "v1/messages")
     elif disable_url_suffix:
         verbose_logger.debug("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix")
 
@@ -4084,9 +4084,7 @@ def _complete_text_completion_inception(
     api_base = passed_api_base or get_secret_str("INCEPTION_API_BASE") or "https://api.inceptionlabs.ai/v1"
     # FIM is served at `/v1/fim/completions`; the OpenAI client appends
     # `/completions`, so point it at the `/v1/fim` base.
-    api_base = api_base.rstrip("/")
-    if not api_base.endswith("/fim"):
-        api_base += "/fim"
+    api_base = ensure_api_route(api_base, "fim")
 
     # Don't forward the server-managed Inception key to a caller-supplied
     # api_base; only resolve it for the default/server base, or when the
@@ -5356,6 +5354,7 @@ def completion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -5478,6 +5477,7 @@ def completion(
             service_tier=service_tier,
             store=store,
             prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
             base_url=base_url,
             api_version=api_version,
             api_key=api_key,
@@ -5843,6 +5843,7 @@ def completion(
             "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_retention": prompt_cache_retention,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
@@ -5979,6 +5980,7 @@ def completion(
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     "github_copilot_auth_type",
+                    "github_copilot_host",
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
@@ -8836,8 +8838,11 @@ def speech(
 
         generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
-        # Handle Gemini models separately (they use speech_to_completion_bridge)
-        if "gemini" in model:
+        needs_cloud_text_to_speech: Final = (
+            litellm.utils.is_gemini_tts_model(model)
+            and response_format in VertexAITextToSpeechConfig.GEMINI_FORMAT_MAPPINGS
+        )
+        if "gemini" in model and not needs_cloud_text_to_speech:
             from .endpoints.speech.speech_to_completion_bridge.handler import (
                 speech_to_completion_bridge_handler,
             )
@@ -9143,7 +9148,7 @@ async def ahealth_check(
 
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -9247,6 +9252,7 @@ async def acount_tokens(
                     request_model=model,
                     tools=tools,
                     system=system,
+                    messages_format="openai",
                 )
                 if result is not None and not result.error:
                     return result
