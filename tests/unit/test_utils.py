@@ -2,14 +2,11 @@ import asyncio
 import base64
 import contextlib
 import contextvars
-import copy
-import importlib
 import io
 import json
 import logging
 import os
 import queue
-import re
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -40,7 +37,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
-from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.caching import CachingSupportedCallTypes
@@ -76,19 +72,12 @@ from litellm.utils import (
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
-    add_custom_logger_callback_to_specific_event,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
-    check_valid_key,
     client,
-    filter_out_litellm_params,
-    get_applied_guardrails,
-    get_llm_provider,
     get_non_default_completion_params,
-    get_optional_params_embeddings,
     get_optional_params_image_gen,
-    get_potential_model_names,
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
@@ -3166,7 +3155,9 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
+        untouched = litellm.get_optional_params(
+            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
+        )
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4135,9 +4126,6 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
     )
 
 
-
-
-
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
@@ -4583,13 +4571,7 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc",
-            created_at=1,
-            output=[],
-            parallel_tool_calls=False,
-            tool_choice="auto",
-            tools=[],
-            model="gpt-5.6",
+            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
         ),
         CallTypes.aresponses,
         id="responses",
@@ -4617,9 +4599,7 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(
-        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
-    )
+    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -4741,9 +4721,6 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
-
-
-
 
 
 @pytest.mark.asyncio
@@ -6546,9 +6523,6 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
     assert payload not in str(logged)
 
 
-
-
-
 @pytest.mark.asyncio
 async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
     """Chat over the Responses bridge exits two @client wrappers with one logging object. Issue
@@ -6611,6 +6585,3 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
-
-
-

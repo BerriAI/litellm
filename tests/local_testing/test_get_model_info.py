@@ -1,12 +1,10 @@
-from typing import Final
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
 import re
 from collections.abc import Collection, Mapping
-
-
-from typing import List, Dict, Any, Final, Literal
+from typing import Any, Dict, Final, List, Literal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,7 +13,6 @@ from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import _invalidate_model_cost_lowercase_map
-from unittest.mock import MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
@@ -251,8 +248,7 @@ def test_get_model_info_custom_provider():
 
 
 def test_get_model_info_custom_model_router():
-    from litellm import Router
-    from litellm import get_model_info
+    from litellm import Router, get_model_info
 
     litellm._turn_on_debug()
 
