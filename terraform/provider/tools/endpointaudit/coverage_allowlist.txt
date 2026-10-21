@@ -48,6 +48,7 @@ GET /tag/user-agent/per-user-analytics
 GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
+GET /team/daily/activity/aggregated/tags  # proxy-only analytics report; no provider resource
 GET /team/daily/activity/aggregated/keys
 GET /team/daily/activity/aggregated/model_top_keys
 GET /team/daily/activity/aggregated/search
