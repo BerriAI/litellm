@@ -1269,7 +1269,7 @@ async def test_retry_reaches_healthy_sibling_when_affinity_pins_deployment_that_
     assert [response._hidden_params["model_id"] for response in responses] == ["B", "B"]
     assert [response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] for response in responses] == [
         1,
-        0,
+        1,
     ]
 
 

@@ -15,6 +15,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import get_excluded_filtered_deployments
 
 
@@ -957,7 +958,6 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
 async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deployment(
     pre_call_check: str, metadata: dict[str, str]
 ):
-    """A pin on the failed deployment must not hide its healthy sibling from weighted failover."""
     router: Final = Router(
         model_list=[
             {
@@ -998,17 +998,24 @@ async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deploy
         fallbacks=[{"test-model": ["fallback-model"]}],
     )
 
-    responses: Final = [
-        await router.acompletion(
-            model="test-model",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata=dict(metadata),
+    while_a_is_down: Final = await router.acompletion(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+    )
+    router.upsert_deployment(
+        Deployment(
+            model_name="test-model",
+            litellm_params=LiteLLM_Params(model="gpt-4o", api_key="bad", mock_response="ok from A", weight=1),
+            model_info=ModelInfo(id="A"),
         )
-        for _ in range(2)
-    ]
+    )
+    after_a_recovers: Final = await router.acompletion(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+    )
 
-    assert [response._hidden_params["model_id"] for response in responses] == ["B", "B"]
-    assert [response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] for response in responses] == [
-        1,
-        0,
-    ]
+    assert while_a_is_down._hidden_params["model_id"] == "B"
+    assert while_a_is_down._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    assert after_a_recovers._hidden_params["model_id"] == "A"

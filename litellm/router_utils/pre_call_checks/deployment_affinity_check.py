@@ -430,9 +430,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 elif isinstance(session_cache_result, str):
                     session_model_id = session_cache_result
 
-                if session_model_id in failed_deployment_ids:
-                    await self.cache.async_delete_cache(key=session_cache_key)
-                elif session_model_id:
+                if session_model_id and session_model_id not in failed_deployment_ids:
                     session_deployment: Final = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
                         model_id=session_model_id,
@@ -467,8 +465,6 @@ class DeploymentAffinityCheck(CustomLogger):
             # Backwards / safety: allow raw string values.
             model_id = cache_result
 
-        if model_id in failed_deployment_ids:
-            await self.cache.async_delete_cache(key=cache_key)
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 

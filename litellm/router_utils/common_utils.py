@@ -39,7 +39,6 @@ _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] =
     tuple[Mapping[str, object], ...]
 )
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
-_OBJECT_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
@@ -62,7 +61,8 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
 def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     if not isinstance(value, tuple):
         return ()
-    return tuple(item for item in _OBJECT_TUPLE_ADAPTER.validate_python(value) if isinstance(item, str))
+    items: Final[tuple[object, ...]] = value
+    return tuple(item for item in items if isinstance(item, str))
 
 
 def _as_excluded_deployment_ids(value: object) -> tuple[str, ...]:

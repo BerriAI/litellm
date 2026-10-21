@@ -2606,3 +2606,56 @@ async def test_affinity_strips_for_team_and_pattern_routes():
 
     assert result is sibling_pool
     assert not request_kwargs["input"][1].get("encrypted_content")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_in_request",
+    [{"_excluded_deployment_ids": ["region-a"]}, {"_retry_skipped_deployment_ids": ("region-a",)}],
+)
+async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_request(failed_in_request):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = _make_originating_mock("https://region-a.example.com/v1", "key-a")
+    mock_router = _make_router_mock_with_cooldown(
+        originating, cooldown_entries=[], routed_group_model_ids=["region-a", "region-b"]
+    )
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "region-a")
+    group = [
+        {
+            "model_info": {"id": "region-a"},
+            "model_name": "gpt-5.4",
+            "litellm_params": {"api_base": "https://region-a.example.com/v1", "api_key": "key-a"},
+        },
+        {
+            "model_info": {"id": "region-b"},
+            "model_name": "gpt-5.4",
+            "litellm_params": {"api_base": "https://region-b.example.com/v1", "api_key": "key-b"},
+        },
+    ]
+    request_kwargs = {
+        "litellm_metadata": {},
+        "input": [
+            {
+                "type": "reasoning",
+                "id": ResponsesAPIRequestUtils._build_encrypted_item_id("region-a", "rs_test"),
+                "encrypted_content": wrapped,
+                "summary": [{"type": "summary_text", "text": "scattering"}],
+            },
+            {"role": "user", "content": "and sunsets?"},
+        ],
+        **failed_in_request,
+    }
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=group,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result is group
+    assert request_kwargs["input"][0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
