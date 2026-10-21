@@ -159,6 +159,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
   );
 
   const detailRows = [
+<<<<<<< HEAD
     ...(skill.category
       ? [{ property: t("claudeCodePlugins.skillDetail.properties.category"), value: skill.category }]
       : []),
@@ -180,6 +181,15 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
           },
         ]
       : []),
+=======
+    ...(skill.category ? [{ property: "Category", value: skill.category }] : []),
+    ...(skill.domain ? [{ property: "Domain", value: skill.domain }] : []),
+    ...(skill.namespace ? [{ property: "Namespace", value: skill.namespace }] : []),
+    ...(skill.version ? [{ property: "Version", value: skill.version }] : []),
+    ...(skill.author?.name ? [{ property: "Author", value: skill.author.name }] : []),
+    { property: "Hosted for Claude Desktop", value: skill.serve_archive ? "Yes" : "No" },
+    ...(skill.created_at ? [{ property: "Added", value: new Date(skill.created_at).toLocaleDateString() }] : []),
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
   ];
 
   const tabs = [
