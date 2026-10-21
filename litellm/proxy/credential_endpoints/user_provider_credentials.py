@@ -35,7 +35,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.repositories.chunked_in import find_many_in
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import DatabaseClient, TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
@@ -52,6 +52,9 @@ class GithubCopilotUserConnectionPayload(BaseModel):
     access_token: str = Field(repr=False)
     github_login: str
     github_host: str = GITHUB_COPILOT_DEFAULT_HOST
+    refresh_token: str | None = Field(default=None, repr=False)
+    access_token_expires_at: float | None = None
+    refresh_token_expires_at: float | None = None
 
 
 class _UserProviderCredentialsRepository(PrismaTableRepository["prisma_models.LiteLLM_UserProviderCredentials"]):
@@ -59,9 +62,12 @@ class _UserProviderCredentialsRepository(PrismaTableRepository["prisma_models.Li
 
 
 def _table(
-    prisma_client: "PrismaClient",
+    prisma_client: DatabaseClient,
 ) -> TableActions["prisma_models.LiteLLM_UserProviderCredentials"]:
-    return _UserProviderCredentialsRepository(prisma_client, use_writer=True).table
+    repository_client: Final = cast(  # cast-ok: the repository constructor retains its legacy client type
+        "PrismaClient", prisma_client
+    )
+    return _UserProviderCredentialsRepository(repository_client, use_writer=True).table
 
 
 def _cache_key(user_id: str, credential_name: str) -> str:
@@ -120,6 +126,38 @@ async def get_user_provider_credential(
     if row is None:
         return None
     return decode_user_provider_credential(row.credential_b64)
+
+
+async def get_user_provider_credential_row(
+    prisma_client: DatabaseClient,
+    user_id: str,
+    credential_name: str,
+) -> tuple[str, GithubCopilotUserConnectionPayload] | None:
+    row: Final = await _table(prisma_client).find_unique(
+        where={"user_id_credential_name": {"user_id": user_id, "credential_name": credential_name}}
+    )
+    if row is None:
+        return None
+    payload: Final = decode_user_provider_credential(row.credential_b64)
+    return (row.credential_b64, payload) if payload is not None else None
+
+
+async def compare_and_set_user_provider_credential(
+    prisma_client: DatabaseClient,
+    user_id: str,
+    credential_name: str,
+    expected_ciphertext: str,
+    payload: GithubCopilotUserConnectionPayload,
+) -> bool:
+    updated_count: Final = await _table(prisma_client).update_many(
+        where={
+            "user_id": user_id,
+            "credential_name": credential_name,
+            "credential_b64": expected_ciphertext,
+        },
+        data={"credential_b64": _encode(payload)},
+    )
+    return updated_count == 1
 
 
 async def delete_user_provider_credential(
@@ -294,13 +332,13 @@ async def set_user_provider_credential_cache(
 
 
 @with_service_target("user_provider_connections")
-async def aget_user_provider_credentials(
-    prisma_client: "PrismaClient",
+async def aget_user_provider_connections(
+    prisma_client: DatabaseClient,
     cache: DualCache,
     user_id: str,
     credential_names: Sequence[str],
-) -> Mapping[str, Mapping[str, str]]:
-    """Map each per-user credential name to the caller's stored GitHub connection.
+) -> Mapping[str, GithubCopilotUserConnectionPayload]:
+    """Map each per-user credential name to the caller's stored GitHub connection payload.
 
     Cached values are the stored ciphertext or the ``_NOT_CONNECTED`` marker;
     plaintext connection data only ever lives in the returned mapping. Redis is the only
@@ -321,11 +359,7 @@ async def aget_user_provider_credentials(
         else:
             misses.append(name)
     if not misses:
-        return {
-            name: connection
-            for name, ciphertext in cached.items()
-            if (connection := _connection_from_ciphertext(ciphertext)) is not None
-        }
+        return dict(item for item in map(_decode_connection_item, cached.items()) if item is not None)
 
     try:
         rows: Final = await find_many_in(
@@ -343,15 +377,30 @@ async def aget_user_provider_credentials(
             await _try_cache_set(token_cache, _cache_key(user_id, name), found.get(name, _NOT_CONNECTED), nx=True)
         if name in found:
             cached[name] = found[name]
+    return dict(item for item in map(_decode_connection_item, cached.items()) if item is not None)
+
+
+async def aget_user_provider_credentials(
+    prisma_client: "PrismaClient",
+    cache: DualCache,
+    user_id: str,
+    credential_names: Sequence[str],
+) -> Mapping[str, Mapping[str, str]]:
+    connections: Final = await aget_user_provider_connections(
+        prisma_client=prisma_client,
+        cache=cache,
+        user_id=user_id,
+        credential_names=credential_names,
+    )
     return {
-        name: connection
-        for name, ciphertext in cached.items()
-        if (connection := _connection_from_ciphertext(ciphertext)) is not None
+        name: {"access_token": payload.access_token, "github_host": payload.github_host}
+        for name, payload in connections.items()
     }
 
 
-def _connection_from_ciphertext(ciphertext: str) -> Mapping[str, str] | None:
+def _decode_connection_item(item: tuple[str, str]) -> tuple[str, GithubCopilotUserConnectionPayload] | None:
+    name, ciphertext = item
     payload: Final = decode_user_provider_credential(ciphertext)
     if payload is None:
         return None
-    return {"access_token": payload.access_token, "github_host": payload.github_host}
+    return name, payload
