@@ -4949,6 +4949,14 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+_DROPPED_REASONING_PARAM_FIXES: Final = MappingProxyType(
+    {
+        "reasoning_effort": "If the deployment is a reasoning model, set model_info.base_model to its underlying model.",
+        "thinking": "If the deployment is a reasoning model, send reasoning_effort instead.",
+    }
+)
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -5046,15 +5054,17 @@ def get_optional_params(
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params:
                     non_default_params.pop(k, None)
-                if "reasoning_effort" in unsupported_params:
-                    verbose_logger.warning(
-                        "Dropping reasoning_effort=%r for model=%r (drop_params=True) because %s does not support "
-                        "reasoning_effort for it. If the deployment is a reasoning model, set model_info.base_model "
-                        "to its underlying model.",
-                        unsupported_params["reasoning_effort"],
-                        model,
-                        custom_llm_provider,
-                    )
+                for reasoning_param, fix in _DROPPED_REASONING_PARAM_FIXES.items():
+                    if reasoning_param in unsupported_params:
+                        verbose_logger.warning(
+                            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it. %s",
+                            reasoning_param,
+                            unsupported_params[reasoning_param],
+                            model,
+                            custom_llm_provider,
+                            reasoning_param,
+                            fix,
+                        )
             else:
                 raise UnsupportedParamsError(
                     status_code=500,

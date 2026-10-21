@@ -2114,3 +2114,19 @@ def test_dropping_an_unsupported_reasoning_effort_logs_one_warning(
     ]
     assert len(drop_warnings) == 1
     assert all(fragment in drop_warnings[0] for fragment in ("'none'", "terra-ptu", "model_info.base_model"))
+
+
+def test_dropping_an_unsupported_thinking_logs_one_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="terra-ptu", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("'disabled'", "terra-ptu", "send reasoning_effort"))

@@ -626,7 +626,7 @@ class TestResolveDeploymentReasoningEffort:
         _sent("turbo\nforged line", drop_params=True)
 
         assert [record.getMessage() for record in caplog.records] == [
-            "Dropping reasoning_effort unrecognized (drop_params=True) for deployment deployment-1, model group "
+            "Dropping reasoning level unrecognized (drop_params=True) for deployment deployment-1, model group "
             "kimi-k3, model hosted_vllm/my-kimi because its model_info.reasoning_effort_levels does not list that "
             "level. List every level the deployment supports."
         ]
@@ -688,7 +688,7 @@ class TestResolveDeploymentReasoningEffort:
             logging.INFO,
         ]
         dropped: Final = caplog.records[0].getMessage()
-        assert "Dropping reasoning_effort none" in dropped
+        assert "Dropping reasoning level none" in dropped
         assert "model_info.reasoning_effort_levels" in dropped
 
 

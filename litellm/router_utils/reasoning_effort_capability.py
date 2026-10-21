@@ -438,7 +438,7 @@ def _log_remap(
     )
     if sent_level is None and requested_level != _DEFAULT_EFFORT:
         verbose_logger.warning(
-            "Dropping reasoning_effort %s (drop_params=True) for deployment %s, model group %s, model %s because its "
+            "Dropping reasoning level %s (drop_params=True) for deployment %s, model group %s, model %s because its "
             "model_info.reasoning_effort_levels does not list that level. List every level the deployment supports.",
             logged_requested_level,
             logged_deployment_id,

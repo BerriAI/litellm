@@ -337,13 +337,21 @@ class TestDisabledReasoningEffort:
             )
 
     @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
-    def test_effort_level_disabled_in_model_map_is_dropped_with_drop_params(self, model, local_model_cost_map):
-        params = _cfg().map_openai_params(
-            response_api_optional_params={"reasoning": {"effort": "minimal", "summary": "auto"}, "max_output_tokens": 64},
-            model=model,
-            drop_params=True,
-        )
+    def test_effort_level_disabled_in_model_map_is_dropped_with_a_warning(
+        self, model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params = _cfg().map_openai_params(
+                response_api_optional_params={
+                    "reasoning": {"effort": "minimal", "summary": "auto"},
+                    "max_output_tokens": 64,
+                },
+                model=model,
+                drop_params=True,
+            )
         assert params == {"reasoning": {"summary": "auto"}, "max_output_tokens": 64}
+        dropped = [r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()]
+        assert len(dropped) == 1 and model in dropped[0]
 
     def test_effort_only_reasoning_is_removed_when_dropped(self, local_model_cost_map):
         params = _cfg().map_openai_params(
