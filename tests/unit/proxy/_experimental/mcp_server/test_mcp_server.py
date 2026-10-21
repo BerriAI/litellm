@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, nullcontext
 
 from starlette.types import Receive, Scope, Send
 
-
+from litellm.types.agents import AgentResponse
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     MCPServer,
@@ -3265,7 +3265,8 @@ async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
 async def _streamable_mcp_request_runner(
     monkeypatch: pytest.MonkeyPatch,
     auth: UserAPIKeyAuth,
-) -> AsyncIterator[tuple[Callable[[str], Awaitable[None]], AsyncMock]]:
+    on_receive_count_at_dispatch: Callable[[int], None] | None = None,
+) -> AsyncIterator[tuple[Callable[..., Awaitable[None]], AsyncMock]]:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import server
@@ -3299,7 +3300,11 @@ async def _streamable_mcp_request_runner(
 
     monkeypatch.setattr(server, "_gateway_initialize_instructions_request_scope", no_initialize_scope)
 
-    async def request(method: str, request_body: bytes | None = None) -> None:
+    async def request(
+        method: str,
+        request_body: bytes | None = None,
+        request_chunks: tuple[bytes, ...] | None = None,
+    ) -> None:
         body: Final = (
             request_body
             if request_body is not None
@@ -3320,11 +3325,39 @@ async def _streamable_mcp_request_runner(
             "server": ("localhost", 4000),
             "scheme": "http",
         }
-        receive: Final[Receive] = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+        request_messages: Final = (
+            tuple(
+                {
+                    "type": "http.request",
+                    "body": chunk,
+                    "more_body": index < len(request_chunks) - 1,
+                }
+                for index, chunk in enumerate(request_chunks)
+            )
+            if request_chunks is not None
+            else ({"type": "http.request", "body": body, "more_body": False},)
+        )
+        receive: Final[Receive] = AsyncMock(side_effect=request_messages)
+        if on_receive_count_at_dispatch is not None:
+            def observe_receive_count(*_args: object, **_kwargs: object) -> None:
+                on_receive_count_at_dispatch(receive.await_count)
+
+            dispatch.side_effect = observe_receive_count
         send: Final[Send] = AsyncMock()
         await server.handle_streamable_http_mcp(scope, receive, send)
 
     yield request, dispatch
+
+
+def _padded_tools_list_body() -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "params": {"_meta": {"pad": "x" * 5000}},
+            "method": "tools/list",
+        }
+    ).encode()
 
 
 @pytest.mark.asyncio
@@ -3369,6 +3402,54 @@ async def test_streamable_mcp_oversized_setup_request_obeys_virtual_key_rpm_limi
 
 
 @pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_model_metadata_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="mcp-oversized-model-rpm-key",
+        metadata={"model_rpm_limit": {"mcp-tool-call": 1}},
+    )
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = _padded_tools_list_body()
+        await request("tools/list", oversized_body)
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_agent_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    agent_id: Final = "mcp-setup-agent-rpm"
+    agent_policy: Final = AgentResponse(
+        agent_id=agent_id,
+        agent_name="mcp-setup-agent",
+        agent_card_params={"name": "mcp-setup-agent"},
+        rpm_limit=1,
+    )
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-agent-rpm-key", agent_id=agent_id).model_copy(
+        update={"managed_agent_policy": agent_policy}
+    )
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = _padded_tools_list_body()
+        await request("tools/list", oversized_body)
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_streamable_mcp_oversized_setup_request_dispatches_without_virtual_key_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3383,6 +3464,26 @@ async def test_streamable_mcp_oversized_setup_request_dispatches_without_virtual
             }
         ).encode()
         await request("tools/list", oversized_body)
+
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_unlimited_setup_request_keeps_routing_peek_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-unlimited-peek-key")
+
+    def assert_receive_count(receive_count: int) -> None:
+        assert receive_count == 1
+
+    async with _streamable_mcp_request_runner(monkeypatch, auth, assert_receive_count) as (request, dispatch):
+        assert await mcp_server._mcp_setup_request_limit_applies(auth) is False
+        oversized_body: Final = _padded_tools_list_body()
+        peek_cap: Final = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+        await request("tools/list", oversized_body, (oversized_body[:peek_cap], oversized_body[peek_cap:]))
 
         assert dispatch.await_count == 1
 

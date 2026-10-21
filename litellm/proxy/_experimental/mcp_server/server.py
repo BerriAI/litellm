@@ -136,18 +136,6 @@ _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _has_request_rate_limit(user_api_key_auth: UserAPIKeyAuth) -> bool:
-    return (
-        user_api_key_auth.rpm_limit is not None
-        or user_api_key_auth.max_parallel_requests is not None
-        or user_api_key_auth.user_rpm_limit is not None
-        or user_api_key_auth.team_rpm_limit is not None
-        or user_api_key_auth.team_member_rpm_limit is not None
-        or user_api_key_auth.organization_rpm_limit is not None
-        or user_api_key_auth.end_user_rpm_limit is not None
-    )
-
-
 def _mcp_setup_request_capacity(
     method: str | None,
     user_api_key_auth: UserAPIKeyAuth | None,
@@ -162,6 +150,16 @@ def _mcp_setup_request_capacity(
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return contextlib.nullcontext()
     return limiter.request_capacity(user_api_key_auth, "mcp-tool-call", request_data={})
+
+
+async def _mcp_setup_request_limit_applies(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return False
+    return await limiter.has_request_capacity_limit(user_api_key_auth, "mcp-tool-call")
 
 
 def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
@@ -2737,7 +2735,7 @@ if MCP_AVAILABLE:
                 if mcp_method is None
                 and peek is not None
                 and len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
-                and _has_request_rate_limit(user_api_key_auth)
+                and await _mcp_setup_request_limit_applies(user_api_key_auth)
                 else mcp_method
             )
             request_capacity: Final = _mcp_setup_request_capacity(charged_method, user_api_key_auth)

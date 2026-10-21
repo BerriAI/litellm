@@ -4141,6 +4141,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             *await self._create_tag_rate_limit_descriptors(data),
         ]
 
+    @staticmethod
+    def _request_capacity_data(
+        model: str,
+        request_data: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        return MappingProxyType({**(request_data or MappingProxyType({})), "model": model})
+
+    async def has_request_capacity_limit(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+        data: Final = self._request_capacity_data(model)
+        descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        return any(
+            descriptor["rate_limit"] is not None
+            and (
+                descriptor["rate_limit"].get("requests_per_unit") is not None
+                or descriptor["rate_limit"].get("max_parallel_requests") is not None
+            )
+            for descriptor in descriptors
+        )
+
     async def _release_request_capacity_when_admitted(
         self,
         admission: asyncio.Task[RateLimitResponse],
@@ -4160,7 +4179,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         request_data: Mapping[str, object] | None = None,
     ) -> AsyncGenerator[None, None]:
         """Charge one non-generation provider request to RPM and hold its concurrency slot."""
-        data: Final = MappingProxyType({**(request_data or MappingProxyType({})), "model": model})
+        data: Final = self._request_capacity_data(model, request_data)
         descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
         acquisition: Final = ParallelSlotAcquisition(
             slot_id=uuid.uuid4().hex,
