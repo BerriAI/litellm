@@ -5,6 +5,7 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
@@ -16,7 +17,28 @@ from litellm.rust_bridge.transcription.native import (
     RustAtranscription,
     RustTranscription,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageTokensObject
+
+SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS: Final = ("language", "prompt", "temperature", "response_format")
+TEXT_RESPONSE_FORMATS: Final = frozenset({"json", "text"})
+
+
+def map_openai_transcription_params(
+    non_default_params: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object]:
+    response_format: Final = non_default_params.get("response_format", "json")
+    if response_format in TEXT_RESPONSE_FORMATS:
+        return dict(non_default_params)
+    if drop_params:
+        return {key: value for key, value in non_default_params.items() if key != "response_format"}
+    raise UnsupportedParamsError(
+        message=(
+            f"bedrock transcription returns only the transcript text, so response_format={response_format!r} is not "
+            "supported. To drop it from the call, set `litellm.drop_params = True`."
+        ),
+        llm_provider="bedrock",
+    )
 
 
 class _RustTranscriptionResult(BaseModel):
@@ -31,7 +53,10 @@ def _transcription_response(
 ) -> TranscriptionResponse:
     parsed: Final = _RustTranscriptionResult.model_validate(result)
     response: Final = TranscriptionResponse(text=parsed.text).model_copy(update={"usage": parsed.usage})
-    response.hidden_params = {**response.hidden_params, "region_name": optional_params.get("aws_region_name")}
+    region_name: Final = (
+        optional_params.get("aws_region_name") or get_secret_str("AWS_REGION_NAME") or get_secret_str("AWS_REGION")
+    )
+    response.hidden_params = {**response.hidden_params, "region_name": region_name}
     return response
 
 

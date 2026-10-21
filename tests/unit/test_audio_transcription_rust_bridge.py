@@ -218,15 +218,29 @@ async def test_async_missing_native_binding_raises_without_python_fallback() -> 
 
 
 @pytest.mark.parametrize(
-    ("region_kwargs", "priced_model"),
+    ("region_kwargs", "region_env", "priced_model"),
     [
-        ({}, MODEL),
-        ({"aws_region_name": "ap-southeast-2"}, "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507"),
+        ({}, {}, MODEL),
+        ({"aws_region_name": "ap-southeast-2"}, {}, "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507"),
+        ({}, {"AWS_REGION_NAME": "eu-west-2"}, "bedrock/eu-west-2/mistral.voxtral-mini-3b-2507"),
+        ({}, {"AWS_REGION": "ap-northeast-1"}, "bedrock/ap-northeast-1/mistral.voxtral-mini-3b-2507"),
+        (
+            {"aws_region_name": "ap-southeast-2"},
+            {"AWS_REGION_NAME": "eu-west-2"},
+            "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507",
+        ),
     ],
 )
 def test_bedrock_transcription_bills_the_converse_token_usage(
-    region_kwargs: dict[str, str], priced_model: str
+    region_kwargs: dict[str, str],
+    region_env: dict[str, str],
+    priced_model: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    for name in ("AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in region_env.items():
+        monkeypatch.setenv(name, value)
     NATIVE_TRANSCRIPTION.override(UsageBridge())
 
     response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, **region_kwargs)
@@ -242,3 +256,39 @@ def test_bedrock_transcription_bills_the_converse_token_usage(
     assert litellm.completion_cost(
         completion_response=response, model=MODEL, call_type="transcription"
     ) == pytest.approx(expected_cost)
+
+
+def test_bedrock_transcription_forwards_language_and_text_formats_to_rust() -> None:
+    bridge: Final = SyncBridge()
+    NATIVE_TRANSCRIPTION.override(bridge)
+
+    litellm.transcription(model=MODEL, file=AUDIO_FILE, language="fr", response_format="text", prompt="Names")
+
+    forwarded: Final = bridge.calls[0].resolved["optional_params"]
+    assert {key: forwarded.get(key) for key in ("language", "response_format", "prompt")} == {
+        "language": "fr",
+        "response_format": "text",
+        "prompt": "Names",
+    }
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    [{"response_format": "srt"}, {"response_format": "verbose_json"}, {"timestamp_granularities": ["word"]}],
+)
+def test_bedrock_transcription_rejects_params_it_cannot_honor(unsupported: dict[str, object]) -> None:
+    bridge: Final = SyncBridge()
+    NATIVE_TRANSCRIPTION.override(bridge)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.transcription(model=MODEL, file=AUDIO_FILE, language="fr", **unsupported)
+
+    assert raised.value.status_code == 400
+    assert bridge.calls == ()
+
+    dropped: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, language="fr", drop_params=True, **unsupported)
+
+    assert dropped.text == "rust"
+    forwarded: Final = bridge.calls[0].resolved["optional_params"]
+    assert forwarded["language"] == "fr"
+    assert forwarded.keys().isdisjoint(unsupported)
