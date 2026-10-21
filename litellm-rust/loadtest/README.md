@@ -16,7 +16,7 @@ machines.
 | `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. Objects are stored compressed and listed from a sorted index, so millions of logs fit. |
 
 Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `large-context`,
-`key-churn` and `soak`. `sustained-100`, `sustained-500` and `sustained-1000` hold one rate for
+`key-churn` and `soak`. `sustained-100`, `sustained-250`, `sustained-500` and `sustained-1000` hold one rate for
 15 minutes with evenly spaced arrivals and smoke's request mix over every model group;
 `sustained-check` runs the same mix at 100, 500 and 1,000 rps for 2 minutes each, to check that the
 client, mock and stack hold 1,000 rps before the long runs.
