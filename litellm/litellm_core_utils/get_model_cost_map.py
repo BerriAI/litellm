@@ -11,13 +11,14 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 
 import asyncio
 import hashlib
+import json
 import os
 import random
 import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Container, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -73,6 +74,41 @@ def _report_problems(registry: ModelRegistry, source: str) -> ModelRegistry:
             "; ".join(problems),
         )
     return registry
+
+
+def model_cost_row_problems(model: str, row: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        registry: Final = ModelRegistry.parse(json.dumps({model: row}, allow_nan=False).encode())
+    except (TypeError, ValueError) as error:
+        return (f"{model}: {error}",)
+    return tuple(registry.problems())
+
+
+def _models_named_by(problem: str, models: Container[str]) -> Iterator[str]:
+    return (problem[:end] for end, char in enumerate(problem) if char in ".: " and problem[:end] in models)
+
+
+def _fails_on_its_own(model: str, row: JsonValue) -> bool:
+    return not isinstance(row, dict) or bool(model_cost_row_problems(model, row))
+
+
+def _without_failing_entries(registry: ModelRegistry, url: str) -> dict[str, JsonValue]:
+    written: Final = registry.to_dict()
+    problems: Final = registry.problems()
+    named: Final = frozenset(chain.from_iterable(_models_named_by(problem, written) for problem in problems))
+    failing: Final = frozenset(
+        model for model in named - RESERVED_TOP_LEVEL_KEYS if _fails_on_its_own(model, written[model])
+    )
+    if problems:
+        verbose_logger.warning(
+            "LiteLLM: %d problems in the model cost map from %s, dropped the %d entries that fail on their own (%s): %s",
+            len(problems),
+            url,
+            len(failing),
+            ", ".join(sorted(failing)),
+            "; ".join(problems),
+        )
+    return {model: row for model, row in written.items() if model not in failing}
 
 
 class GetModelCostMap:
@@ -226,7 +262,7 @@ RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 _litellm_import_complete = threading.Event()
-MODEL_COST_WRITE_LOCK: Final = threading.Lock()
+MODEL_COST_WRITE_LOCK: Final = threading.RLock()
 
 
 def mark_litellm_import_complete() -> None:
@@ -330,7 +366,7 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
     except ValueError as e:
         return ModelCostMapReloadUnavailable(reason=f"invalid model cost map from {url}: {e}")
     return ModelCostMapReloaded(
-        model_cost_map=_report_problems(registry, url).to_dict(), revision=git_blob_id(content), etag=etag
+        model_cost_map=_without_failing_entries(registry, url), revision=git_blob_id(content), etag=etag
     )
 
 
@@ -668,15 +704,14 @@ def adopt_model_cost_map(
 ) -> int:
     import litellm
     from litellm import utils
-    from litellm.litellm_core_utils.model_cost_store import replay_model_cost_overrides
+    from litellm.litellm_core_utils.model_cost_store import adopt_loaded_model_cost
 
     with MODEL_COST_WRITE_LOCK:
-        litellm.model_cost = new_model_cost_map
-        utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+        adopt_loaded_model_cost(new_model_cost_map)
+        utils.invalidate_model_cost_caches()
         litellm.add_known_models(model_cost_map=new_model_cost_map)
         fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
         utils.reapply_runtime_model_cost_registrations()
-        replay_model_cost_overrides()
     return fetched_model_count
 
 
@@ -702,7 +737,7 @@ async def _reload_model_cost_map(
 
 async def areload_model_cost_map(url: str | None = None) -> ModelCostMapAdopted | ModelCostMapReloadUnavailable:
     """Refetch the cost map (``url`` defaults to ``litellm.model_cost_map_url``), then adopt it and replay
-    ``register_model`` recordings, live router deployments and ``set_model_cost_overrides`` owners on top.
+    ``register_model`` recordings and ``set_model_cost_overrides`` owners, then live router deployments, on top.
     On ``ModelCostMapReloadUnavailable`` the current map is kept."""
     return await _reload_model_cost_map(url, client=None)
 

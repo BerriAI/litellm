@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
     FALLBACK_GENERALIZATIONS_KEY,
+    RESERVED_TOP_LEVEL_KEYS,
     GetModelCostMap,
     _count_model_entries,
     _finalize_model_cost_map,
@@ -606,7 +607,6 @@ def test_boot_load_success_does_not_start_background_retry():
 
 def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(monkeypatch):
     import litellm
-    from litellm import utils as litellm_utils
     from litellm.litellm_core_utils import get_model_cost_map as module
 
     original_model_cost = litellm.model_cost
@@ -615,11 +615,6 @@ def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_
         if name.endswith("_models") and isinstance(provider_models, set):
             monkeypatch.setattr(litellm, name, set(provider_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
     source_info = module._cost_map_source_info
     for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
         monkeypatch.setattr(source_info, name, getattr(source_info, name))
@@ -1284,9 +1279,13 @@ def test_every_key_reads_the_same_as_the_json_parsed_map(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_a_fetched_map_serves_a_bad_entry_as_written_and_logs_it_by_model_and_key():
-    edited = json.loads(_real_map_bytes())
-    edited["gpt-5.4-mini"]["mode"] = "telepathy"
+async def test_a_fetched_map_drops_only_the_bad_entry_and_logs_it_by_model_and_key():
+    valid_row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1e-06}
+    edited = {
+        **json.loads(_real_map_bytes()),
+        "cost-probe": valid_row,
+        "cost-probe.v2": {**valid_row, "mode": "telepathy"},
+    }
     client, _ = _mock_client([httpx.Response(200, content=json.dumps(edited).encode())])
     records: Final[list[logging.LogRecord]] = []
     handler: Final = logging.Handler()
@@ -1299,5 +1298,21 @@ async def test_a_fetched_map_serves_a_bad_entry_as_written_and_logs_it_by_model_
         logger.removeHandler(handler)
 
     assert isinstance(result, ModelCostMapReloaded)
-    assert result.model_cost_map["gpt-5.4-mini"]["mode"] == "telepathy"
-    assert [record for record in records if "gpt-5.4-mini.mode" in record.getMessage()]
+    assert "cost-probe.v2" not in result.model_cost_map
+    assert "cost-probe" in result.model_cost_map, "a valid key the bad one's name starts with must stay"
+    assert [record for record in records if "cost-probe.v2.mode" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_a_fetched_map_that_drops_below_the_integrity_limit_is_rejected_as_a_whole():
+    written: Final = json.loads(_real_map_bytes())
+    mostly_bad: Final = {
+        key: {**row, "mode": "telepathy"} if index % 4 != 0 and key not in RESERVED_TOP_LEVEL_KEYS else row
+        for index, (key, row) in enumerate(written.items())
+    }
+    client, _ = _mock_client([httpx.Response(200, content=json.dumps(mostly_bad).encode())])
+
+    result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "integrity validation" in result.reason

@@ -7679,26 +7679,28 @@ class ProxyConfig:
         ## ADD MODEL LOGIC
         for m in db_models:
             _litellm_params = m.litellm_params
-            if isinstance(_litellm_params, dict):
-                # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
-
-            else:
+            if not isinstance(_litellm_params, dict):
                 verbose_proxy_logger.error(
                     "Invalid model added to proxy db. Invalid litellm params. litellm_params=%s", _litellm_params
                 )
                 continue  # skip to next model
             _model_info = self.get_model_info_with_id(model=m, db_model=True)  ## 👈 FLAG = True for db_models
-
-            added = llm_router.upsert_deployment(
-                deployment=Deployment(
-                    model_name=m.model_name,
-                    litellm_params=_litellm_params,
-                    model_info=_model_info,
+            try:
+                # decrypt values
+                for k, v in _litellm_params.items():
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                added = llm_router.upsert_deployment(
+                    deployment=Deployment(
+                        model_name=m.model_name,
+                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
+                        model_info=_model_info,
+                    )
                 )
-            )
+            except Exception:  # noqa: BLE001  # one bad DB model must not stop the rest from loading
+                verbose_proxy_logger.exception(
+                    "Skipping DB model id=%s, it could not be added to the router", _model_info.id
+                )
+                continue
 
             if added is not None:
                 added_models += 1

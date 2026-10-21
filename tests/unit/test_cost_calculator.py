@@ -9973,11 +9973,10 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
-        {f"{metadata_prefix}{model}": {"supports_function_calling": True}},
+        {f"{metadata_prefix}{model}": {"supports_function_calling": True, "litellm_provider": "bedrock_converse"}},
         persist_across_reloads=persist_across_reloads,
     )
     litellm.register_model(
@@ -10057,9 +10056,6 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import litellm.utils as model_utils
-
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.gpt-6-sol"
     litellm.register_model({model: {"supports_function_calling": True}})
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
@@ -10092,7 +10088,6 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.cache-overlay-test"
     profile: Final = f"{profile_prefix}.{model}"
     catalog: Final = {
