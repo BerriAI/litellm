@@ -3824,8 +3824,9 @@ class Router:
           - Partial content: continue from the generated text, as an
             assistant prefill on a fallback that takes one and as assistant
             history plus a user request to continue on any other. A request
-            whose output is constrained (a JSON schema, a forced tool) is not
-            continued, and the primary's error surfaces instead.
+            whose output is constrained (a JSON schema, a forced tool), or a
+            stream that began a tool call, is not continued, and the primary's
+            error surfaces instead.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -4021,10 +4022,12 @@ class Router:
         request_kwargs: Mapping[str, object],
     ) -> ResponsesContinuation | None:
         """What a fallback continues from once a Responses stream broke after text, raising the primary's error
-        when the request constrains its output, since a continued JSON document or forced tool call would not
-        parse."""
+        when the request constrains its output or the stream began a tool call, since a continued JSON document or
+        tool call would not parse."""
         if not e.generated_content or e.is_pre_first_chunk:
             return None
+        if source_iterator.started_tool_call:
+            Router._raise_original_mid_stream_error(e)
         cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
         cut_deployment: Final = (
             self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None

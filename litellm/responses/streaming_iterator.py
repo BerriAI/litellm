@@ -363,6 +363,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _started_tool_call: bool = False
 
     def __init__(
         self,
@@ -491,6 +492,8 @@ class BaseResponsesAPIStreamingIterator:
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
                     _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+                    if getattr(_item, "type", None) in _TOOL_CALL_ITEM_TYPES:
+                        self._started_tool_call = True
                     if _item is not None:
                         ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                             item=_item,
@@ -1036,6 +1039,11 @@ class BaseResponsesAPIStreamingIterator:
         self._pending_logging_tasks = ()
         if pending:
             await asyncio.wait(pending)
+
+    @property
+    def started_tool_call(self) -> bool:
+        """Whether the stream began a tool call, which a text continuation could never finish."""
+        return self._started_tool_call
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
@@ -1683,6 +1691,7 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "mcp_call"})
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,

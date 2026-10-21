@@ -349,6 +349,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             if call_id in self._web_search_calls:
                 continue
+            self._started_tool_call = True
 
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
             fn_name = ""

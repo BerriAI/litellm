@@ -1,6 +1,7 @@
 """Keeps a mid-stream continuation on deployments whose model supports assistant prefill and whose own params leave
 the output unconstrained, and shapes a Responses API continuation for the deployment that serves it."""
 
+import json
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
@@ -30,6 +31,7 @@ _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 _TOOL_FORCING_CHOICE_TYPES: Final = frozenset({"function", "custom", "tool", "any"})
+_QUOTED_ENDING_CHARS: Final = 100
 RESPONSES_CONTINUATION_KWARG: Final = "_responses_continuation"
 
 
@@ -300,9 +302,11 @@ def _continuation_request(emitted_text: str) -> Mapping[str, object]:
         if emitted_text[-1:].isspace()
         else "It ends without trailing whitespace, so begin with a space if your first word starts a new word."
     )
+    ending: Final = json.dumps(emitted_text[-_QUOTED_ENDING_CHARS:], ensure_ascii=False)
     instruction: Final = (
-        "The previous assistant response was interrupted mid-stream. Continue exactly where it stopped and do not "
-        f"repeat any of its content. {seam} Your response must read as a seamless continuation."
+        f"The previous assistant response was interrupted mid-stream. It ended with {ending}. Continue exactly where "
+        "it stopped, so your first characters are the ones that would have come right after it, and do not repeat "
+        f"any of its content. {seam} Your response must read as a seamless continuation."
     )
     return {"type": "message", "role": "user", "content": [{"type": "input_text", "text": instruction}]}
 
