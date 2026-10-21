@@ -35,7 +35,6 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = mock_response_data
         mock_post.return_value = mock_response
@@ -57,19 +56,14 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
 
 
 @pytest.mark.asyncio
-async def test_ollama_aembeddings(
-    mock_response_data, mock_embedding_response, mock_encoding
-):
+async def test_ollama_aembeddings(mock_response_data, mock_embedding_response, mock_encoding):
     mock_response = AsyncMock()
     # Make json() a regular synchronous method, not async
     mock_response.json = MagicMock(return_value=mock_response_data)
     with (
-        patch(
-            "litellm.module_level_aclient.post", return_value=mock_response
-        ) as mock_post,
+        patch("litellm.module_level_aclient.post", return_value=mock_response) as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         response = await ollama_aembeddings(
             api_base="http://localhost:11434",
             model="test-model",
@@ -96,7 +90,6 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
         mock_post.return_value = mock_response
@@ -136,3 +129,72 @@ def test_ollama_embeddings_ignore_a_trailing_slash_on_api_base(api_base: str) ->
 
     assert route.called
     assert [item["embedding"] for item in response.data] == [[0.1, 0.2], [0.3, 0.4]]
+
+
+def test_ollama_embeddings_sends_api_key_and_timeout(mock_response_data, mock_embedding_response, mock_encoding):
+    with patch("litellm.module_level_client.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_post.return_value = mock_response
+
+        ollama_embeddings(
+            api_base="http://localhost:11434",
+            model="test-model",
+            prompts=["hello"],
+            optional_params={},
+            model_response=mock_embedding_response,
+            logging_obj=None,
+            encoding=mock_encoding,
+            api_key="secret",
+            timeout=5,
+        )
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"] == {"Authorization": "Bearer secret"}
+        assert kwargs["timeout"] == 5
+
+
+def test_ollama_embeddings_extra_headers_and_no_clobber(mock_response_data, mock_embedding_response, mock_encoding):
+    with patch("litellm.module_level_client.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_post.return_value = mock_response
+
+        ollama_embeddings(
+            api_base="http://localhost:11434",
+            model="test-model",
+            prompts=["hello"],
+            optional_params={},
+            model_response=mock_embedding_response,
+            logging_obj=None,
+            encoding=mock_encoding,
+            api_key="secret",
+            extra_headers={"Authorization": "Token custom", "X-Tenant": "acme"},
+        )
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"] == {"Authorization": "Token custom", "X-Tenant": "acme"}
+
+
+@pytest.mark.asyncio
+async def test_ollama_aembeddings_sends_api_key_and_timeout(mock_response_data, mock_embedding_response, mock_encoding):
+    with patch("litellm.module_level_aclient.post", new=AsyncMock()) as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_post.return_value = mock_response
+
+        await ollama_aembeddings(
+            api_base="http://localhost:11434",
+            model="test-model",
+            prompts=["hello"],
+            model_response=mock_embedding_response,
+            optional_params={},
+            logging_obj=None,
+            encoding=mock_encoding,
+            api_key="secret",
+            timeout=5,
+        )
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"] == {"Authorization": "Bearer secret"}
+        assert kwargs["timeout"] == 5

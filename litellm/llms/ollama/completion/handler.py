@@ -88,6 +88,15 @@ def _process_ollama_embedding_response(
     return model_response
 
 
+def _ollama_embedding_request_headers(
+    api_key: str | None, extra_headers: Mapping[str, str] | None
+) -> dict[str, str] | None:  # mutable-ok: headers dict is built fresh per request and handed to httpx
+    headers: Final = dict(extra_headers) if extra_headers else {}
+    if api_key is not None and "Authorization" not in headers:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers or None
+
+
 async def ollama_aembeddings(
     api_base: str,
     model: str,
@@ -96,10 +105,16 @@ async def ollama_aembeddings(
     optional_params: dict,
     logging_obj: object,
     encoding: TokenEncoder | None,
+    api_key: str | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ):
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = await litellm.module_level_aclient.post(url=_ollama_embed_url(api_base), json=data)
+    headers: Final = _ollama_embedding_request_headers(api_key=api_key, extra_headers=extra_headers)
+    response: Final = await litellm.module_level_aclient.post(
+        url=_ollama_embed_url(api_base), json=data, headers=headers, timeout=timeout
+    )
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
@@ -120,10 +135,16 @@ def ollama_embeddings(
     model_response: EmbeddingResponse,
     logging_obj: object,
     encoding: TokenEncoder | None = None,
+    api_key: str | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ):
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = litellm.module_level_client.post(url=_ollama_embed_url(api_base), json=data)
+    headers: Final = _ollama_embedding_request_headers(api_key=api_key, extra_headers=extra_headers)
+    response: Final = litellm.module_level_client.post(
+        url=_ollama_embed_url(api_base), json=data, headers=headers, timeout=timeout
+    )
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(

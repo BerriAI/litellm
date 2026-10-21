@@ -7265,6 +7265,9 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                api_key=api_key,
+                extra_headers=cast("dict[str, str] | None", headers),  # cast-ok: untyped kwargs headers
+                timeout=timeout,
             )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker_llm.embedding(
