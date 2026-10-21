@@ -4,6 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from openai import OpenAI
 
 import litellm
@@ -79,17 +80,33 @@ def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
     }
 
 
-def test_responses_request_is_bridged_to_zerogpu_chat_completions():
-    zerogpu: Final = _RecordingZeroGPU({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+def test_responses_request_reaches_zerogpu_responses_natively():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ZEROGPU_API_BASE}/responses").respond(
+            200,
+            json={
+                "id": "resp_zerogpu",
+                "object": "response",
+                "created_at": 1_792_000_000,
+                "model": "gpt-oss-120b",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_zerogpu",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+            },
+        )
+        response: Final = litellm.responses(model="zerogpu/gpt-oss-120b", input="hello", api_key="zerogpu-test-key")
 
-    with zerogpu.client() as client:
-        response: Final = litellm.responses(model="zerogpu/gpt-oss-120b", input="hello", client=client)
-
-    assert [str(request.url) for request in zerogpu.requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
-    assert json.loads(zerogpu.requests[0].content) == {
-        "model": "gpt-oss-120b",
-        "messages": [{"role": "user", "content": "hello"}],
-    }
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["model"] == "gpt-oss-120b"
+    assert body["input"] == "hello"
     assert response.output[0].content[0].text == "hi"
 
 

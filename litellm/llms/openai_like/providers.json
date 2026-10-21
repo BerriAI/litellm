@@ -62,7 +62,7 @@
     "base_url": "https://api.zerogpu.ai/v1",
     "api_key_env": "ZEROGPU_API_KEY",
     "api_base_env": "ZEROGPU_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
