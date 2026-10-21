@@ -46,7 +46,7 @@ def test_bedrock_response_stream_shape_lazy_loads_once():
     """
     get_bedrock_response_stream_shape() loads from botocore at most once per process.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     import litellm.llms.bedrock.common_utils as mod
 
@@ -74,7 +74,6 @@ def test_bedrock_response_stream_shape_load_failure_returns_none():
     should return None rather than propagating the exception, so the module
     still imports cleanly.
     """
-    from unittest.mock import patch
 
     import litellm.llms.bedrock.common_utils as mod
 
@@ -136,7 +135,7 @@ def test_bedrock_parse_message_from_event_raises_on_none_shape():
     _parse_message_from_event must raise BedrockError before touching the
     botocore parser — not an opaque AttributeError from inside botocore.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     import litellm.llms.bedrock.common_utils as mod
     from litellm.llms.bedrock.common_utils import (
@@ -260,7 +259,6 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     Models configured like `bedrock/us.anthropic.claude-opus-4-6-v1[1m]`
     should resolve to the base model name so pricing can be found.
     """
-    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
     assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]") == "anthropic.claude-opus-4-6-v1"
     assert get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]") == "anthropic.claude-sonnet-4-6"
@@ -328,16 +326,9 @@ def test_route_prefix_matched_as_path_segment_not_substring():
     or a ``/`` boundary.
     """
     # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
-    )
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
-    )
-    assert (
-        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
-        is False
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+    assert BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5") is False
 
     # A genuine mantle route still resolves, via the startswith branch...
     assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
@@ -414,7 +405,6 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     must not shadow a base entry that has it (`get(model) or get(base)` used to
     short-circuit on the truthy regional dict and drop the capability).
     """
-    import litellm
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_parallel_tool_use_config,
         is_claude_4_5_on_bedrock,
@@ -540,7 +530,6 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
 def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
     import datetime
-    from unittest.mock import patch
 
     import boto3
     from botocore.exceptions import ClientError
@@ -593,7 +582,6 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
 def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     """Batch and file signing must carry the deployment's session tags into the AssumeRole call too."""
     import datetime
-    from unittest.mock import patch
 
     import boto3
     from botocore.exceptions import ClientError
@@ -852,7 +840,6 @@ def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
 
 
 def _bedrock_configs_with_get_error_class():
-    import importlib
     import inspect
     import pathlib
 
@@ -901,7 +888,9 @@ def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
 
 
-_FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+_FORMAT_REJECTION: Final = (
+    "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+)
 
 
 _COMPILE_REJECTION: Final = (

@@ -9,9 +9,6 @@ import httpx
 import pytest
 import respx
 
-from typing import Final
-from unittest.mock import MagicMock, patch
-
 import litellm
 from litellm import ModelResponse, Router, completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -29,7 +26,6 @@ from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTI
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock, RequestObject
 
-
 CAPITAL_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
     "json_schema": {
@@ -42,7 +38,6 @@ CAPITAL_RESPONSE_FORMAT: Final = {
         },
     },
 }
-
 
 
 def test_transform_usage():
@@ -644,12 +639,6 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
     additional = result.get("additionalModelRequestFields", {})
     assert additional.get("output_config") == {"effort": "high"}
-
-
-
-
-
-
 
 
 def test_reasoning_effort_requests_summarized_display_converse():
@@ -2272,7 +2261,6 @@ async def test_assistant_message_cache_control():
     """Test that assistant messages with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     # Test assistant message with string content and cache_control
@@ -2325,7 +2313,6 @@ async def test_assistant_message_list_content_cache_control():
     """Test assistant messages with list content and cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2369,7 +2356,6 @@ async def test_tool_message_cache_control():
     """Test that tool messages with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2433,7 +2419,6 @@ async def test_tool_message_string_content_cache_control():
     """Test tool messages with string content and message-level cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2489,7 +2474,6 @@ async def test_tool_message_search_results_maps_to_bedrock_search_result_block()
     """OpenAI tool message search_results should map to Bedrock searchResult blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2550,7 +2534,6 @@ async def test_tool_message_empty_search_results_falls_back_to_content():
     """Empty search_results must not skip normal tool content processing."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2719,7 +2702,6 @@ async def test_assistant_tool_calls_cache_control():
     """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2771,7 +2753,6 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
     """Test multiple tool calls where only some have cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2832,7 +2813,6 @@ async def test_no_cache_control_no_cache_point():
     """Test that messages without cache_control don't generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -2877,9 +2857,6 @@ async def test_no_cache_control_no_cache_point():
 
 def test_guarded_text_wraps_in_guardrail_converse_content():
     """Test that guarded_text content type gets wrapped in guardContent blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {
@@ -2980,9 +2957,6 @@ def test_guarded_text_with_system_messages():
 
 def test_guarded_text_with_mixed_content_types():
     """Test guarded_text with mixed content types including images."""
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {
@@ -3069,9 +3043,6 @@ async def test_async_guarded_text():
 
 def test_guarded_text_with_tool_calls():
     """Test guarded_text with tool calls in the conversation."""
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {
@@ -3721,9 +3692,6 @@ def test_empty_assistant_message_handling():
     """
     # Import the litellm module that factory.py uses to ensure we patch the correct reference
     import litellm.litellm_core_utils.prompt_templates.factory as factory_module
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3813,9 +3781,6 @@ def test_empty_assistant_message_handling():
 def test_bedrock_converse_trailing_prefix_assistant_skips_user_continue():
     """Assistant prefill (prefix: true) must not inject a dummy user 'Please continue.' turn."""
     import litellm.litellm_core_utils.prompt_templates.factory as factory_module
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {"role": "user", "content": "Hello, how are you?"},
@@ -3842,9 +3807,6 @@ def test_bedrock_converse_trailing_prefix_assistant_skips_user_continue():
 def test_bedrock_converse_leading_prefix_assistant_skips_user_continue():
     """Leading assistant with prefix: true should not prepend dummy user."""
     import litellm.litellm_core_utils.prompt_templates.factory as factory_module
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {"role": "assistant", "content": "Partial", "prefix": True},
@@ -4176,8 +4138,6 @@ def test_translate_response_format_native_output_config(monkeypatch):
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
-
-
 
 
 ADAPTIVE_THINKING: Final = {"type": "adaptive"}
@@ -4640,8 +4600,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     )
 
     assert ("outputConfig" in request) is forwarded
-
-
 
 
 def test_translate_response_format_fallback_tool_call():
@@ -5740,7 +5698,11 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
-        monkeypatch.delitem(litellm.model_cost["jp.anthropic.claude-opus-4-7"], "cache_creation_input_token_cost_above_1hr", raising=False)
+        monkeypatch.delitem(
+            litellm.model_cost["jp.anthropic.claude-opus-4-7"],
+            "cache_creation_input_token_cost_above_1hr",
+            raising=False,
+        )
         assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [
@@ -6361,9 +6323,6 @@ def test_bedrock_tool_message_openai_file_pdf_becomes_document():
     inside a tool message content list should translate to a Bedrock
     toolResult.content[].document block.
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     pdf_b64 = "JVBERi0xLjQKJeLjz9MK"  # tiny "%PDF-1.4\n" header
     messages = [
@@ -6404,9 +6363,6 @@ def test_bedrock_tool_message_image_url_pdf_data_uri_becomes_document():
     BedrockImageProcessor correctly returns a {"document": ...} block, but the
     tool-result wrapper only appended the "image" case, silently dropping documents.
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
     messages = [
@@ -6449,7 +6405,6 @@ def test_bedrock_tool_message_file_id_http_url_becomes_document():
 
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockImageProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     pdf_url = "https://example.com/whitepaper.pdf"
@@ -6503,9 +6458,6 @@ def test_bedrock_tool_message_file_without_data_or_id_raises():
     see an empty tool result and obscures the caller bug.
     """
     import litellm
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     messages = [
         {"role": "user", "content": "Summarize."},
@@ -6532,9 +6484,6 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
     to a Bedrock image block (not document). Locks in existing behavior after
     the document-passthrough fix.
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
     messages = [
@@ -6731,7 +6680,6 @@ async def test_grounding_source_and_query_rendered_as_text():
     otherwise vanish from the prompt."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = [
@@ -7230,7 +7178,6 @@ async def test_message_level_cache_control_honors_ttl_for_supported_model(
     hardcoded `{"type": "default"}`), silently downgrading 1h to 5m."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
-        _bedrock_converse_messages_pt,
     )
 
     messages = _agentic_messages_with_ttl(ttl_target)
@@ -7256,9 +7203,6 @@ async def test_message_level_cache_control_honors_ttl_for_supported_model(
 def test_message_level_cache_control_drops_ttl_for_unsupported_model(ttl_target):
     """Models outside the extended-caching allow-list must keep emitting the
     plain `{"type": "default"}` cachePoint (Bedrock rejects `ttl` for them)."""
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _bedrock_converse_messages_pt,
-    )
 
     result = _bedrock_converse_messages_pt(
         messages=_agentic_messages_with_ttl(ttl_target),
@@ -7803,9 +7747,6 @@ def test_eager_input_streaming_non_boolean_is_a_bad_request():
         )
 
 
-
-
-
 def _converse_params(
     model: str, model_info: Mapping[str, object] | None, non_default_params: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -7963,8 +7904,6 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
-
-
 
 
 def _converse_request_for_json_schema(

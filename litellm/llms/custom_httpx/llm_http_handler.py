@@ -1,11 +1,10 @@
-from functools import partial
 import asyncio
 import copy
 import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,

@@ -1,5 +1,4 @@
-from collections.abc import Mapping
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -114,7 +113,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not requests_opt_in_native_output(model, anthropic_messages_optional_request_params, model_info):
             return None
         return litellm_params.model_copy(
-            update={"model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}}
+            update={  # mutable-ok: nested model metadata must remain JSON serializable
+                "model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}
+            }
         )
 
     def should_retry_anthropic_messages_without_native_output(

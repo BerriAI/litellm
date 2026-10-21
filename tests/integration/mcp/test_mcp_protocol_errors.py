@@ -1,16 +1,15 @@
 import json
 import queue
 import uuid
-from typing import Final
 from pathlib import Path
+from typing import Final
 
 import httpx
-import yaml
-from integration._support.process import owned_proxy
-
 import pytest
+import yaml
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 

@@ -1923,6 +1923,39 @@
     ],
     "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model[adaptive_thinking]": [
       "other.provider_wire.a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open[anthropic]": [
+      "other.provider_wire.native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open[azure_ai]": [
+      "other.provider_wire.native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[forced_tool_refused-anthropic]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[forced_tool_refused-vertex_ai]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[thinking]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[caller_tools]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[effort_none-anthropic]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[effort_none-azure_ai]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call[vertex_ai]": [
+      "other.provider_wire.json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call[bedrock_invoke]": [
+      "other.provider_wire.json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object": [
+      "other.provider_wire.vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object"
     ]
   },
   "browser": {

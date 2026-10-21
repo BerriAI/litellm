@@ -20,9 +20,6 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
-from litellm.caching.caching import Cache
-from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -30,15 +27,19 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -48,7 +49,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
-    ADDRESSED_RESPONSE_ID_FIELD,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
@@ -586,7 +586,6 @@ def test_all_model_configs():
 
 
 def test_cohere_embedding_optional_params():
-    from litellm import get_optional_params_embeddings
 
     optional_params = get_optional_params_embeddings(
         model="embed-v4.0",
@@ -1608,7 +1607,6 @@ class TestProxyFunctionCalling:
         # For now, we expect False (current behavior), but document the limitation
         assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
-
     def test_litellm_utils_supports_function_calling_import(self):
         """Test that supports_function_calling can be imported from litellm.utils."""
         try:
@@ -1627,7 +1625,6 @@ class TestProxyFunctionCalling:
             assert callable(litellm.supports_function_calling)
         except Exception as e:
             pytest.fail(f"Failed to access litellm.supports_function_calling: {e}")
-
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
@@ -2983,9 +2980,6 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
-
-
-
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
@@ -3903,9 +3897,6 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
     )
 
 
-
-
-
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
@@ -4290,9 +4281,6 @@ async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
     assert wrapper.completion_stream is completion_stream
 
 
-
-
-
 @pytest.mark.asyncio
 @respx.mock
 async def test_wrapper_async_leaves_success_deployment_hook_off_requested_fake_stream(
@@ -4365,9 +4353,6 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
-
-
-
 
 
 @pytest.mark.asyncio

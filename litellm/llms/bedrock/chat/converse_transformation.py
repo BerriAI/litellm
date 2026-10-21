@@ -933,7 +933,7 @@ class AmazonConverseConfig(BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        result: Final[dict[str, object]] = dict(schema)
+        result: Final[dict[str, object]] = dict(schema)  # mutable-ok: recursively normalize a private JSON schema copy
 
         if is_object_schema(result) and "additionalProperties" not in result:
             result["additionalProperties"] = False
@@ -952,7 +952,9 @@ class AmazonConverseConfig(BaseConfig):
                 }
         for key in ("anyOf", "allOf", "oneOf"):
             if isinstance(variants := result.get(key), list):
-                result[key] = [AmazonConverseConfig._add_additional_properties_to_schema(item) for item in variants]
+                result[key] = [  # mutable-ok: schema unions serialize as JSON arrays
+                    AmazonConverseConfig._add_additional_properties_to_schema(item) for item in variants
+                ]
 
         return result
 
@@ -981,7 +983,9 @@ class AmazonConverseConfig(BaseConfig):
             return None
         schema, name, description = (native_format.get(key) for key in ("schema", "name", "description"))
         return AmazonConverseConfig._create_output_config_for_response_format(
-            json_schema={**schema} if isinstance(schema, Mapping) else None,
+            json_schema={**schema}  # mutable-ok: legacy schema normalizer requires a dict
+            if isinstance(schema, Mapping)
+            else None,
             name=name if isinstance(name, str) else None,
             description=description if isinstance(description, str) else None,
         )
@@ -1267,7 +1271,7 @@ class AmazonConverseConfig(BaseConfig):
             # Requires an explicit schema — json_object with no schema falls through
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
-                json_schema=dict(native_schema),
+                json_schema=dict(native_schema),  # mutable-ok: legacy schema normalizer requires a dict
                 name=name,
                 description=description,
             )

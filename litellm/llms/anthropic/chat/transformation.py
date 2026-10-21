@@ -610,7 +610,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         enforced_min_items: Final = (
             isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
         )
-        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
+        unsupported_fields: Final = frozenset(constraint_labels) - (
+            frozenset(("minItems",)) if enforced_min_items else frozenset()
+        )
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -1357,7 +1359,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
-        unpacked: Final = copy.deepcopy(dict(json_schema))
+        unpacked: Final = copy.deepcopy(
+            dict(json_schema)  # mutable-ok: unpack_defs expands this private schema copy in place
+        )
         defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
         if isinstance(defs, dict) and defs:
             unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
@@ -1375,7 +1379,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
         ):
             return None
-        return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
+        return AnthropicConfig.filter_anthropic_output_schema(
+            dict(json_schema)  # mutable-ok: schema filter mutates its input
+        )
 
     def uses_native_structured_output(self, model: str) -> bool:
         return AnthropicConfig._supports_model_capability(
@@ -1392,14 +1398,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_schema is not None
             and schema_has_open_object(json_schema)
             and not self.is_thinking_requested(request_params)
-            and not self.is_thinking_enabled(dict(request_params))
+            and not self.is_thinking_enabled(dict(request_params))  # mutable-ok: legacy helper requires a dict
             and not request_params.get("tools")
             and not AnthropicModelInfo.forced_tool_use_unsupported(model)
         )
         return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+        return self.filter_anthropic_output_schema(
+            dict(self._defs_unpacked(json_schema))  # mutable-ok: filter mutates its input
+        )
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
@@ -1408,7 +1416,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         native_schema: Final = self.native_output_format_schema(json_schema)
         if native_schema is None:
             return None
-        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
+        return AnthropicOutputSchema(
+            type="json_schema",
+            schema=dict(native_schema),  # mutable-ok: wire schema is a JSON dict
+        )
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool

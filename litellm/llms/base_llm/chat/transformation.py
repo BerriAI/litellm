@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+
 """
 Common base config for all LLM providers
 """

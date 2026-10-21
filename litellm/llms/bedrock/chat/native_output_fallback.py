@@ -12,8 +12,12 @@ from litellm.utils import CustomStreamWrapper
 
 NativeOutputResponse: TypeAlias = ModelResponse | CustomStreamWrapper
 NativeOutputAttemptResult: TypeAlias = NativeOutputResponse | Coroutine[object, object, NativeOutputResponse]
-NativeOutputAttempt: TypeAlias = Callable[[NativeOutputFallback | None], NativeOutputAttemptResult]
-NativeOutputFallbackFactory: TypeAlias = Callable[[], NativeOutputFallback | None]
+NativeOutputAttempt: TypeAlias = Callable[
+    [NativeOutputFallback | None], NativeOutputAttemptResult  # mutable-ok: Callable argument type syntax
+]
+NativeOutputFallbackFactory: TypeAlias = Callable[
+    [], NativeOutputFallback | None  # mutable-ok: Callable argument type syntax
+]
 
 
 def _fallback_for(

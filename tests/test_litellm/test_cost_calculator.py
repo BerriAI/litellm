@@ -1,3 +1,4 @@
+import datetime
 import time
 from typing import Final
 
@@ -1047,7 +1048,6 @@ def test_log_context_cost_calculation(monkeypatch: pytest.MonkeyPatch):
     from litellm import completion_cost
     from litellm.types.utils import (
         Choices,
-    EmbeddingResponse,
         Message,
         ModelResponse,
         PromptTokensDetailsWrapper,
@@ -4278,7 +4278,10 @@ def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     assert optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
     assert optional_params["aws_session_token"] == "session-secret"
 
-def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 

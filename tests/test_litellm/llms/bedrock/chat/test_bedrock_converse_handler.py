@@ -1,4 +1,5 @@
 import litellm
+
 """Tests for `BedrockConverseLLM.completion`.
 
 AWS credential resolution is stubbed so nothing reaches STS.
@@ -320,4 +321,3 @@ def test_sync_converse_streaming_upstream_error_carries_the_upstream_body_as_tex
 
     assert raised.value.status_code == status_code
     assert raised.value.message == f"litellm.{error_class.__name__}: BedrockException - {_UPSTREAM_ERROR_BODY}"
-
