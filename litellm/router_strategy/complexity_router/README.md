@@ -433,8 +433,8 @@ continue serving text requests but are excluded from image requests.
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
-to a text-only or unknown model fails before provider dispatch when an image arrives.
+pinned by session affinity. Without `modality_pin_override`, an image request fails before provider
+dispatch when the pinned group has no compatible deployment.
 
 Context-window and modality recovery take priority over the default model. If a compatible tier
 cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.

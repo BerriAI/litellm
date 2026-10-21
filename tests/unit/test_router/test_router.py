@@ -29993,3 +29993,70 @@ async def test_image_dispatch_and_fallback_never_call_text_deployment(
         assert vision_route.called
         assert backup_route.called is primary_fails
         assert not text_route.called
+
+
+@pytest.mark.parametrize("allow_pin_override", (False, True))
+async def test_image_request_cannot_relocate_retained_pin_through_health_fallback(allow_pin_override: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "automatic",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "text-pool", "MEDIUM": "vision-pool"},
+                        "default_model": "vision-pool",
+                        "session_affinity": True,
+                        "modality_pin_override": allow_pin_override,
+                    },
+                },
+            },
+            {
+                "model_name": "text-pool",
+                "litellm_params": {"model": "openai/custom-text", "api_key": "test"},
+                "model_info": {"id": "text", "supports_vision": False},
+            },
+            {
+                "model_name": "vision-pool",
+                "litellm_params": {"model": "openai/custom-vision", "api_key": "test"},
+                "model_info": {"id": "vision", "supports_vision": True},
+            },
+        ]
+    )
+    metadata: Final = {"session_id": "image-session", "user_api_key_hash": "test-key"}
+    text_messages: Final = [{"role": "user", "content": "Hi"}]
+    first: Final = await router.async_get_available_deployment(
+        model="automatic",
+        messages=text_messages,
+        request_kwargs={"metadata": dict(metadata)},
+    )
+    assert first["model_info"]["id"] == "text"
+    image_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What color is this?"},
+                {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+            ],
+        }
+    ]
+    if allow_pin_override:
+        image: Final = await router.async_get_available_deployment(
+            model="automatic",
+            messages=image_messages,
+            request_kwargs={"metadata": dict(metadata)},
+        )
+        assert image["model_info"]["id"] == "vision"
+    else:
+        with pytest.raises(litellm.BadRequestError, match="modality_pin_override"):
+            await router.async_get_available_deployment(
+                model="automatic",
+                messages=image_messages,
+                request_kwargs={"metadata": dict(metadata)},
+            )
+    last: Final = await router.async_get_available_deployment(
+        model="automatic",
+        messages=text_messages,
+        request_kwargs={"metadata": dict(metadata)},
+    )
+    assert last["model_info"]["id"] == "text"

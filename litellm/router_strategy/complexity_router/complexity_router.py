@@ -42,6 +42,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
+from litellm.exceptions import BadRequestError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
@@ -3719,34 +3720,29 @@ class ComplexityRouter(CustomLogger):
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
-        """Replace a routed model that cannot accept this request's image input.
-
-        The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
-        unless modality_pin_override is set, in which case the image turn is re-placed and reported
-        as modality_pin_override while the stored pin, written upstream from the session's own
-        model, is left for the next text turn; replacement picks and every other path are just
-        responses. The re-placement walks
-        UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
-        through `_pick_model_for_tier` so routing plugins still apply, then falls to
-        default_model (never on plugin routers, and never on a plan-floored decision, since
-        default_model carries no tier guarantee), else raises the clear 400. The rewritten
-        decision keeps its cause on a same-tier repick and becomes modality_escalation when the
-        tier moved or default_model took over, with the displaced placement in signals.
-        """
+        """Keep compatible placements, reject incompatible pins, and repick permitted image routes."""
         decision: Final = response.routing_decision
         if (
             not resolved_messages
             or response.model is None
-            or (
-                decision is not None
-                and decision.get("cause") == "session_affinity_pin"
-                and not self.config.modality_pin_override
-            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         ):
             return response
+        if (
+            decision is not None
+            and decision.get("cause") == "session_affinity_pin"
+            and not self.config.modality_pin_override
+        ):
+            raise BadRequestError(
+                message=(
+                    f"Auto-router {self.model_name} is pinned to '{response.model}', which has no deployment "
+                    "with confirmed image support. Configure model_info.supports_vision for a vision-capable "
+                    "deployment, enable modality_pin_override to permit relocation, or remove the image content."
+                ),
+                model=self.model_name,
+                llm_provider="",
+            )
         fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
         eligible: Final = frozenset(
             name
@@ -3775,9 +3771,7 @@ class ComplexityRouter(CustomLogger):
             new_tier = None
             new_model = self._placed_default_model()
         else:
-            import litellm
-
-            raise litellm.BadRequestError(
+            raise BadRequestError(
                 message=(
                     f"Auto-router {self.model_name} received a request with image input, but no model "
                     f"at or above the decided tier has confirmed image support. "
@@ -3791,7 +3785,7 @@ class ComplexityRouter(CustomLogger):
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
         # Reaching here on a kept pin means modality_pin_override is on, since the guard above
-        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # rejects otherwise. The model moved off the pin even on a same-tier repick, so reporting
         # the pin's own cause would claim the session's model served a request it did not.
         displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model

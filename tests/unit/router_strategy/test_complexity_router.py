@@ -14853,7 +14853,7 @@ class TestModalityRouting:
             ("no_ask_capable_default_kept", "vision-default", "default_fallback"),
             ("no_ask_text_default_displaced", "vision-mid", "modality_escalation"),
             ("custom_tiers_walk", "premium-model", "modality_escalation"),
-            ("pin_kept_bypasses", "text-cheap", "session_affinity_pin"),
+            ("pin_kept_rejects", None, None),
             ("pin_replacement_gated", "vision-big", "modality_escalation"),
             ("pin_override_escalates", "vision-mid", "modality_pin_override"),
             ("pin_override_same_tier", "vision-cheap", "modality_pin_override"),
@@ -14932,6 +14932,10 @@ class TestModalityRouting:
             mock_router_instance.model_list = []
             mock_router_instance.model_name_to_deployment_indices = {}
         router = self._router(mock_router_instance, config, vision)
+        if path == "pin_kept_rejects":
+            with pytest.raises(litellm.BadRequestError, match="modality_pin_override"):
+                await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
+            return
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model
         assert result.routing_decision["cause"] == expected_cause
