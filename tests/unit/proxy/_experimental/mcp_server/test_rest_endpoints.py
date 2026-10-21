@@ -5105,3 +5105,109 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
             assert (authorization.removeprefix("Bearer ") or None) == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+@pytest.mark.asyncio
+async def test_rest_tool_listing_reapplies_key_tool_permissions_on_cached_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    from collections.abc import Mapping, Sequence
+    from typing import cast
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server import operations as mcp_operations
+    from litellm.proxy._experimental.mcp_server.catalog import _configuration_identity
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager, MCPTransport
+    from litellm.proxy._experimental.mcp_server.tools_list_cache import InProcessToolsListStore, SharedToolsListCache
+    from litellm.proxy._experimental.mcp_server.operations import ListMCPToolsRestAPIResponseObject
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from mcp.types import ListToolsResult
+
+    class UpstreamFetch:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self) -> ListToolsResult:
+            self.calls += 1
+            return ListToolsResult(
+                tools=[
+                    Tool(name="read", input_schema={"type": "object"}),
+                    Tool(name="write", input_schema={"type": "object"}),
+                ]
+            )
+
+    server: Final = MCPServer(
+        server_id="cache-permission-server",
+        name="cache-permission-server",
+        transport=MCPTransport.http,
+        url="http://127.0.0.1:8765/mcp",
+    )
+    store: Final = InProcessToolsListStore(clock=lambda: 100)
+    cache: Final = SharedToolsListCache(lambda: store, lambda: 30, clock=lambda: 100)
+    fetch: Final = UpstreamFetch()
+    digest: Final = hashlib.sha256(_configuration_identity(server).encode()).hexdigest()
+    await cache.get(server.server_id, digest, "full", fetch)
+    manager: Final = MCPServerManager(tools_list_cache=cache, jwt_signer_provider=lambda: None)
+
+    async def allowed_servers(user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
+        return [server.server_id]
+
+    def find_server(server_id: str, client_ip: str | None = None) -> MCPServer | None:
+        return server if server_id == server.server_id else None
+
+    def filter_server_ids(server_ids: list[str], client_ip: str | None) -> tuple[list[str], int]:
+        return server_ids, 0
+
+    async def same_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return user_api_key_auth
+
+    async def auth_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        return [user_api_key_auth]
+
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(manager, "get_allowed_mcp_servers", allowed_servers)
+    monkeypatch.setattr(manager, "get_mcp_server_by_id", find_server)
+    monkeypatch.setattr(manager, "filter_server_ids_by_ip_with_info", filter_server_ids)
+    monkeypatch.setattr(rest_endpoints, "acting_user_auth", same_auth)
+    monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", auth_contexts)
+
+    read_only: Final = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="read-only",
+            mcp_servers=[server.server_id],
+            mcp_tool_permissions={server.server_id: ["read"]},
+        )
+    )
+    write_only: Final = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="write-only",
+            mcp_servers=[server.server_id],
+            mcp_tool_permissions={server.server_id: ["write"]},
+        )
+    )
+    read_result: Final = cast(
+        Mapping[str, object],
+        await rest_endpoints.list_tool_rest_api(
+            _build_request(path="/mcp-rest/tools/list", method="GET"),
+            server_id=server.server_id,
+            user_api_key_dict=read_only,
+        ),
+    )
+    write_result: Final = cast(
+        Mapping[str, object],
+        await rest_endpoints.list_tool_rest_api(
+            _build_request(path="/mcp-rest/tools/list", method="GET"),
+            server_id=server.server_id,
+            user_api_key_dict=write_only,
+        ),
+    )
+    read_tools: Final = cast(Sequence[ListMCPToolsRestAPIResponseObject], read_result["tools"])
+    write_tools: Final = cast(Sequence[ListMCPToolsRestAPIResponseObject], write_result["tools"])
+
+    assert tuple(tool.name for tool in read_tools) == ("read",)
+    assert tuple(tool.name for tool in write_tools) == ("write",)
+    assert fetch.calls == 1

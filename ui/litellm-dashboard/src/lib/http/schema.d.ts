@@ -5919,6 +5919,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/mcp_tools_list_cache_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mcp Tools List Cache Settings */
+        get: operations["get_mcp_tools_list_cache_settings_get_mcp_tools_list_cache_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -18170,6 +18187,23 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"];
+        trace?: never;
+    };
+    "/update/mcp_tools_list_cache_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Mcp Tools List Cache Settings */
+        patch: operations["update_mcp_tools_list_cache_settings_update_mcp_tools_list_cache_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -37827,6 +37861,29 @@ export interface components {
          * @description Response model for native MCP tool search settings
          */
         MCPToolSearchSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
+        /** MCPToolsListCacheSettings */
+        MCPToolsListCacheSettings: {
+            /**
+             * Ttl Seconds
+             * @description Cache upstream MCP tools/list results for this many seconds. Zero disables the cache.
+             * @default 0
+             */
+            ttl_seconds: number;
+        };
+        /**
+         * MCPToolsListCacheSettingsResponse
+         * @description Response model for MCP tools/list cache settings
+         */
+        MCPToolsListCacheSettingsResponse: {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
@@ -60258,6 +60315,26 @@ export interface operations {
             };
         };
     };
+    get_mcp_tools_list_cache_settings_get_mcp_tools_list_cache_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolsListCacheSettingsResponse"];
+                };
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -75412,6 +75489,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MCPToolSearchSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mcp_tools_list_cache_settings_update_mcp_tools_list_cache_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolsListCacheSettings"];
             };
         };
         responses: {

@@ -1,5 +1,6 @@
 # Create server parameters for stdio connection
 import asyncio
+import hashlib
 import json
 import os
 from typing import Final
@@ -16,12 +17,229 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPTransport,
 )
+from litellm.proxy._experimental.mcp_server.catalog import _configuration_identity
+from litellm.proxy._experimental.mcp_server.tools_list_cache import InProcessToolsListStore, SharedToolsListCache
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.types.mcp import MCPAuth
+import httpx2
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
 
 
 mcp_server_manager = MCPServerManager()
+
+
+@pytest.mark.asyncio
+async def test_get_tools_page_uses_cached_raw_tools_without_creating_upstream_client() -> None:
+    class RequestCounter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def respond(self, request: httpx2.Request) -> httpx2.Response:
+            self.calls += 1
+            return httpx2.Response(500)
+
+    server: Final = MCPServer(
+        server_id="cache-server",
+        name="cache-server",
+        transport=MCPTransport.http,
+        url="http://127.0.0.1:8765/mcp",
+        auth_type=None,
+        pinned_tools={"cached_tool": {"description": "pinned", "input_schema": {"type": "object", "properties": {}}}},
+    )
+    store: Final = InProcessToolsListStore(clock=lambda: 100)
+    cache: Final = SharedToolsListCache(lambda: store, lambda: 30, clock=lambda: 100)
+    digest: Final = hashlib.sha256(_configuration_identity(server).encode()).hexdigest()
+    tool: Final = MCPTool(name="cached_tool", description="cached", inputSchema={"type": "object", "properties": {}})
+
+    async def fetch() -> ListToolsResult:
+        return ListToolsResult(tools=[tool])
+
+    await cache.get(server.server_id, digest, "full", fetch)
+    requests: Final = RequestCounter()
+    manager: Final = MCPServerManager(
+        tools_list_cache=cache,
+        upstream_transport=httpx2.MockTransport(requests.respond),
+    )
+
+    result: Final = await manager.get_tools_page(server, add_prefix=False)
+    second_result: Final = await manager.get_tools_page(server, add_prefix=False)
+    cached_raw: Final = await cache.get(server.server_id, digest, "full", fetch)
+
+    assert result.tools[0].description == "pinned"
+    assert second_result.tools[0].description == "pinned"
+    assert cached_raw.tools[0].description == "cached"
+    assert requests.calls == 0
+
+
+@pytest.mark.parametrize(
+    "auth_type",
+    (
+        MCPAuth.true_passthrough,
+        MCPAuth.oauth_delegate,
+        MCPAuth.oauth2_token_exchange,
+        MCPAuth.oauth2_id_jag,
+        MCPAuth.oauth2,
+    ),
+)
+def test_caller_dependent_auth_modes_bypass_tools_list_cache(auth_type: MCPAuth) -> None:
+    server: Final = MCPServer(
+        server_id="cache-server",
+        name="cache-server",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+    manager: Final = MCPServerManager()
+
+    assert not manager._tools_list_cache_eligible(
+        server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+
+
+def test_caller_headers_stdio_env_and_per_user_headers_bypass_tools_list_cache() -> None:
+    manager: Final = MCPServerManager()
+    http_server: Final = MCPServer(
+        server_id="cache-server",
+        name="cache-server",
+        transport=MCPTransport.http,
+        extra_headers=["x-request-tag"],
+    )
+    stdio_server: Final = MCPServer(
+        server_id="stdio-server",
+        name="stdio-server",
+        transport=MCPTransport.stdio,
+        env={"REQUEST_TAG": "${X-Request-Tag}"},
+    )
+    per_user_header_server: Final = MCPServer(
+        server_id="env-server",
+        name="env-server",
+        transport=MCPTransport.http,
+        static_headers={"Authorization": "${TOKEN}"},
+        env_vars=[{"name": "TOKEN", "scope": "user"}],
+    )
+
+    assert not manager._tools_list_cache_eligible(
+        http_server,
+        mcp_auth_header="caller-auth",
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        http_server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=True,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        http_server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers={"X-Request-Tag": "request"},
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        http_server,
+        mcp_auth_header=None,
+        catalog_auth_header="catalog-auth",
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        stdio_server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers={"X-Request-Tag": "request"},
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        per_user_header_server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+
+
+def test_openapi_byok_and_active_jwt_signer_bypass_tools_list_cache() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server: Final = MCPServer(
+        server_id="cache-server",
+        name="cache-server",
+        transport=MCPTransport.http,
+    )
+    manager: Final = MCPServerManager()
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="test-user")
+
+    assert not manager._tools_list_cache_eligible(
+        server.model_copy(update={"spec_path": "openapi.yaml"}),
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+    assert not manager._tools_list_cache_eligible(
+        server.model_copy(update={"is_byok": True}),
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=None,
+    )
+    signer_manager: Final = MCPServerManager(jwt_signer_provider=lambda: object())
+
+    assert not signer_manager._tools_list_cache_eligible(
+        server,
+        mcp_auth_header=None,
+        catalog_auth_header=...,
+        caller_extra_headers_present=False,
+        raw_headers=None,
+        user_api_key_auth=caller,
+    )
+
+
+@pytest.mark.parametrize(
+    ("ui_value", "env_value", "expected"),
+    (
+        ({"ttl_seconds": 5.0}, "10", 5.0),
+        ({"ttl_seconds": 0.0}, "10", 0.0),
+        (None, "10", 10.0),
+        (None, None, 0.0),
+        ({"ttl_seconds": -1.0}, "10", 0.0),
+    ),
+)
+def test_configured_tools_list_cache_ttl_prefers_ui_over_env_and_default(
+    monkeypatch: pytest.MonkeyPatch,
+    ui_value: dict[str, float] | None,
+    env_value: str | None,
+    expected: float,
+) -> None:
+    import litellm
+
+    from litellm.constants import MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _configured_tools_list_cache_ttl
+
+    monkeypatch.setattr(litellm, "mcp_tools_list_cache_ttl", ui_value)
+    if env_value is None:
+        monkeypatch.delenv(MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR, env_value)
+
+    assert _configured_tools_list_cache_ttl() == expected
 
 
 @pytest.mark.asyncio

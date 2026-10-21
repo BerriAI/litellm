@@ -521,7 +521,7 @@ class CatalogSnapshots:
 
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
-                self.manager.invalidate_server_definition_caches(server_id)
+                self.manager.invalidate_server_definition_caches(server_id, invalidate_tools_list_cache=False)
                 self.manager.invalidate_oauth_discovery_state(server_id)
         self._database_identity = database_identity
         self.manager.registry = registered_registry

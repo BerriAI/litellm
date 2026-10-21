@@ -159,6 +159,15 @@ class MCPToolSearchSettings(LiteLLMBaseModel):
     )
 
 
+class MCPToolsListCacheSettings(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ttl_seconds: float = Field(
+        default=0.0,
+        description="Cache upstream MCP tools/list results for this many seconds. Zero disables the cache.",
+    )
+
+
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
 MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
 

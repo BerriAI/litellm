@@ -7855,6 +7855,39 @@ class TestMCPServerManager:
         assert kept is not None and kept.description == "kept"
 
     @pytest.mark.asyncio
+    async def test_definition_change_causes_only_one_new_shared_cache_fetch(self):
+        from litellm.proxy._experimental.mcp_server.tools_list_cache import (
+            InProcessToolsListStore,
+            SharedToolsListCache,
+        )
+
+        class FetchCounter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def __call__(self) -> ListToolsResult:
+                self.calls += 1
+                return ListToolsResult(tools=[])
+
+        store: Final = InProcessToolsListStore(clock=lambda: 100)
+        cache: Final = SharedToolsListCache(lambda: store, lambda: 60, clock=lambda: 100)
+        peer_cache: Final = SharedToolsListCache(lambda: store, lambda: 60, clock=lambda: 100)
+        manager: Final = MCPServerManager()
+        manager._tools_list_cache = cache
+        fetch: Final = FetchCounter()
+
+        await cache.get("srv", "old-definition", "full", fetch)
+        await peer_cache.get("srv", "old-definition", "full", fetch)
+        manager.invalidate_server_definition_caches("srv")
+        await asyncio.sleep(0)
+        await peer_cache.get("srv", "new-definition", "full", fetch)
+        manager.invalidate_server_definition_caches("srv", invalidate_tools_list_cache=False)
+        await asyncio.sleep(0)
+        await peer_cache.get("srv", "new-definition", "full", fetch)
+
+        assert fetch.calls == 2
+
+    @pytest.mark.asyncio
     async def test_server_save_during_an_in_flight_listing_is_not_undone_by_the_stale_record(self):
         """A PUT /v1/mcp/server that lands while a listing awaits its upstream fetch drops the server's
         catalog; the fetch completing afterwards must not write the pre-save catalog back, or hooks see
@@ -19976,6 +20009,68 @@ class TestToolCatalogGuard:
         assert served[0].input_schema["properties"]["id"]["description"] == "[MASKED] id"
         assert upstream.description == "Read a SECRET note"
         proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_tools_are_guarded_on_every_listing(self, catalog_guardrail):
+        import hashlib
+
+        from litellm.proxy._experimental.mcp_server.catalog import _configuration_identity
+        from litellm.proxy._experimental.mcp_server.tools_list_cache import (
+            InProcessToolsListStore,
+            SharedToolsListCache,
+        )
+
+        guardrail, proxy_logging_obj = catalog_guardrail
+        server: Final = MCPServer(
+            server_id="cached-notes",
+            name="cached_notes",
+            url="http://127.0.0.1:8765/mcp",
+            transport=MCPTransport.http,
+        )
+        upstream: Final = MCPTool(
+            name="read_note",
+            description="Read a SECRET note",
+            inputSchema={"type": "object"},
+        )
+
+        class CountingFetch:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def __call__(self) -> ListToolsResult:
+                self.calls += 1
+                return ListToolsResult(tools=[upstream])
+
+        fetch: Final = CountingFetch()
+        store: Final = InProcessToolsListStore(clock=lambda: 100)
+        cache: Final = SharedToolsListCache(
+            store_provider=lambda: store,
+            ttl_seconds=lambda: 60,
+            clock=lambda: 100,
+        )
+        manager: Final = MCPServerManager(
+            tools_list_cache=cache,
+            jwt_signer_provider=lambda: None,
+        )
+        configuration_digest: Final = hashlib.sha256(_configuration_identity(server).encode()).hexdigest()
+
+        primed: Final = await cache.get(server.server_id, configuration_digest, "full", fetch)
+        first: Final = await manager.get_tools_page(
+            server,
+            add_prefix=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        second: Final = await manager.get_tools_page(
+            server,
+            add_prefix=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert [tool.name for tool in primed.tools] == ["read_note"]
+        assert [(tool.name, tool.description) for tool in first.tools] == [("read_note", "Read a [MASKED] note")]
+        assert [(tool.name, tool.description) for tool in second.tools] == [("read_note", "Read a [MASKED] note")]
+        assert guardrail.seen_texts == [["Read a SECRET note"], ["Read a SECRET note"]]
+        assert fetch.calls == 1
 
     @pytest.mark.asyncio
     async def test_discovery_masks_nested_schema_descriptions_without_changing_cached_schema(self, catalog_guardrail):

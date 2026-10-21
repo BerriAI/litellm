@@ -11853,6 +11853,7 @@ def test_general_settings_ui_defaults_unchanged_for_existing_fields():
         ("enable_anthropic_prompt_caching", True),
         ("anthropic_prompt_caching_ttl", "1h"),
         ("openai_system_messages_first", True),
+        ("mcp_tools_list_cache_ttl", {"ttl_seconds": 120}),
     ],
 )
 def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):

@@ -265,6 +265,8 @@ MCP_MAX_SSE_EVENT_SIZE_BYTES: Final = get_env_int_in_range(
     "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", 64 * 1024 * 1024, 1, sys.maxsize
 )
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_TOOLS_LIST_CACHE_GENERATION_TTL: Final = 2**31 - 1
+MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR: Final = "LITELLM_MCP_TOOLS_LIST_CACHE_TTL"
 MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
 MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
     "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
@@ -2006,6 +2008,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "budget_rollover",
     "personal_key_model_access_from_teams",
     "mcp_tool_search",
+    "mcp_tools_list_cache_ttl",
     "turn_off_message_logging",
     "datadog_params",
     "datadog_llm_observability_params",

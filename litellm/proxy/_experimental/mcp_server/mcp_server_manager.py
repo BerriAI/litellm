@@ -70,6 +70,7 @@ from litellm.constants import (
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
     MCP_TOOL_LISTING_TIMEOUT,
+    MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR,
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -168,6 +169,14 @@ from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
     apply_description_overrides,
     pin_tool_catalog,
     scan_tool_descriptions,
+)
+from litellm.proxy._experimental.mcp_server.tools_list_cache import (
+    TOOLS_LIST_CACHE_SETTINGS_KEY,
+    InProcessToolsListStore,
+    RedisToolsListStore,
+    SharedToolsListCache,
+    ToolsListStore,
+    tools_list_cache_ttl,
 )
 from litellm.proxy._experimental.mcp_server.upstream import (
     passthrough_token_from_mcp_auth_header,
@@ -1893,6 +1902,30 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
     return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
 
 
+_SHARED_IN_PROCESS_TOOLS_LIST_STORE: Final = InProcessToolsListStore()
+
+
+def _tools_list_store_provider() -> ToolsListStore:
+    from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+
+    redis_cache: Final = redis_usage_cache or user_api_key_cache.redis_cache
+    return _SHARED_IN_PROCESS_TOOLS_LIST_STORE if redis_cache is None else RedisToolsListStore(redis_cache)
+
+
+def _configured_tools_list_cache_ttl() -> float:
+    from litellm.proxy import proxy_server
+
+    configured: Final = proxy_server.proxy_config.litellm_settings.get(TOOLS_LIST_CACHE_SETTINGS_KEY)
+    ui_value: Final = configured.get("ttl_seconds") if isinstance(configured, Mapping) else None
+    return tools_list_cache_ttl(ui_value, os.getenv(MCP_TOOLS_LIST_CACHE_TTL_ENV_VAR))
+
+
+def _mcp_jwt_signer_provider() -> object | None:
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import get_mcp_jwt_signer
+
+    return get_mcp_jwt_signer()
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -2011,6 +2044,8 @@ class MCPServerManager:
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
+        tools_list_cache: SharedToolsListCache | None = None,
+        jwt_signer_provider: Callable[[], object | None] = _mcp_jwt_signer_provider,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
@@ -2021,6 +2056,11 @@ class MCPServerManager:
             token_exchanger=build_token_exchanger(),
         )
         self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
+        self._tools_list_cache = tools_list_cache or SharedToolsListCache(
+            store_provider=_tools_list_store_provider,
+            ttl_seconds=_configured_tools_list_cache_ttl,
+        )
+        self._jwt_signer_provider = jwt_signer_provider
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
         self._prompt_discovery_cache = _DiscoveryCache[ListPromptsResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListPromptsResult)
@@ -4432,7 +4472,111 @@ class MCPServerManager:
 
     _get_tools_from_server = get_tools_from_server
 
-    async def get_tools_page(
+    def _tools_list_cache_eligible(
+        self,
+        server: MCPServer,
+        *,
+        mcp_auth_header: str | Mapping[str, str] | None,
+        catalog_auth_header: str | Mapping[str, str] | None | EllipsisType,
+        caller_extra_headers_present: bool,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> bool:
+        if server.spec_path or server.is_byok or caller_extra_headers_present:
+            return False
+        if server.auth_type not in {
+            None,
+            MCPAuth.none,
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+            MCPAuth.token,
+            MCPAuth.aws_sigv4,
+        } and not (
+            server.auth_type == MCPAuth.oauth2
+            and server.has_client_credentials
+            and not server.needs_user_oauth_token
+            and getattr(server, "delegate_auth_to_upstream", False) is not True
+        ):
+            return False
+        if (
+            _consumes_caller_authorization(server)
+            or mcp_auth_header
+            or (catalog_auth_header is not ... and catalog_auth_header)
+            or self._forwarded_header_values(server, raw_headers)
+            or self._references_per_user_env_var(server)
+            or self.build_stdio_env(server, raw_headers) != self.build_stdio_env(server)
+        ):
+            return False
+        if user_api_key_auth is not None:
+            has_static_authorization: Final = any(
+                key.lower() == "authorization" for key in (server.static_headers or {})
+            )
+            if self._jwt_signer_provider() is not None and not has_static_authorization and not mcp_auth_header:
+                return False
+        return True
+
+    async def _fetch_raw_tools_page(
+        self,
+        client: MCPClient,
+        server: MCPServer,
+        params: PaginatedRequestParams | None,
+    ) -> ListToolsResult:
+        if params is None:
+            return ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
+
+        page_params: Final = params
+        return await retry_upstream_rate_limit(
+            lambda: self._fetch_tools_page_with_timeout(client, server, page_params),
+            server.name,
+            deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+        )
+
+    async def _get_cacheable_tools_page(
+        self,
+        server: MCPServer,
+        params: PaginatedRequestParams | None,
+        resolved_static_headers: Mapping[str, str] | None,
+    ) -> ListToolsResult:
+        async def fetch_raw_tools() -> ListToolsResult:
+            cache_client: Final = await self.create_mcp_client(
+                server=server,
+                mcp_auth_header=None,
+                extra_headers=None if resolved_static_headers is None else dict(resolved_static_headers),
+                stdio_env=self.build_stdio_env(server),
+                subject_token=None,
+                user_api_key_auth=None,
+                raw_headers=None,
+                client_ip=None,
+                for_tool_listing=True,
+            )
+            raw_page: Final = await self._fetch_raw_tools_page(cache_client, server, params)
+            self._remember_upstream_initialize_instructions(server, cache_client)
+            return raw_page
+
+        configuration_digest: Final = hashlib.sha256(_configuration_identity(server).encode()).hexdigest()
+        cursor_slot: Final = (
+            "full"
+            if params is None
+            else "first"
+            if params.cursor is None
+            else hashlib.sha256(params.cursor.encode()).hexdigest()
+        )
+        return await self._tools_list_cache.get(server.server_id, configuration_digest, cursor_slot, fetch_raw_tools)
+
+    async def _get_uncacheable_tools_page(
+        self,
+        client: MCPClient | None,
+        server: MCPServer,
+        params: PaginatedRequestParams | None,
+    ) -> ListToolsResult:
+        assert client is not None
+        page: Final = await self._fetch_raw_tools_page(client, server, params)
+        self._remember_upstream_initialize_instructions(server, client)
+        return page
+
+    async def get_tools_page(  # noqa: C901  # this route keeps upstream auth and request-specific filtering together
         self,
         server: MCPServer,
         mcp_auth_header: str | dict[str, str] | None = None,
@@ -4462,6 +4606,7 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
+        caller_extra_headers_present: Final = bool(extra_headers)
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=_catalog_auth_header(mcp_auth_header, catalog_auth_header),
@@ -4502,11 +4647,9 @@ class MCPServerManager:
                 )
 
                 static_headers: Final = server.static_headers or {}
-                has_static_authorization: Final = any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
-                )
+                has_static_authorization: Final = any(k.lower() == "authorization" for k in static_headers)
                 has_extra_authorization: Final = bool(extra_headers) and any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
+                    k.lower() == "authorization" for k in (extra_headers or {})
                 )
 
                 if (
@@ -4533,17 +4676,26 @@ class MCPServerManager:
                 else None
             )
 
-            client = await self.create_mcp_client(  # rebind-ok: pre-existing rebinding on a rename-only line
-                server=server,
+            cache_eligible: Final = self._tools_list_cache_eligible(
+                server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
+                catalog_auth_header=catalog_auth_header,
+                caller_extra_headers_present=caller_extra_headers_present,
                 raw_headers=raw_headers,
-                client_ip=client_ip,
-                for_tool_listing=True,
+                user_api_key_auth=user_api_key_auth,
             )
+            if not cache_eligible:
+                client = await self.create_mcp_client(  # rebind-ok: pre-existing rebinding on a rename-only line
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=extra_headers,
+                    stdio_env=stdio_env,
+                    subject_token=subject_token,
+                    user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                    for_tool_listing=True,
+                )
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
@@ -4577,16 +4729,11 @@ class MCPServerManager:
                 )
             else:
                 page: Final = (
-                    await retry_upstream_rate_limit(
-                        lambda: self._fetch_tools_page_with_timeout(client, server, params),
-                        server.name,
-                        deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
-                    )
-                    if params is not None
-                    else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
+                    await self._get_cacheable_tools_page(server, params, resolved_static_headers)
+                    if cache_eligible
+                    else await self._get_uncacheable_tools_page(client, server, params)
                 )
-                tools = page.tools
-                self._remember_upstream_initialize_instructions(server, client)
+                tools: Final = page.tools
 
             guarded_tools: Final = await self._guard_tool_catalog(
                 server=server,
@@ -4655,13 +4802,15 @@ class MCPServerManager:
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
 
-    def invalidate_server_definition_caches(self, server_id: str) -> None:
+    def invalidate_server_definition_caches(self, server_id: str, *, invalidate_tools_list_cache: bool = True) -> None:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
             invalidate_oauth_metadata_cache,
         )
 
         self.invalidate_discovery_lists(server_id)
         self._drop_listed_tools(server_id)
+        if invalidate_tools_list_cache:
+            self._tools_list_cache.invalidate(server_id)
         invalidate_oauth_metadata_cache(server_id)
 
     def _drop_listed_tools(self, server_id: str) -> None:

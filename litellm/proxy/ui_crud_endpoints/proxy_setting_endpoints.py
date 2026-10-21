@@ -24,6 +24,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
+from litellm.proxy._experimental.mcp_server.tools_list_cache import TOOLS_LIST_CACHE_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -54,7 +55,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.mcp import MCPToolSearchSettings
+from litellm.types.mcp import MCPToolSearchSettings, MCPToolsListCacheSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -545,6 +546,12 @@ class MCPSemanticFilterSettingsResponse(SettingsResponse):
 
 class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
+
+
+class MCPToolsListCacheSettingsResponse(SettingsResponse):
+    """Response model for MCP tools/list cache settings"""
+
+    model_config = ConfigDict(frozen=True)
 
 
 class WebSearchInterceptionSettings(LiteLLMBaseModel):
@@ -1045,6 +1052,7 @@ async def _update_litellm_setting(
         | DefaultTeamSSOParams
         | MCPSemanticFilterSettings
         | MCPToolSearchSettings
+        | MCPToolsListCacheSettings
         | WebSearchInterceptionSettings
     ),
     settings_key: str,
@@ -1703,6 +1711,56 @@ async def update_mcp_tool_search_settings(
         settings=settings,
         settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
         success_message="MCP tool search settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+@router.get(
+    "/get/mcp_tools_list_cache_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=MCPToolsListCacheSettingsResponse,
+)
+async def get_mcp_tools_list_cache_settings(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
+
+    config: Final = TypeAdapter(dict[str, object]).validate_python(
+        await proxy_config.get_config()  # pyright: ignore[reportUnknownMemberType]  # config getter exposes untyped nested settings
+    )
+    response: Final = TypeAdapter(dict[str, object]).validate_python(
+        await _get_settings_with_schema(
+            settings_key=TOOLS_LIST_CACHE_SETTINGS_KEY,
+            settings_class=MCPToolsListCacheSettings,
+            config=config,
+        )
+    )
+    return response
+
+
+@router.patch(
+    "/update/mcp_tools_list_cache_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_mcp_tools_list_cache_settings(
+    settings: MCPToolsListCacheSettings,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Mapping[str, object]:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update MCP tools/list cache settings.",
+        )
+
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key=TOOLS_LIST_CACHE_SETTINGS_KEY,
+        success_message="MCP tools/list cache settings updated successfully. Changes will be applied across all pods within 10 seconds.",
         user_api_key_dict=user_api_key_dict,
     )
 

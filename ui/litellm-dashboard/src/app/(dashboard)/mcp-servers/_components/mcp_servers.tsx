@@ -41,6 +41,7 @@ import type {
 } from "@/components/mcp_tools/types";
 import MCPSemanticFilterSettings from "@/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSearchSettings/MCPToolSearchSettings";
+import MCPToolsListCacheSettings from "@/components/Settings/AdminSettings/MCPToolsListCacheSettings/MCPToolsListCacheSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
@@ -770,6 +771,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
               <TabsContent value="tool-search" keepMounted>
                 <MCPToolSearchSettings accessToken={accessToken} />
+                <MCPToolsListCacheSettings accessToken={accessToken} />
               </TabsContent>
 
               <TabsContent value="network-settings" keepMounted>
