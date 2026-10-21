@@ -28,7 +28,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
-from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypesLiteral, GenericGuardrailAPIInputs
 
 GUARDRAIL_PATH: Final = "/v1/guardrails/litellm"
 
@@ -91,6 +91,21 @@ def _request_route(request_data: Mapping[str, object]) -> str | None:
         if isinstance(route, str) and route:
             return route
     return None
+
+
+def _mcp_tool_name(request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj | None") -> str | None:
+    """The MCP tool this evaluation is for, or None for model traffic.
+
+    The logger's call type wins when there is one, because a chat client can put MCP keys in its request body.
+    """
+    if logging_obj is not None and logging_obj.call_type not in MCP_GUARDRAIL_CALL_TYPES:
+        return None
+    pre_call_name: Final = request_data.get("mcp_tool_name")
+    if isinstance(pre_call_name, str) and pre_call_name:
+        return pre_call_name
+    call_metadata: Final = _as_object(request_data.get("mcp_tool_call_metadata"))
+    post_call_name: Final = call_metadata.get("name") if call_metadata is not None else None
+    return post_call_name if isinstance(post_call_name, str) and post_call_name else None
 
 
 def _as_object(value: object) -> Mapping[str, object] | None:
@@ -171,6 +186,7 @@ class AiriaGuardrail(CustomGuardrail):
                     "tool_calls": inputs.get("tool_calls") or (),
                     "model": inputs.get("model"),
                     "litellm_call_id": call_id,
+                    "mcp_tool_name": _mcp_tool_name(request_data, logging_obj),
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
@@ -203,8 +219,7 @@ class AiriaGuardrail(CustomGuardrail):
             )
 
         if action == ACTION_INTERVENED:
-            # during_call runs alongside the model call, so the prompt has already been sent and a
-            # rewrite of it would reach nothing but the logs
+            # during_call races the model call, so a rewrite of the prompt cannot be relied on to reach it
             if _EVALUATING_DURING_CALL.get():
                 raise self._blocked()
             if input_type == "response" and _stream_cannot_carry_a_rewrite(request_data):

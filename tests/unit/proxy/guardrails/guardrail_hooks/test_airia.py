@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from collections.abc import AsyncGenerator
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -11,6 +12,7 @@ from mcp.types import CallToolResult, TextContent
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.guardrails.guardrail_hooks.airia.airia import AiriaGuardrail
@@ -144,6 +146,7 @@ async def test_pre_mcp_call_redaction_rewrites_the_tool_arguments() -> None:
     assert data["mcp_arguments"] == {"to": "[EmailAddress1]"}
     assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "request"
     assert _post_mock(guardrail).call_args.kwargs["json"]["texts"] == ["ada@example.com"]
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "send_email"
 
 
 @pytest.mark.asyncio
@@ -175,12 +178,36 @@ async def test_post_mcp_call_redaction_masks_the_tool_result(monkeypatch: pytest
 
     checked: Final = await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_mcp_call_hook(
         response=CallToolResult(content=[TextContent(type="text", text="reach ada@example.com")]),
-        request_data={},
+        request_data={"mcp_tool_call_metadata": {"name": "lookup_contact", "arguments": {}}},
         user_api_key_dict=UserAPIKeyAuth(api_key="test"),
     )
 
     assert checked.content == [TextContent(type="text", text="reach [EmailAddress1]")]
     assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "response"
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "lookup_contact"
+
+
+@pytest.mark.asyncio
+async def test_mcp_keys_in_a_chat_request_body_do_not_mark_it_as_a_tool_call() -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"})
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-1",
+        function_id="1",
+    )
+
+    await guardrail.apply_guardrail(
+        inputs=_inputs(),
+        request_data={"mcp_tool_name": "send_email", "mcp_tool_call_metadata": {"name": "send_email"}},
+        input_type="request",
+        logging_obj=logging_obj,
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
 def _during_call_request() -> dict[str, object]:
@@ -198,7 +225,6 @@ def _during_call_request() -> dict[str, object]:
 async def test_during_call_enforces_every_intervention_as_a_block(
     verdict: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The prompt is already on its way to the model, so a redaction can no longer be delivered"""
     guardrail: Final = _make_guardrail_with_response(verdict, event_hook="during_call", default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
