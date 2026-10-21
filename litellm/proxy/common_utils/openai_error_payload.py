@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import status
+from fastapi import HTTPException, status
 
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyException
@@ -59,6 +59,25 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
+    match exc:
+        case ProxyException():
+            return exc
+        case HTTPException(status_code=status_code, detail=detail):
+            return _openai_shaped_proxy_exception(exc, str(detail), status_code)
+        case _:
+            return _openai_shaped_proxy_exception(exc, str(exc), default_status_code)
+
+
+def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
+    return ProxyException(
+        message=message,
+        type=openai_error_type(exc, status_code),
+        param=openai_error_param(exc),
+        code=status_code,
+    )
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers

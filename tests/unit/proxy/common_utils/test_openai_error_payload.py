@@ -9,6 +9,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    proxy_exception_for,
     with_litellm_call_id,
 )
 
@@ -203,3 +204,71 @@ def test_a_proxy_error_keeps_the_call_id_it_was_raised_with():
 
     assert with_litellm_call_id(raised_with_id, "second").headers == {"x-litellm-call-id": "first"}
     assert with_litellm_call_id(ProxyException(message="nope", type="None", param=None, code=400), None).headers == {}
+
+
+@pytest.mark.parametrize(
+    "raised_status, expected_type",
+    [
+        (400, "invalid_request_error"),
+        (404, "invalid_request_error"),
+        (403, "permission_error"),
+        (422, "invalid_request_error"),
+        (500, "internal_server_error"),
+    ],
+)
+def test_a_catch_all_handler_keeps_the_status_its_route_answered_with(raised_status: int, expected_type: str):
+    wrapped = proxy_exception_for(
+        HTTPException(status_code=raised_status, detail={"message": "boom"}),
+        default_status_code=400,
+    )
+
+    assert (wrapped.code, wrapped.type) == (str(raised_status), expected_type)
+
+
+@pytest.mark.parametrize(
+    "default_status_code, expected_type", [(400, "invalid_request_error"), (500, "internal_server_error")]
+)
+def test_an_exception_carrying_no_status_falls_back_to_the_routes_default(default_status_code: int, expected_type: str):
+    wrapped = proxy_exception_for(ValueError("boom"), default_status_code=default_status_code)
+
+    assert (wrapped.code, wrapped.type) == (str(default_status_code), expected_type)
+
+
+def test_a_proxy_exception_passes_through_with_the_type_it_already_named():
+    raised = ProxyException(
+        message="Budget has been exceeded",
+        type=ProxyErrorTypes.budget_exceeded.value,
+        param="max_budget",
+        code=400,
+    )
+
+    assert proxy_exception_for(raised, default_status_code=500) is raised
+
+
+def test_the_message_is_what_the_route_raised_without_an_invented_prefix():
+    assert proxy_exception_for(ValueError("boom"), default_status_code=400).message == "boom"
+
+
+def test_an_http_exceptions_detail_survives_the_wrapping():
+    wrapped = proxy_exception_for(
+        HTTPException(status_code=400, detail={"error": "Invalid budget_duration 'not-a-duration'."}),
+        default_status_code=400,
+    )
+
+    assert "Invalid budget_duration" in wrapped.message
+
+
+def test_a_carried_type_survives_the_wrapping():
+    class _Carrier(Exception):
+        type: str = "context_window_exceeded"
+        status_code: int = 400
+
+    assert proxy_exception_for(_Carrier("boom"), default_status_code=500).type == "context_window_exceeded"
+
+
+@pytest.mark.parametrize("exc", [HTTPException(status_code=404, detail="nope"), ValueError("boom")])
+def test_the_wrapped_error_serializes_as_an_openai_error_object(exc: Exception):
+    body = json.loads(json.dumps({"error": proxy_exception_for(exc, default_status_code=400).to_dict()}))
+
+    assert body["error"]["param"] is None
+    assert body["error"]["type"] == "invalid_request_error"
