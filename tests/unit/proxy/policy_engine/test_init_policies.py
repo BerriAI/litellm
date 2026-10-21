@@ -1,8 +1,10 @@
 """The policy table printed at boot keeps its terminal form in plain mode and is JSON when json_logs is on."""
 
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
+from io import StringIO
 from typing import Final
 
 import pytest
@@ -40,6 +42,15 @@ NO_ATTACHMENTS_WARNING: Final = (
 )
 
 
+class _Stdout(StringIO):
+    def __init__(self, terminal: bool) -> None:
+        super().__init__()
+        self._terminal = terminal
+
+    def isatty(self) -> bool:
+        return self._terminal
+
+
 @pytest.mark.parametrize(
     ("attachments", "expected"),
     [
@@ -53,13 +64,23 @@ NO_ATTACHMENTS_WARNING: Final = (
     ],
     ids=["with-attachments", "without-attachments"],
 )
-def test_policy_table_prints_unchanged_in_plain_mode(monkeypatch, capfd, attachments, expected):
-    """Operators without JSON logs keep the colored policy table byte for byte."""
+@pytest.mark.parametrize("terminal", [True, False], ids=["terminal", "piped"])
+def test_policy_table_prints_unchanged_in_plain_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    attachments: Sequence[Mapping[str, object]] | None,
+    expected: str,
+    terminal: bool,
+) -> None:
+    """Operators without JSON logs keep the colored policy table byte for byte on a terminal, and the same text
+    without color codes on a piped stdout."""
     monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stdout: Final = _Stdout(terminal)
+    monkeypatch.setattr(sys, "stdout", stdout)
 
     _print_policies_on_startup(POLICIES, attachments)
 
-    assert capfd.readouterr() == (expected, "")
+    assert stdout.getvalue() == (expected if terminal else re.sub(r"\x1b\[\d+m", "", expected))
 
 
 def test_policy_table_is_one_json_record_in_json_mode(monkeypatch, capfd):
