@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from datetime import date
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
@@ -471,23 +471,12 @@ def _resolve_model(model: str | None) -> str:
     return (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
 
-_RouterRoute: TypeAlias = Literal["model_group", "deployment"]
-
-
-def _router_route(
-    router: "Router", model: str, caller_is_proxy_admin: bool, request_team_id: str | None
-) -> _RouterRoute | None:
+def _is_router_model(router: "Router", model: str, caller_is_proxy_admin: bool) -> bool:
     if router.is_recognized_model(model) or (caller_is_proxy_admin and model in router.team_public_model_names):
-        return "model_group"
+        return True
     if router.router_general_settings.pass_through_all_models:
-        return None
-    if router.default_deployment is not None or router.pattern_router.route(model) is not None:  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
-        return "model_group"
-    deployments: Final = router._get_deployment_by_litellm_model(model=model)  # pyright: ignore[reportPrivateUsage]  # the lookup the router's specific_deployment path runs
-    serves_model: Final = any(
-        router.deployment_usable_by_team(deployment, request_team_id) for deployment in deployments
-    )
-    return "deployment" if serves_model else None
+        return False
+    return router.default_deployment is not None or router.pattern_router.route(model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
 
 
 class _TaggedMetadata(BaseModel):
@@ -610,7 +599,7 @@ async def _acompletion(
     router_settings: Mapping[str, object] | None = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.proxy_server import llm_router
-    from litellm.router_utils.common_utils import get_request_team_id, is_proxy_admin_request
+    from litellm.router_utils.common_utils import is_proxy_admin_request
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
@@ -619,13 +608,9 @@ async def _acompletion(
     caller_metadata: Final[Mapping[str, object]] = (
         _caller_metadata(user_api_key_dict) if user_api_key_dict is not None else MappingProxyType({})
     )
-    router_request: Final = MappingProxyType({"metadata": caller_metadata})
-    route: Final = (
-        _router_route(llm_router, model, is_proxy_admin_request(router_request), get_request_team_id(router_request))
-        if llm_router is not None
-        else None
-    )
-    if llm_router is not None and route is not None:
+    if llm_router is not None and _is_router_model(
+        llm_router, model, is_proxy_admin_request(MappingProxyType({"metadata": caller_metadata}))
+    ):
         router_kwargs: Final = _per_request_router_kwargs(router_settings)
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
@@ -637,7 +622,6 @@ async def _acompletion(
                 drop_params=True,
                 allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
                 metadata=dict(caller_metadata),
-                specific_deployment=route == "deployment",
                 **router_kwargs,
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
@@ -649,7 +633,6 @@ async def _acompletion(
             drop_params=True,
             allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
             metadata=dict(caller_metadata),
-            specific_deployment=route == "deployment",
             **router_kwargs,
         )
     return await litellm.acompletion(

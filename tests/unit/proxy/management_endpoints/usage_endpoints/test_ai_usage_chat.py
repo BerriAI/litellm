@@ -646,45 +646,12 @@ class TestUsageAiChatProviderRequest:
         ]
 
     @pytest.mark.asyncio
-    async def test_deployment_name_is_called_with_that_deployment_credentials(
+    async def test_a_deployment_model_string_runs_on_the_environment_key(
         self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._mock_openai(respx_mock)
 
         await self._ask("openai/gpt-5.6", monkeypatch, self._router())
-
-        assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-gpt5-deployment"
-
-    @pytest.mark.asyncio
-    async def test_deleted_deployment_name_is_called_with_the_environment_key(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._mock_openai(respx_mock)
-        router: Final = self._router()
-        router.delete_deployment(id=router.get_model_ids(model_name="gpt-5-prod")[0])
-
-        await self._ask("openai/gpt-5.6", monkeypatch, router)
-
-        assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
-
-    @pytest.mark.asyncio
-    async def test_team_owned_deployment_name_is_called_with_the_environment_key(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from litellm.router import Router
-
-        self._mock_openai(respx_mock)
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "team-gpt-5",
-                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-team-deployment"},
-                    "model_info": {"team_id": "team-1"},
-                }
-            ]
-        )
-
-        await self._ask("openai/gpt-5.6", monkeypatch, router)
 
         assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
 
