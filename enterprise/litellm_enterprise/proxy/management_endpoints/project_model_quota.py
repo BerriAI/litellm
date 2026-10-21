@@ -1,7 +1,6 @@
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -31,7 +30,9 @@ class ProjectModelQuotaPolicy(BaseModel):
 
 REQUIRE_BOTH_LIMITS: Final = ProjectModelQuotaPolicy()
 
-_QUOTA_SETTING: Final = TypeAdapter(bool | ProjectModelQuotaPolicy | None)
+_QUOTA_SETTING: Final[TypeAdapter[bool | ProjectModelQuotaPolicy | None]] = TypeAdapter(
+    bool | ProjectModelQuotaPolicy | None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,7 @@ def required_limits(policy: ProjectModelQuotaPolicy, model: str, providers: froz
         return policy.models[pattern]
     if not providers:
         return policy.default
-    return frozenset(chain.from_iterable(policy.providers.get(provider, policy.default) for provider in providers))
+    return frozenset[QuotaLimit]().union(*(policy.providers.get(provider, policy.default) for provider in providers))
 
 
 def _is_positive(value: object) -> bool:

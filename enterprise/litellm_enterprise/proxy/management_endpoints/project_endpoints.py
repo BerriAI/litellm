@@ -525,6 +525,7 @@ async def new_project(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         litellm_proxy_admin_name,
         llm_router,
         premium_user,
@@ -573,7 +574,7 @@ async def new_project(
             data=data,
         )
 
-        quota_policy: Final = _project_model_quota_policy(general_settings)
+        quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             _raise_on_missing_project_model_quota(
                 data,
@@ -721,6 +722,7 @@ async def update_project(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         litellm_proxy_admin_name,
         llm_router,
         premium_user,
@@ -828,7 +830,7 @@ async def update_project(
                 data=data,
             )
 
-        quota_policy: Final = _project_model_quota_policy(general_settings)
+        quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             _raise_on_missing_project_model_quota_on_update(
                 data,
