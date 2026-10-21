@@ -2,8 +2,8 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
-from itertools import count
+from dataclasses import dataclass, field
+from itertools import count, islice
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -14,6 +14,7 @@ import yaml
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+from anthropic import Anthropic
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -42,8 +43,8 @@ DEPLOYMENTS: Final = (pytest.param(OPENAI, id="openai"), pytest.param(ANTHROPIC,
 @dataclass(frozen=True, slots=True)
 class ListCall:
     path: str
-    params: Mapping[str, str] = MappingProxyType({})
-    headers: Mapping[str, str] = MappingProxyType({})
+    params: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    headers: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 LIST_FORMS: Final = (
@@ -151,7 +152,12 @@ class Rig:
     proxy: Gateway
     owner: str
     intruder: str
-    managed_files: tuple[str, ...]
+    files_by_provider: Mapping[str, tuple[str, ...]]
+    every_file: tuple[str, ...]
+
+    @property
+    def base_url(self) -> str:
+        return str(self.proxy.client.base_url).rstrip("/")
 
     def list(self, call: ListCall, key: str | None = None) -> FilePage:
         response: Final = self.proxy.request("GET", call.path, key=key, params=call.params, headers=call.headers)
@@ -159,12 +165,12 @@ class Rig:
         return FilePage.model_validate_json(response.text)
 
 
-def _upload(proxy: Gateway, key: str) -> str:
+def _upload(proxy: Gateway, key: str, deployments: tuple[Deployment, ...]) -> str:
     with OpenAI(base_url=f"{str(proxy.client.base_url).rstrip('/')}/openai/v1", api_key=key, max_retries=0) as client:
         uploaded: Final = client.files.with_raw_response.create(
             file=("notes.txt", UPLOAD, "text/plain"),
             purpose="user_data",
-            extra_body={"target_model_names": f"{OPENAI.model},{ANTHROPIC.model}"},
+            extra_body={"target_model_names": ",".join(deployment.model for deployment in deployments)},
         )
     assert uploaded.status_code == 200, uploaded.text
     return uploaded.parse().id
@@ -183,9 +189,18 @@ def _rig(directory: Path) -> Iterator[Rig]:
         with owned_proxy(shared, directory, {}, config=config) as proxy, proxy.scenario() as scenario:
             owner: Final = scenario.key(user_id=scenario.user())
             intruder: Final = scenario.key(user_id=scenario.user())
-            older: Final = _upload(proxy, owner)
-            newer: Final = _upload(proxy, owner)
-            yield Rig(proxy, owner, intruder, (newer, older))
+            on_both: Final = _upload(proxy, owner, (OPENAI, ANTHROPIC))
+            on_openai: Final = _upload(proxy, owner, (OPENAI,))
+            on_anthropic: Final = _upload(proxy, owner, (ANTHROPIC,))
+            yield Rig(
+                proxy,
+                owner,
+                intruder,
+                MappingProxyType(
+                    {OPENAI.provider: (on_openai, on_both), ANTHROPIC.provider: (on_anthropic, on_both)}
+                ),
+                (on_anthropic, on_openai, on_both),
+            )
 
 
 @pytest.fixture(scope="module")
@@ -205,24 +220,46 @@ def test_another_key_lists_none_of_the_files_on_the_shared_key(
 
 @pytest.mark.parametrize("deployment", DEPLOYMENTS)
 @pytest.mark.parametrize("form", LIST_FORMS)
-def test_owner_lists_their_own_managed_files_newest_first(
+def test_owner_lists_their_own_managed_files_on_that_provider_or_model_newest_first(
     rig: Rig, deployment: Deployment, form: Callable[[Deployment], ListCall]
 ) -> None:
     page: Final = rig.list(form(deployment), key=rig.owner)
-    assert (page.ids, page.has_more) == (list(rig.managed_files), False)
+    assert (page.ids, page.has_more) == (list(rig.files_by_provider[deployment.provider]), False)
 
 
-def test_owner_pages_through_their_managed_files_with_limit_and_after(rig: Rig) -> None:
+def test_owner_lists_every_managed_file_when_no_provider_or_model_is_named(rig: Rig) -> None:
+    page: Final = rig.list(ListCall("/v1/files"), key=rig.owner)
+    assert (page.ids, page.has_more) == (list(rig.every_file), False)
+
+
+@pytest.mark.parametrize("cursor_param", ["after", "after_id"])
+def test_owner_pages_through_a_provider_list_with_limit_and_a_cursor(rig: Rig, cursor_param: str) -> None:
     first: Final = rig.list(ListCall("/openai/v1/files", params={"limit": "1"}), key=rig.owner)
-    second: Final = rig.list(ListCall("/openai/v1/files", params={"limit": "1", "after": first.ids[0]}), key=rig.owner)
+    second: Final = rig.list(
+        ListCall("/openai/v1/files", params={"limit": "1", cursor_param: first.ids[0]}), key=rig.owner
+    )
+    expected: Final = rig.files_by_provider[OPENAI.provider]
     assert [(page.ids, page.has_more) for page in (first, second)] == [
-        ([rig.managed_files[0]], True),
-        ([rig.managed_files[1]], False),
+        ([expected[0]], True),
+        ([expected[1]], False),
     ]
+
+
+def test_anthropic_sdk_auto_pages_the_owners_files_to_the_end(rig: Rig) -> None:
+    with Anthropic(base_url=f"{rig.base_url}/anthropic", api_key=rig.owner, max_retries=0) as client:
+        listed: Final = [file.id for file in islice(client.beta.files.list(limit=1), 5)]
+    assert listed == list(rig.files_by_provider[ANTHROPIC.provider])
+
+
+def test_anthropic_sdk_pages_backwards_to_the_newest_file_and_stops(rig: Rig) -> None:
+    newest_first: Final = rig.files_by_provider[ANTHROPIC.provider]
+    with Anthropic(base_url=f"{rig.base_url}/anthropic", api_key=rig.owner, max_retries=0) as client:
+        listed: Final = [file.id for file in islice(client.beta.files.list(limit=1, before_id=newest_first[-1]), 5)]
+    assert listed == list(reversed(newest_first[:-1]))
 
 
 @pytest.mark.parametrize("deployment", DEPLOYMENTS)
 def test_master_key_lists_managed_files_instead_of_the_provider_key(rig: Rig, deployment: Deployment) -> None:
     listed: Final = rig.list(ListCall(f"/{deployment.provider}/v1/files")).ids
     assert UNMANAGED_FILE not in listed
-    assert set(rig.managed_files) <= set(listed)
+    assert set(rig.files_by_provider[deployment.provider]) <= set(listed)
