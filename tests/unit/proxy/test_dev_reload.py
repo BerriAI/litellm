@@ -22,6 +22,7 @@ import pytest
 from uvicorn import config as uvicorn_config
 
 from litellm.proxy.dev_reload import (
+    RELOAD_OPTIONS,
     RELOAD_WORKER_HEALTHCHECK_SECONDS,
     ReloadOptions,
     load_app_or_exit,
@@ -29,6 +30,7 @@ from litellm.proxy.dev_reload import (
     pool_config,
     stop_pool_when_reloader_exits,
 )
+from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 UNCHANGED_LOGGING: Final = {"version": 1, "incremental": True}
 POOL_WORKERS: Final = 2
@@ -130,6 +132,24 @@ def test_the_reload_pool_defaults_the_worker_healthcheck_and_keeps_an_explicit_o
         pool_config({**_options("app:app"), "timeout_worker_healthcheck": explicit}, workers=2).timeout_worker_healthcheck
         == explicit
     )
+
+
+def test_the_reload_pool_accepts_and_keeps_every_uvicorn_arg_the_proxy_cli_builds(tmp_path: Path) -> None:
+    cli_args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args(
+        "127.0.0.1", 4123, keepalive_timeout=61, timeout_worker_healthcheck=RELOAD_WORKER_HEALTHCHECK_SECONDS + 7
+    )
+    options: Final = RELOAD_OPTIONS.validate_python(
+        {
+            **cli_args,
+            "log_config": UNCHANGED_LOGGING,
+            "reload": True,
+            "reload_dirs": [str(tmp_path)],
+            "reload_includes": ["*.py"],
+        }
+    )
+    config: Final = pool_config(options, workers=POOL_WORKERS)
+    server_args: Final = {key: value for key, value in cli_args.items() if key not in ("app", "log_config")}
+    assert {key: getattr(config, key) for key in server_args} == server_args
 
 
 def test_the_pool_is_told_to_stop_once_the_reloader_process_exits() -> None:

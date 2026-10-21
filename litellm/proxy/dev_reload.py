@@ -21,6 +21,7 @@ class ServerOptions(TypedDict, total=False):
     host: ReadOnly[str]
     port: ReadOnly[int]
     server_header: ReadOnly[bool]
+    timeout_graceful_shutdown: ReadOnly[float]
     log_config: ReadOnly[str | dict[str, JsonValue]]  # mutable-ok: uvicorn.Config requires a concrete logging dict
     log_level: ReadOnly[str | int]
     timeout_keep_alive: ReadOnly[int]
@@ -67,7 +68,7 @@ def pool_config(options: ReloadOptions, workers: int) -> Config:
         partial(load_app_or_exit, options["app"]),
         factory=True,
         workers=workers,
-        **SERVER_OPTIONS.validate_python({"timeout_worker_healthcheck": RELOAD_WORKER_HEALTHCHECK_SECONDS, **options}),
+        **SERVER_OPTIONS.validate_python({"timeout_worker_healthcheck": RELOAD_WORKER_HEALTHCHECK_SECONDS, **options}),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
     )
 
 
@@ -102,7 +103,7 @@ def run_multi_worker_reload(options: ReloadOptions, workers: int) -> None:
         reload=options["reload"],
         reload_dirs=list(options["reload_dirs"]),
         reload_includes=list(options["reload_includes"]),
-        **SERVER_OPTIONS.validate_python(options),
+        **SERVER_OPTIONS.validate_python(options),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
     )
     shared_socket: Final = worker_config.bind_socket()
     try:
