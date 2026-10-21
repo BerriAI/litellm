@@ -22,7 +22,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
     responses_reasoning_items_from_thinking_blocks,
-    salvage_concatenated_tool_arguments,
     schema_grammar_branch_count,
     schema_has_open_object,
     schema_has_unresolvable_ref,
