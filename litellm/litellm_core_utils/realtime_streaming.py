@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 from collections.abc import Callable, Coroutine, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -15,12 +16,17 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
+    REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeBackend,
+    RealtimeSessionUpdateRejection,
+)
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -156,6 +162,16 @@ def _session_update_frame(session: Mapping[str, object]) -> str:
     return json.dumps(frame, default=_SESSION_FIELDS.validate_python)
 
 
+_HELD_SESSION_UPDATE_TOO_LARGE: Final = RealtimeSessionUpdateRejection(
+    code="session_update_too_large",
+    message=(
+        "The session.update frames sent before the first conversation content add up to more than 10 MB, "
+        "so this session.update was not applied"
+    ),
+    param="session",
+)
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
@@ -274,8 +290,10 @@ class RealTimeStreaming:
         event_normalizer: RealtimeEventNormalizer | None = None,
         usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
+        lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._lazy_setup_deadline: Final = time.monotonic() + lazy_setup_deadline_seconds
         self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
@@ -332,6 +350,7 @@ class RealTimeStreaming:
         # content (realtimeInput / clientContent / toolResponse) has been sent.
         self._content_sent_after_setup: bool = False
         self._held_session_update: Mapping[str, object] | None = None
+        self._held_session_update_bytes: int = 0
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -649,7 +668,7 @@ class RealTimeStreaming:
 
     async def _rejected_setup_session_update(self, message: str) -> bool:
         provider_config: Final = self.provider_config
-        if provider_config is None or not self._builds_setup_lazily():
+        if provider_config is None or not provider_config.builds_setup_from_session_update():
             return False
         client_event: Final = _decode_json_object(message)
         session: Final = client_event.get("session")
@@ -667,17 +686,23 @@ class RealTimeStreaming:
         return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
 
     async def _hold_session_update(self, message: str) -> None:
-        session: Final = _decode_json_object(message).get("session")
+        client_event: Final = _decode_json_object(message)
+        if self._held_session_update_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES:
+            await self.websocket.send_text(
+                json.dumps(_HELD_SESSION_UPDATE_TOO_LARGE.error_event(client_event.get("event_id")))
+            )
+            return
+        session: Final = client_event.get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
         self._held_session_update = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
-        await self._acknowledge_held_session_update()
+        held_message: Final = self._held_session_update_message()
+        self._held_session_update_bytes = len(held_message.encode("utf-8"))
+        await self._acknowledge_held_session_update(held_message)
 
-    async def _acknowledge_held_session_update(self) -> None:
+    async def _acknowledge_held_session_update(self, held_message: str) -> None:
         if self.provider_config is None:
             return
-        preview: Final = self.provider_config.transform_realtime_request(
-            self._held_session_update_message(), self.model, None
-        )
+        preview: Final = self.provider_config.transform_realtime_request(held_message, self.model, None)
         setup: Final = next(
             (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
         )
@@ -698,7 +723,25 @@ class RealTimeStreaming:
             return
         message: Final = self._held_session_update_message()
         self._held_session_update = None
+        self._held_session_update_bytes = 0
         await self._send_to_backend(message)
+
+    async def _send_setup_before_content(self, msg_type: str | None) -> None:
+        if self._holds_session_updates_until_first_content():
+            await self._send_held_session_update_as_setup()
+        await self._send_default_setup_before_first_client_message(msg_type)
+
+    async def _receive_client_message_before_setup_deadline(self) -> str | None:
+        if not self._holds_session_updates_until_first_content():
+            return await self._receive_client_message()
+        receive: Final = asyncio.ensure_future(self._receive_client_message())
+        try:
+            done, _ = await asyncio.wait((receive,), timeout=self._lazy_setup_deadline - time.monotonic())
+            if not done:
+                await self._send_setup_before_content(None)
+            return await receive
+        finally:
+            receive.cancel()
 
     async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
         if self.session_configuration_request is not None or self.provider_config is None:
@@ -1591,7 +1634,7 @@ class RealTimeStreaming:
         client_event: _ClientEventFrame
         try:
             while True:
-                message = await self._receive_client_message()
+                message = await self._receive_client_message_before_setup_deadline()
                 if message is None:
                     return ClientLoopExit.CLIENT_DISCONNECTED
 
@@ -1606,6 +1649,7 @@ class RealTimeStreaming:
                     msg_type = client_event.get("type")
 
                     if msg_type == "conversation.item.create":
+                        await self._send_setup_before_content(msg_type)
                         # Check user text messages for prompt injection
                         item = client_event.get("item", {})
                         # Check function_call_output first so a client cannot
@@ -1803,12 +1847,10 @@ class RealTimeStreaming:
                     await self._send_session_gate_once()
                 if msg_type == "session.update" and await self._rejected_setup_session_update(message):
                     continue
-                if self._holds_session_updates_until_first_content():
-                    if msg_type == "session.update":
-                        await self._hold_session_update(message)
-                        continue
-                    await self._send_held_session_update_as_setup()
-                await self._send_default_setup_before_first_client_message(msg_type)
+                if msg_type == "session.update" and self._holds_session_updates_until_first_content():
+                    await self._hold_session_update(message)
+                    continue
+                await self._send_setup_before_content(msg_type)
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True

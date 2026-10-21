@@ -162,6 +162,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
         self._unbilled_input_audio_bytes: int = 0
+        self._manual_activity_open: bool = False
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return "setup" in msg_obj
@@ -278,17 +279,26 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         except (json.JSONDecodeError, TypeError, AttributeError):
             return False
 
+    def _start_manual_activity(self, session_configuration_request: str | None) -> tuple[str, ...]:
+        if self._manual_activity_open or not self._manual_turn_detection_enabled(session_configuration_request):
+            return ()
+        self._manual_activity_open = True
+        activity_start: Final[BidiGenerateContentRealtimeInput] = {"activityStart": {}}
+        return (json.dumps({"realtimeInput": activity_start}),)
+
+    def _end_manual_activity(self) -> tuple[str, ...]:
+        if not self._manual_activity_open:
+            return ()
+        self._manual_activity_open = False
+        activity_end: Final[BidiGenerateContentRealtimeInput] = {"activityEnd": {}}
+        return (json.dumps({"realtimeInput": activity_end}),)
+
     def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: str | None) -> list[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
         if self._manual_turn_detection_enabled(session_configuration_request):
-            realtime_input_dict: BidiGenerateContentRealtimeInput = {
-                "activityEnd": True,
-            }
-            verbose_logger.debug("Gemini Realtime: Sending activityEnd realtimeInput to backend")
-        else:
-            realtime_input_dict = {"audioStreamEnd": True}
-            verbose_logger.debug("Gemini Realtime: Sending audioStreamEnd realtimeInput to backend")
-        return [json.dumps({"realtimeInput": realtime_input_dict})]
+            return list(self._end_manual_activity())
+        audio_stream_end: Final[BidiGenerateContentRealtimeInput] = {"audioStreamEnd": True}
+        return [json.dumps({"realtimeInput": audio_stream_end})]
 
     def map_automatic_turn_detection(self, value: OpenAIRealtimeTurnDetection) -> AutomaticActivityDetection:
         """Map OpenAI ``server_vad`` to Gemini ``automaticActivityDetection``.
@@ -488,9 +498,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return RealtimeSessionUpdateRejection(
                 code="session_update_not_applied",
                 message=(
-                    "Gemini Live takes its session configuration once, with the first conversation content, "
-                    "so this session.update was not applied. Send session.update before the first content, "
-                    "or set drop_params to drop it instead"
+                    "Gemini Live accepts one session configuration per connection, and this session already sent "
+                    "its configuration, so this session.update was not applied. Put every setting in session.update "
+                    "before the first conversation content, or set drop_params to drop it instead"
                 ),
                 param="session",
             )
@@ -708,14 +718,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 message_str = str(message)
             raise ValueError(f"Invalid JSON message: {message_str}")
 
-        messages: Final[list[str]] = []
         msg_type: Final = json_message.get("type")
 
         if msg_type == "session.update":
             return self._handle_session_update(json_message, model, session_configuration_request)
 
         if msg_type == "response.create":
-            return []  # Gemini responds automatically; nothing to forward
+            return list(self._end_manual_activity())
 
         if msg_type == "conversation.item.create":
             return self._handle_conversation_item(json_message)
@@ -733,8 +742,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
             gemini_msg: Final = json.dumps({"realtimeInput": realtime_input_dict})
             verbose_logger.debug("Gemini Realtime: Sending audio realtimeInput to backend")
-            messages.append(gemini_msg)
-            return messages
+            return [*self._start_manual_activity(session_configuration_request), gemini_msg]
 
         if msg_type in ("input_audio_buffer.commit", "input_audio_buffer.end"):
             return self._handle_input_audio_buffer_commit_or_end(session_configuration_request)

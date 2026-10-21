@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Mapping
 from typing import Final, cast
@@ -1425,22 +1426,50 @@ def test_gemini_input_audio_buffer_clear_is_local_noop():
     assert messages == []
 
 
-def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
+_MANUAL_VAD_SETUP = json.dumps({"setup": {"realtimeInputConfig": {"automaticActivityDetection": {"disabled": True}}}})
+_APPEND = json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00\x01" * 80).decode()})
+
+
+def _realtime_input_keys(config: GeminiRealtimeConfig, client_event: str, setup: str | None) -> list[str]:
+    frames = config.transform_realtime_request(client_event, "gemini-live-2.5-flash-native-audio", setup)
+    return [key for frame in frames for key in json.loads(frame)["realtimeInput"]]
+
+
+@pytest.mark.parametrize("turn_end", ["input_audio_buffer.commit", "response.create"])
+def test_gemini_manual_vad_wraps_each_audio_turn_in_activity_start_and_end(turn_end):
+    """With activity detection off, Gemini Live answers only after activityEnd closes an
+    activityStart, and it closes the socket on any other shape of those markers."""
     config = GeminiRealtimeConfig()
-    setup = {
-        "setup": {
-            "realtimeInputConfig": {
-                "automaticActivityDetection": {"disabled": True},
-            }
-        }
-    }
-    messages = config.transform_realtime_request(
-        json.dumps({"type": "input_audio_buffer.commit"}),
-        "gemini-live-2.5-flash-native-audio",
-        session_configuration_request=json.dumps(setup),
-    )
-    assert len(messages) == 1
-    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": True}}
+    end = json.dumps({"type": turn_end})
+
+    turns = [
+        [_realtime_input_keys(config, event, _MANUAL_VAD_SETUP) for event in (_APPEND, _APPEND, end, end)]
+        for _ in range(2)
+    ]
+
+    assert turns == [[["activityStart", "audio"], ["audio"], ["activityEnd"], []]] * 2
+
+
+def test_gemini_manual_vad_activity_markers_are_empty_messages():
+    config = GeminiRealtimeConfig()
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    first_append = config.transform_realtime_request(_APPEND, "gemini-live-2.5-flash", _MANUAL_VAD_SETUP)
+    turn_end = config.transform_realtime_request(commit, "gemini-live-2.5-flash", _MANUAL_VAD_SETUP)
+
+    assert json.loads(first_append[0]) == {"realtimeInput": {"activityStart": {}}}
+    assert [json.loads(frame) for frame in turn_end] == [{"realtimeInput": {"activityEnd": {}}}]
+
+
+def test_gemini_automatic_vad_sends_no_activity_markers():
+    config = GeminiRealtimeConfig()
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+    response_create = json.dumps({"type": "response.create"})
+
+    keys = [_realtime_input_keys(config, event, None) for event in (_APPEND, commit)]
+
+    assert keys == [["audio"], ["audioStreamEnd"]]
+    assert config.transform_realtime_request(response_create, "gemini-live-2.5-flash", None) == []
 
 
 def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():

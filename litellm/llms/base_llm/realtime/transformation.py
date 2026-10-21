@@ -27,7 +27,7 @@ else:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RealtimeSessionUpdateRejection:
-    code: Literal["invalid_type", "invalid_value", "session_update_not_applied"]
+    code: Literal["invalid_type", "invalid_value", "session_update_not_applied", "session_update_too_large"]
     message: str
     param: str
 
