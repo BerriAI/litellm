@@ -5,8 +5,11 @@ Test to verify the Google GenAI generate_content adapter functionality
 import asyncio
 import json
 import unittest
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
+import respx
 
 from litellm.google_genai.main import agenerate_content
 
@@ -1645,15 +1648,26 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
 
 
 @pytest.mark.asyncio
-async def test_generate_content_bridge_honors_the_request_cache_controls(respx_mock, monkeypatch):
+@pytest.mark.parametrize(
+    ("first_cache_controls", "second_cache_controls"),
+    [({"no-store": True}, None), (None, {"no-cache": True})],
+    ids=["no-store", "no-cache"],
+)
+async def test_generate_content_bridge_leaves_an_exact_match_cache_as_it_was(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    first_cache_controls: Mapping[str, bool] | None,
+    second_cache_controls: Mapping[str, bool] | None,
+) -> None:
     import httpx
 
     from litellm.caching.caching import Cache
+    from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
     from litellm.types.caching import LiteLLMCacheType
 
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
-    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -1666,16 +1680,41 @@ async def test_generate_content_bridge_honors_the_request_cache_controls(respx_m
             },
         )
     )
-    request = {
+    request: Final = {
         "model": "openai/gpt-4.1",
         "contents": [{"role": "user", "parts": [{"text": "What is the capital of France?"}]}],
-        "cache": {"no-cache": True, "no-store": True},
         "api_key": "sk-test",
     }
 
-    await agenerate_content(**request)
-    await asyncio.sleep(0.5)
-    await agenerate_content(**request)
+    await agenerate_content(**request, **({} if first_cache_controls is None else {"cache": first_cache_controls}))
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    await agenerate_content(**request, **({} if second_cache_controls is None else {"cache": second_cache_controls}))
 
-    assert route.call_count == 2
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("semantic", "expected_cache"),
+    [(True, {"no-cache": True, "no-store": True}), (False, None)],
+    ids=["semantic", "exact-match"],
+)
+def test_generate_content_bridge_forwards_the_request_cache_controls_only_to_a_semantic_cache(
+    monkeypatch: pytest.MonkeyPatch, semantic: bool, expected_cache: Mapping[str, bool] | None
+) -> None:
+    from litellm.caching.caching import Cache
+    from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
+    from litellm.types.caching import LiteLLMCacheType
+
+    cache_type: Final = LiteLLMCacheType.VALKEY_SEMANTIC if semantic else LiteLLMCacheType.LOCAL
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type=cache_type, host="localhost", port="6379", similarity_threshold=0.8)
+    )
+
+    completion_kwargs: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/gpt-4.1",
+        contents=[{"role": "user", "parts": [{"text": "What is the capital of France?"}]}],
+        extra_kwargs={"cache": {"no-cache": True, "no-store": True}},
+    )
+
+    assert completion_kwargs.get("cache") == expected_cache
 

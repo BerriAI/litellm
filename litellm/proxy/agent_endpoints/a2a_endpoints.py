@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
@@ -40,6 +41,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.semantic_cache_gate import SKIP_CACHE_CONTROLS
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
     coerce_keepalive_interval,
@@ -180,12 +182,17 @@ async def _resolve_backend_auth(
     )
 
 
-def _request_cache_controls(agent_params: Mapping[str, object], data: Mapping[str, object]) -> Mapping[str, object]:
+def _request_cache_controls(
+    agent_params: Mapping[str, object], data: Mapping[str, object], cache: Cache | None
+) -> Mapping[str, object]:
     request_cache: Final = data.get("cache")
-    if not isinstance(request_cache, Mapping):
+    if cache is None or not cache.is_semantic_cache() or not isinstance(request_cache, Mapping):
+        return {}
+    bypass: Final = {key: value for key, value in SKIP_CACHE_CONTROLS.items() if request_cache.get(key) is value}
+    if not bypass:
         return {}
     agent_cache: Final = agent_params.get("cache")
-    return {"cache": {**(agent_cache if isinstance(agent_cache, Mapping) else {}), **request_cache}}
+    return {"cache": {**(agent_cache if isinstance(agent_cache, Mapping) else {}), **bypass}}
 
 
 def _forwarding_headers(
@@ -848,7 +855,7 @@ async def invoke_agent_a2a(
         )
         forwarded_litellm_params: Final = {
             **backend_auth.litellm_params,
-            **_request_cache_controls(backend_auth.litellm_params, data),
+            **_request_cache_controls(backend_auth.litellm_params, data, litellm.cache),
         }
 
         # Merge agent-level guardrails into data so post_call_success_hook and

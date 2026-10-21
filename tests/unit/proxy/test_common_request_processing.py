@@ -525,6 +525,7 @@ class TestProxyBaseLLMRequestProcessing:
         expected_cache_controls: dict[str, object],
     ) -> None:
         from litellm.caching.caching import Cache
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
         from litellm.types.caching import LiteLLMCacheType
 
         class _Gate(CustomLogger):
@@ -533,37 +534,30 @@ class TestProxyBaseLLMRequestProcessing:
             ) -> bool:
                 return gate_allows
 
-        async def passthrough_pre_call_hook(
-            user_api_key_dict: ProxyUserAPIKeyAuth,
-            data: dict[str, object],
-            call_type: str,
-            skip_guardrails: bool = False,
-        ) -> dict[str, object]:
-            return data
-
         monkeypatch.setattr(litellm, "callbacks", [_Gate()])
         monkeypatch.setattr(
             litellm,
             "cache",
             Cache(type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8),
         )
-        body: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "cache": {"ttl": 60}}
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
-            "add_litellm_data_to_request",
-            AsyncMock(return_value={**body, "metadata": {}, "proxy_server_request": {"body": body}}),
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            }
         )
-        mock_request: Final = MagicMock(spec=Request)
-        mock_request.headers = {}
-        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
 
-        returned_data, _ = await ProxyBaseLLMRequestProcessing(data={}).common_processing_pre_call_logic(
-            request=mock_request,
+        returned_data, _ = await ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "cache": {"ttl": 60}}
+        ).common_processing_pre_call_logic(
+            request=request,
             general_settings={},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-hashed", team_id="team-other"),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=MagicMock(spec=ProxyConfig),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            proxy_config=RealProxyConfig(),
             route_type="acompletion",
         )
 

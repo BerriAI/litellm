@@ -69,7 +69,7 @@ class GenerateContentToCompletionHandler:
                 completion_kwargs["proxy_server_request"] = extra_kwargs["proxy_server_request"]
             if "litellm_metadata" in extra_kwargs:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
-            if "cache" in extra_kwargs:
+            if "cache" in extra_kwargs and litellm.cache is not None and litellm.cache.is_semantic_cache():
                 completion_kwargs["cache"] = extra_kwargs["cache"]
 
         if stream:

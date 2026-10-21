@@ -386,7 +386,12 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
     return agent
 
 
-def _make_request_mock(method: str, params: Mapping[str, object], request_id: object = "req-1") -> MagicMock:
+def _make_request_mock(
+    method: str,
+    params: Mapping[str, object],
+    request_id: object = "req-1",
+    cache: Mapping[str, object] | None = None,
+) -> MagicMock:
     req = MagicMock()
     req.headers = {}
     req.json = AsyncMock(
@@ -395,6 +400,7 @@ def _make_request_mock(method: str, params: Mapping[str, object], request_id: ob
             "id": request_id,
             "method": method,
             "params": params,
+            **({} if cache is None else {"cache": cache}),
         }
     )
     return req
@@ -660,6 +666,38 @@ async def test_message_methods_hand_the_semantic_cache_check_result_to_the_agent
         )
 
     assert (captured.litellm_params or {}).get("cache") == {"ttl": 60, "no-cache": True, "no-store": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+@pytest.mark.parametrize(
+    ("cache_type", "expected_agent_cache"),
+    [
+        (LiteLLMCacheType.VALKEY_SEMANTIC, {"namespace": "team-a", "no-store": True}),
+        (LiteLLMCacheType.LOCAL, {"namespace": "team-a"}),
+    ],
+    ids=["semantic", "exact-match"],
+)
+async def test_message_methods_forward_only_the_callers_semantic_cache_opt_outs_to_the_agent_call(
+    method: str, cache_type: LiteLLMCacheType, expected_agent_cache: Mapping[str, object]
+) -> None:
+    agent: Final = _make_agent_mock()
+    agent.litellm_params = {"cache": {"namespace": "team-a"}}
+    mock_request: Final = _make_request_mock(
+        method, _HELLO_MESSAGE_PARAMS, cache={"namespace": "team-b", "use-cache": True, "ttl": 1, "no-store": True}
+    )
+    cache: Final = Cache(type=cache_type, host="localhost", port="6379", similarity_threshold=0.8)
+
+    with patch.object(litellm, "cache", cache):
+        captured: Final = await _invoke_message_method(
+            method,
+            mock_request,
+            UserAPIKeyAuth(api_key="sk-test", team_id="team-a"),
+            _add_proxy_data,
+            agent=agent,
+        )
+
+    assert (captured.litellm_params or {}).get("cache") == expected_agent_cache
 
 
 @pytest.mark.asyncio
