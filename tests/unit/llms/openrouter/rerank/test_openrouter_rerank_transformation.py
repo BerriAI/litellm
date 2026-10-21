@@ -200,6 +200,41 @@ def test_get_error_class_extracts_openrouter_error_message():
     assert error.status_code == 401
 
 
+def test_map_cohere_rerank_params_returns_empty_dict_when_params_are_none():
+    mapped = _config().map_cohere_rerank_params(
+        non_default_params=None,
+        model="cohere/rerank-v3.5",
+        drop_params=False,
+        query="q",
+        documents=["a", "b"],
+    )
+
+    assert mapped == {}
+
+
+def test_get_error_class_keeps_unparseable_error_message():
+    error = _config().get_error_class(
+        error_message="upstream timeout",
+        status_code=500,
+        headers={},
+    )
+
+    assert error.message == "upstream timeout"
+    assert error.status_code == 500
+
+
+def test_get_error_class_keeps_original_message_without_error_payload():
+    raw = json.dumps({"detail": "not an OpenRouter error shape"})
+
+    error = _config().get_error_class(
+        error_message=raw,
+        status_code=400,
+        headers={},
+    )
+
+    assert error.message == raw
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
