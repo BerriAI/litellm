@@ -64195,13 +64195,17 @@
     },
     "fireworks_ai/accounts/fireworks/models/muse-spark-open": {
         "cache_read_input_token_cost": 1.5e-07,
+        "cache_read_input_token_cost_priority": 2.25e-07,
         "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 1.875e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.25e-06,
-        "source": "https://fireworks.ai/models/fireworks/muse-spark-open",
+        "output_cost_per_token_priority": 6.375e-06,
+        "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
