@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm import Router
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -539,7 +540,9 @@ async def _admin_picker_models() -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(openai_only_router, monkeypatch):
+async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
     jev_models: Final = _priced_jev_models()
 
@@ -551,8 +554,8 @@ async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(o
 
 @pytest.mark.asyncio
 async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_cannot_resolve(
-    openai_only_router, monkeypatch
-):
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("LITELLM_QA_UNSET_TYPESAFE_TOKEN", raising=False)
     monkeypatch.setenv("TYPESAFE_API_KEY", "oidc/env/LITELLM_QA_UNSET_TYPESAFE_TOKEN")
 
@@ -562,7 +565,9 @@ async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_c
 
 
 @pytest.mark.asyncio
-async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(openai_only_router, monkeypatch):
+async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
 
     picker_models: Final = await _admin_picker_models()
@@ -573,8 +578,8 @@ async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentia
 
 @pytest.mark.asyncio
 async def test_scope_expand_does_not_read_the_secret_manager_for_typesafe_credentials(
-    openai_only_router, monkeypatch
-):
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
     secret_manager: Final = MagicMock(spec=CustomSecretManager)
     secret_manager.sync_read_secret.return_value = None
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -593,7 +598,9 @@ async def test_scope_expand_does_not_read_the_secret_manager_for_typesafe_creden
 
 
 @pytest.mark.asyncio
-async def test_default_model_list_does_not_offer_typesafe_models(openai_only_router, monkeypatch):
+async def test_default_model_list_does_not_offer_typesafe_models(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
     admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
 

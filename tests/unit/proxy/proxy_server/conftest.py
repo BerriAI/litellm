@@ -11,10 +11,13 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from litellm import Router
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via
@@ -539,11 +542,11 @@ def reset_login_throttle(monkeypatch):
 
 
 @pytest.fixture
-def openai_only_router(monkeypatch) -> Any:
+def openai_only_router(monkeypatch: pytest.MonkeyPatch) -> Router:
     from litellm import Router
     from litellm.proxy import proxy_server
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "gpt-4",
