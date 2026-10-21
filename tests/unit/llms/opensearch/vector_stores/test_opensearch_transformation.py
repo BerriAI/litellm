@@ -1,4 +1,6 @@
+import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final
@@ -7,6 +9,9 @@ from unittest.mock import MagicMock
 import httpx
 import openai
 import pytest
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -16,10 +21,21 @@ from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVecto
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
 
+ACCESS_KEY: Final = "AKIDOPENSEARCHTEST"
+SECRET_KEY: Final = "opensearch-test-secret"
 QUERY: Final = "How many days a year can I work abroad?"
 QUERY_VECTOR: Final = [0.1, 0.2, 0.3]
-OPENSEARCH: Final = "https://opensearch.internal:9200"
-BASE_PARAMS: Final = {"api_base": OPENSEARCH, "litellm_embedding_model": "embedding-alias"}
+SERVERLESS: Final = "https://abc123.us-east-1.aoss.amazonaws.com"
+BASE_PARAMS: Final = {
+    "api_base": SERVERLESS,
+    "aws_access_key_id": ACCESS_KEY,
+    "aws_secret_access_key": SECRET_KEY,
+    "litellm_embedding_model": "embedding-alias",
+}
+_AUTHORIZATION: Final = re.compile(
+    r"\AAWS4-HMAC-SHA256 Credential=(?P<key>[^/]+)/(?P<date>\d{8})/(?P<region>[^/]+)/(?P<service>[^/]+)/aws4_request, "
+    r"SignedHeaders=(?P<signed>[^,]+), Signature=(?P<signature>[0-9a-f]{64})\Z"
+)
 
 
 class RecordingEmbeddingExecutor:
@@ -31,6 +47,28 @@ class RecordingEmbeddingExecutor:
 
     async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
         return self.call(model, query, configuration)
+
+
+def _signature_scope(request: httpx.Request) -> tuple[str, str]:
+    authorization: Final = _AUTHORIZATION.match(request.headers["authorization"])
+    assert authorization is not None, request.headers["authorization"]
+    signed_names: Final = authorization["signed"].split(";")
+    assert {"host", "x-amz-content-sha256", "x-amz-date"} <= set(signed_names), signed_names
+    assert request.headers["x-amz-content-sha256"] == hashlib.sha256(request.content).hexdigest()
+    signed_request: Final = AWSRequest(
+        method=request.method,
+        url=str(request.url),
+        data=request.content,
+        headers={name: request.headers[name] for name in signed_names},
+    )
+    signed_request.context["timestamp"] = request.headers["x-amz-date"]
+    signer: Final = SigV4Auth(Credentials(ACCESS_KEY, SECRET_KEY), authorization["service"], authorization["region"])
+    expected: Final = signer.signature(
+        signer.string_to_sign(signed_request, signer.canonical_request(signed_request)), signed_request
+    )
+    assert authorization["key"] == ACCESS_KEY
+    assert authorization["signature"] == expected, "SigV4 signature does not cover the request that was sent"
+    return authorization["service"], authorization["region"]
 
 
 def _sent(respond: MagicMock) -> tuple[httpx.Request, ...]:
@@ -101,10 +139,24 @@ async def _search(
     "fields",
     [{}, {"opensearch_embedding_field": "passage_vector", "opensearch_text_field": "passage"}],
 )
-@pytest.mark.parametrize("api_base", [OPENSEARCH, "http://localhost:9200/", "https://search.docs.example/os/"])
+@pytest.mark.parametrize(
+    "api_base,region_params,service,region",
+    [
+        (SERVERLESS, {}, "aoss", "us-east-1"),
+        (SERVERLESS, {"aws_region_name": "us-west-2"}, "aoss", "us-west-2"),
+        ("https://search-docs-xyz.eu-west-1.es.amazonaws.com/", {}, "es", "eu-west-1"),
+        ("https://vpc-docs-xyz.cn-north-1.es.amazonaws.com.cn", {}, "es", "cn-north-1"),
+        ("https://search.docs.example", {"aws_region_name": "ap-south-1"}, "es", "ap-south-1"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_search_sends_an_unsigned_knn_query_and_returns_an_openai_results_page(
-    asynchronous: bool, fields: Mapping[str, str], api_base: str
+async def test_search_sends_a_signed_knn_query_and_returns_an_openai_results_page(
+    asynchronous: bool,
+    fields: Mapping[str, str],
+    api_base: str,
+    region_params: Mapping[str, str],
+    service: str,
+    region: str,
 ) -> None:
     executor: Final = RecordingEmbeddingExecutor()
     embedding_field: Final = fields.get("opensearch_embedding_field", "embedding")
@@ -115,7 +167,7 @@ async def test_search_sends_an_unsigned_knn_query_and_returns_an_openai_results_
         asynchronous,
         respond,
         executor,
-        {**fields, "api_base": api_base, "max_num_results": 3},
+        {**fields, **region_params, "api_base": api_base, "max_num_results": 3},
     )
 
     assert response == {"object": "vector_store.search_results.page", "search_query": QUERY, "data": EXPECTED_RESULTS}
@@ -127,8 +179,7 @@ async def test_search_sends_an_unsigned_knn_query_and_returns_an_openai_results_
         "query": {"knn": {embedding_field: {"vector": QUERY_VECTOR, "k": 3}}},
         "_source": {"excludes": [embedding_field]},
     }
-    assert sent[0].headers["content-type"] == "application/json"
-    assert "authorization" not in sent[0].headers
+    assert _signature_scope(sent[0]) == (service, region)
     executor.call.assert_called_once_with("embedding-alias", QUERY, {})
 
 
@@ -182,7 +233,7 @@ async def test_opensearch_error_keeps_its_status(asynchronous: bool, status: int
         ({"opensearch_text_field": 7}, "opensearch_text_field"),
         ({"extra_body": {"min_score": 0.5}}, "extra_body"),
         ({"api_base": None}, "api_base"),
-        ({"api_base": "opensearch.internal:9200"}, "api_base"),
+        ({"api_base": "abc123.us-east-1.aoss.amazonaws.com"}, "api_base"),
     ],
 )
 @pytest.mark.asyncio
