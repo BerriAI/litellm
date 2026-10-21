@@ -189,10 +189,7 @@ def test_native_streams_are_bounded_by_stream_timeout(stream: bool, expected_tim
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=(
-            RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-            RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-        ),
+        rules=RUST_RULES,
     )
     assert captured[0].resolved["timeout"] == expected_timeout
 
