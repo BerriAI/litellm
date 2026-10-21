@@ -166,6 +166,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     resolve_token_count_settings,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -975,6 +976,7 @@ from litellm.secret_managers.main import (
 )
 from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -17747,10 +17749,7 @@ def get_model_group_info(
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
-    unique_models: Final = []
-    for model in all_models_str:
-        if model not in unique_models:
-            unique_models.append(model)
+    unique_models: Final = tuple(dict.fromkeys(all_models_str))
 
     for model in unique_models:
         if model_group is not None and model_group != model:
@@ -17759,7 +17758,18 @@ def get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
+            model_groups.append(
+                ModelGroupInfoProxy.model_validate(
+                    {
+                        **_model_group_info.model_dump(),
+                        **model_group_custom_fields(
+                            llm_router.get_model_list_of_routed_group(
+                                resolve_model_group_alias(llm_router.model_group_alias, model) or model
+                            )
+                        ),
+                    }
+                )
+            )
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -18210,6 +18220,7 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        data.pop(STREAM_USAGE_INJECTED_FIELD, None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {

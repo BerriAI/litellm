@@ -3551,6 +3551,30 @@ class TestOverrideOpenAIResponseModel:
 
         assert response_obj.model == "downstream-model"
 
+    def test_frozen_response_comes_back_as_a_copy_carrying_the_requested_model(self):
+        from litellm.types.extraction import ExtractionResponse
+
+        response_obj = ExtractionResponse.model_validate(
+            {
+                "model": "cloudflare/@cf/cloudflare/clairic",
+                "answers": {"vendor": {"type": "text", "value": "Acme Tools"}},
+                "truncated": False,
+                "usage": {"input_tokens": 52, "output_tokens": 0},
+            }
+        )
+        response_obj.set_hidden_params({"response_cost": 0.0000052})
+
+        stamped = _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="invoice-reader",
+            log_context="test_context",
+        )
+
+        assert isinstance(stamped, ExtractionResponse)
+        assert stamped.model == "invoice-reader"
+        assert stamped.answers == response_obj.answers
+        assert stamped.hidden_params["response_cost"] == 0.0000052
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
@@ -9157,6 +9181,7 @@ class TestApplyStreamUsageTracking:
 
         assert data["stream_options"] == {"include_usage": True}
         assert data["_litellm_strip_stream_usage"] is True
+        assert data["_litellm_stream_usage_injected"] is True
 
     def test_default_preserves_other_client_stream_options_keys(self):
         data = {"stream": True, "stream_options": {"include_obfuscation": True}}
@@ -9165,6 +9190,7 @@ class TestApplyStreamUsageTracking:
 
         assert data["stream_options"] == {"include_obfuscation": True, "include_usage": True}
         assert data["_litellm_strip_stream_usage"] is True
+        assert data["_litellm_stream_usage_injected"] is True
 
     def test_client_requested_usage_is_left_untouched_and_not_stripped(self):
         data = {"stream": True, "stream_options": {"include_usage": True}}
@@ -9181,6 +9207,7 @@ class TestApplyStreamUsageTracking:
 
         assert data["stream_options"]["include_usage"] is True
         assert data["_litellm_strip_stream_usage"] is True
+        assert data["_litellm_stream_usage_injected"] is True
 
     def test_explicit_false_flag_disables_injection_entirely(self):
         data = {"stream": True}
@@ -9205,6 +9232,36 @@ class TestApplyStreamUsageTracking:
 
         assert data["stream_options"] == {"include_usage": True}
         assert "_litellm_strip_stream_usage" not in data
+
+    @pytest.mark.parametrize("client_stream_options", [None, {"include_obfuscation": True}])
+    def test_flag_true_marks_usage_injected_for_clients_that_did_not_ask(
+        self, client_stream_options: dict[str, bool] | None
+    ):
+        data: Final = {
+            "stream": True,
+            **({} if client_stream_options is None else {"stream_options": client_stream_options}),
+        }
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_stream_usage_injected"] is True
+
+    def test_flag_true_leaves_usage_unmarked_when_client_asked_and_neutralizes_client_marker(self):
+        data: Final = {"stream": True, "stream_options": {"include_usage": True}, "_litellm_stream_usage_injected": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_stream_usage_injected"] is False
 
     def test_flag_true_respects_client_explicit_include_usage_false(self):
         data = {"stream": True, "stream_options": {"include_usage": False}}
