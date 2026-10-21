@@ -280,12 +280,13 @@ describe("CacheDashboard cache analytics charts", () => {
 
   it("shows the failed state with the server message and Retry when the activity query errors", async () => {
     const refetch = vi.fn();
-    useCacheActivity.mockReturnValue({
+    const failedActivity = {
       data: undefined,
       isError: true,
       error: { error: { message: "Request timed out after 30s" } },
       refetch,
-    });
+    };
+    useCacheActivity.mockReturnValue(failedActivity);
     renderDashboard();
 
     const card = await screen.findByText("Cache Hits vs API Requests").then((el) => el.closest("[data-slot=card]"));
