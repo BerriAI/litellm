@@ -513,6 +513,63 @@ class TestProxyBaseLLMRequestProcessing:
         add_litellm_data_to_request.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("gate_allows", "expected_cache_controls"),
+        [(True, {"ttl": 60}), (False, {"ttl": 60, "no-cache": True, "no-store": True})],
+        ids=["allowed", "rejected"],
+    )
+    async def test_common_processing_pre_call_logic_applies_the_semantic_cache_gate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        gate_allows: bool,
+        expected_cache_controls: dict[str, object],
+    ) -> None:
+        from litellm.caching.caching import Cache
+        from litellm.types.caching import LiteLLMCacheType
+
+        class _Gate(CustomLogger):
+            async def async_should_semantic_cache(
+                self, user_api_key_dict: ProxyUserAPIKeyAuth, data: Mapping[str, object], call_type: str
+            ) -> bool:
+                return gate_allows
+
+        async def passthrough_pre_call_hook(
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
+        ) -> dict[str, object]:
+            return data
+
+        monkeypatch.setattr(litellm, "callbacks", [_Gate()])
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8),
+        )
+        body: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "cache": {"ttl": 60}}
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            AsyncMock(return_value={**body, "metadata": {}, "proxy_server_request": {"body": body}}),
+        )
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+
+        returned_data, _ = await ProxyBaseLLMRequestProcessing(data={}).common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-hashed", team_id="team-other"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        assert returned_data["cache"] == expected_cache_controls
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
     @pytest.mark.parametrize(
         "route_type,input_key,system_key,token_key",
