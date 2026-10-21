@@ -72,15 +72,38 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spe
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
-# Method-scoped because the generic credential CRUD handlers share these paths:
-# the route check cannot admit PATCH/DELETE on a name like "user_connections"
-# or "*/user_connection*" without also opening the admin CRUD handlers.
-_INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES: Final = (
+# Writes that only touch the caller's own credential row (BYOK connections and
+# per-user MCP credentials). Method-scoped because the generic credential CRUD
+# handlers share these paths: the route check cannot admit PATCH/DELETE on a
+# name like "user_connections" without also opening the admin CRUD handlers.
+_SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
     ("GET", "/credentials/user_connections"),
     ("POST", "/credentials/{credential_name:path}/user_connection/start"),
     ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
     ("DELETE", "/credentials/{credential_name:path}/user_connection"),
+    ("POST", "/v1/mcp/server/oauth/{server_id}/register"),
+    ("POST", "/v1/mcp/server/{server_id}/oauth-user-credential"),
+    ("DELETE", "/v1/mcp/server/{server_id}/oauth-user-credential"),
+    ("POST", "/v1/mcp/server/{server_id}/user-credential"),
+    ("DELETE", "/v1/mcp/server/{server_id}/user-credential"),
+    ("POST", "/v1/mcp/server/{server_id}/user-env-vars"),
+    ("DELETE", "/v1/mcp/server/{server_id}/user-env-vars"),
 )
+
+
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/utils/transform_request",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }
+)
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 
 class RouteChecks:
@@ -349,7 +372,7 @@ class RouteChecks:
             _user_role == LitellmUserRoles.INTERNAL_USER.value
             and (
                 RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
-                or RouteChecks.is_internal_user_credential_connection_route(route=route, request=request)
+                or RouteChecks.is_self_scoped_credential_route(route=route, request=request)
             )
             or user_is_org_admin(request_data=request_data, user_object=user_obj)
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
@@ -403,6 +426,11 @@ class RouteChecks:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this route. Route={route} is an admin only route",
                 )
+
+    @staticmethod
+    def is_unbilled_route(route: str) -> bool:
+        resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+        return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
 
     @staticmethod
     def is_llm_api_route(route: str) -> bool:
@@ -702,13 +730,13 @@ class RouteChecks:
     _get_request_method = get_request_method
 
     @staticmethod
-    def is_internal_user_credential_connection_route(route: str, request: Request | None) -> bool:
+    def is_self_scoped_credential_route(route: str, request: Request | None) -> bool:
         method: Final = RouteChecks.get_request_method(request)
         if method is None:
             return False
         return any(
             method == expected_method and RouteChecks.check_route_access(route=route, allowed_routes=(pattern,))
-            for expected_method, pattern in _INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES
+            for expected_method, pattern in _SELF_SCOPED_CREDENTIAL_ROUTES
         )
 
     @staticmethod
@@ -1031,6 +1059,9 @@ class RouteChecks:
 
         # Self-service logout; the endpoint only revokes the caller's own session key.
         if route == "/session/logout":
+            return
+
+        if RouteChecks.is_self_scoped_credential_route(route=route, request=request):
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive

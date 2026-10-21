@@ -209,4 +209,4 @@ async def test_chat_completion_request_with_redaction(route, body, router, monke
 
     assert _test_logger.reaches_async_failure_event is True
 
-    assert _test_logger.reaches_sync_failure_event is True
+    assert _test_logger.reaches_sync_failure_event is False

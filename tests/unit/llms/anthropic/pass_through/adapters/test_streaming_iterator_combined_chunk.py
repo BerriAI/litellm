@@ -18,6 +18,10 @@ import anthropic
 import httpx
 import pytest
 
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_streaming_response,
+    convert_to_streaming_response_async,
+)
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _CombinedChunkSplitter,
@@ -141,6 +145,43 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
     assert message_delta["usage"]["output_tokens"] == 5
     assert message_delta["usage"]["cache_read_input_tokens"] == 30
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+
+
+def _cached_bedrock_response(cache_read: int, cache_write: int) -> dict:
+    return {
+        "id": "chatcmpl-cached",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "us.anthropic.claude-opus-4-7",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+        "usage": Usage(
+            prompt_tokens=42145,
+            completion_tokens=6,
+            total_tokens=42151,
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_write,
+        ).model_dump(),
+    }
+
+
+async def _replay_async(cached: dict) -> list[ModelResponseStream]:
+    return [chunk async for chunk in convert_to_streaming_response_async(cached)]
+
+
+@pytest.mark.parametrize("cache_read, cache_write", [(42139, 0), (0, 42139)], ids=["read", "write"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+def test_a_cache_hit_replayed_as_a_messages_stream_keeps_the_prompt_cache_tokens(replay, cache_read, cache_write):
+    cached: Final = _cached_bedrock_response(cache_read, cache_write)
+    chunks: Final = (
+        asyncio.run(_replay_async(cached)) if replay == "async" else list(convert_to_streaming_response(cached))
+    )
+
+    events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-opus-4-7"))
+    message_delta: Final = next(event for event in events if event.get("type") == "message_delta")
+
+    assert message_delta["usage"]["input_tokens"] == 6
+    assert message_delta["usage"].get("cache_read_input_tokens", 0) == cache_read
+    assert message_delta["usage"].get("cache_creation_input_tokens", 0) == cache_write
 
 
 def test_splitter_passes_through_non_combined_chunks():

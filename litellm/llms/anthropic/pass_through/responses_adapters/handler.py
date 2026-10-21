@@ -14,8 +14,9 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -31,6 +32,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import request_safeguards_evaluator
+from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -95,7 +97,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
         return cache_control_as_prompt_cache_breakpoint
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
-    if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
+    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
         return _without_prompt_cache_breakpoint
     return None
 
@@ -141,6 +143,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
@@ -188,6 +191,8 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
+        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
     )
 
     # Normalize reasoning effort based on model capabilities
@@ -205,6 +210,7 @@ def _build_responses_kwargs(
                 effort,
                 model=model,
                 custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+                deployment_model_info=forwarded_kwargs.get("model_info"),
             )
             if normalized != effort:
                 responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}

@@ -11,6 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
@@ -137,6 +138,25 @@ def merge_bedrock_aws_request_params(
     return request_params
 
 
+def configured_bedrock_control_plane_endpoint(endpoint: object) -> str | None:
+    """An ``aws_bedrock_control_plane_endpoint`` value without a trailing slash, or None when unset."""
+    if isinstance(endpoint, str) and endpoint.strip():
+        return endpoint.strip().rstrip("/")
+    return None
+
+
+def bedrock_control_plane_base_url(endpoint: object, aws_region_name: str) -> str:
+    """Base URL for Bedrock control-plane calls such as model invocation jobs.
+
+    A configured ``aws_bedrock_control_plane_endpoint`` (a VPC endpoint or a compatible gateway)
+    wins over the regional ``bedrock`` host. ``api_base`` is deliberately not used here, since on a
+    Bedrock deployment it points at the runtime host, which does not serve these APIs.
+    """
+    return configured_bedrock_control_plane_endpoint(endpoint) or (
+        f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+    )
+
+
 def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
     """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
     s3_access_key_id: Final = params.get("s3_access_key_id")
@@ -184,7 +204,7 @@ def _get_local_model_cost_map() -> dict:
     return GetModelCostMap.load_local_model_cost_map()
 
 
-def pop_bedrock_invoke_output_config_format(request_body: dict) -> dict | None:
+def pop_bedrock_invoke_output_config_format(request_body: dict[str, object]) -> dict[str, object] | None:
     """
     Remove and return Anthropic's nested ``output_config.format`` field.
 
@@ -205,8 +225,8 @@ def pop_bedrock_invoke_output_config_format(request_body: dict) -> dict | None:
 
 
 def convert_bedrock_invoke_output_format_to_inline_schema(
-    output_format: dict,
-    request_body: dict,
+    output_format: Mapping[str, object],
+    request_body: dict[str, object],
 ) -> None:
     """
     Embed an Anthropic structured-output schema into the last user message.
@@ -292,6 +312,77 @@ def bedrock_chat_uses_native_structured_output(
     )
 
 
+def bedrock_native_output_is_opt_in(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
+    return not _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+
+
+def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **litellm_params,
+        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+    }
+
+
+_BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs are not permitted"
+_BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
+    _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
+    "compilation exceeded limits: Schema is too complex",
+    "output_config.format.schema:",
+)
+
+
+def is_bedrock_native_output_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and any(rejection in error_text for rejection in _BEDROCK_NATIVE_OUTPUT_REJECTIONS)
+
+
+def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
+    opt_out_advice: Final = (
+        " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the "
+        "rejected call."
+        if _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED in error_text
+        else ""
+    )
+    verbose_logger.warning(
+        "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it.%s",
+        model,
+        opt_out_advice,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeOutputFallback:
+    optional_params: Mapping[str, object]
+    litellm_params: Mapping[str, object]
+
+
+def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
+    match optional_params:
+        case {"output_config": {"format": object()}}:
+            return True
+        case _:
+            return False
+
+
+def requests_opt_in_native_output(
+    model: str, anthropic_optional_params: Mapping[str, object], model_info: Mapping[str, object] | None
+) -> bool:
+    native_output_requested: Final = isinstance(
+        anthropic_optional_params.get("output_format"), Mapping
+    ) or requests_output_config_format(anthropic_optional_params)
+    return native_output_requested and bedrock_native_output_is_opt_in(model, model_info=model_info)
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def json_object_or_none(value: object) -> Mapping[str, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, Mapping) else None
+
+
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
 
 
@@ -358,7 +449,8 @@ def apply_bedrock_invoke_structured_output(
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
-    schema_format: Final = legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    legacy_format: Final = json_object_or_none(legacy_output_format)
+    schema_format: Final = legacy_format if legacy_format is not None else output_config_format
     if schema_format is None:
         return
 

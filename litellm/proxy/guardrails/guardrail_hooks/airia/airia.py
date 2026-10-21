@@ -128,6 +128,9 @@ class AiriaGuardrail(CustomGuardrail):
         )
         verbose_proxy_logger.info("AiriaGuardrail initialized with gateway: %s", self.api_base)
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

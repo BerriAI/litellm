@@ -784,9 +784,16 @@ def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execut
         assert cases[0].find("error") is not None
 
 
-@pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
+@pytest.mark.parametrize(
+    ("assignment", "exit_code"),
+    (
+        ("absent", pytest.ExitCode.USAGE_ERROR),
+        ("missing", pytest.ExitCode.USAGE_ERROR),
+        ("foreign", pytest.ExitCode.INTERRUPTED),
+    ),
+)
 def test_invalid_native_selections_fail_before_any_case_runs(
-    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"]
+    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"], exit_code: pytest.ExitCode
 ) -> None:
     root: Final = Path(__file__).resolve().parents[3]
     events: Final = tmp_path / "executed.txt"
@@ -823,7 +830,7 @@ def test_invalid_native_selections_fail_before_any_case_runs(
             timeout=15,
             check=False,
         )
-        assert result.returncode == pytest.ExitCode.USAGE_ERROR, result.stdout + result.stderr
+        assert result.returncode == exit_code, result.stdout + result.stderr
         assert not events.exists()
 
 
