@@ -475,9 +475,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return
         raise UnsupportedParamsError(
             message=(
-                f"{model} does not support {param}: the model map flags it `supports_sampling_params: false` "
-                "because Google ignores sampling params on this model. "
-                "To drop unsupported params, set `litellm.drop_params = True`."
+                f"{model} does not support {param}: Google ignores sampling params on this model, so LiteLLM "
+                "treats it as `supports_sampling_params: false`. To drop unsupported params, set "
+                "`litellm.drop_params = True`, or set `supports_sampling_params: true` in the model's "
+                "model_info to forward them anyway."
             ),
             status_code=400,
         )
