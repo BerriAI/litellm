@@ -20,6 +20,7 @@ from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
+from openai.types.batch_usage import BatchUsage
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -44,6 +45,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -4720,6 +4722,31 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+def _parse_batch_usage(value: object) -> BatchUsage | None:
+    if isinstance(value, BatchUsage):
+        return value
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return BatchUsage.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _chat_usage_from_batch_usage(batch_usage: BatchUsage) -> Usage:
+    return Usage(
+        prompt_tokens=batch_usage.input_tokens,
+        completion_tokens=batch_usage.output_tokens,
+        total_tokens=batch_usage.total_tokens,
+        prompt_tokens_details={"cached_tokens": batch_usage.input_tokens_details.cached_tokens},
+        completion_tokens_details={"reasoning_tokens": batch_usage.output_tokens_details.reasoning_tokens},
+        input_tokens=batch_usage.input_tokens,
+        input_tokens_details=batch_usage.input_tokens_details.model_dump(),
+        output_tokens=batch_usage.output_tokens,
+        output_tokens_details=batch_usage.output_tokens_details.model_dump(),
+    )
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
@@ -4732,6 +4759,12 @@ class LiteLLMBatch(Batch):
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _usage_from_batch_usage(cls, value: object) -> object:
+        batch_usage: Final = _parse_batch_usage(value)
+        return value if batch_usage is None else _chat_usage_from_batch_usage(batch_usage)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

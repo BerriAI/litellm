@@ -25,6 +25,7 @@ from litellm.types.utils import (
     HiddenParams,
     ImageObject,
     ImageResponse,
+    LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -1007,3 +1008,56 @@ def test_text_tokens_without_nested_reasoning_clamps(
         )
         == expected_text_tokens
     )
+
+
+_BATCH_FIELDS: Final = {
+    "id": "batch_abc",
+    "object": "batch",
+    "endpoint": "/v1/responses",
+    "input_file_id": "file-abc",
+    "completion_window": "24h",
+    "status": "completed",
+    "created_at": 1,
+}
+_PROVIDER_BATCH_USAGE: Final = {
+    "input_tokens": 21,
+    "input_tokens_details": {"cached_tokens": 5},
+    "output_tokens": 543,
+    "output_tokens_details": {"reasoning_tokens": 448},
+    "total_tokens": 564,
+}
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        pytest.param(_PROVIDER_BATCH_USAGE, id="provider_batch_usage"),
+        pytest.param(
+            {"prompt_tokens": 0, "completion_tokens": 0, **_PROVIDER_BATCH_USAGE},
+            id="stored_row_with_zeroed_chat_fields",
+        ),
+    ),
+)
+def test_batch_usage_reads_token_counts_from_the_provider_batch_usage(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+
+    assert batch.usage is not None
+    assert batch.usage.prompt_tokens_details is not None
+    assert batch.usage.completion_tokens_details is not None
+    assert (
+        batch.usage.prompt_tokens,
+        batch.usage.completion_tokens,
+        batch.usage.total_tokens,
+        batch.usage.prompt_tokens_details.cached_tokens,
+        batch.usage.completion_tokens_details.reasoning_tokens,
+    ) == (21, 543, 564, 5, 448)
+    assert (batch.usage.input_tokens, batch.usage.output_tokens) == (21, 543)
+
+
+def test_batch_usage_keeps_chat_shaped_usage_as_is() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {**_BATCH_FIELDS, "usage": {"prompt_tokens": 28, "completion_tokens": 8, "total_tokens": 36}}
+    )
+
+    assert batch.usage is not None
+    assert (batch.usage.prompt_tokens, batch.usage.completion_tokens, batch.usage.total_tokens) == (28, 8, 36)
