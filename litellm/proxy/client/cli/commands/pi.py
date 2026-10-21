@@ -191,7 +191,7 @@ def provider_block(
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which
     breaks compaction thresholds and over-asks models with smaller output caps.
     pi sniffs compat from the base URL, and one gateway URL fronts models with
-    different capabilities, so both flags are pinned off.
+    different capabilities, so the store and long-cache flags are pinned off.
     """
     return {
         "baseUrl": base_url.rstrip("/") + "/v1",
@@ -199,6 +199,8 @@ def provider_block(
         "compat": {
             "supportsStore": False,
             "supportsLongCacheRetention": False,
+            "sendSessionAffinityHeaders": True,
+            "sessionAffinityFormat": "openrouter",
         },
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
         "models": [_model_entry(model_id, limits) for model_id in model_ids],
