@@ -263,6 +263,7 @@ INTERNAL_STATE_NAMES: Final = (
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
     "_litellm_strip_stream_usage",
+    "_litellm_stream_usage_injected",
     "client_side_timeout",
     "model_file_id_mapping",
     "acompletion",

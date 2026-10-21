@@ -361,10 +361,11 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.litellm_params import RoutingStrategyName
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -4673,7 +4674,8 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
-        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=self.default_litellm_params)
+        defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params)
+        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=defaults)
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
@@ -4817,6 +4819,19 @@ class Router:
                 data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
             )
 
+        deployment_litellm_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+        if router_config_requests_stream_usage(
+            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+            (
+                _LITELLM_PARAMS_ADAPTER.validate_python(
+                    deployment_litellm_params
+                    if isinstance(deployment_litellm_params, Mapping)
+                    else deployment_litellm_params.model_dump(exclude_none=True)
+                ),
+                defaults,
+            ),
+        ):
+            kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):

@@ -936,6 +936,26 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
     }, proxy_request
 
 
+def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request() -> None:
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+
+    request: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    proxy_request: Final = {"body": dict(request)}
+    data: Final = {
+        **request,
+        **stream_usage_tracking_updates(request, {}, "acompletion", lambda: True),
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert data[STREAM_USAGE_INJECTED_FIELD] is True
+    assert proxy_request["body"]["stream_options"] == {"include_usage": True}
+    assert STREAM_USAGE_INJECTED_FIELD not in proxy_request["body"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(

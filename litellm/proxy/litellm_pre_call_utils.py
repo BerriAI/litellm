@@ -268,7 +268,7 @@ def sanitize_for_log(value: object) -> str:
 
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
@@ -2370,7 +2370,15 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
+        frozenset(
+            {
+                "secret_fields",
+                "proxy_server_request",
+                "litellm_logging_obj",
+                VECTOR_STORE_CALLER_METADATA_KWARG,
+                STREAM_USAGE_INJECTED_FIELD,
+            }
+        )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )

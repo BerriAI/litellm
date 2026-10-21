@@ -364,7 +364,8 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
         )
     )
 
-    assert tuple(chunk.choices[0].text for chunk in chunks) == ("hello", None, None)
+    assert tuple(chunk.choices[0].text for chunk in chunks[:-1]) == ("hello", None)
+    assert chunks[-1].choices == []
     assert tuple(chunk.usage for chunk in chunks[:-1]) == (None, None)
     assert (chunks[-1].usage.prompt_tokens, chunks[-1].usage.completion_tokens, chunks[-1].usage.total_tokens) == (
         2,

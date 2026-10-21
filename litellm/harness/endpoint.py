@@ -37,6 +37,7 @@ from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -690,18 +691,21 @@ class ModelEndpoint:
     async def _invoke_sdk(
         self,
         route: str,
-        kwargs: dict[str, Any],  # mutable-ok: injects stream_options into the SDK kwargs
+        kwargs: dict[str, Any],  # mutable-ok: SDK call kwargs built by _sdk_kwargs
     ) -> object:
         if route == ROUTE_MESSAGES:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
-            if kwargs.get("stream"):
-                stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
-                kwargs["stream_options"] = {  # mutable-ok: JSON field sent to litellm.acompletion
-                    "include_usage": True,
-                    **stream_options,
+            if not kwargs.get("stream"):
+                return await litellm.acompletion(**kwargs)
+            stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
+            return await litellm.acompletion(
+                **{
+                    **kwargs,
+                    "stream_options": {"include_usage": True, **stream_options},
+                    STREAM_USAGE_INJECTED_FIELD: "include_usage" not in stream_options,
                 }
-            return await litellm.acompletion(**kwargs)
+            )
         return await litellm.aresponses(**kwargs)
 
     async def _call_sdk(self, route: str, body: Mapping[str, object]) -> Response:
