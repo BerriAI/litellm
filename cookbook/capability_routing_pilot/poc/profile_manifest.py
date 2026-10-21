@@ -3,7 +3,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import takewhile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -41,13 +41,20 @@ class ImageAvailability:
     compressed_size_bytes: int | None
     error: str | None
     manifest_response_received: bool
+    token_scope_ok: bool | None = None
+    retry_status: int | None = None
+    auth_rate_limit_remaining: str | None = None
+    auth_retry_after: str | None = None
+    rate_limit_remaining: str | None = None
+    retry_after: str | None = None
+    check_error_final: bool = False
 
 
 def _hash_order(task_id: str) -> str:
     return hashlib.sha256(f"{SEED}{task_id}".encode()).hexdigest()
 
 
-def _prefix_selected_ids(
+def _selected_ids(
     category: str,
     labels: Sequence[CandidateLabel],
     image_by_id: dict[str, ImageAvailability],
@@ -58,17 +65,9 @@ def _prefix_selected_ids(
             key=lambda task_id: (_hash_order(task_id), task_id),
         )
     )
-    resolved_prefix: Final = tuple(
-        takewhile(
-            lambda task_id: task_id in image_by_id and image_by_id[task_id].exists is not None,
-            ordered_ids,
-        )
-    )
-    return tuple(
-        task_id
-        for task_id in resolved_prefix
-        if image_by_id[task_id].exists is True
-    )[:MAX_PER_CATEGORY]
+    return tuple(task_id for task_id in ordered_ids if task_id in image_by_id and image_by_id[task_id].exists is True)[
+        :MAX_PER_CATEGORY
+    ]
 
 
 def _candidate_record(
@@ -83,6 +82,8 @@ def _candidate_record(
         if image.exists is True
         else "unavailable"
         if image.exists is False
+        else "access_error"
+        if image.error == "access_error"
         else "check_error"
     )
     return {
@@ -95,9 +96,7 @@ def _candidate_record(
         "call_id": label.call_id,
         "label_cost_usd": label.cost_usd,
         "image": (
-            image.image
-            if image is not None
-            else f"swebench/sweb.eval.x86_64.{task_id.replace('__', '_1776_').lower()}"
+            image.image if image is not None else f"swebench/sweb.eval.x86_64.{task_id.replace('__', '_1776_').lower()}"
         ),
         "image_available": image.exists if image is not None else None,
         "image_lookup_status": status,
@@ -105,12 +104,19 @@ def _candidate_record(
         "compressed_size_bytes": image.compressed_size_bytes if image is not None else None,
         "image_error": image.error if image is not None else None,
         "manifest_response_received": image.manifest_response_received if image is not None else False,
+        "token_scope_ok": image.token_scope_ok if image is not None else None,
+        "retry_status": image.retry_status if image is not None else None,
+        "auth_rate_limit_remaining": image.auth_rate_limit_remaining if image is not None else None,
+        "auth_retry_after": image.auth_retry_after if image is not None else None,
+        "rate_limit_remaining": image.rate_limit_remaining if image is not None else None,
+        "retry_after": image.retry_after if image is not None else None,
     }
 
 
 def build_draft_manifest(
     labels: Sequence[CandidateLabel],
     images: Sequence[ImageAvailability],
+    frozen_at_utc: str | None = None,
 ) -> dict[str, object]:
     label_by_id: Final = {label.task_id: label for label in labels}
     image_by_id: Final = {image.task_id: image for image in images}
@@ -119,16 +125,12 @@ def build_draft_manifest(
     if not set(image_by_id).issubset(label_by_id):
         raise ValueError("image results must belong to labeled candidates")
     records: Final = tuple(
-        _candidate_record(task_id, label_by_id[task_id], image_by_id.get(task_id))
-        for task_id in sorted(label_by_id)
+        _candidate_record(task_id, label_by_id[task_id], image_by_id.get(task_id)) for task_id in sorted(label_by_id)
     )
     category_counts: Final = {
         category: {
             "labeled": sum(label.primary_category == category for label in labels),
-            "inspected": sum(
-                label.primary_category == category and label.task_id in image_by_id
-                for label in labels
-            ),
+            "inspected": sum(label.primary_category == category and label.task_id in image_by_id for label in labels),
             "with_image": sum(
                 label.primary_category == category
                 and label.task_id in image_by_id
@@ -154,8 +156,7 @@ def build_draft_manifest(
                 for label in labels
             ),
             "not_inspected": sum(
-                label.primary_category == category and label.task_id not in image_by_id
-                for label in labels
+                label.primary_category == category and label.task_id not in image_by_id for label in labels
             ),
             "selected": 0,
             "selection_status": "profiled" if category in SUPPORTED_CATEGORIES else "unsupported_category",
@@ -164,9 +165,7 @@ def build_draft_manifest(
         for category in ALL_CATEGORIES
     }
     selected_ids: Final = {
-        category: _prefix_selected_ids(category, labels, image_by_id)
-        if category in SUPPORTED_CATEGORIES
-        else ()
+        category: _selected_ids(category, labels, image_by_id) if category in SUPPORTED_CATEGORIES else ()
         for category in ALL_CATEGORIES
     }
     categories_with_selection: Final = {
@@ -184,11 +183,12 @@ def build_draft_manifest(
         for category, counts in category_counts.items()
     }
     return {
-        "frozen": False,
+        "frozen": frozen_at_utc is not None,
+        "frozen_at_utc": frozen_at_utc,
         "tenant_id": PUBLIC_DEV_TENANT,
         "seed": SEED,
-        "rule": f"Per supported category, sort by sha256(seed + task_id), stop at the first unresolved check, and select up to {MAX_PER_CATEGORY} confirmed images",
-        "availability_bias": "Selection includes only tasks with confirmed public images; image lookup errors block later IDs in deterministic order",
+        "rule": f"Per supported category, sort by sha256(seed + task_id) and select the first {MAX_PER_CATEGORY} confirmed accessible images",
+        "availability_bias": "Selection includes only publicly accessible images at freeze time; access errors and unavailable images are excluded, so the cohort is availability-biased",
         "profiled_categories": SUPPORTED_CATEGORIES,
         "unsupported_categories": ("shell_build", "algorithms_data"),
         "heldout_exclusion_list": (
@@ -203,14 +203,23 @@ def build_draft_manifest(
             {
                 "task_id": record["task_id"],
                 "category": record["primary_category"],
-                "status": "check_error",
+                "status": record["image_lookup_status"],
+                "reason": record["image_error"],
+                "retry_status": record["retry_status"],
+                "token_scope_ok": record["token_scope_ok"],
+                "auth_rate_limit_remaining": record["auth_rate_limit_remaining"],
+                "auth_retry_after": record["auth_retry_after"],
+                "rate_limit_remaining": record["rate_limit_remaining"],
+                "retry_after": record["retry_after"],
             }
             for record in records
-            if record["image_available"] is None and record["image_lookup_status"] == "check_error"
+            if record["image_available"] is None and record["image_lookup_status"] in {"check_error", "access_error"}
         ),
         "unknown_count": category_counts["unknown"]["labeled"],
         "image_unavailable_count": sum(record["image_available"] is False for record in records),
-        "image_lookup_error_count": sum(record["image_lookup_status"] == "check_error" for record in records),
+        "image_lookup_error_count": sum(
+            record["image_lookup_status"] in {"check_error", "access_error"} for record in records
+        ),
         "image_not_inspected_count": sum(record["image_lookup_status"] == "not_inspected" for record in records),
         "selected_count": sum(len(ids) for ids in selected_ids.values()),
         "categories": categories_with_selection,
@@ -268,6 +277,13 @@ def _load_images(path: Path) -> tuple[ImageAvailability, ...]:
             compressed_size_bytes=value.get("compressed_size_bytes"),
             error=value.get("error"),
             manifest_response_received=value.get("manifest_response_received", False),
+            token_scope_ok=value.get("token_scope_ok"),
+            retry_status=value.get("retry_status"),
+            auth_rate_limit_remaining=value.get("auth_rate_limit_remaining"),
+            auth_retry_after=value.get("auth_retry_after"),
+            rate_limit_remaining=value.get("registry_rate_limit_remaining"),
+            retry_after=value.get("registry_retry_after"),
+            check_error_final=value.get("check_error_final", False),
         )
         for value in values
         if isinstance(value.get("task_id"), str)
@@ -281,6 +297,20 @@ def _load_images(path: Path) -> tuple[ImageAvailability, ...]:
         )
         and (value.get("error") is None or isinstance(value.get("error"), str))
         and isinstance(value.get("manifest_response_received", False), bool)
+        and (value.get("token_scope_ok") is None or isinstance(value.get("token_scope_ok"), bool))
+        and (
+            value.get("retry_status") is None
+            or isinstance(value.get("retry_status"), int)
+            and not isinstance(value.get("retry_status"), bool)
+        )
+        and (value.get("auth_rate_limit_remaining") is None or isinstance(value.get("auth_rate_limit_remaining"), str))
+        and (value.get("auth_retry_after") is None or isinstance(value.get("auth_retry_after"), str))
+        and (
+            value.get("registry_rate_limit_remaining") is None
+            or isinstance(value.get("registry_rate_limit_remaining"), str)
+        )
+        and (value.get("registry_retry_after") is None or isinstance(value.get("registry_retry_after"), str))
+        and isinstance(value.get("check_error_final", False), bool)
     )
     if len(images) != len(values):
         raise ValueError(f"{path.name} contains invalid image result fields")
@@ -292,10 +322,12 @@ def main() -> None:
     parser.add_argument("--labels", type=Path, default=ROOT / "profiling_labels.jsonl")
     parser.add_argument("--images", type=Path, default=ROOT / "profiling_candidate_images.json")
     parser.add_argument("--output", type=Path, default=ROOT / "profiling_manifest_draft.json")
+    parser.add_argument("--freeze", action="store_true")
     arguments = parser.parse_args()
     manifest: Final = build_draft_manifest(
         _load_labels(arguments.labels),
         _load_images(arguments.images),
+        datetime.now(UTC).isoformat() if arguments.freeze else None,
     )
     arguments.output.write_text(json.dumps(manifest, indent=2) + "\n")
     print(

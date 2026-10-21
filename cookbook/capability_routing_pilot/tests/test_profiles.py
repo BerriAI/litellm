@@ -1,3 +1,6 @@
+import hashlib
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -192,7 +195,15 @@ def test_missing_zero_and_insufficient_evidence_are_not_selected() -> None:
     assert no_evidence.status is SupportStatus.NO_EVIDENCE
     assert zero_success.status is SupportStatus.UNSUPPORTED_ZERO_SUCCESS
     assert insufficient.status is SupportStatus.INSUFFICIENT_EVIDENCE
-    assert select(PUBLIC_DEV_TENANT, "repository_debugging", _versions(), (),).decision is DecisionStatus.NO_QUALIFIED_MODEL
+    assert (
+        select(
+            PUBLIC_DEV_TENANT,
+            "repository_debugging",
+            _versions(),
+            (),
+        ).decision
+        is DecisionStatus.NO_QUALIFIED_MODEL
+    )
     assert (
         select(
             PUBLIC_DEV_TENANT,
@@ -396,17 +407,76 @@ def test_capability_map_is_intermediate_and_contains_bound_and_version_notes() -
     assert capability_map["versions"]["harness_config_hash"] == CONFIG_HASH
 
 
-def test_map_builder_rejects_old_runs_jsonl_and_reads_only_profiling_runs(tmp_path: Path) -> None:
+def test_map_builder_checks_manifest_membership_and_digest(tmp_path: Path) -> None:
     versions = _versions()
-    old_runs = tmp_path / "runs.jsonl"
-    old_runs.write_text("")
-    capability_map = compile_map_from_profiling_runs(old_runs, PUBLIC_DEV_TENANT, versions)
-    assert capability_map["profiles"] == []
-    aliased_old_runs = tmp_path / "profiling_runs.jsonl"
-    aliased_old_runs.symlink_to(old_runs)
-    with pytest.raises(ValueError, match="only read profiling_runs.jsonl"):
-        compile_map_from_profiling_runs(aliased_old_runs, PUBLIC_DEV_TENANT, versions)
+    manifest = tmp_path / "manifest.json"
+    manifest_bytes = json.dumps({"categories": {"repository_debugging": {"selected_ids": ["task-0"]}}}).encode()
+    manifest.write_bytes(manifest_bytes)
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    attempt = _attempts("haiku", 1, 1, 0.1)[0]
+    attempt_row = {
+        **asdict(attempt),
+        **asdict(attempt.key),
+        "manifest_sha256": manifest_sha256,
+    }
+    profiling_runs = tmp_path / "profiling_runs.jsonl"
+    profiling_runs.write_text(json.dumps(attempt_row) + "\n")
+
+    capability_map = compile_map_from_profiling_runs(
+        profiling_runs,
+        manifest,
+        manifest_sha256,
+        PUBLIC_DEV_TENANT,
+        versions,
+    )
+
+    assert capability_map["profiles"][0]["graded_count"] == 1
     assert capability_map["final"] is False
+    with pytest.raises(ValueError, match="manifest sha256 mismatch"):
+        compile_map_from_profiling_runs(
+            profiling_runs,
+            manifest,
+            "wrong-digest",
+            PUBLIC_DEV_TENANT,
+            versions,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("task_id", "outside-manifest", "not selected"),
+        ("manifest_sha256", "wrong-digest", "attempt manifest sha256 mismatch"),
+    ),
+)
+def test_map_builder_rejects_attempt_membership_or_digest_mismatch(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest_bytes = json.dumps({"categories": {"repository_debugging": {"selected_ids": ["task-0"]}}}).encode()
+    manifest.write_bytes(manifest_bytes)
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    attempt = _attempts("haiku", 1, 1, 0.1)[0]
+    attempt_row = {
+        **asdict(attempt),
+        **asdict(attempt.key),
+        "manifest_sha256": manifest_sha256,
+        field: value,
+    }
+    profiling_runs = tmp_path / "profiling_runs.jsonl"
+    profiling_runs.write_text(json.dumps(attempt_row) + "\n")
+
+    with pytest.raises(ValueError, match=message):
+        compile_map_from_profiling_runs(
+            profiling_runs,
+            manifest,
+            manifest_sha256,
+            PUBLIC_DEV_TENANT,
+            _versions(),
+        )
 
 
 def test_harness_hash_is_canonical_json_over_the_full_budget_config() -> None:

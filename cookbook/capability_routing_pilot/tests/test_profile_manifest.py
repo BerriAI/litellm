@@ -10,15 +10,13 @@ from poc.profile_manifest import (
 
 
 def test_manifest_selects_deterministic_public_images_and_marks_unsupported_categories() -> None:
-    labels = tuple(
-        CandidateLabel(f"repo-{index}", "repository_debugging", None)
-        for index in range(35)
-    ) + tuple(
-        CandidateLabel(f"feature-{index}", "feature_implementation", None)
-        for index in range(32)
-    ) + (
-        CandidateLabel("shell-1", "shell_build", None),
-        CandidateLabel("unknown-1", "unknown", None),
+    labels = (
+        tuple(CandidateLabel(f"repo-{index}", "repository_debugging", None) for index in range(35))
+        + tuple(CandidateLabel(f"feature-{index}", "feature_implementation", None) for index in range(32))
+        + (
+            CandidateLabel("shell-1", "shell_build", None),
+            CandidateLabel("unknown-1", "unknown", None),
+        )
     )
     images = tuple(
         ImageAvailability(
@@ -32,7 +30,11 @@ def test_manifest_selects_deterministic_public_images_and_marks_unsupported_cate
         )
         for label in labels
     )
-    manifest = build_draft_manifest(tuple(reversed(labels)), tuple(reversed(images)))
+    manifest = build_draft_manifest(
+        tuple(reversed(labels)),
+        tuple(reversed(images)),
+        frozen_at_utc="2026-10-21T00:00:00+00:00",
+    )
     categories = manifest["categories"]
     repo_expected = tuple(
         sorted(
@@ -46,7 +48,8 @@ def test_manifest_selects_deterministic_public_images_and_marks_unsupported_cate
             key=lambda task_id: (hashlib.sha256(f"{SEED}{task_id}".encode()).hexdigest(), task_id),
         )[:MAX_PER_CATEGORY]
     )
-    assert manifest["frozen"] is False
+    assert manifest["frozen"] is True
+    assert manifest["frozen_at_utc"] == "2026-10-21T00:00:00+00:00"
     assert categories["repository_debugging"]["selected_ids"] == repo_expected
     assert categories["feature_implementation"]["selected_ids"] == feature_expected
     assert categories["shell_build"]["selection_status"] == "unsupported_category"
@@ -65,7 +68,21 @@ def test_manifest_reports_image_unavailable_and_lookup_errors_without_selecting_
     images = (
         ImageAvailability("available", "image/a", True, "sha256:a", 100, None, True),
         ImageAvailability("unavailable", "image/b", False, None, None, None, True),
-        ImageAvailability("error", "image/c", None, None, None, "http_429", True),
+        ImageAvailability(
+            "error",
+            "image/c",
+            None,
+            None,
+            None,
+            "access_error",
+            True,
+            token_scope_ok=False,
+            retry_status=401,
+            auth_rate_limit_remaining="17",
+            auth_retry_after="2",
+            rate_limit_remaining="41",
+            retry_after="3",
+        ),
     )
     image_by_id = {image.task_id: image for image in images}
     manifest = build_draft_manifest(labels, images)
@@ -85,15 +102,24 @@ def test_manifest_reports_image_unavailable_and_lookup_errors_without_selecting_
             ),
         )
     )
-    blocker = next(
-        task_id
-        for task_id in ordered_ids
-        if task_id not in {image.task_id for image in images} or image_by_id[task_id].exists is None
-    )
     assert counts["selected_ids"] == tuple(
         task_id
-        for task_id in ordered_ids[: ordered_ids.index(blocker)]
-        if image_by_id[task_id].exists is True
+        for task_id in ordered_ids
+        if image_by_id.get(task_id) is not None and image_by_id[task_id].exists is True
     )
     assert manifest["image_unavailable_count"] == 1
     assert manifest["image_lookup_error_count"] == 1
+    assert manifest["error_exclusions"] == (
+        {
+            "task_id": "error",
+            "category": "repository_debugging",
+            "status": "access_error",
+            "reason": "access_error",
+            "retry_status": 401,
+            "token_scope_ok": False,
+            "auth_rate_limit_remaining": "17",
+            "auth_retry_after": "2",
+            "rate_limit_remaining": "41",
+            "retry_after": "3",
+        },
+    )

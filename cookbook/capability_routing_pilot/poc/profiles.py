@@ -4,7 +4,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
-from itertools import groupby
+from itertools import chain, groupby
 from pathlib import Path
 from typing import Final
 
@@ -203,11 +203,42 @@ def attempt_from_mapping(value: object) -> TaskAttempt:
 
 
 def read_attempts_jsonl(path: Path) -> tuple[TaskAttempt, ...]:
-    return tuple(
-        attempt_from_mapping(json.loads(line))
-        for line in path.read_text().splitlines()
-        if line.strip()
-    )
+    return tuple(attempt_from_mapping(json.loads(line)) for line in path.read_text().splitlines() if line.strip())
+
+
+def _manifest_category_ids(value: object) -> tuple[str, ...]:
+    row: Final = _record_mapping(value)
+    selected_ids: Final = row.get("selected_ids")
+    if not isinstance(selected_ids, (list, tuple)) or not all(
+        isinstance(task_id, str) and task_id for task_id in selected_ids
+    ):
+        raise ValueError("manifest category selected_ids must be non-empty strings")
+    return tuple(selected_ids)
+
+
+def manifest_selection(path: Path, expected_sha256: str) -> tuple[tuple[str, ...], str]:
+    raw_manifest: Final = path.read_bytes()
+    actual_sha256: Final = hashlib.sha256(raw_manifest).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError("manifest sha256 mismatch")
+    manifest: Final = _record_mapping(json.loads(raw_manifest))
+    categories: Final = _record_mapping(manifest.get("categories"))
+    task_ids: Final = tuple(chain.from_iterable(_manifest_category_ids(category) for category in categories.values()))
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("manifest selected task IDs must be unique")
+    return task_ids, actual_sha256
+
+
+def validate_manifest_attempt(
+    task_id: str,
+    attempt_manifest_sha256: str,
+    selected_task_ids: Sequence[str],
+    manifest_sha256: str,
+) -> None:
+    if task_id not in selected_task_ids:
+        raise ValueError(f"task_id is not selected in the manifest: {task_id}")
+    if attempt_manifest_sha256 != manifest_sha256:
+        raise ValueError("attempt manifest sha256 mismatch")
 
 
 def _status(
@@ -316,9 +347,7 @@ def _cheapest(profiles: Sequence[Profile]) -> Profile:
     return min(
         profiles,
         key=lambda profile: (
-            profile.cost_per_graded_task_usd
-            if profile.cost_per_graded_task_usd is not None
-            else math.inf,
+            profile.cost_per_graded_task_usd if profile.cost_per_graded_task_usd is not None else math.inf,
             profile.key.model_alias,
             profile.key.returned_model_version,
         ),
@@ -353,15 +382,11 @@ def select(
         return Selection(DecisionStatus.SELECTED, _cheapest(qualified), False, "cheapest_qualified")
     if quality_first:
         evidenced: Final = tuple(
-            profile
-            for profile in matching
-            if profile.graded_count >= min_evidence and profile.successes > 0
+            profile for profile in matching if profile.graded_count >= min_evidence and profile.successes > 0
         )
         if evidenced:
             best_lower_bound: Final = max(profile.lower_5pct for profile in evidenced)
-            best: Final = _cheapest(
-                tuple(profile for profile in evidenced if profile.lower_5pct == best_lower_bound)
-            )
+            best: Final = _cheapest(tuple(profile for profile in evidenced if profile.lower_5pct == best_lower_bound))
             return Selection(DecisionStatus.SELECTED, best, True, "quality_first_threshold_unmet")
     return Selection(DecisionStatus.NO_QUALIFIED_MODEL, None, False, "no_qualified_model")
 
@@ -383,13 +408,10 @@ def compile_map(
         "unknown",
     )
     matching: Final = tuple(
-        profile
-        for profile in profiles
-        if profile.key.tenant_id == tenant_id and _versions_match(profile, versions)
+        profile for profile in profiles if profile.key.tenant_id == tenant_id and _versions_match(profile, versions)
     )
     category_profiles: Final = {
-        category: tuple(profile for profile in matching if profile.key.category == category)
-        for category in categories
+        category: tuple(profile for profile in matching if profile.key.category == category) for category in categories
     }
     return {
         "final": final,
@@ -437,15 +459,24 @@ def compile_map(
 
 def compile_map_from_profiling_runs(
     path: Path,
+    manifest_path: Path,
+    expected_manifest_sha256: str,
     tenant_id: str,
     versions: ProfileVersions,
     tau: float = 0.80,
     min_evidence: int = 13,
 ) -> dict[str, object]:
     _validate_thresholds(tau, min_evidence)
-    if path.is_symlink():
-        raise ValueError("capability maps may only read profiling_runs.jsonl")
-    profiles: Final = aggregate_profiles(read_attempts_jsonl(path), tau, min_evidence)
+    selected_task_ids, actual_manifest_sha256 = manifest_selection(manifest_path, expected_manifest_sha256)
+    attempts: Final = read_attempts_jsonl(path)
+    for attempt in attempts:
+        validate_manifest_attempt(
+            attempt.task_id,
+            attempt.manifest_sha256,
+            selected_task_ids,
+            actual_manifest_sha256,
+        )
+    profiles: Final = aggregate_profiles(attempts, tau, min_evidence)
     return compile_map(tenant_id, versions, profiles, tau, min_evidence, final=False)
 
 
