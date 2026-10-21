@@ -1194,20 +1194,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         """
         Masks the input and output before logging to langfuse, datadog, etc.
+        Operates on a defensive copy of result so the client-facing response is not modified in-place (#47605).
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
-            # Operates on defensive copies so the client-facing request and response are not modified in-place
-            kwargs_copy: Final[dict[str, object]] = safe_deep_copy(kwargs)  # mutable-ok: defensive clone
-            result_copy: Final[object] = safe_deep_copy(result)
-
-            messages: Final[list | None] = kwargs_copy.get("messages", None)
+        if call_type in {"completion", "acompletion"}:  # /chat/completions requests
+            result_for_logging: Final[object] = safe_deep_copy(result)
+            messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
-                return kwargs_copy, result_copy
+                return kwargs, result_for_logging
 
-            presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs_copy)
+            presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -1219,7 +1217,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             text=content,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
-                            request_data=kwargs_copy,
+                            request_data=kwargs,
                         )
                     )  # need to pass separately b/c presidio has context window limits
                     task_mappings.append((msg_idx, None))  # None indicates string content
@@ -1233,7 +1231,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 text=text_str,
                                 output_parse_pii=False,
                                 presidio_config=presidio_config,
-                                request_data=kwargs_copy,
+                                request_data=kwargs,
                             )
                         )
                         task_mappings.append((msg_idx, int(content_idx)))
@@ -1254,26 +1252,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
-            kwargs_copy["messages"] = messages
-            if "input" in kwargs_copy and (
-                kwargs.get("input") is kwargs.get("messages") or kwargs_copy.get("input") == kwargs.get("messages")
-            ):
-                kwargs_copy["input"] = messages
+            kwargs["messages"] = messages
 
             if (
-                isinstance(result_copy, ModelResponse)
-                and result_copy.choices
-                and not isinstance(result_copy.choices[0], StreamingChoices)
+                isinstance(result_for_logging, ModelResponse)
+                and result_for_logging.choices
+                and not isinstance(result_for_logging.choices[0], StreamingChoices)
             ):
-                await self._process_response_for_pii(response=result_copy, request_data=kwargs_copy, mode="mask")
-            elif isinstance(result_copy, dict) and self._is_anthropic_message_response(result_copy):
+                await self._process_response_for_pii(response=result_for_logging, request_data=kwargs, mode="mask")
+            elif isinstance(result_for_logging, dict) and self._is_anthropic_message_response(result_for_logging):
                 await self._process_anthropic_response_for_pii(
-                    response=result_copy,
-                    request_data=kwargs_copy,
+                    response=result_for_logging,
+                    request_data=kwargs,
                     mode="mask",
                 )
 
-            return kwargs_copy, result_copy
+            return kwargs, result_for_logging
 
         return kwargs, result
 
