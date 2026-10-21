@@ -11095,6 +11095,198 @@ class TestContextAwareClassifier:
         assert "LITELLM ESCALATE" in user_payload
 
 
+_TASK_FILE: Final = (
+    "# TASK\nMigrate the billing service from a monolith to event-sourced microservices, keep the ledger "
+    "consistent across the cutover, and design the saga compensation for partial refunds"
+)
+_TASK_ASK: Final = "What's in TASK.md?"
+
+
+def _tool_loop_continuation(shape: str) -> list[dict[str, object]]:
+    match shape:
+        case "chat_completions":
+            return [
+                {"role": "user", "content": _TASK_ASK},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "TASK.md"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": _TASK_FILE},
+            ]
+        case "anthropic_messages":
+            return [
+                {"role": "user", "content": [{"type": "text", "text": _TASK_ASK}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "TASK.md"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [{"type": "text", "text": _TASK_FILE}],
+                        }
+                    ],
+                },
+            ]
+        case _:
+            raise AssertionError(shape)
+
+
+class _TaskAwareJevClient:
+    """Grades COMPLEX only when the classifier was shown the task file, the way the live JEV model did."""
+
+    def __init__(self) -> None:
+        self.states: list[str] = []
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.states.append(request.state)
+        tier: Final = "COMPLEX" if "saga compensation" in request.state else "SIMPLE"
+        return JevSystemOneResponse(
+            model="jev-1.13.0",
+            answers={"tier": JevChoiceAnswer(type="choice", choice=tier, probabilities={tier: 1.0}, confidence=0.9)},
+            usage=JevUsage(input_tokens=10, output_tokens=2),
+        )
+
+
+_AGENT_TIERS: Final = {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"}
+
+
+class TestAgentProgressReachesClassifier:
+    """An agent loop's tool calls and results reach the classifier once classifier_context_include_tool_turns is on."""
+
+    @staticmethod
+    def _jev_router(client: _TaskAwareJevClient, **overrides: object) -> ComplexityRouter:
+        return ComplexityRouter(
+            "test-router",
+            MagicMock(),
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": _AGENT_TIERS,
+                **overrides,
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", ["chat_completions", "anthropic_messages"])
+    @pytest.mark.parametrize("include_tool_turns,expected_model", [(True, "strong"), (False, "cheap")])
+    async def test_jev_continuation_turn_routes_on_what_the_tool_returned(
+        self, shape: str, include_tool_turns: bool, expected_model: str
+    ) -> None:
+        """The reported loop: the ask is trivial, the file it reads is the real task, and every_request
+        must route the next turn on that file instead of on the ask."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=include_tool_turns)
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_tool_loop_continuation(shape)
+        )
+
+        assert response is not None
+        assert response.model == expected_model
+        assert ('read_file({"path": "TASK.md"})' in client.states[-1]) is include_tool_turns
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", ["chat_completions", "anthropic_messages"])
+    async def test_llm_classifier_sees_the_tool_result_as_part_of_the_ask(
+        self, llm_classifier_config: dict[str, object], shape: str
+    ) -> None:
+        """Quoted among the context-only turns, the file left the live classifier at SIMPLE, so the work
+        has to sit under the ask that is being classified."""
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {**llm_classifier_config, "classifier_context_include_tool_turns": True},
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=_tool_loop_continuation(shape)
+        )
+
+        assert response is not None
+        payload: Final = dependency.acompletion.call_args.kwargs["messages"][1]["content"]
+        ask_at: Final = payload.index(f"Classify this message:\n{_TASK_ASK}")
+        assert payload.index('read_file({"path": "TASK.md"})') > ask_at
+        assert payload.index("saga compensation") > ask_at
+
+    @pytest.mark.asyncio
+    async def test_tool_traffic_of_an_earlier_ask_stays_out(self) -> None:
+        """A new human ask starts a new piece of work, so the tools that served the last one say nothing about it."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[
+                *_tool_loop_continuation("chat_completions"),
+                {"role": "assistant", "content": "Done, the plan is in PLAN.md."},
+                {"role": "user", "content": "thanks, what time is it in Tokyo?"},
+            ],
+        )
+
+        assert response is not None
+        assert response.model == "cheap"
+        assert "Work the agent has done" not in client.states[-1]
+
+    @pytest.mark.asyncio
+    async def test_budget_keeps_the_newest_tool_result(self) -> None:
+        """A long loop overflows the budget, and what survives must be the newest result, the one the next
+        step acts on."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(
+            client, classifier_context_include_tool_turns=True, classifier_context_budget_chars=len(_TASK_FILE) + 50
+        )
+        early_results: Final = tuple(
+            {"role": "tool", "tool_call_id": f"call_{i}", "content": f"listing {i}: " + "x" * 200} for i in range(5)
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[
+                *_tool_loop_continuation("chat_completions")[:1],
+                *early_results,
+                {"role": "tool", "content": _TASK_FILE},
+            ],
+        )
+
+        assert response is not None
+        assert response.model == "strong"
+        assert "listing 0" not in client.states[-1]
+
+    @pytest.mark.asyncio
+    async def test_zero_context_window_turns_tool_context_off(self) -> None:
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(
+            client, classifier_context_include_tool_turns=True, classifier_context_window_size=0
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_tool_loop_continuation("chat_completions")
+        )
+
+        assert response is not None
+        assert response.model == "cheap"
+
+
 # The shape a coding agent actually sends, taken from a captured classifier payload: the session
 # quoted whole, then one line asking for a title. The engineering vocabulary is all inside the
 # quoted block, which is what used to decide the tier.
