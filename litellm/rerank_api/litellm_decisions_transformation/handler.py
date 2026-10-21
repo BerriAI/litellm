@@ -7,14 +7,16 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from functools import partial
 from queue import Empty, SimpleQueue
-from threading import Lock
 from typing import Final, Literal
 
-from pydantic import TypeAdapter, ValidationError
-
 import litellm
-from litellm.decisions.call import DecisionsCall, OpenAIDecisionRequestFields, asend, prepare_call, send
-from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+from litellm.decisions.call import (
+    DecisionsCall,
+    OpenAIDecisionRequestFields,
+    asend,
+    prepare_call,
+    send,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rerank_api.litellm_decisions_transformation.transformation import (
     DecisionRerankRequest,
@@ -25,9 +27,6 @@ from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.rerank import DecisionRerankResponse
 from litellm.types.utils import Usage
 
-_METADATA: Final = TypeAdapter(Mapping[str, object])
-_DISPATCH_COSTS: Final = TypeAdapter(Mapping[str, tuple[float, ...]])
-
 _CHILD_OMIT: Final = frozenset({"litellm_logging_obj", "litellm_call_id"})
 _MAX_CONCURRENCY: Final = 8
 
@@ -37,35 +36,6 @@ class _DocumentCall:
     index: int
     text: str
     call: DecisionsCall
-
-
-def _dispatch_cost_recorder(
-    kwargs: Mapping[str, object], request: DecisionRerankRequest
-) -> Callable[[int], None] | None:
-    try:
-        reservations: Final = (
-            budget_reservation_from_metadata(_METADATA.validate_python(kwargs.get(name) or {}))
-            for name in ("metadata", "litellm_metadata")
-        )
-        reservation: Final = next((item for item in reservations if item is not None), None)
-        if reservation is None:
-            return None
-        costs: Final = _DISPATCH_COSTS.validate_python(reservation.get("decision_rerank_input_costs") or {}).get(
-            request.strategy, ()
-        )
-    except ValidationError:
-        return None
-    if len(costs) != _call_count(request):
-        return None
-    reservation["input_cost"] = 0.0  # Only dispatched children belong in the cancellation floor.
-    lock: Final = Lock()
-
-    def record(index: int) -> None:
-        with lock:
-            current: Final = reservation.get("input_cost")
-            reservation["input_cost"] = (float(current) if isinstance(current, (float, int)) else 0.0) + costs[index]
-
-    return record
 
 
 def _timeout(model: str, provider: str) -> litellm.Timeout:
@@ -86,14 +56,11 @@ def _call_with_deadline(document: _DocumentCall, deadline: float) -> DecisionsCa
 def _send(
     document: _DocumentCall,
     deadline: float,
-    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResult:
     call: Final = _call_with_deadline(document, deadline)
     if isinstance(call, litellm.Timeout):
         return DecisionRerankResult(document.index, document.text, error=call)
     try:
-        if record_dispatch is not None:
-            record_dispatch(document.index)
         response: Final = send(call)
         if isinstance(response, OpenAIDecisionResponse):
             return DecisionRerankResult(document.index, document.text, response=response)
@@ -110,14 +77,11 @@ async def _asend(
     document: _DocumentCall,
     deadline: float,
     cancellation_requested: asyncio.Event,
-    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResult:
     call: Final = _call_with_deadline(document, deadline)
     if isinstance(call, litellm.Timeout):
         return DecisionRerankResult(document.index, document.text, error=call)
     try:
-        if record_dispatch is not None:
-            record_dispatch(document.index)
         response: Final = await asend(call)
         if isinstance(response, OpenAIDecisionResponse):
             return DecisionRerankResult(document.index, document.text, response=response)
@@ -196,7 +160,6 @@ def _rerank(
     model: str,
     provider: str,
     deadline: float,
-    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResponse:
     count: Final = _call_count(request)
     workers: Final = min(count, _MAX_CONCURRENCY)
@@ -207,7 +170,7 @@ def _rerank(
             if time.monotonic() >= deadline:
                 return
             try:
-                completed.put(_send(prepare(index), deadline, record_dispatch))
+                completed.put(_send(prepare(index), deadline))
             except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
                 completed.put(DecisionRerankResult(index, request.document_text(index), error=error))
 
@@ -233,7 +196,6 @@ async def _arerank(
     model: str,
     provider: str,
     deadline: float,
-    record_dispatch: Callable[[int], None] | None,
 ) -> DecisionRerankResponse:
     count: Final = _call_count(request)
     workers: Final = min(count, _MAX_CONCURRENCY)
@@ -250,7 +212,6 @@ async def _arerank(
                         prepare(index),
                         deadline,
                         cancellation_requested,
-                        record_dispatch,
                     )
                 )
             except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
@@ -355,7 +316,6 @@ def rerank_with_decisions(
             "headers": dict(first.call.headers),
         },
     )
-    record_dispatch: Final = _dispatch_cost_recorder(kwargs, request)
     if is_async:
         return _arerank(
             prepare_next,
@@ -364,6 +324,5 @@ def rerank_with_decisions(
             model,
             provider,
             deadline,
-            record_dispatch,
         )
-    return _rerank(prepare_next, request, logging_obj, model, provider, deadline, record_dispatch)
+    return _rerank(prepare_next, request, logging_obj, model, provider, deadline)

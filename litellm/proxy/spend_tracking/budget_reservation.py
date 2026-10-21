@@ -7,7 +7,6 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
@@ -43,11 +42,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.rerank_api.litellm_decisions_transformation.transformation import (
-    DecisionRerankRequest,
-    LiteLLMDecisionsRerankConfig,
-)
-from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -79,7 +73,6 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 }
 
 _CACHED_VALUE: Final = TypeAdapter(object)
-_BUDGET_REQUEST: Final = TypeAdapter(Mapping[str, object])
 _WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
@@ -280,41 +273,12 @@ async def reserve_budget_for_request(
         raw_body=raw_body,
     )
 
-    decision_rerank: Final = "rerank" in route and any(
-        _decision_rerank_candidates(_BUDGET_REQUEST.validate_python(request_body), route, model, llm_router)
-        for model in _get_request_models(request_body, route, llm_router)
+    reservation_cost = estimate_request_max_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        input_token_counts=input_token_counts,
     )
-    estimates: Final[tuple[float | None, float | None, Mapping[str, tuple[float, ...]]]] = (
-        await asyncio.to_thread(
-            _decision_rerank_reservation_estimates,
-            _BUDGET_REQUEST.validate_python(request_body),
-            route,
-            llm_router,
-            input_token_counts,
-        )
-        if decision_rerank
-        else (
-            estimate_request_max_cost(
-                request_body=request_body,
-                route=route,
-                llm_router=llm_router,
-                input_token_counts=input_token_counts,
-            ),
-            estimate_request_input_cost(
-                request_body=request_body,
-                route=route,
-                llm_router=llm_router,
-                input_token_counts=input_token_counts,
-            ),
-            {},
-        )
-    )
-    reservation_cost = estimates[0]
-    if decision_rerank and reservation_cost is None and fail_closed_budget_enforcement:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Budget enforcement unavailable: unable to estimate all decision rerank calls.",
-        )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
     # In that case we fall back to read-time enforcement only.
@@ -345,14 +309,19 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
+    input_cost: Final = estimate_request_input_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        input_token_counts=input_token_counts,
+    )
     budget_reservation: Final = {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
         "callback_bound": False,
-        "input_cost": min(float(estimates[1] or 0.0), reservation_cost),
+        "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
-        **({"decision_rerank_input_costs": estimates[2]} if decision_rerank else {}),
     }
     _start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
@@ -1314,193 +1283,6 @@ def _coerce_datetime(value: object) -> datetime | None:
     return None
 
 
-@dataclass(frozen=True, slots=True)
-class _DecisionRerankEstimate:
-    strategy: str
-    input_costs: tuple[float | None, ...]
-    max_cost: float | None
-
-    @property
-    def input_cost(self) -> float | None:
-        return (
-            None
-            if any(cost is None for cost in self.input_costs)
-            else sum(cost for cost in self.input_costs if cost is not None)
-        )
-
-
-def _rerank_deployment_params(model: str, llm_router: Router | None) -> tuple[Mapping[str, object], ...]:
-    deployments: Final = (llm_router.get_model_list(model_name=model) or []) if llm_router is not None else []
-    return tuple(deployment["litellm_params"] for deployment in deployments) or ({},)
-
-
-def _decision_rerank_candidates(
-    request_body: Mapping[str, object],
-    route: str,
-    model: str,
-    llm_router: Router | None,
-) -> tuple[tuple[str, DecisionRerankRequest], ...]:
-    if "rerank" not in route:
-        return ()
-    return tuple(
-        (
-            str(params.get("model") or model),
-            LiteLLMDecisionsRerankConfig.validate_request(
-                {**params, **request_body},
-                model=model,
-                provider=str(params.get("custom_llm_provider") or ""),
-                strategy=strategy,
-            ),
-        )
-        for params in _rerank_deployment_params(model, llm_router)
-        if (
-            strategy := get_decision_rerank_strategy(
-                str(params.get("model") or model),
-                custom_llm_provider=str(params.get("custom_llm_provider") or "") or None,
-            )
-        )
-        is not None
-    )
-
-
-def _decision_rerank_inputs(request: DecisionRerankRequest, model: str) -> tuple[int | None, ...]:
-    count: Final = 1 if request.strategy == "multiple_choice" else len(request.documents)
-    return tuple(
-        count_input_tokens_for_model(
-            request_body={
-                "input": LiteLLMDecisionsRerankConfig.transform_rerank_request(request, index).model_dump_json()
-            },
-            model=model,
-        )
-        for index in range(count)
-    )
-
-
-def _price_decision_rerank_inputs(
-    strategy: str,
-    model: str,
-    counts: Sequence[int | None],
-    model_info: Mapping[str, object],
-) -> _DecisionRerankEstimate:
-    # Rerank does not forward caller output caps to the Decisions request.
-    maximums: Final = tuple(
-        _max_cost_for_cost_info(
-            request_body={},
-            route="/decisions",
-            model=model,
-            model_info=model_info,
-            input_tokens=tokens,
-        )
-        for tokens in counts
-    )
-    return _DecisionRerankEstimate(
-        strategy=strategy,
-        input_costs=tuple(
-            _input_cost_for_cost_info(
-                request_body={},
-                route="/decisions",
-                model=model,
-                model_info=model_info,
-                input_tokens=tokens,
-            )
-            for tokens in counts
-        ),
-        max_cost=(
-            None if any(cost is None for cost in maximums) else sum(cost for cost in maximums if cost is not None)
-        ),
-    )
-
-
-def _decision_rerank_costs(
-    request_body: Mapping[str, object],
-    route: str,
-    model: str,
-    llm_router: Router | None,
-) -> tuple[_DecisionRerankEstimate, ...]:
-    candidates: Final = _decision_rerank_candidates(request_body, route, model, llm_router)
-    if not candidates:
-        return ()
-    cost_infos: Final = _get_model_cost_infos(model=model, llm_router=llm_router)
-    inputs: Final = tuple(
-        (
-            backend_model,
-            request.strategy,
-            _decision_rerank_inputs(request, backend_model),
-        )
-        for backend_model, request in candidates
-    )
-    return tuple(
-        _price_decision_rerank_inputs(strategy=strategy, model=backend_model, counts=counts, model_info=model_info)
-        for backend_model, strategy, counts in inputs
-        for model_info in cost_infos  # comprehension-ok: conservatively price every deployment/cost combination
-    ) or (_DecisionRerankEstimate("pointwise", (None,), None),)
-
-
-def _maximum_dispatch_costs(
-    candidates: Sequence[Sequence[float | None]],
-) -> tuple[float, ...]:
-    return tuple(max(costs[index] or 0.0 for costs in candidates) for index in range(len(candidates[0])))
-
-
-def _decision_rerank_reservation_estimates(
-    request_body: Mapping[str, object],
-    route: str,
-    llm_router: Router | None,
-    input_token_counts: Mapping[str, int],
-) -> tuple[float | None, float | None, Mapping[str, tuple[float, ...]]]:
-    models: Final = _get_request_models(dict(request_body), route, llm_router)
-    decisions: Final = {
-        model: _decision_rerank_costs(request_body=request_body, route=route, model=model, llm_router=llm_router)
-        for model in models
-    }
-    all_estimates: Final = tuple(chain.from_iterable(decisions.values()))
-    if any(estimate.max_cost is None or estimate.input_cost is None for estimate in all_estimates):
-        return None, None, {}
-    maximums: Final = tuple(
-        _estimate_request_max_cost_for_model(
-            request_body=dict(request_body),
-            route=route,
-            model=model,
-            llm_router=llm_router,
-            input_tokens=input_token_counts.get(model),
-            decision_estimates=decisions[model],
-        )
-        for model in models
-    )
-    # A native sibling keeps its existing cancellation floor. The adapter replaces it before dispatch.
-    native_inputs: Final = tuple(
-        _estimate_request_input_cost_for_model(
-            request_body=dict(request_body),
-            route=route,
-            model=model,
-            llm_router=llm_router,
-            input_tokens=input_token_counts.get(model),
-            decision_estimates=(),
-        )
-        for model in models
-        if any(
-            get_decision_rerank_strategy(
-                str(params.get("model") or model),
-                custom_llm_provider=str(params.get("custom_llm_provider") or "") or None,
-            )
-            is None
-            for params in _rerank_deployment_params(model, llm_router)
-        )
-    )
-    strategies: Final = frozenset(estimate.strategy for estimate in all_estimates)
-    dispatch_costs: Final = {
-        strategy: _maximum_dispatch_costs(
-            tuple(estimate.input_costs for estimate in all_estimates if estimate.strategy == strategy)
-        )
-        for strategy in strategies
-    }
-    return (
-        max((cost for cost in maximums if cost is not None), default=None),
-        max((cost for cost in native_inputs if cost is not None), default=0.0),
-        dispatch_costs,
-    )
-
-
 def estimate_request_max_cost(
     request_body: dict,
     route: str,
@@ -1558,7 +1340,6 @@ def _estimate_request_input_cost_for_model(
     model: str,
     llm_router: Router | None,
     input_tokens: int | None = None,
-    decision_estimates: Sequence[_DecisionRerankEstimate] | None = None,
 ) -> float | None:
     estimates: Final = [
         _input_cost_for_cost_info(
@@ -1570,16 +1351,7 @@ def _estimate_request_input_cost_for_model(
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
-    transformed: Final = (
-        decision_estimates
-        if decision_estimates is not None
-        else _decision_rerank_costs(_BUDGET_REQUEST.validate_python(request_body), route, model, llm_router)
-    )
-    if any(estimate.input_cost is None for estimate in transformed):
-        return None
-    valid_estimates: Final = [
-        cost for cost in (*estimates, *(estimate.input_cost for estimate in transformed)) if cost is not None
-    ]
+    valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
 
 
@@ -1616,7 +1388,6 @@ def _estimate_request_max_cost_for_model(
     model: str,
     llm_router: Router | None,
     input_tokens: int | None = None,
-    decision_estimates: Sequence[_DecisionRerankEstimate] | None = None,
 ) -> float | None:
     estimates: Final = [
         _max_cost_for_cost_info(
@@ -1628,16 +1399,7 @@ def _estimate_request_max_cost_for_model(
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
-    transformed: Final = (
-        decision_estimates
-        if decision_estimates is not None
-        else _decision_rerank_costs(_BUDGET_REQUEST.validate_python(request_body), route, model, llm_router)
-    )
-    if any(estimate.max_cost is None for estimate in transformed):
-        return None
-    valid_estimates: Final = [
-        cost for cost in (*estimates, *(estimate.max_cost for estimate in transformed)) if cost is not None
-    ]
+    valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
 
 
