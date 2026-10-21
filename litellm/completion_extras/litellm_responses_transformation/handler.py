@@ -11,13 +11,12 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
+import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
-    import httpx
-
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
 
 
@@ -34,10 +33,14 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     client: ReadOnly[object]
 
 
-def _provider_response_headers(stream: object) -> "httpx.Headers | None":
+def _provider_response_headers(stream: object) -> httpx.Headers | None:
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    return stream.response.headers if isinstance(stream, BaseResponsesAPIStreamingIterator) else None
+    match stream:
+        case BaseResponsesAPIStreamingIterator(response=httpx.Response(headers=headers)):
+            return headers
+        case _:
+            return None
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:

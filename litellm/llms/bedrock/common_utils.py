@@ -1258,8 +1258,10 @@ def _extra_body_bridgeable(extra_body: object) -> bool:
     if not isinstance(extra_body, dict):
         return False
     validated: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body)
-    return validated.keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES and isinstance(
-        validated.get("store", False), bool
+    return (
+        validated.keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+        and isinstance(validated.get("store", False), bool)
+        and isinstance(validated.get("include"), (list, tuple, NoneType))
     )
 
 
@@ -1298,6 +1300,7 @@ def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -
         and not _sets_a_chat_param_the_responses_bridge_drops(request_params)
         and isinstance(request_params.get("reasoning_effort"), (str, NoneType))
         and isinstance(request_params.get("store"), (bool, NoneType))
+        and isinstance(request_params.get("include"), (list, tuple, NoneType))
         and _bedrock_serves_responses(model)
     )
 
@@ -1316,7 +1319,7 @@ def bedrock_responses_bridge_optional_params(optional_params: Mapping[str, objec
     extra_body: Final = optional_params.get("extra_body")
     extra_body_params: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body) if isinstance(extra_body, dict) else {}
     include: Final = extra_body_params.get("include", optional_params.get("include"))
-    requested: Final = _INCLUDE_ADAPTER.validate_python(include) if isinstance(include, (list, tuple)) else ()
+    requested: Final = _INCLUDE_ADAPTER.validate_python(include or ())
     return {
         **optional_params,
         **(

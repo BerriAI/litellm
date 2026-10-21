@@ -615,6 +615,17 @@ def _weather_tool_named(name):
         ),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"top_k": 5}}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": "store=false"}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "include": ["file_search_call.results"]}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "include": "file_search_call.results"}, "converse"),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"include": ["file_search_call.results"]}},
+            "responses",
+        ),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"include": "file_search_call.results"}},
+            "converse",
+        ),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"include": {"a": 1}}}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "seed": 7}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logit_bias": {"50256": -100}}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "web_search_options": {}}, "converse"),
