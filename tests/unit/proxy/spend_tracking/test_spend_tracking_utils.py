@@ -31,8 +31,6 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
-from litellm.constants import SILENT_EXPERIMENT_METADATA_KEY
-from litellm.types.router import SilentExperimentMarker
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -178,33 +176,6 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
 
     assert json.loads(payload["metadata"])[KUBERNETES_POD_ROUTING_KEY] == expected
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
-
-
-@pytest.mark.parametrize(
-    ("silent_experiment_metadata", "expected"),
-    [
-        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED}, True),
-        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}, None),
-        ({SILENT_EXPERIMENT_METADATA_KEY: True}, None),
-        ({"is_silent_experiment": True}, None),
-        ({}, None),
-    ],
-)
-def test_get_logging_payload_records_whether_the_call_was_a_silent_experiment(
-    silent_experiment_metadata: dict[str, object], expected: bool | None
-) -> None:
-    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
-    payload: Final = get_logging_payload(
-        kwargs={
-            "model": "gpt-4o-mini",
-            "litellm_params": {"metadata": {"user_api_key": "test-key", **silent_experiment_metadata}},
-        },
-        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
-        start_time=now,
-        end_time=now,
-    )
-
-    assert json.loads(payload["metadata"]).get("is_silent_experiment") is expected
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])

@@ -309,6 +309,7 @@ _in_memory_loggers: Final[list[CustomLogger]] = []
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
     ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
 )
+_SILENT_EXPERIMENT_BUCKETS: Final = ("metadata", "litellm_metadata")
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -798,6 +799,7 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
+        self.is_silent_experiment = False
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
@@ -1113,6 +1115,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
+        self.is_silent_experiment = self.is_silent_experiment or is_silent_experiment_call(litellm_params)
         self.litellm_params = {
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
@@ -6491,6 +6494,7 @@ class StandardLoggingPayloadSetup:
         start_time: dt_object | None = None,
         response_id: str | None = None,
         custom_llm_provider: str | None = None,
+        is_silent_experiment: bool = False,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -6564,13 +6568,7 @@ class StandardLoggingPayloadSetup:
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
             ),
-            **(
-                SilentExperimentFlag(is_silent_experiment=True)
-                if metadata is not None
-                and SILENT_EXPERIMENT_METADATA_KEY in metadata
-                and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED
-                else SilentExperimentFlag()
-            ),
+            **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         )
         if isinstance(metadata, dict):
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
@@ -7373,6 +7371,7 @@ def get_standard_logging_object_payload(
             start_time=start_time,
             response_id=id,
             custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
+            is_silent_experiment=logging_obj.is_silent_experiment is True,
         )
         _request_body: Final = proxy_server_request.get("body", {})
         end_user_id: Final = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
@@ -7667,7 +7666,9 @@ def get_standard_logging_metadata(
     return clean_metadata
 
 
-def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):
+def scrub_sensitive_keys_in_metadata(
+    litellm_params: dict[str, Any] | None,  # mutable-ok: the langfuse masking function is moved onto these params
+) -> dict[str, Any]:  # mutable-ok: loggers write into the returned params and their metadata
     if litellm_params is None:
         litellm_params = {}
 
@@ -7682,7 +7683,24 @@ def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):
             litellm_params["_langfuse_masking_function"] = masking_fn
         litellm_params["metadata"] = metadata
 
-    return litellm_params
+    if not is_silent_experiment_call(litellm_params):
+        return litellm_params
+    return {
+        name: (
+            {key: value for key, value in bucket.items() if key != SILENT_EXPERIMENT_METADATA_KEY}
+            if name in _SILENT_EXPERIMENT_BUCKETS and _carries_silent_experiment_marker(bucket)
+            else bucket
+        )
+        for name, bucket in litellm_params.items()
+    }
+
+
+def _carries_silent_experiment_marker(bucket: object) -> bool:
+    return isinstance(bucket, dict) and bucket.get(SILENT_EXPERIMENT_METADATA_KEY) is SilentExperimentMarker.MIRRORED
+
+
+def is_silent_experiment_call(litellm_params: Mapping[str, object]) -> bool:
+    return any(_carries_silent_experiment_marker(litellm_params.get(name)) for name in _SILENT_EXPERIMENT_BUCKETS)
 
 
 # integration helper function

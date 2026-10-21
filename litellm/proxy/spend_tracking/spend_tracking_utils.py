@@ -32,7 +32,6 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
-    SILENT_EXPERIMENT_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.constants import (
@@ -81,7 +80,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag, SilentExperimentMarker
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -229,6 +228,7 @@ def _get_spend_logs_metadata(
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
+    is_silent_experiment: bool = False,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -296,12 +296,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
-        **(
-            SilentExperimentFlag(is_silent_experiment=True)
-            if SILENT_EXPERIMENT_METADATA_KEY in metadata
-            and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED
-            else SilentExperimentFlag()
-        ),
+        **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )
@@ -746,6 +741,11 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        is_silent_experiment=(
+            standard_logging_payload is not None
+            and "is_silent_experiment" in standard_logging_payload["metadata"]
+            and standard_logging_payload["metadata"]["is_silent_experiment"]
+        ),
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
