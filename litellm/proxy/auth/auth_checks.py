@@ -5677,6 +5677,45 @@ async def can_key_call_resolved_model(
             )
 
 
+async def can_caller_call_resolved_model(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """``can_key_call_resolved_model`` plus the agent grant and a personal key owner's own models, which
+    ``common_checks`` applies to a model named at auth time and a model named after auth needs as well"""
+    await can_key_call_resolved_model(
+        model=model,
+        llm_model_list=None if llm_router is None else llm_router.get_model_list(),
+        valid_token=valid_token,
+        llm_router=llm_router,
+    )
+    await can_agent_call_model(
+        model=model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if valid_token.team_id is not None or prisma_client is None:
+        return
+    await can_user_call_model(
+        model=model,
+        llm_router=llm_router,
+        user_object=await _user_object_or_none(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+    )
+
+
 def can_org_access_model(
     model: str,
     org_object: LiteLLM_OrganizationTable | None,

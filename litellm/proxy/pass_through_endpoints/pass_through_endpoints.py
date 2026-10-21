@@ -2403,12 +2403,15 @@ def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
 
 def _truncated_close_reason(reason: str) -> str:
     """
-    Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
+    Fit a close reason inside the byte budget a WebSocket close frame allows, ending on the last whole sentence
+    that fits when there is one and never splitting a character
     """
     encoded: Final = reason.encode("utf-8")
     if len(encoded) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES:
         return reason
-    return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+    clipped: Final = encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+    sentence_end: Final = clipped.rfind(". ")
+    return clipped if sentence_end == -1 else clipped[: sentence_end + 1]
 
 
 SENDABLE_CLOSE_CODES: Final = frozenset(CloseCode) - frozenset(
@@ -2660,6 +2663,16 @@ async def websocket_passthrough_request(
                         bytes_data: bytes | None = message.get("bytes")
 
                         if text_data is not None:
+                            refusal = await _relay_client_frame(
+                                websocket,
+                                upstream_ws,
+                                text_data,
+                                _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
+                                client_frame_gate,
+                                user_api_key_dict,
+                            )
+                            if refusal is not None:
+                                return refusal
                             # Try to extract model from client setup message for Vertex AI Live
                             if endpoint and "/vertex_ai/live" in endpoint:
                                 verbose_proxy_logger.debug(
@@ -2716,16 +2729,6 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            refusal = await _relay_client_frame(
-                                websocket,
-                                upstream_ws,
-                                text_data,
-                                _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
-                                client_frame_gate,
-                                user_api_key_dict,
-                            )
-                            if refusal is not None:
-                                return refusal
                         elif bytes_data is not None:
                             refusal = await _relay_client_frame(
                                 websocket,
@@ -2812,19 +2815,21 @@ async def websocket_passthrough_request(
             task_results: Final = tuple(task.result() for task in done if task.exception() is None)
 
             # A refusal outranks any exception it caused: closing the client socket is what makes the
-            # upstream reader's next send fail, so raising that instead would report the wrong cause
+            # upstream reader's next send fail, so raising that instead would report the wrong cause.
+            # Turns that completed before a refusal were served, so they are logged and billed as a success
             client_frame_refusal: Final = next(
                 (result for result in task_results if isinstance(result, ProxyException)), None
             )
             if client_frame_refusal is not None:
                 await upstream_ws.close()
+            if client_frame_refusal is not None and not websocket_messages:
                 await log_failure(client_frame_refusal)
                 return
 
             # Check for exceptions in completed tasks
             for task in done:
                 exception = task.exception()
-                if exception is not None:
+                if exception is not None and client_frame_refusal is None:
                     raise exception
 
             upstream_close: Final = _upstream_close_to_relay(task_results)
