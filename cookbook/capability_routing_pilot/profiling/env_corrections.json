@@ -1,0 +1,11 @@
+{
+  "pydicom__pydicom-1413": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"pytest==7.4.4\"",
+    "cause": "The gold preflight ran pytest 8.3.5 and both TestBadValueRead cases failed because the test instance lacked its setup-created tag attribute",
+    "evidence": [
+      "pydicom/tests/test_valuerep.py::TestBadValueRead::test_read_bad_value_in_VR_default",
+      "pydicom/tests/test_valuerep.py::TestBadValueRead::test_read_bad_value_in_VR_enforce_valid_value"
+    ],
+    "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)"
+  }
+}
