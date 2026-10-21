@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
 
 from fastapi import Query
 
@@ -30,7 +30,6 @@ class EntityQuery:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool
-    group_by: "TeamGroupBy" = "team"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +39,6 @@ class ResolvedScope:
 
 
 Entity = Literal["user", "team", "tag", "organization", "customer", "agent"]
-TeamGroupBy: TypeAlias = Literal["team", "tag"]
 EntityScopeResolution = ResolvedScope | ScopeDenied
 EntityScopeQuery = Callable[..., EntityQuery]
 EntityScopeResolve = Callable[[UserAPIKeyAuth, EntityQuery, PrismaClient], Awaitable[EntityScopeResolution]]
@@ -126,9 +124,8 @@ async def _resolve_team(
 ) -> EntityScopeResolution:
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    requested: Final = _named_team_ids(query) if query.group_by == "tag" else query.entity_ids
     team_scope: Final = await resolve_team_daily_activity_scope(
-        team_ids=",".join(requested) if requested is not None else None,
+        team_ids=",".join(query.entity_ids) if query.entity_ids is not None else None,
         exclude_team_ids=",".join(query.exclude_entity_ids) if query.exclude_entity_ids else None,
         api_key=query.api_key,
         user_api_key_dict=user_api_key_dict,
@@ -136,29 +133,13 @@ async def _resolve_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    team: Final = _build_scope(
+    return _build_scope(
         TEAM_RESOLVER,
         query,
         team_scope.team_ids,
         team_scope.exclude_team_ids or (),
         team_scope.api_key_filter,
         team_scope.team_alias_metadata,
-    )
-    if query.group_by == "team":
-        return team
-    permitted: Final = tuple(team_scope.team_ids or ())
-    if len(permitted) != 1:
-        raise ValueError(f"group_by=tag resolved to {len(permitted)} teams, expected exactly one")
-    return ResolvedScope(
-        scope=replace(
-            team.scope,
-            table=DailyActivityTable.TAG,
-            entity_id_field="tag",
-            entity_ids=None,
-            exclude_entity_ids=(),
-            team_id=permitted[0],
-        ),
-        entity_metadata=None,
     )
 
 
@@ -278,7 +259,6 @@ def _team_query(
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
-    group_by: TeamGroupBy = "team",
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(team_ids),
@@ -289,22 +269,11 @@ def _team_query(
         model=model,
         timezone_offset_minutes=timezone,
         include_current_utc_day=False,
-        group_by=group_by,
     )
 
 
-def _named_team_ids(query: EntityQuery) -> tuple[str, ...]:
+def named_team_ids(query: EntityQuery) -> tuple[str, ...]:
     return tuple(team_id for team_id in query.entity_ids or () if team_id)
-
-
-def group_by_tag_error(query: EntityQuery) -> str | None:
-    """Checked before any permission lookup, which fills in every team a non-admin belongs to."""
-    if query.group_by != "tag":
-        return None
-    named: Final = _named_team_ids(query)
-    if len(named) == 1:
-        return None
-    return f"group_by=tag needs exactly one team in team_ids, got {len(named)}"
 
 
 def _tag_query(
@@ -425,6 +394,7 @@ TEAM_RESOLVER = EntityScopeResolver(
             "aggregated": "get_team_daily_activity_aggregated",
             "search": "get_team_daily_activity_aggregated_search",
             "key_page": "get_team_daily_activity_aggregated_keys",
+            "tag_page": "get_team_daily_activity_aggregated_tags",
             "model_top_keys": "get_team_daily_activity_model_top_keys",
             "export": "get_team_daily_activity_export",
         }
