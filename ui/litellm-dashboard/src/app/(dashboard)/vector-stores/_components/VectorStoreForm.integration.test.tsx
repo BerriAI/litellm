@@ -134,6 +134,44 @@ describe("VectorStoreForm submit payload", () => {
     expect(createdPayload().custom_llm_provider).toBe("milvus");
   });
 
+  it("registers an existing opensearch index with the proxy embedding model and default field names", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Amazon OpenSearch");
+    await user.type(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), "litellm-qa-docs");
+    await user.type(
+      screen.getByPlaceholderText("https://abc123.us-east-1.aoss.amazonaws.com"),
+      "https://yzatq55tpsuvlwozcal4.us-east-1.aoss.amazonaws.com",
+    );
+    await chooseFromSelect(user, 1, "text-embedding-3-small");
+    await submit(user);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    expect(createdPayload().custom_llm_provider).toBe("opensearch");
+    expect(createdPayload().vector_store_id).toBe("litellm-qa-docs");
+    expect(createdPayload().litellm_params).toStrictEqual({
+      api_base: "https://yzatq55tpsuvlwozcal4.us-east-1.aoss.amazonaws.com",
+      aws_region_name: undefined,
+      litellm_embedding_model: "text-embedding-3-small",
+      opensearch_embedding_field: "embedding",
+      opensearch_text_field: "text",
+    });
+  });
+
+  it("blocks an opensearch submit that has no endpoint or embedding model", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Amazon OpenSearch");
+    await user.type(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), "litellm-qa-docs");
+    await submit(user);
+
+    expect(await screen.findByText("Please input the opensearch endpoint")).toBeInTheDocument();
+    expect(screen.getByText("Please select the embedding model")).toBeInTheDocument();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it("sends a provider field's seeded default even when the user never touches it", async () => {
     const user = setupUser();
     renderForm();
