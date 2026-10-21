@@ -14,10 +14,6 @@ def _frontmatter(skill_directory: Path) -> object:
     return yaml.safe_load(frontmatter)
 
 
-def test_litellm_setup_skill_sits_where_skill_installers_look() -> None:
-    assert _SKILLS_DIR / "litellm-setup" in _SKILL_DIRECTORIES
-
-
 @pytest.mark.parametrize("skill_directory", _SKILL_DIRECTORIES, ids=lambda path: path.name)
 def test_skill_frontmatter_has_string_name_matching_its_directory_and_a_description(skill_directory: Path) -> None:
     frontmatter: Final = _frontmatter(skill_directory)

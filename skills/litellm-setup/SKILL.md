@@ -7,10 +7,10 @@ description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gatew
 
 Take the user from nothing to a running LiteLLM proxy that has answered one chat completion. Run every command yourself unless a step says the user does it
 
-Never print a secret. Provider keys, the master key, the salt key, the database URL, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`. Load `.env` into a shell with this line, which exports each line as it is, so a `&` or `$` in a value stays literal. The steps that need it start with it:
+Never print a secret. Provider keys, the master key, the salt key, the database URL, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`. Load `.env` into a shell with this line, which exports each line as it is, so a `&` or `$` in a value stays literal, and first drops any database settings the shell already had, so only `.env` picks the database. The steps that need it start with it:
 
 ```bash
-while IFS= read -r line || [ -n "$line" ]; do case "$line" in [A-Za-z_]*=*) export "$line" ;; esac; done < .env
+unset DATABASE_URL DIRECT_URL DATABASE_HOST; while IFS= read -r line || [ -n "$line" ]; do case "$line" in [A-Za-z_]*=*) export "$line" ;; esac; done < .env
 ```
 
 ## 1. Ask once
@@ -19,7 +19,7 @@ Ask everything in one message, with defaults the user can accept by saying "go":
 
 - Providers and models. Default is OpenAI with its newest flagship model
 - Whether they want virtual keys, teams, spend tracking, or the Admin UI. Those need Postgres, plain routing does not. Default is no
-- uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres they already have
+- uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres server they already have, with a new, empty database for LiteLLM
 - Folder and port. Defaults are `./litellm-proxy` (`./litellm-gateway` for the quickstart) and 4000
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
@@ -29,16 +29,16 @@ In the same message, say that someone who would rather answer prompts can run `l
 ## 2. Check prerequisites
 
 ```bash
-uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version
+uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version; command -v python3 lsof
 ```
 
-The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it the way https://docs.astral.sh/uv/getting-started/installation/ shows for their OS, and run the installer only after the user says yes. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2
+Every path needs curl, openssl, python3, and lsof, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it the way https://docs.astral.sh/uv/getting-started/installation/ shows for their OS, and run the installer only after the user says yes. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
 
 Check the port is free with `lsof -nP -iTCP:4000 -sTCP:LISTEN`, which prints nothing when it is. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
 
 ## 3. Postgres with Docker: run the quickstart
 
-The repo's quickstart starts the gateway, Postgres, and the Admin UI in Docker, listening on this machine only, and installs a `litellm-gateway` command that stops, starts, updates, or removes them. It asks nothing when it has no terminal. It writes the master key, salt key, and database password to its own `.env` and never prints them. Download it, then run it with the folder and port from step 1. It returns once the gateway is ready:
+The repo's quickstart starts the gateway, Postgres, and the Admin UI in Docker, listening on this machine only, and puts a `litellm-gateway` command in that folder that stops, starts, updates, or removes them. It asks nothing when it has no terminal. It writes the master key, salt key, and database password to its own `.env` and never prints them. Download it, then run it with the folder and port from step 1. It returns once the gateway is ready:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh -o quickstart.sh
@@ -109,7 +109,7 @@ Add one entry per model. Providers that need more than a key, like Azure or Bedr
 
 ## 6. Their own Postgres, on the uv path
 
-Ask the user to add `DATABASE_URL=postgresql://...` for their database to `.env` themselves. Then add a salt key. It encrypts the provider credentials the proxy stores in the database and falls back to the master key when unset, so set it once and never change it:
+Ask the user to create a new, empty database for LiteLLM on their server (`CREATE DATABASE litellm;`) and add `DATABASE_URL=postgresql://...` for it to `.env` themselves. The proxy creates its tables there on first start and stops on a database that already holds other tables. If that URL goes through a transaction pooler such as PgBouncer, they also add `DIRECT_URL` for the same database without the pooler, which the migrations use. Then add a salt key. It encrypts the provider credentials the proxy stores in the database and falls back to the master key when unset, so set it once and never change it:
 
 ```bash
 grep -q '^LITELLM_SALT_KEY=.' .env || printf 'LITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" >> .env
@@ -168,7 +168,7 @@ Tell the user, without printing any secret:
 
 - The base URL is `http://127.0.0.1:4000`. Any OpenAI-compatible client works with it as the base URL and the master key or a virtual key as the API key
 - The master key is `LITELLM_MASTER_KEY` in the folder's `.env`
-- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), or `litellm-gateway stop` (quickstart). To start it again, rerun the step 7 command, `docker start litellm`, or `litellm-gateway start`. `litellm-gateway update` and `litellm-gateway uninstall` update or remove a quickstart install
+- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), or `<folder>/litellm-gateway stop` (quickstart). To start it again, rerun the step 7 command, `docker start litellm`, or `<folder>/litellm-gateway start`. `update` and `uninstall` update or remove a quickstart install. Give the quickstart commands with the folder's full path, since a bare `litellm-gateway` is on PATH only when `~/.local/bin` is, and can belong to an earlier install
 - With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 3 or 6 first
 - To manage the running proxy from a coding agent (keys, teams, users, models, MCP servers), install `npx skills add BerriAI/litellm-skills -g`
 
@@ -177,7 +177,8 @@ Tell the user, without printing any secret:
 - `refused to start: no master key is set` means the loader line did not run in the shell command that started `litellm`, or `--env-file .env` is missing from `docker run`
 - `a database URL is set but the prisma CLI is neither on PATH nor importable` means the install lacks `extra_proxy`, so rerun step 4 with it
 - `The Client hasn't been generated yet` or `Unable to find Prisma binaries` means the Prisma generate command in step 6 has not run
-- `Incorrect API key provided` or another provider `AuthenticationError` means a provider key is wrong. Fix it in `.env` and restart, since the proxy reads the environment only at startup. On the quickstart, add the model again with the right key
+- `Incorrect API key provided` or another provider `AuthenticationError` means a provider key is wrong. Fix it in `.env` and restart, since the proxy reads the environment only at startup. On uv, stop it and rerun step 7. On Docker, `docker rm -f litellm` and rerun step 7, since `docker restart` keeps the environment the container was created with. On the quickstart the key is saved with the model, so delete the model and add it again: `GET /model/info` lists each model's `model_info.id`, and `POST /model/delete` with `{"id": "<id>"}` deletes it
+- `Cannot automatically baseline this database` means `DATABASE_URL` points at a database that already holds tables LiteLLM did not create. Point it at a new, empty database
 - `Invalid model name passed in model=...` means the request's `model` is not a `model_name` in `config.yaml` or step 3. `GET /v1/models` lists the ones the key can use
 - `No connected db.` on a proxy without Postgres means the bearer token is not the master key
 - `Conflict. The container name "/litellm" is already in use` means an earlier run left a container. `docker start litellm` reuses it, or with the user's OK `docker rm -f litellm` and rerun step 7
