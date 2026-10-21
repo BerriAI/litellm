@@ -6,12 +6,17 @@ import pytest
 
 from poc import run_pilot
 from poc.run_profiling import (
+    DEFAULT_OVERLAYS,
     PHASE_BUDGET_USD,
     AttemptPaths,
     ProfileConfig,
     ProfileBatch,
     ProfileTask,
     RuntimeOps,
+    TransientInfraError,
+    _cleanup_plan,
+    _pull_batch,
+    _guard_sha256,
     MixedVersionAttemptError,
     execute_batch,
     model_order_for_task,
@@ -37,6 +42,9 @@ def _config(tmp_path: Path, task_ids: tuple[str, ...] = ("task-0", "task-1", "ta
         }
     ).encode()
     manifest.write_bytes(manifest_bytes)
+    (tmp_path / "poc").mkdir()
+    (tmp_path / "poc" / "pilot_models.json").write_text("{}")
+    (tmp_path / "poc" / "pilot.yaml").write_text("")
     return ProfileConfig(
         root_dir=tmp_path,
         manifest_path=manifest,
@@ -112,6 +120,10 @@ def test_runner_record_boundary_checks_membership_and_manifest_sha(tmp_path: Pat
     assert result["returned_model_version"] == "anthropic/claude-haiku-4-5-20251001"
     assert result["x_litellm_model_id"] == "deployment-1"
     assert result["raw_result"]["model"] == "haiku-4.5"
+    assert result["latency_s"] == 3.0
+    assert result["eval_latency_s"] == 2.0
+    assert result["harness_sha256"] == _guard_sha256(config.root_dir)
+    assert result["harness_sha256"] != hashlib.sha256(Path(run_pilot.__file__).read_bytes()).hexdigest()
 
 
 def test_attempt_cost_and_latency_are_required(tmp_path: Path) -> None:
@@ -200,23 +212,26 @@ def test_injected_batch_preflight_cleanup_and_attempts(tmp_path: Path) -> None:
         {task_id: "gold patch"},
         {model: {} for model in model_order_for_task(0)},
     )
-    images: list[str] = []
+    images: dict[str, str] = {}
     evaluated: list[str] = []
     removed: list[str] = []
     attempted: list[tuple[str, int]] = []
 
     def inspect(reference: str) -> str | None:
-        return "sha256:image-id" if reference in images else None
+        return images.get(reference)
 
     def pull(reference: str) -> None:
-        images.append(reference)
+        images[reference] = "sha256:image-id"
+
+    def tag(source: str, target: str) -> None:
+        images[target] = images[source]
 
     def evaluate(_task: str, _patch: str, label: str, _paths: object) -> tuple[str, float]:
         evaluated.append(label)
         return ("resolved" if label == "gold" else "unresolved", 1.0)
 
     def remove(reference: str) -> bool:
-        images.remove(reference)
+        images.pop(reference, None)
         removed.append(reference)
         return True
 
@@ -251,6 +266,8 @@ def test_injected_batch_preflight_cleanup_and_attempts(tmp_path: Path) -> None:
         disk_stats=lambda: {"free_bytes": 100 * 1024**3},
         inspect_image=inspect,
         pull_image=pull,
+        tag_image=tag,
+        build_image=lambda _tag, _dockerfile: None,
         evaluate=evaluate,
         remove_image=remove,
         image_exists=lambda reference: reference in images,
@@ -289,12 +306,83 @@ def test_injected_batch_preflight_cleanup_and_attempts(tmp_path: Path) -> None:
     execute_batch(config, batch, data, versions, operations, {}, "https://gateway.invalid", guard)
 
     assert evaluated == ["gold", "noop"]
-    assert removed == [image_ref]
+    assert removed == ["swebench/example:latest", image_ref]
     assert not images
     records = [json.loads(line) for line in config.runs_path.read_text().splitlines()]
     assert sum(row["record_type"] == "attempt" for row in records) == 4
     assert attempted == [("sonnet-5", 2), ("opus-5", 1)]
+    checkpoint = json.loads((config.profile_dir / "capability_map_intermediate.json").read_text())
+    assert any(profile["graded_count"] > 0 for profile in checkpoint["profiles"])
     assert (config.profile_dir / "capability_map_intermediate.json").exists()
+
+
+def test_overlay_agent_and_grader_refs_share_final_image_id(tmp_path: Path) -> None:
+    image_ref = "swebench/pvlib-python@sha256:abc"
+    task = ProfileTask(
+        0,
+        "pvlib__pvlib-python-1191",
+        "feature_implementation",
+        model_order_for_task(0),
+        image_ref,
+        "sha256:abc",
+    )
+    config = ProfileConfig(tmp_path, tmp_path / "manifest.json", "manifest-sha")
+    images: dict[str, str] = {}
+
+    def tag(source: str, target: str) -> None:
+        images[target] = images[source]
+
+    operations = RuntimeOps(
+        disk_stats=lambda: {"free_bytes": 100 * 1024**3},
+        inspect_image=lambda reference: images.get(reference),
+        pull_image=lambda reference: images.__setitem__(reference, "upstream-id"),
+        tag_image=tag,
+        build_image=lambda tag, _dockerfile: images.__setitem__(tag, "overlay-id"),
+        evaluate=lambda *_args: ("unresolved", 0.1),
+        remove_image=lambda reference: not images.pop(reference, None),
+        image_exists=lambda reference: reference in images,
+        attempt=lambda *_args: {},
+    )
+    plan = _pull_batch(config, ProfileBatch(1, (task,)), operations, {})
+    prepared = plan.prepared[0]
+    assert prepared.agent_ref == "routing_poc/profiling-overlay:pvlib__pvlib-python-1191"
+    assert prepared.grader_ref == "swebench/pvlib-python:latest"
+    assert prepared.overlay_image_id == prepared.final_image_id == "overlay-id"
+    _cleanup_plan(config, ProfileBatch(1, (task,)), plan, operations)
+    assert not images
+
+
+def test_transient_pull_leaves_rows_absent_and_retry_prepares_task(tmp_path: Path) -> None:
+    task = ProfileTask(0, "task-0", "repository_debugging", model_order_for_task(0), "repo/image@sha256:x", "sha256:x")
+    config = ProfileConfig(tmp_path, tmp_path / "manifest.json", "manifest-sha")
+    failed = True
+    images: dict[str, str] = {}
+
+    def pull(reference: str) -> None:
+        if failed:
+            raise OSError("registry unavailable")
+        images[reference] = "upstream-id"
+
+    def tag(source: str, target: str) -> None:
+        images[target] = images[source]
+
+    operations = RuntimeOps(
+        disk_stats=lambda: {"free_bytes": 100 * 1024**3},
+        inspect_image=lambda reference: images.get(reference),
+        pull_image=pull,
+        tag_image=tag,
+        build_image=lambda _tag, _dockerfile: None,
+        evaluate=lambda *_args: ("unresolved", 0.1),
+        remove_image=lambda reference: not images.pop(reference, None),
+        image_exists=lambda reference: reference in images,
+        attempt=lambda *_args: {},
+    )
+    with pytest.raises(TransientInfraError):
+        _pull_batch(config, ProfileBatch(1, (task,)), operations, {})
+    assert not config.runs_path.exists()
+    failed = False
+    plan = _pull_batch(config, ProfileBatch(1, (task,)), operations, {})
+    assert plan.prepared[0].final_image_id == "upstream-id"
 
 
 def test_profile_guard_enforces_phase_cap_and_pre_pull_disk_reserve(tmp_path: Path) -> None:

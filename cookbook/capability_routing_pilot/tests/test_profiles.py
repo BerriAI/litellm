@@ -348,6 +348,40 @@ def test_alias_and_returned_model_versions_split_profiles() -> None:
     assert len({profile.key.model_alias for profile in profiles}) == 2
 
 
+def test_same_alias_keeps_version_and_deployment_cohorts_separate() -> None:
+    profiles = aggregate_profiles(
+        _attempts(
+            "haiku",
+            1,
+            1,
+            1.0,
+            returned_model_version="model-a",
+            deployment_id="deployment-a",
+        )
+        + _attempts(
+            "haiku",
+            1,
+            1,
+            1.0,
+            returned_model_version="model-b",
+            deployment_id="deployment-b",
+        )
+    )
+    capability_map = compile_map(
+        PUBLIC_DEV_TENANT,
+        _versions(
+            models=(("haiku", "model-a"), ("haiku", "model-b")),
+            deployments=(("haiku", "deployment-a"), ("haiku", "deployment-b")),
+        ),
+        profiles,
+    )
+    observed = {
+        (profile["key"]["model_alias"], profile["key"]["returned_model_version"], profile["key"]["deployment_id"])
+        for profile in capability_map["profiles"]
+    }
+    assert observed == {("haiku", "model-a", "deployment-a"), ("haiku", "model-b", "deployment-b")}
+
+
 def test_quality_first_is_disabled_by_default_and_only_uses_evidenced_nonzero_profiles() -> None:
     twelve_successes = _attempts("haiku", 12, 13, 1.0)
     zero_successes = _attempts(
