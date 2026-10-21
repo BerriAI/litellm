@@ -21,13 +21,13 @@ https://github.com/microsoft/Foundry-Local
 
 ## Quick Start
 
-Use [Foundry Local Python SDK 2.2.0](https://pypi.org/project/foundry-local-sdk/2.2.0/) to run models on-device. Foundry Local supports in-process inference, but LiteLLM uses its optional OpenAI-compatible HTTP service. Start that service and point `FOUNDRY_LOCAL_API_BASE` at its `/v1` URL.
+Use [Foundry Local Python SDK 2.2.1](https://pypi.org/project/foundry-local-sdk/2.2.1/) to run models on-device. Foundry Local supports in-process inference, but LiteLLM uses its optional OpenAI-compatible HTTP service. Start that service and point `FOUNDRY_LOCAL_API_BASE` at its `/v1` URL.
 
 <Tabs>
 <TabItem value="python" label="Python SDK">
 
 ```bash
-pip install foundry-local-sdk==2.2.0
+pip install foundry-local-sdk==2.2.1
 ```
 
 ```python
@@ -94,7 +94,7 @@ Keep this process running while LiteLLM uses the service. Configure the printed 
 </TabItem>
 </Tabs>
 
-### SDK 2.2.0 requirements
+### SDK 2.2.1 requirements
 
 The unified `foundry-local-sdk` Python wheel supports Windows x64, Linux x64/ARM64, and macOS Apple silicon. It requires Python 3.11 through 3.14. Windows wheels include the WinML runtime, so the separate `foundry-local-sdk-winml` package is no longer needed.
 
