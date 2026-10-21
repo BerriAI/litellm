@@ -1,43 +1,71 @@
 ---
 name: litellm-setup
-description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gateway, on this machine, from install through provider keys, config.yaml, a master key, optional Postgres, and a verified chat completion. Use when the user asks to set up LiteLLM, install the LiteLLM proxy, self-host an LLM gateway, or put one endpoint in front of OpenAI, Anthropic, Gemini, Azure, Bedrock, Ollama, or other providers. Not for using the LiteLLM Python SDK inside an app
+description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gateway, on this machine, from install through provider keys, config.yaml, a master key, optional Postgres and Admin UI, and a verified chat completion. Use when the user asks to set up LiteLLM, install the LiteLLM proxy, self-host an LLM gateway, or put one endpoint in front of OpenAI, Anthropic, Gemini, Azure, Bedrock, Ollama, or other providers. Not for using the LiteLLM Python SDK inside an app
 ---
 
 # Set up a LiteLLM proxy
 
 Take the user from nothing to a running LiteLLM proxy that has answered one chat completion. Run every command yourself unless a step says the user does it
 
-Never print a secret. Provider keys, the master key, the salt key, the database password, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`
+Never print a secret. Provider keys, the master key, the salt key, the database URL, and virtual keys live only in `.env`, and `config.yaml` reads them through `os.environ/NAME`. Check that a value is there with `grep -c '^NAME=.' .env`, never with `cat .env` or `echo "$NAME"`. Load `.env` into a shell with this line, which exports each line as it is, so a `&` or `$` in a value stays literal. The steps that need it start with it:
+
+```bash
+while IFS= read -r line || [ -n "$line" ]; do case "$line" in [A-Za-z_]*=*) export "$line" ;; esac; done < .env
+```
 
 ## 1. Ask once
 
 Ask everything in one message, with defaults the user can accept by saying "go":
 
 - Providers and models. Default is OpenAI with its newest flagship model
-- uv (default) or Docker
 - Whether they want virtual keys, teams, spend tracking, or the Admin UI. Those need Postgres, plain routing does not. Default is no
-- Folder and port. Defaults are `./litellm-gateway` and 4000
+- uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres they already have
+- Folder and port. Defaults are `./litellm-proxy` (`./litellm-gateway` for the quickstart) and 4000
 
-In the same message, say that someone who would rather answer prompts can run `litellm --setup` in their own terminal after step 3. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 7 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
+
+In the same message, say that someone who would rather answer prompts can run `litellm --setup` in their own terminal after step 4. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
 
 ## 2. Check prerequisites
 
 ```bash
-uv --version; docker info --format '{{.ServerVersion}}'; curl --version | head -1; openssl version
+uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version
 ```
 
-The uv path needs uv, which picks or downloads a supported Python on its own (LiteLLM supports 3.10 to 3.14). If uv is missing, offer to install it the way https://docs.astral.sh/uv/getting-started/installation/ shows for their OS, and run the installer only after the user says yes. The Docker path needs a running Docker daemon. Postgres in step 5 also uses Docker unless the user already has a database
+The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it the way https://docs.astral.sh/uv/getting-started/installation/ shows for their OS, and run the installer only after the user says yes. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2
 
-## 3. Install
+Check the port is free with `lsof -nP -iTCP:4000 -sTCP:LISTEN`, which prints nothing when it is. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
+
+## 3. Postgres with Docker: run the quickstart
+
+The repo's quickstart starts the gateway, Postgres, and the Admin UI in Docker, listening on this machine only, and installs a `litellm-gateway` command that stops, starts, updates, or removes them. It asks nothing when it has no terminal. It writes the master key, salt key, and database password to its own `.env` and never prints them. Download it, then run it with the folder and port from step 1. It returns once the gateway is ready:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh -o quickstart.sh
+LITELLM_DIR="$PWD/litellm-gateway" LITELLM_PORT=4000 sh quickstart.sh --yes
+cd litellm-gateway
+```
+
+Models live in the database here, so add each one through the API instead of a `config.yaml`, naming it the way step 5 says. Pipe the request body in, so the provider key never shows up in output or on a command line. If the key is not in your environment, ask the user to add the line `OPENAI_API_KEY=<their key>` to this `.env` themselves, and run the loader line first:
+
+```bash
+python3 -c 'import json, os, sys; json.dump({"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": os.environ["OPENAI_API_KEY"]}}, sys.stdout)' \
+  | curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/model/new \
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" -d @-
+```
+
+Run that in one shell command that starts with the loader line, since the master key is in `.env`. `200` means the model was added. Then go to step 8
+
+## 4. Install
 
 uv:
 
 ```bash
-uv tool install 'litellm[proxy]'
+uv tool install --python '>=3.10,<3.15' 'litellm[proxy]'
 litellm --version
 ```
 
-With Postgres, install `'litellm[proxy,extra_proxy]'` instead, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. If `litellm` is not found, run `uv tool update-shell` for new shells and call `"$(uv tool dir --bin)/litellm"` in this one
+With their own Postgres, install `'litellm[proxy,extra_proxy]'` instead, with the same `--python` range, which adds the Prisma client the proxy uses for the database. Running `uv tool install` again with the new extras replaces the old install. If `litellm` is not found, call `"$(uv tool dir --bin)/litellm"` in this shell. `uv tool update-shell` puts it on the PATH of new shells by editing the user's shell profile, so run it only after the user says yes
 
 Docker:
 
@@ -45,26 +73,26 @@ Docker:
 docker pull docker.litellm.ai/berriai/litellm:main-stable
 ```
 
-## 4. Write `.env` and `config.yaml`
+## 5. Write `.env` and `config.yaml`
 
 Run every command from here on in the folder from step 1. Create `.env` readable only by the user, keep it out of git, and add a master key unless it already has one. The proxy refuses to start without one, and `sk-` is the format of every key it issues:
 
 ```bash
-mkdir -p litellm-gateway && cd litellm-gateway
-(umask 077; touch .env); grep -qx '.env' .gitignore 2>/dev/null || echo '.env' >> .gitignore
+mkdir -p litellm-proxy && cd litellm-proxy
+touch .env && chmod 600 .env; grep -qx '.env' .gitignore 2>/dev/null || echo '.env' >> .gitignore
 grep -q '^LITELLM_MASTER_KEY=.' .env || printf 'LITELLM_MASTER_KEY=sk-%s\n' "$(openssl rand -hex 32)" >> .env
 ```
 
-For each provider key, if it is already in your environment (`[ -n "$OPENAI_API_KEY" ] && echo set`), copy it in without printing it, as in `printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >> .env`. Otherwise ask the user to add the line `OPENAI_API_KEY=<their key>` to `.env` themselves and tell you when it is there. If they paste a key into the chat anyway, write it to `.env` and never repeat it. Keep one `NAME=value` per line with no quotes, so the shell and `docker --env-file` read the same value
+For each provider key, if it is already in your environment (`[ -n "$OPENAI_API_KEY" ] && echo set`), copy it in without printing it, as in `printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >> .env`. Otherwise ask the user to add the line `OPENAI_API_KEY=<their key>` to `.env` themselves and tell you when it is there. If they paste a key into the chat anyway, write it to `.env` and never repeat it. Keep one `NAME=value` per line with no quotes, so `docker --env-file` and the loader line read the same value
 
-Confirm each model's current LiteLLM name in the cost map instead of trusting memory, since model names go stale fast. This lists the chat models for one provider (`openai`, `anthropic`, `gemini`, `azure`, `bedrock`, `ollama`, and so on):
+Confirm each model's current LiteLLM name in the cost map instead of trusting memory, since model names go stale fast. This lists the chat models of the provider named last (`openai`, `anthropic`, `gemini`, `azure`, `bedrock`, `vertex_ai`, and so on). It matches by prefix, so `bedrock` also lists the `bedrock_converse` rows, which hold the newer Bedrock models, and `vertex_ai` lists every Vertex family. For Ollama, use a model from `ollama list` instead:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json \
-  | python3 -c 'import json,sys; [print(k) for k,v in json.load(sys.stdin).items() if isinstance(v,dict) and v.get("litellm_provider")=="openai" and v.get("mode")=="chat"]'
+  | python3 -c 'import json,sys; [print(v["litellm_provider"], k) for k,v in json.load(sys.stdin).items() if isinstance(v,dict) and str(v.get("litellm_provider","")).startswith(sys.argv[1]) and v.get("mode")=="chat"]' openai
 ```
 
-In `config.yaml`, `model` is `<provider>/<name from the cost map>`, except that names which already start with the provider (like `gemini/...`) are used as they are. `model_name` is what clients will send. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
+In `config.yaml`, `model` is the name with its provider in front, as in `openai/gpt-6.1-sol` or `bedrock/us.anthropic.<name>`. Names that already start with a provider and a slash (`gemini/...`, `vertex_ai/...`) are used as they are. `model_name` is what clients will send. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
 
 ```yaml
 model_list:
@@ -79,32 +107,15 @@ general_settings:
 
 Add one entry per model. Providers that need more than a key, like Azure or Bedrock, list their `litellm_params` on their page under https://docs.litellm.ai/docs/providers. Point every secret at `.env` through `os.environ/NAME` the same way
 
-## 5. Postgres, only when the user wants it
+## 6. Their own Postgres, on the uv path
 
-Skip this step for plain routing. If the user already has a Postgres, ask them to add `DATABASE_URL=postgresql://...` to `.env` themselves and go to the uv-only part at the end of this step
-
-Otherwise add a database password, its URL, and a salt key to `.env`. The salt key encrypts the provider credentials the proxy stores in the database and falls back to the master key when unset, so set it now and never change it. Use host `localhost` for the uv path and `litellm-db` for the Docker path:
+Ask the user to add `DATABASE_URL=postgresql://...` for their database to `.env` themselves. Then add a salt key. It encrypts the provider credentials the proxy stores in the database and falls back to the master key when unset, so set it once and never change it:
 
 ```bash
-pw=$(openssl rand -hex 16); host=localhost
-printf 'POSTGRES_PASSWORD=%s\nDATABASE_URL=postgresql://litellm:%s@%s:5432/litellm\nLITELLM_SALT_KEY=sk-%s\n' \
-  "$pw" "$pw" "$host" "$(openssl rand -hex 32)" >> .env
+grep -q '^LITELLM_SALT_KEY=.' .env || printf 'LITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" >> .env
 ```
 
-Start Postgres in Docker. On the uv path the proxy reaches it through the published port, so check `lsof -nP -iTCP:5432 -sTCP:LISTEN` prints nothing first, and on the Docker path drop the `-p` flag:
-
-```bash
-docker network create litellm
-set -a; . ./.env; set +a
-docker run -d --name litellm-db --network litellm -p 127.0.0.1:5432:5432 \
-  -e POSTGRES_USER=litellm -e POSTGRES_PASSWORD -e POSTGRES_DB=litellm \
-  -v litellm-db:/var/lib/postgresql/data postgres:16
-for i in $(seq 1 60); do docker exec litellm-db pg_isready -h 127.0.0.1 -U litellm >/dev/null 2>&1 && break; sleep 1; done
-```
-
-Keep `-h 127.0.0.1` in the readiness check. On first boot Postgres answers on its socket during setup and then restarts, so a check without it passes too early
-
-On the uv path only, generate the Prisma client once inside the tool's environment. A pip or uv install doesn't ship it generated (Docker images do):
+Generate the Prisma client once inside the tool's environment. A pip or uv install doesn't ship it generated (Docker images do):
 
 ```bash
 tool="$(uv tool dir)/litellm"
@@ -112,40 +123,38 @@ schema=$("$tool/bin/python" -I -c 'import importlib.util, os; print(os.path.join
 PATH="$tool/bin:$PATH" prisma generate --schema "$schema"
 ```
 
-## 6. Start the proxy
+## 7. Start the proxy
 
-Check the port is free with `lsof -nP -iTCP:4000 -sTCP:LISTEN`, which prints nothing when it is. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port. Bind to `127.0.0.1` unless the user wants other machines to reach it
+Bind to `127.0.0.1` unless the user wants other machines to reach it
 
-uv, in one shell command, since the installed `litellm` does not read `.env` by itself:
+uv, in one shell command that starts with the loader line, since the installed `litellm` does not read `.env` by itself:
 
 ```bash
-set -a; . ./.env; set +a
 nohup litellm --config config.yaml --host 127.0.0.1 --port 4000 > litellm.log 2>&1 &
 echo $! > litellm.pid
 ```
 
-Docker, adding `--network litellm` when Postgres runs in Docker:
+Docker:
 
 ```bash
 docker run -d --name litellm --env-file .env -v "$PWD/config.yaml:/app/config.yaml:ro" -p 127.0.0.1:4000:4000 \
   docker.litellm.ai/berriai/litellm:main-stable --config /app/config.yaml --port 4000
 ```
 
-Wait on the health route. The first start with Postgres applies the database migrations and takes longer:
+Wait on the health route, stopping early if the proxy exits. The first start with Postgres applies the database migrations and takes longer. Define `alive` for the path you took, `alive() { kill -0 "$(cat litellm.pid)" 2>/dev/null; }` for uv or `alive() { [ "$(docker inspect -f '{{.State.Running}}' litellm 2>/dev/null)" = true ]; }` for Docker, in the same shell command as the loop:
 
 ```bash
-for i in $(seq 1 180); do curl -fsS http://127.0.0.1:4000/health/liveliness >/dev/null 2>&1 && break; sleep 1; done
+for i in $(seq 1 180); do curl -fsS http://127.0.0.1:4000/health/liveliness >/dev/null 2>&1 && break; alive || break; sleep 1; done
 curl -sS http://127.0.0.1:4000/health/readiness
 ```
 
 Readiness reports `"db":"connected"` with Postgres and `"db":"Not connected"` without it. If the proxy never comes up, read the end of `litellm.log` (or `docker logs litellm`) and check the troubleshooting list
 
-## 7. Verify with a chat completion
+## 8. Verify with a chat completion
 
-Use a `model_name` from `config.yaml`:
+Use a `model_name` from `config.yaml` (or step 3), in one shell command that starts with the loader line:
 
 ```bash
-set -a; . ./.env; set +a
 curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
   -d '{"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "Say hello in five words."}]}'
@@ -153,23 +162,23 @@ curl -sS http://127.0.0.1:4000/v1/chat/completions \
 
 Show the user the reply in `choices[0].message.content`. An error here means the setup is not done, so fix it before handing off
 
-## 8. Hand off
+## 9. Hand off
 
 Tell the user, without printing any secret:
 
 - The base URL is `http://127.0.0.1:4000`. Any OpenAI-compatible client works with it as the base URL and the master key or a virtual key as the API key
 - The master key is `LITELLM_MASTER_KEY` in the folder's `.env`
-- To stop it, `kill "$(cat litellm.pid)"` (uv) or `docker stop litellm` (Docker). To start it again, rerun the step 6 command or `docker start litellm`
-- With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 5 first
+- To stop it, `kill "$(cat litellm.pid)"` (uv), `docker stop litellm` (Docker), or `litellm-gateway stop` (quickstart). To start it again, rerun the step 7 command, `docker start litellm`, or `litellm-gateway start`. `litellm-gateway update` and `litellm-gateway uninstall` update or remove a quickstart install
+- With Postgres, the Admin UI is at `http://127.0.0.1:4000/ui` (user `admin`, password the master key), and `POST /key/generate` with the master key creates virtual keys with their own budgets and model lists. Without Postgres, both need step 3 or 6 first
 - To manage the running proxy from a coding agent (keys, teams, users, models, MCP servers), install `npx skills add BerriAI/litellm-skills -g`
 
 ## Troubleshooting
 
-- `refused to start: no master key is set` means `.env` was not exported into the shell that started `litellm`, or `--env-file .env` is missing from `docker run`
-- `a database URL is set but the prisma CLI is neither on PATH nor importable` means the install lacks `extra_proxy`, so rerun step 3 with it
-- `The Client hasn't been generated yet` or `Unable to find Prisma binaries` means the Prisma generate command in step 5 has not run
-- `Incorrect API key provided` or another provider `AuthenticationError` means a provider key in `.env` is wrong. Fix it and restart, since the proxy reads the environment only at startup
-- `Invalid model name passed in model=...` means the request's `model` is not a `model_name` in `config.yaml`. `GET /v1/models` lists the ones the key can use
+- `refused to start: no master key is set` means the loader line did not run in the shell command that started `litellm`, or `--env-file .env` is missing from `docker run`
+- `a database URL is set but the prisma CLI is neither on PATH nor importable` means the install lacks `extra_proxy`, so rerun step 4 with it
+- `The Client hasn't been generated yet` or `Unable to find Prisma binaries` means the Prisma generate command in step 6 has not run
+- `Incorrect API key provided` or another provider `AuthenticationError` means a provider key is wrong. Fix it in `.env` and restart, since the proxy reads the environment only at startup. On the quickstart, add the model again with the right key
+- `Invalid model name passed in model=...` means the request's `model` is not a `model_name` in `config.yaml` or step 3. `GET /v1/models` lists the ones the key can use
 - `No connected db.` on a proxy without Postgres means the bearer token is not the master key
-- `password authentication failed` from Postgres means an old `litellm-db` volume kept the password it was created with. Put that password back in `.env`, or with the user's OK run `docker rm -f litellm-db && docker volume rm litellm-db` and redo step 5
+- `Conflict. The container name "/litellm" is already in use` means an earlier run left a container. `docker start litellm` reuses it, or with the user's OK `docker rm -f litellm` and rerun step 7
 - Inside Docker, `localhost` in `config.yaml` (an Ollama `api_base`, say) is the container itself. Use `host.docker.internal`, and on Linux also pass `--add-host=host.docker.internal:host-gateway`
