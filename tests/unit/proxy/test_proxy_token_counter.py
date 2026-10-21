@@ -9,7 +9,6 @@ import itertools
 import json
 import logging
 import threading
-import time
 import traceback
 from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
@@ -2730,7 +2729,7 @@ async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(
             request=TokenCountRequest(model="slow-lookup-model", messages=[{"role": "user", "content": "hi"}])
         )
     )
-    await asyncio.to_thread(lookup_started.wait, 5)
+    assert await asyncio.to_thread(lookup_started.wait, 5)
     other_request_ran.set()
     await counting
 
@@ -2854,17 +2853,24 @@ async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geog
     assert (counter.calls[0][0], counter.regions[0]) == ("bedrock_mantle/anthropic.claude-opus-5-5", counted_in)
 
 
-class _SlowVault:
+_LOOP_PROGRESS_TIMEOUT_SECONDS: Final = 5
+
+
+class _VaultWaitingForLoopProgress:
+    def __init__(
+        self,
+        lookup_started: threading.Event,
+        loop_progressed: threading.Event,
+        loop_progressed_during_lookup: threading.Event,
+    ) -> None:
+        self._lookup_started = lookup_started
+        self._loop_progressed = loop_progressed
+        self._loop_progressed_during_lookup = loop_progressed_during_lookup
+
     def sync_read_secret(self, secret_name: str) -> None:
-        time.sleep(0.5)
-
-
-async def _longest_stall(done: asyncio.Event) -> float:
-    if done.is_set():
-        return 0.0
-    started: Final = time.monotonic()
-    await asyncio.sleep(0.01)
-    return max(time.monotonic() - started, await _longest_stall(done))
+        self._lookup_started.set()
+        if self._loop_progressed.wait(_LOOP_PROGRESS_TIMEOUT_SECONDS):
+            self._loop_progressed_during_lookup.set()
 
 
 @pytest.mark.asyncio
@@ -2884,25 +2890,30 @@ async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_fre
         ),
     )
     monkeypatch.setattr(proxy_server, "_get_provider_token_counter", bedrock_counter)
-    monkeypatch.setattr(litellm, "secret_manager_client", _SlowVault())
+    lookup_started: Final = threading.Event()
+    loop_progressed: Final = threading.Event()
+    loop_progressed_during_lookup: Final = threading.Event()
+    monkeypatch.setattr(
+        litellm,
+        "secret_manager_client",
+        _VaultWaitingForLoopProgress(lookup_started, loop_progressed, loop_progressed_during_lookup),
+    )
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.HASHICORP_VAULT)
     monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
-    done: Final = asyncio.Event()
 
     async def count() -> TokenCountResponse:
-        try:
-            return await token_counter(
-                request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]),
-                call_endpoint=True,
-            )
-        finally:
-            done.set()
+        return await token_counter(
+            request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]),
+            call_endpoint=True,
+        )
 
-    started: Final = time.monotonic()
-    stall, response = await asyncio.gather(_longest_stall(done), count())
+    async def prove_loop_progress() -> None:
+        assert await asyncio.to_thread(lookup_started.wait, _LOOP_PROGRESS_TIMEOUT_SECONDS)
+        loop_progressed.set()
 
-    assert time.monotonic() - started >= 1.0
-    assert stall < 0.4
+    response, _ = await asyncio.gather(count(), prove_loop_progress())
+
+    assert loop_progressed_during_lookup.is_set()
     assert response.total_tokens == 447
 
 

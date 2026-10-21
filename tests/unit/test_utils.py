@@ -1073,6 +1073,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -4841,7 +4842,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={
@@ -9377,7 +9379,7 @@ def test_models_by_provider():
             continue
         elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])

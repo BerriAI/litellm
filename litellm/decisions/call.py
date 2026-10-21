@@ -11,6 +11,7 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
+from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    DecisionsResponseValidationError,
     image_media_type,
     image_param,
     input_images,
@@ -687,6 +689,13 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
+    returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+    if returned is not None and cost_map_key_prices_anything(returned):
+        return returned
+    return f"{call.custom_llm_provider}/{call.model}"
+
+
 def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     formatted: Final = _formatted_response(response, call)
     provider_cost: Final = call.provider_config.provider_reported_cost(response)
@@ -694,10 +703,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": (
-                get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
-                or f"{call.custom_llm_provider}/{call.model}"
-            ),
+            "provider_response_model": _pricing_model(response, call),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
@@ -727,18 +733,21 @@ def _formatted_response(
 
 
 def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
-    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
-        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
-        return litellm.APIConnectionError(
-            message=f"{provider_label} - {error.message}",
-            llm_provider=call.custom_llm_provider,
-            model=f"{call.custom_llm_provider}/{call.model}",
-        )
-    return litellm.exception_type(
-        model=f"{call.custom_llm_provider}/{call.model}",
-        custom_llm_provider=call.custom_llm_provider,
-        original_exception=error,
-    )
+    provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+    model: Final = f"{call.custom_llm_provider}/{call.model}"
+    match error:
+        case DecisionsResponseValidationError():
+            return litellm.InternalServerError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case BaseLLMException(status_code_is_synthesized=True):
+            return litellm.APIConnectionError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case _:
+            return litellm.exception_type(
+                model=model, custom_llm_provider=call.custom_llm_provider, original_exception=error
+            )
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:

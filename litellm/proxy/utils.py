@@ -62,6 +62,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
+    REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
@@ -90,7 +91,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, CostPerToken, ModelInfo, Usage
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -158,6 +159,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -267,6 +269,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -502,7 +505,7 @@ class InternalUsageCache:
         key: str,
         local_only: bool = False,
         **kwargs: object,
-    ) -> Any:
+    ) -> object:
         return self.dual_cache.get_cache(
             key=key,
             local_only=local_only,
@@ -1069,7 +1072,14 @@ def _estimated_prompt_usage(
         if isinstance(optional_params, dict)
         else None
     )
-    system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
+    system_input: Final = next(
+        (
+            system
+            for system in (dispatched_system, request_body.get("system"), request_body.get("instructions"))
+            if system and system != REDACTED_BY_LITELLM
+        ),
+        None,
+    )
     return _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),
@@ -1151,6 +1161,43 @@ def _timed_out_earlier_records(
     return tuple(record for identity, record in by_identity.items() if identity != final_identity)
 
 
+def _record_pricing(
+    model_call_details: Mapping[str, object], record: Mapping[str, object], base_model: str | None
+) -> tuple[Mapping[str, object], str | None]:
+    """The ``(model_call_details, base_model)`` to price one earlier attempt with: the record's own
+    deployment model and ``base_model`` when it served a different model than the final attempt
+    (the provider is then inferred from that model), else the final attempt's."""
+    record_model: Final = record.get("model")
+    if not isinstance(record_model, str) or record_model == model_call_details.get("model"):
+        return model_call_details, base_model
+    record_base_model: Final = record.get("base_model")
+    return (
+        {**model_call_details, "model": record_model, "custom_llm_provider": None},
+        record_base_model if isinstance(record_base_model, str) else None,
+    )
+
+
+def _billed_earlier_attempt(
+    model_call_details: Mapping[str, object],
+    record: Mapping[str, object],
+    index: int,
+    estimated_usage: Usage,
+    base_model: str | None,
+) -> BilledFailedAttempt:
+    pricing_details, pricing_base_model = _record_pricing(model_call_details, record, base_model)
+    return BilledFailedAttempt(
+        attempted_retries=_attempt_number(record, index),
+        deployment_id=_record_deployment_id(record),
+        usage=estimated_usage,
+        response_cost=_estimated_input_cost(
+            pricing_details,
+            estimated_usage.prompt_tokens,
+            deployment_id=_record_deployment_id(record),
+            base_model=pricing_base_model,
+        ),
+    )
+
+
 def _billed_earlier_attempts(
     model_call_details: Mapping[str, object],
     litellm_params: Mapping[str, object] | None,
@@ -1164,54 +1211,45 @@ def _billed_earlier_attempts(
     request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
     hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
     ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
-    attempt, at that deployment's input rate (else the cost map's rate for ``base_model`` or the
-    model). Only the exception class survives on the record, so an earlier connect timeout is
-    billed too; any other failure class is not."""
+    attempt, at that deployment's input rate (else the cost map's rate for the record's own
+    ``base_model`` or model, which a fallback hop can make a different model than the final one).
+    Only the exception class survives on the record, so an earlier connect timeout is billed too;
+    any other failure class is not."""
     final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
     final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
     return tuple(
-        BilledFailedAttempt(
-            attempted_retries=_attempt_number(record, index),
-            deployment_id=_record_deployment_id(record),
-            usage=estimated_usage,
-            response_cost=_estimated_input_cost(
-                model_call_details,
-                estimated_usage.prompt_tokens,
-                deployment_id=_record_deployment_id(record),
-                base_model=base_model,
-            ),
-        )
+        _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
     )
 
 
-def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPerToken | None:
-    """The pricing the router registered for this deployment under its ``model_info.id``, read
-    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
-    public cost map. The id is ``Logging.get_router_model_id()`` (the logging object's own
-    ``litellm_params``), never the flattened ``model_call_details`` copy a request body key can
-    overwrite."""
-    model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
-    if model_info is None:
-        return None
-    return CostPerToken(
-        input_cost_per_token=model_info["input_cost_per_token"] or 0.0,
-        output_cost_per_token=model_info["output_cost_per_token"] or 0.0,
-    )
+def _deployment_priced_input_cost(
+    model: str, custom_llm_provider: str | None, prompt_tokens: int, deployment_pricing: ModelInfo
+) -> float:
+    """Input price for the estimated prompt at the deployment's registered rates, read through
+    ``deployment_pricing_model_info`` and priced by ``generic_cost_per_token`` the way the success
+    path prices them, so a long-context tier the deployment declares (``input_cost_per_token_above_200k_tokens``)
+    is honoured instead of flattened to the standard rate. An entry it cannot price keeps the row at $0."""
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider or str(deployment_pricing.get("litellm_provider") or ""),
+            model_info=deployment_pricing,
+        )
+    except Exception as exc:  # noqa: BLE001  # a malformed registered entry must not drop the failure row
+        verbose_proxy_logger.debug("failure spend estimate: could not price deployment of %s: %s", model, exc)
+        return 0.0
+    return prompt_cost
 
 
-def _priced_input_cost(
-    pricing_model: str,
-    custom_llm_provider: str | None,
-    prompt_tokens: int,
-    custom_cost_per_token: CostPerToken | None,
-) -> float | None:
+def _priced_input_cost(pricing_model: str, custom_llm_provider: str | None, prompt_tokens: int) -> float | None:
     try:
         estimated_input_cost, _ = litellm.cost_per_token(
             model=pricing_model,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=custom_cost_per_token,
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug("failure spend estimate: could not price %s: %s", pricing_model, exc)
@@ -1225,18 +1263,20 @@ def _estimated_input_cost(
     deployment_id: str | None,
     base_model: str | None,
 ) -> float:
-    """Input price for the estimated prompt: the deployment's registered rate when it has one, else
-    the cost map's rate for ``base_model``, else the deployment model, the same candidate order
-    ``completion_cost`` walks (an Azure deployment name is not in the cost map, its ``base_model``
-    is; a ``base_model`` the cost map does not know falls through to the deployment model). A model
-    no candidate can price keeps the row at $0 rather than dropping the failure row."""
+    """Input price for the estimated prompt: the deployment's registered rates when it has any (the id
+    is ``Logging.get_router_model_id()``, never the flattened ``model_call_details`` copy a request body
+    key can overwrite), else the cost map's rate for ``base_model``, else the deployment model, the same
+    candidate order ``completion_cost`` walks (an Azure deployment name is not in the cost map, its
+    ``base_model`` is; a ``base_model`` the cost map does not know falls through to the deployment
+    model). A model no candidate can price keeps the row at $0 rather than dropping the failure row."""
     model: Final = str(model_call_details.get("model") or "")
     custom_llm_provider: Final = str(model_call_details.get("custom_llm_provider") or "") or None
-    custom_cost_per_token: Final = _deployment_cost_per_token(deployment_id, model)
-    pricing_models: Final = (base_model, model) if base_model is not None else (model,)
+    deployment_pricing: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
+    if deployment_pricing is not None:
+        return _deployment_priced_input_cost(model, custom_llm_provider, prompt_tokens, deployment_pricing)
+    pricing_models_to_try: Final = pricing_models(base_model, model)
     candidate_costs: Final = (
-        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens, custom_cost_per_token)
-        for pricing_model in pricing_models
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens) for pricing_model in pricing_models_to_try
     )
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
@@ -1375,8 +1415,9 @@ def _timed_out_reading_from_provider(exception: Exception) -> bool:
 
 
 def _client_disconnected(exception: Exception) -> bool:
-    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
-    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+    """The 499 the proxy itself raises when the caller hung up while the provider was still working on the
+    request. A provider's own 499 arrives as a litellm exception and is a plain upstream failure."""
+    return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
@@ -1398,17 +1439,19 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
+    _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
+    _billed: Final = provider_billed and not _success_already_logged
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
-        provider_billed=provider_billed,
+        provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
-        if provider_billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
+        if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
     _earlier_attempts: Final = (
@@ -3851,6 +3894,7 @@ class ProxyLogging:
                 original_exception,
                 traceback_str,
             ),
+            kwargs={"for_async_request": True},
             daemon=True,
         ).start()
 
@@ -8557,7 +8601,7 @@ async def _create_spend_logs_with_poison_isolation(
         await repo.table.create_many(data=rows, skip_duplicates=True)
         return failure_budget
     except Exception as e:
-        if not PrismaDBExceptionHandler.is_prisma_data_error(e):
+        if not (PrismaDBExceptionHandler.is_prisma_data_error(e) or isinstance(e, UnicodeEncodeError)):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
