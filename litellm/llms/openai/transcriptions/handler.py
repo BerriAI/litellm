@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
@@ -97,6 +98,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 logging_obj=logging_obj,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
         openai_client: Final[OpenAI] = self._get_openai_client(
@@ -106,6 +108,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -113,7 +116,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             input=None,
             api_key=openai_client.api_key,
             additional_args={
-                "api_base": openai_client._base_url._uri_reference,
+                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "atranscription": True,
                 "complete_input_dict": data,
             },
@@ -159,6 +162,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         client=None,
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         try:
             openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(
@@ -169,6 +173,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 client=client,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
             ## LOGGING
@@ -176,7 +181,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 input=None,
                 api_key=openai_aclient.api_key,
                 additional_args={
-                    "api_base": openai_aclient._base_url._uri_reference,
+                    "api_base": openai_aclient._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },

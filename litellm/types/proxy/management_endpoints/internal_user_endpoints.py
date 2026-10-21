@@ -4,14 +4,14 @@ from typing import Any, Final, Literal
 from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.proxy._types import (
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
+from litellm.types.proxy.management_endpoints.user_requests import (
     LiteLLM_UserTableWithKeyCount,
     NewUserRequest,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 MAX_BULK_DELETE_USERS: Final = 500
 

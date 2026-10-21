@@ -1,6 +1,6 @@
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 # Bedrock contextual grounding tags each content block so the guardrail knows
 # which text is the reference source, the user question, and the content to grade.
@@ -12,8 +12,18 @@ class BedrockTextContent(TypedDict, total=False):
     qualifiers: list[BedrockGuardrailQualifier]
 
 
+class BedrockImageSource(TypedDict):
+    bytes: ReadOnly[str]
+
+
+class BedrockImageContent(TypedDict):
+    format: ReadOnly[Literal["png", "jpeg"]]
+    source: ReadOnly[BedrockImageSource]
+
+
 class BedrockContentItem(TypedDict, total=False):
     text: BedrockTextContent
+    image: ReadOnly[BedrockImageContent]
 
 
 class BedrockRequest(TypedDict, total=False):

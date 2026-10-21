@@ -277,12 +277,18 @@ class TestExchangeHostTrust:
 
     def test_a_gateway_listed_with_its_port_is_trusted(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
-        assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
+        assert (
+            self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
+        )
 
     def test_allowlist_matching_ignores_hostname_case(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "Gateway.Internal:8443")
-        assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
-        assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
+        assert (
+            self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
+        )
+        assert (
+            self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
+        )
 
     def test_a_gateway_listed_with_a_port_is_not_trusted_on_another_port(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
@@ -302,14 +308,15 @@ class TestExchangeHostTrust:
 
     def test_a_gateway_listed_without_a_port_is_trusted_on_every_port(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
-        assert self._mint("https://gateway.internal:9443", monkeypatch) == "https://gateway.internal:9443/v1/oauth/token"
+        assert (
+            self._mint("https://gateway.internal:9443", monkeypatch) == "https://gateway.internal:9443/v1/oauth/token"
+        )
 
     def test_an_entry_spelling_the_scheme_default_port_matches_a_base_that_omits_it(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:443")
         assert self._mint("https://gateway.internal", monkeypatch) == "https://gateway.internal/v1/oauth/token"
-
 
 
 class TestBaseUrlDerivation:
@@ -548,8 +555,6 @@ class TestResolutionMatrix:
             {"anthropic_federation_rule_id": "fdrl_1"},
             {"anthropic_organization_id": "org-1"},
             {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
-            {"anthropic_organization_id": "org-1", "anthropic_identity_token": "oidc/env/TOK"},
-            {"anthropic_federation_rule_id": "fdrl_1", "anthropic_identity_token": "oidc/env/TOK"},
         ],
     )
     def test_gate_unmet_returns_none(self, litellm_params: dict):
@@ -834,7 +839,11 @@ class TestDenialHints:
 
     def test_only_console_pointer_when_both_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise(
-            {**self.BASE_PARAMS, "anthropic_federation_workspace_id": "wrkspc_1", "anthropic_service_account_id": "svac_1"},
+            {
+                **self.BASE_PARAMS,
+                "anthropic_federation_workspace_id": "wrkspc_1",
+                "anthropic_service_account_id": "svac_1",
+            },
             401,
             monkeypatch,
         )
@@ -1064,7 +1073,6 @@ class TestKeycloakIdentitySourceDispatch:
         assert first.assertion_ref != second.assertion_ref
 
 
-
 @pytest.mark.parametrize(
     "sparse_params",
     [TestInternalIssuerIdentitySourceDispatch.LITELLM_PARAMS, TestKeycloakIdentitySourceDispatch.LITELLM_PARAMS],
@@ -1229,9 +1237,82 @@ class TestMissingIdsFailClosedWhenIdentitySourceConfigured:
         with pytest.raises(litellm.AuthenticationError, match="must be one of internal_issuer, keycloak"):
             resolve_anthropic_wif_params({"anthropic_identity_source": "bogus"})
 
-    def test_legacy_token_params_without_ids_still_return_none(self, monkeypatch: pytest.MonkeyPatch):
+
+class TestLegacyRefsFailClosedWithoutIds:
+    """A token file or inline token on the deployment asks to federate as explicitly as a named
+    identity source does, so a missing rule or organization id is reported by name instead of
+    letting the request die later as a missing API key."""
+
+    def test_token_file_without_organization_id_names_the_file_param(self, tmp_path: Path):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_identity_token_file": str(tmp_path / "token")}
+            )
+
+        message: Final = exc_info.value.message
+        assert "anthropic_identity_token_file is set, but anthropic_organization_id is not set. Copy" in message
+        assert "Settings > Workload identity" in message
+        assert "ANTHROPIC_FEDERATION_RULE_ID" in message
+        assert not message.endswith(".")
+
+    def test_inline_token_without_rule_id_names_the_token_param(self):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params(
+                {"anthropic_organization_id": "org-1", "anthropic_identity_token": "oidc/env/TOK"}
+            )
+
+        assert (
+            "anthropic_identity_token is set, but anthropic_federation_rule_id is not set. Copy"
+            in exc_info.value.message
+        )
+
+    def test_token_file_with_both_ids_missing_names_both(self, tmp_path: Path):
+        with pytest.raises(
+            litellm.AuthenticationError, match="anthropic_federation_rule_id and anthropic_organization_id are not set"
+        ):
+            resolve_anthropic_wif_params({"anthropic_identity_token_file": str(tmp_path / "token")})
+
+    def test_fleet_wide_env_source_does_not_relabel_a_legacy_param(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
-        assert resolve_anthropic_wif_params({"anthropic_identity_token": "oidc/env/TOK"}) is None
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params({"anthropic_identity_token": "oidc/env/TOK"})
+
+        assert "anthropic_identity_token is set, but" in exc_info.value.message
+        assert "internal_issuer" not in exc_info.value.message
+
+    def test_env_token_file_without_ids_still_returns_none(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", str(tmp_path / "token"))
+        assert resolve_anthropic_wif_params({"anthropic_federation_rule_id": "fdrl_1"}) is None
+
+    def test_environment_ids_complete_a_token_file_param(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        token_file: Final = tmp_path / "token"
+
+        params: Final = resolve_anthropic_wif_params({"anthropic_identity_token_file": str(token_file)})
+
+        assert params is not None
+        assert (params.federation_rule_id, params.organization_id) == ("fdrl_env", "org-env")
+        assert params.assertion_ref == f"oidc/file/{token_file}"
+
+    def test_disabling_federation_wins_over_the_gate(self, tmp_path: Path):
+        litellm_params: Final = {
+            "anthropic_disable_workload_identity_federation": True,
+            "anthropic_identity_token_file": str(tmp_path / "token"),
+        }
+        assert resolve_anthropic_wif_params(litellm_params) is None
+
+    def test_facade_raises_without_an_engine_call(self):
+        poster: Final = ScriptedPoster([token_response()])
+        engine: Final = make_engine(poster)
+        with pytest.raises(litellm.AuthenticationError, match="anthropic_identity_token is set, but"):
+            get_anthropic_wif_token(
+                {"anthropic_organization_id": "org-1", "anthropic_identity_token": "oidc/env/TOK"},
+                None,
+                "claude-haiku-5-5",
+                engine,
+            )
+        assert poster.requests == []
 
 
 class TestConfigYamlShapedIdentitySources:

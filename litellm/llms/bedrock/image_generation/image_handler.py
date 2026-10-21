@@ -23,10 +23,11 @@ from litellm.llms.bedrock.image_generation.amazon_titan_transformation import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import BearerPreparedRequest
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -44,7 +45,7 @@ class BedrockImagePreparedRequest(LiteLLMBaseModel):
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -64,11 +65,11 @@ class BedrockImageGeneration(BaseAWSLLM):
 
     @classmethod
     def get_config_class(cls, model: str | None) -> BedrockImageConfigClass:
-        if AmazonTitanImageGenerationConfig._is_titan_model(model):
+        if AmazonTitanImageGenerationConfig.is_titan_model(model):
             return AmazonTitanImageGenerationConfig
-        elif AmazonNovaCanvasConfig._is_nova_model(model):
+        elif AmazonNovaCanvasConfig.is_nova_model(model):
             return AmazonNovaCanvasConfig
-        elif AmazonStability3Config._is_stability_3_model(model):
+        elif AmazonStability3Config.is_stability_3_model(model):
             return AmazonStability3Config
         else:
             return litellm.AmazonStabilityConfig
@@ -109,7 +110,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         try:
             response: Final = client.post(
                 url=prepared_request.endpoint_url,

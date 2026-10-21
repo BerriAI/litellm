@@ -1,6 +1,6 @@
 import builtins
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import PrivateAttr
 from typing_extensions import ReadOnly, TypedDict
@@ -25,7 +25,15 @@ class ContainerObject(LiteLLMBaseModel):
     expires_after: ExpiresAfter | None = None
     last_active_at: int | None = None
     name: str | None = None
-    _hidden_params: dict[str, Any] = PrivateAttr(default={})
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
@@ -143,6 +151,14 @@ class ContainerFileObject(LiteLLMBaseModel):
     path: str
     source: str
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key: str) -> bool:
         return hasattr(self, key)

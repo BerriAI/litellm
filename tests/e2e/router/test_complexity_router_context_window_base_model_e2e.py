@@ -1,26 +1,14 @@
-"""Live e2e pins for the complexity router's context-window escalation when a tier's
-window is declared only through ``model_info.base_model``.
+"""Live e2e pins for the complexity router's context-window escalation when a tier is a Bedrock
+application inference profile ARN whose window is declared only through ``model_info.base_model``.
 
-A Bedrock application inference profile ARN has no cost-map row of its own, so the
-SIMPLE tier's window exists only through ``base_model``. ``Router.get_router_model_info``
-read base_model for azure deployments alone and resolved every other provider's
-deployment by its own ``model:``, so the ARN came back with no window, the escalation
-gate treated an unknown window as able to hold anything, and an oversized request the
-classifier scored SIMPLE stayed on the 200k model and 400'd at Bedrock with "prompt is
-too long" instead of moving to the 1M MEDIUM tier.
+The ARN names no model, so before the router took the base_model's window it saw no window at all,
+the escalation gate treated that as able to hold anything, and an oversized request scored SIMPLE
+stayed on the 200k model and 400'd at Bedrock instead of moving to the 1M MEDIUM tier.
 
-The explicit-window control declares ``max_input_tokens`` below its model's own row and
-sends a request that fits the row but not the declaration, so it escalates only because
-a declared window is honored. It lives on its own backend model: the router registers a
-deployment's ``model_info`` under the shared cost-map key of its ``model:``, so a declared
-window on the ARN would leak to the base_model deployment and hide the bug. A short
+The explicit-window control declares ``max_input_tokens`` below its model's own row on a separate
+backend model, since the router registers a deployment's ``model_info`` under the shared cost-map key
+of its ``model:`` and a declared window on the ARN would leak to the base_model deployment. A short
 request on the base_model router proves the gate only moves what does not fit.
-
-Every deployment is registered via /model/new (stage has no static config for these)
-and the served deployment is read back from the spend log's ``model``, which stores
-either the registered alias or the provider-prefixed form. The prompts are plain prose
-with a "how many" ask, which keeps the heuristic classifier on SIMPLE, and the router
-estimates their size as chars/4.
 """
 
 import os

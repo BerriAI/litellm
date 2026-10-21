@@ -42,10 +42,32 @@ pub enum ResultSource {
     Cache { key: String },
 }
 
+/// What the call cost, settled once by the route. A host records it; it never re-derives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Cost {
+    /// The amount the provider itself billed, taken from its response.
+    Reported { amount: serde_json::Number },
+    /// Served from the cache, so nothing was billed.
+    CacheHit,
+    /// No provider figure: the host estimates from usage and its price table.
+    Deferred,
+}
+
+impl Cost {
+    pub fn settle(source: &ResultSource, reported: Option<serde_json::Number>) -> Self {
+        match (source, reported) {
+            (ResultSource::Cache { .. }, _) => Self::CacheHit,
+            (ResultSource::Provider, Some(amount)) => Self::Reported { amount },
+            (ResultSource::Provider, None) => Self::Deferred,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionFacts {
     pub provider: ProviderIdentity,
     pub source: ResultSource,
+    pub cost: Cost,
 }
 
 pub trait Interceptors<E>: Send + Sync {

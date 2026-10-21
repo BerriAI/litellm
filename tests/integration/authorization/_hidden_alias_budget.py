@@ -201,10 +201,14 @@ def exhausted_key(rig: AliasRig, scenario: Scenario) -> str:
 
 
 def upstream_requests(upstream_url: str) -> tuple[str, ...]:
-    drained: Final = JSON_OBJECT.validate_json(
+    observed: Final = JSON_OBJECT.validate_json(
         httpx.get(f"{upstream_url}/__observations", timeout=15, trust_env=False).content
     )
-    return tuple(json.dumps(entry) for entry in JSON_LIST.validate_python(drained["requests"]))
+    return tuple(json.dumps(entry) for entry in JSON_LIST.validate_python(observed["requests"]))
+
+
+def reset_upstream_requests(upstream_url: str) -> None:
+    httpx.delete(f"{upstream_url}/__observations", timeout=15, trust_env=False).raise_for_status()
 
 
 def upstream_hits(observed: tuple[str, ...], marker: str) -> int:

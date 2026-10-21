@@ -3,7 +3,6 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use moka::sync::Cache;
-use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use aws_credential_types::Credentials;
@@ -14,10 +13,12 @@ use aws_sigv4::http_request::{
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 
+use litellm_auth_types::AwsParams;
+
 use super::Error;
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
-    AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
+    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
     AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
     DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
@@ -543,50 +544,39 @@ fn is_bedrock_region(value: &str) -> bool {
 /// region, then the environment. Each service decides what a missing one means.
 pub fn resolve_aws_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
-        .or(model_region)
-        .map(str::to_string)
-        .or_else(|| env_lookup(AWS_REGION_NAME))
-        .or_else(|| env_lookup(AWS_REGION))
+    params
+        .resolve(&AwsParams::REGION, &|_| None)
+        .or_else(|| model_region.map(str::to_string))
+        .or_else(|| AwsParams::REGION.resolve(&|_| None, env_lookup))
 }
 
 pub fn resolve_bedrock_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_aws_region(model_region, optional_params, env_lookup)
+    resolve_aws_region(model_region, params, env_lookup)
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
 }
 
 pub fn aws_auth_config(
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> AwsAuthConfig {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let env = |key: &str| env_lookup(key);
     AwsAuthConfig {
-        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
-        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
-        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
-        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
-        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
-        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
-        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
-        web_identity_token: value("aws_web_identity_token")
-            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
-        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
-        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+        access_key_id: params.resolve(&AwsParams::ACCESS_KEY_ID, env_lookup),
+        secret_access_key: params.resolve(&AwsParams::SECRET_ACCESS_KEY, env_lookup),
+        session_token: params.resolve(&AwsParams::SESSION_TOKEN, env_lookup),
+        region_name: params.resolve(&AwsParams::REGION, env_lookup),
+        session_name: params.resolve(&AwsParams::SESSION_NAME, env_lookup),
+        profile_name: params.resolve(&AwsParams::PROFILE_NAME, env_lookup),
+        role_name: params.resolve(&AwsParams::ROLE_NAME, env_lookup),
+        web_identity_token: params.resolve(&AwsParams::WEB_IDENTITY_TOKEN, env_lookup),
+        sts_endpoint: params.resolve(&AwsParams::STS_ENDPOINT, env_lookup),
+        external_id: params.resolve(&AwsParams::EXTERNAL_ID, env_lookup),
     }
 }
 
@@ -599,13 +589,10 @@ pub enum AwsCredentialSource {
 }
 
 impl AwsCredentialSource {
-    pub fn from_params(
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Self {
-        match host_supplied_credentials(optional_params) {
+    pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+        match host_supplied_credentials(params) {
             Some(credentials) => Self::HostSupplied(credentials),
-            None => Self::Chain(aws_auth_config(optional_params, env_lookup)),
+            None => Self::Chain(aws_auth_config(params, env_lookup)),
         }
     }
 
@@ -629,20 +616,20 @@ impl AwsCredentialSource {
 /// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
 /// environment outranks explicit keys in [`classify_auth`] and the two sides
 /// would sign as different principals.
-pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option<Credentials> {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
+pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
+    let value = |value: &Option<String>| {
+        value
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(str::to_string)
     };
-    let access_key_id = value("aws_access_key_id")?;
-    let secret_access_key = value("aws_secret_access_key")?;
+    let access_key_id = value(&params.aws_access_key_id)?;
+    let secret_access_key = value(&params.aws_secret_access_key)?;
     Some(Credentials::new(
         access_key_id,
         secret_access_key,
-        value("aws_session_token").map(str::to_string),
+        value(&params.aws_session_token),
         None,
         "litellm-host-supplied",
     ))
@@ -651,7 +638,7 @@ pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::BEDROCK_SERVICE;
+    use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
 
     fn no_env(_: &str) -> Option<String> {
         None
@@ -667,37 +654,80 @@ mod tests {
             recorded.lock().unwrap().insert(name.to_string());
             None
         };
-        resolve_aws_region(None, &Map::new(), &env);
-        aws_auth_config(&Map::new(), &env);
+        resolve_aws_region(None, &AwsParams::default(), &env);
+        aws_auth_config(&AwsParams::default(), &env);
         assert!(
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| crate::constants::SECRET_NAMES.contains(&name.as_str()))
+                .all(|name| AwsParams::secret_names().contains(&name.as_str()))
         );
     }
 
-    #[test]
-    fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
-        let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
-        let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());
-        let region = |key: &str| (key == AWS_REGION).then(|| "sa-east-1".to_string());
-
-        let resolved = [
-            resolve_aws_region(Some("us-east-2"), &params, &region_name),
-            resolve_aws_region(Some("us-east-2"), &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region),
-            resolve_aws_region(None, &Map::new(), &no_env),
-        ];
+    #[rstest::rstest]
+    #[case::param_wins(Some("from-params"), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-params"))]
+    #[case::blank_param_falls_to_environment(Some("  "), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
+    #[case::absent_param_falls_to_environment(None, &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
+    #[case::nothing(None, &[], None)]
+    fn auth_config_reads_each_spec_from_params_then_the_environment(
+        #[case] aws_secret_access_key: Option<&str>,
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let params = AwsParams {
+            aws_secret_access_key: aws_secret_access_key.map(str::to_string),
+            ..AwsParams::default()
+        };
+        let env = |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
 
         assert_eq!(
-            resolved.map(|region| region.unwrap_or_else(|| "none".into())),
-            ["eu-west-1", "us-east-2", "ap-south-1", "sa-east-1", "none"]
+            aws_auth_config(&params, &env).secret_access_key.as_deref(),
+            expected
         );
         assert_eq!(
-            resolve_bedrock_region(None, &Map::new(), &no_env),
-            DEFAULT_BEDROCK_REGION
+            aws_auth_config(&AwsParams::default(), &|key: &str| (key == AWS_REGION)
+                .then(|| "sa-east-1".to_string()))
+            .region_name
+            .as_deref(),
+            Some("sa-east-1")
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::call_params(Some("us-east-2"), Some("eu-west-1"), &[(AWS_REGION_NAME, "ap-south-1")], Some("eu-west-1"))]
+    #[case::model_region(Some("us-east-2"), None, &[(AWS_REGION_NAME, "ap-south-1")], Some("us-east-2"))]
+    #[case::aws_region_name(None, None, &[(AWS_REGION_NAME, "ap-south-1")], Some("ap-south-1"))]
+    #[case::aws_region(None, None, &[(AWS_REGION, "sa-east-1")], Some("sa-east-1"))]
+    #[case::nothing(None, None, &[], None)]
+    fn a_region_comes_from_the_call_then_the_model_then_the_environment(
+        #[case] model_region: Option<&str>,
+        #[case] aws_region_name: Option<&str>,
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let params = AwsParams {
+            aws_region_name: aws_region_name.map(str::to_string),
+            ..AwsParams::default()
+        };
+        let env = |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
+
+        assert_eq!(
+            resolve_aws_region(model_region, &params, &env).as_deref(),
+            expected
+        );
+        assert_eq!(
+            resolve_bedrock_region(model_region, &params, &env),
+            expected.unwrap_or(DEFAULT_BEDROCK_REGION)
         );
     }
 

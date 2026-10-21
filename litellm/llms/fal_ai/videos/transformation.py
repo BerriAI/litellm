@@ -16,8 +16,8 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -279,7 +279,7 @@ def _status_video_object(
 class FalAIVideoConfig(BaseVideoConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = _get_httpx_client,
+        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
         async_client_factory: Callable[[], AsyncHTTPHandler] = _get_fal_ai_async_httpx_client,
     ) -> None:
         super().__init__()
@@ -562,7 +562,12 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise ValueError(f"fal.ai video result did not include a video URL: {error_message}")
         raise ValueError("fal.ai video result did not include a video URL")
 
-    def transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    def transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "HTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(
@@ -580,7 +585,12 @@ class FalAIVideoConfig(BaseVideoConfig):
         video_response.raise_for_status()
         return video_response.content
 
-    async def async_transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(

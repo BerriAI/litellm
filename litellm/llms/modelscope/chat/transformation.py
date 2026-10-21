@@ -66,6 +66,13 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     @override
     def get_complete_url(
         self,
@@ -79,10 +86,9 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default ModelScope /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = self.DEFAULT_BASE_URL
+        clean_api_base: Final = (api_base or self.DEFAULT_BASE_URL).rstrip("/")
 
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
+        if not clean_api_base.endswith("/chat/completions"):
+            return f"{clean_api_base}/chat/completions"
 
-        return api_base
+        return clean_api_base
