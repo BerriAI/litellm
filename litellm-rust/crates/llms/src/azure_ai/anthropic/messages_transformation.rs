@@ -12,7 +12,9 @@ use crate::{
     Error,
     anthropic::{
         common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX, non_empty},
-        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, update_headers_with_anthropic_beta,
+        },
     },
     base_llm::{
         anthropic_messages::transformation::{
@@ -103,7 +105,7 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
-        self.anthropic.request_headers(headers, request)
+        update_headers_with_anthropic_beta(headers, request)
     }
 }
 

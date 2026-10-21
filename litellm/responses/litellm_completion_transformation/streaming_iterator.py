@@ -17,7 +17,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, stamp_responses_usage_cost
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
-    ResponseIncompleteEvent,
     PART_UNION_TYPES,
     BaseLiteLLMOpenAIResponseObject,
     ContentPartAddedEvent,
@@ -35,6 +34,7 @@ from litellm.types.llms.openai import (
     ReasoningSummaryTextDoneEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -913,7 +913,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 raise StopAsyncIteration
 
         self.finished = self.is_stream_finished()
-        response_completed_event: Final = self._emit_response_completed_event(self.litellm_model_response)
+        response_completed_event: Final = self._emit_terminal_response_event(self.litellm_model_response)
         if response_completed_event:
             # Latch so wrappers (FallbackResponsesStreamWrapper) + proxy
             # container-ownership hook can read completed_response.
@@ -1296,7 +1296,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         stamp_responses_usage_cost(partial, self.litellm_logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
-    def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
+    def _emit_terminal_response_event(
+        self, litellm_model_response: ModelResponse
+    ) -> ResponseCompletedEvent | ResponseIncompleteEvent | None:
         if litellm_model_response:
             # Transform the response
             responses_api_response: Final = (
@@ -1316,6 +1318,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = self._with_encoded_response_id(responses_api_response)
 
+            if responses_api_response.status == "incomplete":
+                return ResponseIncompleteEvent(
+                    type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    response=encoded_response,
+                )
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=encoded_response,
