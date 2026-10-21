@@ -97,7 +97,7 @@ def test_acount_tokens_with_tools():
         assert result.total_tokens == 30
         mock_handler.assert_called_once()
         call_kwargs = mock_handler.call_args
-        assert call_kwargs.kwargs.get("tools") == tools
+        assert list(call_kwargs.kwargs.get("tools") or ()) == tools
 
 
 def test_acount_tokens_with_system():

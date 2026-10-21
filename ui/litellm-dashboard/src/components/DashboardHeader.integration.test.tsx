@@ -59,7 +59,7 @@ async function openTools() {
     <QueryClientProvider client={client}>
       <PluginModeProvider accessToken="test-session">
         <CommandPaletteProvider>
-          <DashboardHeader />
+          <DashboardHeader accessToken={null} />
         </CommandPaletteProvider>
       </PluginModeProvider>
     </QueryClientProvider>,

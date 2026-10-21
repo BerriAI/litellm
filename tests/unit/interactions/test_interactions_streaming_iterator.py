@@ -90,8 +90,10 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
     )
     iterator.completed_response = InteractionsAPIStreamingResponse()
 
+    existing_tasks = asyncio.all_tasks()
     iterator._handle_logging_completed_response()
-    await asyncio.sleep(0.5)
+    spawned_tasks = asyncio.all_tasks() - existing_tasks
+    await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
 
     assert recorder.async_hook_fired is True
     assert recording_executor.submitted_for(logging_obj) == []

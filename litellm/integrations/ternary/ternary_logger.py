@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
@@ -51,6 +51,8 @@ class TernaryLogger(FocusLogger):
     TERNARY_EXPORT_FREQUENCY ("daily" default / "interval"), TERNARY_EXPORT_INTERVAL_SECONDS.
     """
 
+    export_job_name: ClassVar[str] = TERNARY_USAGE_DATA_JOB_NAME
+
     def __init__(
         self,
         *,
@@ -80,13 +82,15 @@ class TernaryLogger(FocusLogger):
                 "TERNARY_EXPORT_INTERVAL_SECONDS must be a positive integer when TERNARY_EXPORT_FREQUENCY is 'interval'"
             )
 
-        destination_config: Final[dict[str, str]] = {}  # mutable-ok: built from the config values present below
-        if resolved_api_key:
-            destination_config["api_key"] = resolved_api_key
-        if resolved_connection_id:
-            destination_config["connection_id"] = resolved_connection_id
-        if resolved_base_url:
-            destination_config["base_url"] = resolved_base_url
+        destination_config: Final = {
+            key: value
+            for key, value in (
+                ("api_key", resolved_api_key),
+                ("connection_id", resolved_connection_id),
+                ("base_url", resolved_base_url),
+            )
+            if value
+        }
 
         super().__init__(
             provider="ternary",
@@ -122,25 +126,6 @@ class TernaryLogger(FocusLogger):
                 destination=FocusTernaryDestination(prefix=self.prefix, config=self._destination_config),
             )
         return self._engine
-
-    async def initialize_focus_export_job(self) -> None:
-        """Run the scheduled export under a Ternary-specific pod lock (distinct from FocusLogger's)."""
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
-        writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None) if proxy_logging_obj else None
-        pod_lock_manager: Final = getattr(writer, "pod_lock_manager", None) if writer is not None else None
-
-        if pod_lock_manager and pod_lock_manager.redis_cache:
-            acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=TERNARY_USAGE_DATA_JOB_NAME)
-            if not acquired:
-                verbose_logger.debug("Ternary export: unable to acquire pod lock")
-                return
-            try:
-                await self._run_scheduled_export()
-            finally:
-                await pod_lock_manager.release_lock(cronjob_id=TERNARY_USAGE_DATA_JOB_NAME)
-        else:
-            await self._run_scheduled_export()
 
     @staticmethod
     async def init_ternary_background_job(

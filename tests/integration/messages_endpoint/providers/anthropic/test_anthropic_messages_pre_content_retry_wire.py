@@ -40,6 +40,7 @@ FirstAttempt = Literal[
     "drop_after_message_start",
     "error_frame",
     "error_frame_after_message_start",
+    "error_frame_after_content",
     "http_status",
     "drop_after_content",
 ]
@@ -66,6 +67,8 @@ class _Failure:
                 return status_reply(self.status)
             case "drop_after_content":
                 return dropping_reply(chunks, abort_after=3)
+            case "error_frame_after_content":
+                return stream_reply((*chunks[:3], error_frame(self.status, f"scripted {self.status}")))
 
 
 _MID_STREAM_FAILURES: Final = (
@@ -124,12 +127,12 @@ def _stream(gateway: Gateway, body: Mapping[str, JsonValue]) -> tuple[int, tuple
     return response.status_code, parse_sse(response.text)
 
 
+def _rows(request_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
+
+
 def _success_rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return eventually(
-        lambda: read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)),
-        lambda rows: len(rows) >= 1,
-        seconds=70,
-    )
+    return eventually(lambda: _rows(request_id), lambda rows: len(rows) >= 1, seconds=70)
 
 
 def _assert_completed_by_retry(
@@ -141,6 +144,8 @@ def _assert_completed_by_retry(
     assert delta_text(events) == _TEXT, events
     assert [request.target for request in wire.drain()] == ["/v1/messages"] * attempts
     assert _success_rows(_served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
+    superseded_rows: Final = {attempt: _rows(_served_id(prompt, attempt)) for attempt in range(1, attempts)}
+    assert not any(superseded_rows.values()), superseded_rows
 
 
 def _assert_rejected_before_content(
@@ -300,6 +305,23 @@ def test_stream_dropping_after_content_is_not_retried(gateway: Gateway) -> None:
         assert message_id(events) == _served_id(prompt, 1), events
         assert delta_text(events) == _TEXT, events
         assert [request.target for request in wire.drain()] == ["/v1/messages"]
+
+
+def test_stream_error_frame_after_content_is_not_retried_and_keeps_its_spend_row(gateway: Gateway) -> None:
+    prompt: Final = _prompt()
+    attempts: Final = Attempts()
+    with (
+        wire_server(_upstream(prompt, _Failure("error_frame_after_content", 529), attempts)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
+        status, events = _stream(gateway, _body(model, prompt, "deployment"))
+        assert status == 200, events
+        assert event_types(events) == (*LIFECYCLE[:3], "error"), events
+        assert message_id(events) == _served_id(prompt, 1), events
+        assert delta_text(events) == _TEXT, events
+        assert [request.target for request in wire.drain()] == ["/v1/messages"]
+        assert [row["model_group"] for row in _success_rows(_served_id(prompt, 1))] == [model]
 
 
 def test_stream_rejected_with_401_before_it_opens_is_not_retried(gateway: Gateway) -> None:

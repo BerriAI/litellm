@@ -5,6 +5,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -35,6 +36,9 @@ _TransportStreams: TypeAlias = tuple[
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
+
+
+SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
 
 
 class _SessionCallbackMap(TypedDict):
@@ -183,6 +187,23 @@ def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
         (key.strip() if isinstance(key, str) else key): (value.strip() if isinstance(value, str) else value)
         for key, value in headers.items()
     }
+
+
+async def _receive_session_message(
+    message: ServerNotification | Exception,
+    *,
+    stream_error: asyncio.Future[Exception],
+    on_notification: Callable[[ServerNotification], Awaitable[None]] | None,
+) -> None:
+    if not isinstance(message, Exception):
+        if on_notification is not None:
+            await on_notification(message)
+        return
+    if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
+        return
+    if not stream_error.done():
+        stream_error.set_result(message)
+    raise RuntimeError("MCP response stream failed")
 
 
 def _first_non_cancelled_cause(exc: BaseException, cleanup_errors: tuple[Exception, ...] = ()) -> BaseException | None:
@@ -477,6 +498,7 @@ class MCPClient:
         elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
@@ -503,6 +525,7 @@ class MCPClient:
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._session_callbacks_override: _SessionCallbackMap | None = None
         # handle the basic auth value if provided
         if auth_value:
@@ -532,6 +555,17 @@ class MCPClient:
 
     async def discovery_auth_fingerprint(self) -> str:
         return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
+
+    async def subscription_auth_fingerprint(self) -> str:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+
+        request: Final = await self.prepare_request_auth()
+        auth: Final = self._resolved_auth
+        if isinstance(auth, ClientCredentialsBearerAuth) and auth.subscription_identity is not None:
+            request.headers[auth.header_name] = "managed-grant:" + auth.subscription_identity
+        return self._hash_discovery_auth(request, self._aws_identity())
 
     def _aws_identity(self) -> tuple[str, str, str | None, str | None] | None:
         return self._aws_auth.identity if isinstance(self._aws_auth, MCPSigV4Auth) else None
@@ -578,7 +612,11 @@ class MCPClient:
             return stdio_client(server_params), None
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
-            httpx_client_factory = self._create_httpx_client_factory()
+            httpx_client_factory = (
+                self._create_httpx_client_factory()
+                if self._upstream_transport is None
+                else self._create_httpx_client_factory(transport=self._upstream_transport)
+            )
             return (
                 sse_client(
                     url=self.server_url,
@@ -590,7 +628,11 @@ class MCPClient:
             )
         # HTTP transport (default)
         headers = self._get_auth_headers()
-        httpx_client_factory = self._create_httpx_client_factory()
+        httpx_client_factory = (
+            self._create_httpx_client_factory()
+            if self._upstream_transport is None
+            else self._create_httpx_client_factory(transport=self._upstream_transport)
+        )
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
@@ -696,6 +738,7 @@ class MCPClient:
         *,
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
+        on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -716,16 +759,6 @@ class MCPClient:
                     stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
                     _notify_stream_error(on_stream_error, stream_error)
 
-                    async def receive_message(
-                        message: ServerNotification | Exception,
-                    ) -> None:
-                        if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
-                            return
-                        if not stream_error.done():
-                            stream_error.set_result(message)
-                        # The SDK closes pending requests when its message handler raises.
-                        raise RuntimeError("MCP response stream failed")
-
                     session_kwargs: Final = (
                         self._session_callbacks_override
                         if self._session_callbacks_override is not None
@@ -737,7 +770,9 @@ class MCPClient:
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self.timeout,
-                        message_handler=receive_message,
+                        message_handler=partial(
+                            _receive_session_message, stream_error=stream_error, on_notification=on_notification
+                        ),
                         sampling_callback=session_kwargs["sampling_callback"],
                         elicitation_callback=session_kwargs["elicitation_callback"],
                         logging_callback=session_kwargs["logging_callback"],
@@ -793,7 +828,7 @@ class MCPClient:
             raise (
                 in_flight_error
                 if in_flight_error is not None
-                else asyncio.CancelledError("MCP session cleanup timed out")
+                else asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE)
             )
         return result
 
@@ -804,6 +839,7 @@ class MCPClient:
         quiet_on_error: bool = False,
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
+        on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -822,8 +858,9 @@ class MCPClient:
                     http_client=http_client,
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
+                    on_notification=on_notification,
                 )
-                if on_stream_error is not None or on_cleanup is not None
+                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
@@ -1094,7 +1131,7 @@ class MCPClient:
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         raise_on_error: bool = False,
         allow_input_required: bool = False,
         persistent_session: "PersistentMCPSession | None" = None,
@@ -1126,7 +1163,12 @@ class MCPClient:
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
-                    await host_progress_callback(progress, total)
+                    try:
+                        inspect.signature(host_progress_callback).bind(progress, total, message)
+                    except (TypeError, ValueError):
+                        await host_progress_callback(progress, total)
+                    else:
+                        await host_progress_callback(progress, total, message)
                 except Exception as e:
                     verbose_logger.warning("Failed to forward to Host: %s", e)
 
@@ -1579,6 +1621,20 @@ def _deliver_persistent_outcome(
     )
 
 
+async def _await_persistent_operation(operation: Awaitable[object], result: asyncio.Future[object]) -> object:
+    running: Final = asyncio.ensure_future(operation)
+
+    def cancel_operation(_: asyncio.Future[object]) -> None:
+        running.cancel()
+
+    result.add_done_callback(cancel_operation)
+    try:
+        (outcome,) = await asyncio.gather(running, return_exceptions=True)
+        return outcome
+    finally:
+        result.remove_done_callback(cancel_operation)
+
+
 class UpstreamSessionClosedError(RuntimeError):
     def __init__(self) -> None:
         super().__init__("upstream MCP session closed")
@@ -1707,12 +1763,14 @@ class PersistentMCPSession:
                     if callbacks is not None:
                         self._current_callbacks = callbacks
                     async with self._admission() if self._admission is not None else nullcontext():
-                        if not future.done():
-                            (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
-                            if _deliver_persistent_outcome(future, outcome, self._stream_error):
-                                self._active = None
-                                self._ended = True
-                                return
+                        if not future.done() and _deliver_persistent_outcome(
+                            future,
+                            await _await_persistent_operation(operation(session), future),
+                            self._stream_error,
+                        ):
+                            self._active = None
+                            self._ended = True
+                            return
                     self._active = None
                 if self._retiring and self._queue.empty():
                     return

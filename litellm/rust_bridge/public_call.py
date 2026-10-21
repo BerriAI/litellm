@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
@@ -69,6 +69,10 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     if isinstance(value, str | bytes) or not isinstance(value, Sequence):
         return None
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
+
+
+def known_params(names: Collection[str], request: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in request.items() if name in names and value is not None}
 
 
 def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:

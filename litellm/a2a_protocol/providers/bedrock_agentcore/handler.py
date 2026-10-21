@@ -117,7 +117,7 @@ class BedrockAgentCoreA2AHandler:
         response.raise_for_status()
 
         # Check content type — AgentCore may return JSON instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(response.headers.get_list("content-type")).lower()
 
         if "application/json" in content_type:
             # Single JSON response fallback (not SSE)

@@ -925,7 +925,6 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
 
 
 def test_arize_otel_v2_cache_hit_exports_llm_span(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: LIT-9127 response-cache hits emit no OTel v2 LLM span")
     marker: Final = "a-cache-hit-" + uuid.uuid4().hex
     sentinel: Final = f"{marker}-sentinel"
 
