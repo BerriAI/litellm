@@ -95,6 +95,7 @@ CONNECTION_NAMES: Final = (
     "configurable_clientside_auth_params",
     "use_xai_oauth",
     "fireworks_forward_user_id",
+    "hosted_vllm_cache_salt",
     "aws_batch_role_arn",
     "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",

@@ -6,12 +6,37 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
+from litellm.llms.hosted_vllm.common_utils import (
+    CACHE_SALT_FIELD,
+    HOSTED_VLLM_CACHE_SALT_PARAM,
+    derive_cache_salt,
+    get_cache_salt_caller,
+    with_caller_cache_salt,
+)
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+
+def _cache_salt_caller(litellm_params: GenericLiteLLMParams) -> str | None:
+    # On /v1/responses `metadata` is the caller's own OpenAI field, so the key hash is read from
+    # `litellm_metadata` only.
+    extras: Final[Mapping[str, object]] = litellm_params.model_extra or MappingProxyType({})
+    return get_cache_salt_caller(
+        MappingProxyType(
+            {
+                HOSTED_VLLM_CACHE_SALT_PARAM: litellm_params.hosted_vllm_cache_salt,
+                "litellm_metadata": extras.get("litellm_metadata"),
+            }
+        ),
+        metadata_keys=("litellm_metadata",),
+    )
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -44,6 +69,35 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
             }
         )
         return headers
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: overrides the base class signature
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: overrides the base class signature
+    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
+        request: Final = super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        caller: Final = _cache_salt_caller(litellm_params)
+        if caller is None:
+            return request
+        return {**request, CACHE_SALT_FIELD: derive_cache_salt(caller, request.get(CACHE_SALT_FIELD))}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return with_caller_cache_salt(extra_body, _cache_salt_caller(litellm_params))
 
     def get_complete_url(
         self,
