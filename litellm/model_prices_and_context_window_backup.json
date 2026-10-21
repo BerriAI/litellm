@@ -76709,14 +76709,14 @@
         "supports_response_schema": true
     },
     "baseten/reflection/Beam-1.0": {
-        "cache_read_input_token_cost": 1.3e-07,
-        "input_cost_per_token": 1.3e-06,
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 4e-07,
         "litellm_provider": "baseten",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4.3e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://inference.baseten.co/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
