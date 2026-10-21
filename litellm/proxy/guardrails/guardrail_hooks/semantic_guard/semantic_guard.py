@@ -6,7 +6,7 @@ via embedding similarity. Smarter than regex (understands intent), lighter
 than an LLM call (~20-50ms per request for embedding).
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
@@ -50,7 +50,7 @@ class SemanticGuardrail(CustomGuardrail):
         similarity_threshold: float,
         route_templates: list[str] | None = None,
         custom_routes_file: str | None = None,
-        custom_routes: list[dict[str, Any]] | None = None,
+        custom_routes: list[dict[str, object]] | None = None,
         on_flagged_action: str = "block",
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
@@ -157,7 +157,14 @@ class SemanticGuardrail(CustomGuardrail):
         return response
 
 
-def _get_top_route_choice(result: Any) -> Any:
+class _RouteChoice(Protocol):
+    """The semantic-router match this guardrail reads: the route that fired, if any."""
+
+    @property
+    def name(self) -> str | None: ...
+
+
+def _get_top_route_choice(result: _RouteChoice | list[_RouteChoice] | None) -> _RouteChoice | None:
     """Extract the top RouteChoice from SemanticRouter result.
 
     SemanticRouter.__call__ can return RouteChoice or List[RouteChoice].
@@ -194,7 +201,7 @@ def _extract_response_text(response: Any) -> str:
     return ""
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):

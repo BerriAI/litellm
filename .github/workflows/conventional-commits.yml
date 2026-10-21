@@ -41,6 +41,7 @@ jobs:
             ci
             chore
             revert
+            security
           requireScope: false
           subjectPattern: ^(?![A-Z]).+$
           subjectPatternError: |

@@ -1,5 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -23,20 +22,16 @@ const providers = [
   { provider_name: "tavily", ui_friendly_name: "Tavily Search" },
 ];
 
-const renderModal = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <CreateSearchTool
-        userRole="Admin"
-        accessToken="test-token"
-        onCreateSuccess={vi.fn()}
-        isModalVisible
-        setModalVisible={vi.fn()}
-      />
-    </QueryClientProvider>,
+const renderModal = () =>
+  renderWithProviders(
+    <CreateSearchTool
+      userRole="Admin"
+      accessToken="test-token"
+      onCreateSuccess={vi.fn()}
+      isModalVisible
+      setModalVisible={vi.fn()}
+    />,
   );
-};
 
 const pickProvider = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
   await user.click(screen.getAllByRole("combobox")[0]);
@@ -45,6 +40,7 @@ const pickProvider = async (user: ReturnType<typeof userEvent.setup>, label: str
 
 describe("CreateSearchTools submit payload", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.clearAllMocks();
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers });
     vi.mocked(networking.createSearchTool).mockResolvedValue({ search_tool_id: "st-1" });
@@ -58,6 +54,7 @@ describe("CreateSearchTools submit payload", () => {
     fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "my-search" } });
     await pickProvider(user, "Perplexity AI");
     fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-secret" } });
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "0.05" } });
     fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "finds things" } });
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
 
@@ -69,15 +66,43 @@ describe("CreateSearchTools submit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-secret",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
+        input_cost_per_query: 0.05,
       },
       search_tool_info: { description: "finds things" },
     });
     expect(JSON.stringify(payload)).toBe(
-      '{"search_tool_name":"my-search","litellm_params":{"search_provider":"perplexity","api_key":"sk-secret"},"search_tool_info":{"description":"finds things"}}',
+      '{"search_tool_name":"my-search","litellm_params":{"search_provider":"perplexity","api_key":"sk-secret","input_cost_per_query":0.05},"search_tool_info":{"description":"finds things"}}',
     );
+  });
+
+  it("sends a zero cost per query as 0, not as an omitted field", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByLabelText(/Search Tool Name/);
+
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "free-search" } });
+    await pickProvider(user, "Tavily Search");
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+
+    await waitFor(() => expect(networking.createSearchTool).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(vi.mocked(networking.createSearchTool).mock.calls[0][1])).toBe(
+      '{"search_tool_name":"free-search","litellm_params":{"search_provider":"tavily","input_cost_per_query":0}}',
+    );
+  });
+
+  it("rejects a negative cost per query before anything is sent", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByLabelText(/Search Tool Name/);
+
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "neg-search" } });
+    await pickProvider(user, "Tavily Search");
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "-1" } });
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+
+    expect(await screen.findByText("Cost per query cannot be negative")).toBeInTheDocument();
+    expect(networking.createSearchTool).not.toHaveBeenCalled();
   });
 
   it("omits untouched optional fields from the wire body instead of sending empty strings", async () => {
@@ -147,5 +172,25 @@ describe("CreateSearchTools submit payload", () => {
       await screen.findByText("Name can only contain letters, numbers, hyphens, and underscores"),
     ).toBeInTheDocument();
     expect(networking.createSearchTool).not.toHaveBeenCalled();
+  });
+
+  it("should block creation after clearing the required provider and accept a restored choice", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    fireEvent.change(await screen.findByLabelText(/Search Tool Name/), { target: { value: "synthetic-search" } });
+    await pickProvider(user, "Perplexity AI");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(networking.fetchAvailableSearchProviders).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+    expect(await screen.findByText("Please select a search provider")).toBeInTheDocument();
+    expect(networking.createSearchTool).not.toHaveBeenCalled();
+    await pickProvider(user, "Tavily Search");
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+    await waitFor(() =>
+      expect(networking.createSearchTool).toHaveBeenCalledWith("test-token", {
+        search_tool_name: "synthetic-search",
+        litellm_params: { search_provider: "tavily" },
+      }),
+    );
   });
 });

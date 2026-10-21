@@ -210,6 +210,7 @@ class PolicyResolver:
         Returns:
             List of (policy_name, GuardrailPipeline) tuples
         """
+        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
@@ -229,6 +230,11 @@ class PolicyResolver:
         for policy_name in matching_policy_names:
             policy = policies.get(policy_name)
             if policy is None:
+                continue
+            if policy.condition is not None and not ConditionEvaluator.evaluate(
+                condition=policy.condition, context=context
+            ):
+                verbose_proxy_logger.debug("Policy '%s' condition did not match, skipping pipeline", policy_name)
                 continue
             if policy.pipeline is not None:
                 pipelines.append((policy_name, policy.pipeline))
