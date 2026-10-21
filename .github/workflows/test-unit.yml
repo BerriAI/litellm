@@ -316,6 +316,7 @@ jobs:
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
               tests/unit/llms/opensandbox
+              tests/unit/llms/opensearch
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
