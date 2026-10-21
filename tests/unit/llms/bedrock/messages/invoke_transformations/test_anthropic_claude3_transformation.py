@@ -14,7 +14,9 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
+import litellm
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -39,6 +41,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
 from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -3943,3 +3946,6 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
 
     assert isinstance(raised, litellm.BadRequestError)
     assert len(bedrock.bodies) == 1
+
+
+REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])

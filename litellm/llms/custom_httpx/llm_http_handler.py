@@ -26,6 +26,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -2219,7 +2220,9 @@ class BaseLLMHTTPHandler:
 
         native_output_fallback_params: Final = anthropic_messages_provider_config.native_output_fallback_litellm_params(
             model=model,
-            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params),
+            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(
+                anthropic_messages_optional_request_params
+            ),
             litellm_params=litellm_params,
         )
         rebuild_without_native_output: Final = (
@@ -2229,7 +2232,9 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_provider_config.transform_anthropic_messages_request,
                 model=model,
                 messages=copy.deepcopy(_JSON_OBJECTS.validate_python(messages)),
-                anthropic_messages_optional_request_params=copy.deepcopy(_JSON_OBJECT.validate_python(anthropic_messages_optional_request_params)),
+                anthropic_messages_optional_request_params=copy.deepcopy(
+                    _JSON_OBJECT.validate_python(anthropic_messages_optional_request_params)
+                ),
                 litellm_params=native_output_fallback_params,
                 headers=_JSON_OBJECT.validate_python(headers),
             )

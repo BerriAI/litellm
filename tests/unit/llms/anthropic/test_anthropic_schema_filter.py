@@ -5,6 +5,7 @@ Related to: https://platform.claude.com/docs/en/build-with-claude/structured-out
 """
 
 import pytest
+
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 

@@ -2039,23 +2039,66 @@ def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object])
     ("schema", "unresolvable"),
     [
         (_object_with({"a": {"type": "string"}}), False),
-        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
-        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
-        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
+        (
+            _object_with(
+                {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}
+            ),
+            False,
+        ),
+        (
+            _object_with(
+                {"a": {"$ref": "#/definitions/A"}},
+                definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}},
+            ),
+            False,
+        ),
+        (
+            _object_with(
+                {"a": {"$ref": "/$defs/A"}},
+                **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}},
+            ),
+            False,
+        ),
         (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
         (_object_with({"a": {"$ref": "other.json#/A"}}), True),
         (_object_with({"parent": {"$ref": "#"}}), True),
-        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
-        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
+        (
+            _object_with(
+                {"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}
+            ),
+            True,
+        ),
+        (
+            _object_with(
+                {"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}
+            ),
+            True,
+        ),
         (
             _object_with(
                 {"a": {"$ref": "#/$defs/A"}},
-                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
+                **{
+                    "$defs": {
+                        "A": {"properties": {"b": {"$ref": "#/$defs/B"}}},
+                        "B": {"properties": {"a": {"$ref": "#/$defs/A"}}},
+                    }
+                },
             ),
             True,
         ),
     ],
-    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
+    ids=[
+        "no-refs",
+        "shared-def",
+        "chained-definitions",
+        "root-path-defs",
+        "missing-def",
+        "external",
+        "root",
+        "self-cycle",
+        "root-path-self-cycle",
+        "mutual-cycle",
+    ],
 )
 def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
     assert schema_has_unresolvable_ref(schema) is unresolvable
@@ -2064,7 +2107,11 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 @pytest.mark.parametrize(
     ("schema", "properties", "branches"),
     [
-        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
+        (
+            _object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]),
+            3,
+            8,
+        ),
         (
             _object_with(
                 {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},
@@ -2081,4 +2128,3 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 def test_schema_size_counts_every_written_object_once(schema, properties, branches):
     assert schema_property_count(schema) == properties
     assert schema_grammar_branch_count(schema) == branches
-

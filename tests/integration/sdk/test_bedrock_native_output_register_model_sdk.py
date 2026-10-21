@@ -10,7 +10,9 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, Router
-from litellm.utils import _invalidate_model_cost_lowercase_map  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+)
 
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _JSON_TOOL: Final = "json_tool_call"
