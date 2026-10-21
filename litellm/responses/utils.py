@@ -13,6 +13,8 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
+    CacheWriteTokensDetails,
+    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -23,6 +25,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
     SpecialEnums,
@@ -39,6 +42,23 @@ def _apply_nested_drop_params(params: dict[str, object], additional_drop_params:
 def _output_token_detail(details: object, field: str) -> int | None:
     value: Final = getattr(details, field, None)
     return value if isinstance(value, int) else None
+
+
+def _normalize_input_tokens_details(details: object) -> InputTokensDetails:
+    if isinstance(details, InputTokensDetails):
+        return details
+    return InputTokensDetails.model_validate(details)
+
+
+def _cache_creation_token_details(
+    details: CacheWriteTokensDetails | None,
+) -> CacheCreationTokenDetails | None:
+    if details is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=details.ttl_30m_tokens,
+        ephemeral_1h_input_tokens=details.ttl_12h_tokens,
+    )
 
 
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
@@ -1246,25 +1266,25 @@ class ResponseAPILoggingUtils:
         completion_tokens: Final[int] = response_api_usage.output_tokens or 0
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if response_api_usage.input_tokens_details:
-            if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
-            else:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
-                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
-                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
-                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
-                    cached_tokens_details=getattr(
-                        response_api_usage.input_tokens_details, "cached_tokens_details", None
-                    ),
-                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
-                    cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
-                    cache_type=getattr(response_api_usage.input_tokens_details, "cache_type", None),
-                    web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
-                    google_maps_grounding_requests=getattr(
-                        response_api_usage.input_tokens_details, "google_maps_grounding_requests", None
-                    ),
-                )
+            input_tokens_details: Final[InputTokensDetails] = _normalize_input_tokens_details(
+                response_api_usage.input_tokens_details
+            )
+            cache_write_tokens_details: Final[CacheWriteTokensDetails | None] = (
+                input_tokens_details.cache_write_tokens_details
+            )
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                cached_tokens=input_tokens_details.cached_tokens,
+                audio_tokens=input_tokens_details.audio_tokens,
+                text_tokens=input_tokens_details.text_tokens,
+                image_tokens=input_tokens_details.image_tokens,
+                cached_tokens_details=input_tokens_details.cached_tokens_details,
+                video_tokens=input_tokens_details.video_tokens,
+                cache_write_tokens=input_tokens_details.cache_write_tokens,
+                cache_type=getattr(input_tokens_details, "cache_type", None),
+                web_search_requests=getattr(input_tokens_details, "web_search_requests", None),
+                google_maps_grounding_requests=getattr(input_tokens_details, "google_maps_grounding_requests", None),
+                cache_creation_token_details=_cache_creation_token_details(cache_write_tokens_details),
+            )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(
             response_api_usage, "output_tokens_details", None

@@ -13,13 +13,16 @@ break-outs that overlap it, matching the Anthropic path. A request with no cache
 activity leaves both fields unset, which is the documented behavior.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final, cast
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import CacheWriteTokensDetails, InputTokensDetails, ResponseAPIUsage
 from litellm.types.utils import Choices, Message, ModelResponse
 
 MODEL = "gpt-5.6"
@@ -91,6 +94,61 @@ def test_responses_api_cache_costs_are_itemized_in_the_breakdown(local_model_cos
     assert breakdown["output_cost"] == pytest.approx(expected_output)
     assert breakdown["total_cost"] == pytest.approx(expected_input + expected_output)
     assert total == pytest.approx(breakdown["total_cost"])
+
+
+@pytest.mark.parametrize("details_as_object", [False, True], ids=["dict", "model"])
+def test_responses_api_12h_cache_writes_use_the_12h_rate(local_model_cost_map, details_as_object: bool):
+    rates: Final[Mapping[str, float]] = cast(Mapping[str, float], litellm.model_cost[MODEL])
+    usage_input: Final[dict[str, object] | ResponseAPIUsage] = (
+        ResponseAPIUsage(
+            input_tokens=12000,
+            output_tokens=200,
+            total_tokens=12200,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=4000,
+                cache_write_tokens=7000,
+                cache_write_tokens_details=CacheWriteTokensDetails(ttl_30m_tokens=3000, ttl_12h_tokens=4000),
+            ),
+        )
+        if details_as_object
+        else {
+            "input_tokens": 12000,
+            "output_tokens": 200,
+            "total_tokens": 12200,
+            "input_tokens_details": {
+                "cached_tokens": 4000,
+                "cache_write_tokens": 7000,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 4000},
+            },
+        }
+    )
+    usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_input)
+    completion_response: Final = ModelResponse(
+        id="x",
+        created=1,
+        model=MODEL,
+        object="chat.completion",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=usage,
+    )
+    logging_obj: Final = _logging_obj()
+
+    litellm.completion_cost(
+        completion_response=completion_response,
+        model=MODEL,
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    expected_input: Final = (
+        1000 * rates["input_cost_per_token"]
+        + 4000 * rates["cache_read_input_token_cost"]
+        + 3000 * rates["cache_creation_input_token_cost"]
+        + 4000 * rates["cache_creation_input_token_cost_above_1hr"]
+    )
+    assert breakdown["input_cost"] == pytest.approx(expected_input)
 
 
 def test_cache_fields_stay_unset_when_there_was_no_cache_activity(local_model_cost_map):

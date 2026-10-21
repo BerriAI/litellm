@@ -3401,11 +3401,6 @@ class LiteLLMCompletionResponsesConfig:
             cache_write_tokens: Final = getattr(prompt_details, "cache_write_tokens", None) or getattr(
                 prompt_details, "cache_creation_tokens", None
             )
-            cache_write_extra: Final[Mapping[str, int]] = (
-                MappingProxyType({"cache_write_tokens": cache_write_tokens})
-                if cache_write_tokens is not None
-                else MappingProxyType({})
-            )
             cache_type: Final = getattr(prompt_details, "cache_type", None)
             cache_type_extra: Final[Mapping[str, str]] = (
                 MappingProxyType({"cache_type": cache_type}) if cache_type is not None else MappingProxyType({})
@@ -3426,18 +3421,20 @@ class LiteLLMCompletionResponsesConfig:
                     if count is not None
                 }
             )
-            response_usage.input_tokens_details = InputTokensDetails(
-                cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
-                text_tokens=prompt_details.text_tokens,
-                audio_tokens=prompt_details.audio_tokens,
-                image_tokens=prompt_details.image_tokens,
-                video_tokens=prompt_details.video_tokens,
-                cached_tokens_details=(
-                    cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
-                ),
-                **cache_write_extra,
-                **cache_type_extra,
-                **grounding_request_counts,
+            response_usage.input_tokens_details = InputTokensDetails.model_validate(
+                {
+                    "cached_tokens": prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
+                    "text_tokens": prompt_details.text_tokens,
+                    "audio_tokens": prompt_details.audio_tokens,
+                    "image_tokens": prompt_details.image_tokens,
+                    "video_tokens": prompt_details.video_tokens,
+                    "cached_tokens_details": (
+                        cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
+                    ),
+                    "cache_write_tokens": cache_write_tokens,
+                    **cache_type_extra,
+                    **grounding_request_counts,
+                }
             )
 
         # Translate completion_tokens_details to output_tokens_details
