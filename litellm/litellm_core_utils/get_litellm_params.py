@@ -9,6 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.llms.openrouter.data_residency import infer_openrouter_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -216,7 +217,9 @@ def get_litellm_params(
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
-    data_residency: Final[str | None] = infer_openai_data_residency(custom_llm_provider, api_base)
+    data_residency: Final[str | None] = infer_openai_data_residency(
+        custom_llm_provider, api_base
+    ) or infer_openrouter_data_residency(custom_llm_provider, api_base)
 
     # Build base dict with explicit parameters (always included)
     litellm_params: Final = {

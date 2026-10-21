@@ -17,6 +17,7 @@ from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenRouterException
+from ..data_residency import resolve_openrouter_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -84,15 +85,10 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
         """
-        # api_base is already set to https://openrouter.ai/api/v1 in main.py
-        # Remove trailing slashes
-        if api_base:
-            api_base = api_base.rstrip("/")
-        else:
-            api_base = "https://openrouter.ai/api/v1"
+        resolved_base: Final = resolve_openrouter_api_base(api_base=api_base).rstrip("/")
 
         # Return the embeddings endpoint
-        return f"{api_base}/embeddings"
+        return f"{resolved_base}/embeddings"
 
     def transform_embedding_request(
         self,
