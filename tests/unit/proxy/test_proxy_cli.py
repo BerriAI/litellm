@@ -4252,8 +4252,8 @@ class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
 
 def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
     """The yellow notices for the flags Granian ignores (`--max_requests_before_restart`, `--ciphers`) are
-    printed while the launcher starts; with json_logs on they are INFO records on stdout like every other
-    line, not plaintext between the records."""
+    printed while the launcher starts; with json_logs on they are WARNING records on stdout after the INFO
+    start line, not plaintext between the records."""
     pytest.importorskip("granian")
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
@@ -4284,4 +4284,4 @@ def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
         "(Granian uses workers_lifetime in seconds, not a per-request limit).",
         "LiteLLM: --ciphers is not applied when using --run_granian.",
     ]
-    assert {record["level"] for record in records} == {"INFO"}
+    assert [record["level"] for record in records] == ["INFO", "WARNING", "WARNING"]

@@ -111,8 +111,8 @@ def test_policy_table_is_one_json_record_in_json_mode(monkeypatch, capfd):
 
 
 def test_missing_attachments_warning_is_a_second_json_record(monkeypatch, capfd):
-    """Without attachments the table and the yellow warning are two INFO records on stdout, where the two
-    prints put them."""
+    """Without attachments the table and the yellow warning are an INFO and a WARNING record on stdout,
+    where the two prints put them."""
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
@@ -126,4 +126,4 @@ def test_missing_attachments_warning_is_a_second_json_record(monkeypatch, capfd)
         "\n".join(("LiteLLM Policy Engine: Loaded 1 policies", "", *POLICY_ROWS)),
         NO_ATTACHMENTS_WARNING,
     ]
-    assert {record["level"] for record in records} == {"INFO"}
+    assert [record["level"] for record in records] == ["INFO", "WARNING"]

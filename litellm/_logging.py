@@ -943,17 +943,18 @@ def print_startup_message(message: str) -> None:
     if litellm.suppress_startup_output is True:
         return
     frame: Final = inspect.currentframe()
-    _write_startup_message(message, frame.f_back if frame is not None else None)
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.INFO)
 
 
 def print_startup_warning(message: str) -> None:
-    """Write a boot-time warning exactly as print_startup_message writes a message, even with
-    suppress_startup_output on, since it names something the operator has to fix."""
+    """Write a boot-time warning as print_startup_message writes a message, even with suppress_startup_output
+    on, since it names something the operator has to fix. With JSON logs on it is a WARNING record, on
+    stdout where the print put it, so a collector that filters on the level field keeps it."""
     frame: Final = inspect.currentframe()
-    _write_startup_message(message, frame.f_back if frame is not None else None)
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.WARNING)
 
 
-def _write_startup_message(message: str, caller: FrameType | None) -> None:
+def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
     if not litellm.json_logs:
         print(terminal_text(message), flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
         return
@@ -962,7 +963,7 @@ def _write_startup_message(message: str, caller: FrameType | None) -> None:
         return
     record: Final = verbose_proxy_logger.makeRecord(
         verbose_proxy_logger.name,
-        logging.INFO,
+        level,
         caller.f_code.co_filename if caller is not None else __file__,
         caller.f_lineno if caller is not None else 0,
         text,
@@ -992,8 +993,8 @@ def _write_startup_message(message: str, caller: FrameType | None) -> None:
 
 
 def _startup_json_handler() -> logging.Handler:
-    """The proxy's JSON handler on stdout, filters included, for one startup message."""
-    handler: Final = LevelRoutingStreamHandler()
+    """The proxy's JSON handler on stdout, filters included, for one startup message or warning."""
+    handler: Final = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     handler.addFilter(_secret_filter)
     handler.addFilter(_correlation_filter)

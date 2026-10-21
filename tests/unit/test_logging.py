@@ -1914,7 +1914,8 @@ def test_print_startup_warning_still_prints_when_suppressed(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], json_logs: bool
 ):
     """A warning names something the operator has to fix, like an ignored flag or a failed migration diff,
-    so suppress_startup_output leaves it in place, at the caller's location in JSON mode."""
+    so suppress_startup_output leaves it in place. In JSON mode it is a WARNING record at the caller's
+    location, on stdout where the print put it, so a collector's WARNING filter keeps it."""
     monkeypatch.setattr(litellm, "json_logs", json_logs)
     monkeypatch.setattr(litellm, "suppress_startup_output", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
@@ -1930,6 +1931,7 @@ def test_print_startup_warning_still_prints_when_suppressed(
     if json_logs:
         record: Final = json.loads(lines[0])
         assert record["message"] == "LiteLLM: --ciphers is not applied when using --run_granian."
+        assert record["level"] == "WARNING"
         assert str(record["logger"]).startswith("test_logging.py:"), record["logger"]
     else:
         assert lines[0] == "LiteLLM: --ciphers is not applied when using --run_granian."
