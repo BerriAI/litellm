@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import stat
 import time
 from pathlib import Path
@@ -60,6 +61,7 @@ def _write_token_file(home: Path, *, key: str | None) -> None:
 
 
 STALE_TOKEN_BASE_URL: Final = "https://stale-token.example.com"
+STALE_TOKEN_TIMESTAMP: Final = 1_700_000_000.0
 
 
 def _register_models_answer(key: str, answer: int | Exception) -> None:
@@ -1095,7 +1097,7 @@ class TestPrintTokenCommand:
             return_value=CliTokenRecord(
                 base_url=STALE_TOKEN_BASE_URL,
                 key="sk-stale-key",
-                timestamp=time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600,
+                timestamp=STALE_TOKEN_TIMESTAMP,
             ),
         ):
             result: Final = self.runner.invoke(print_token, obj={})
@@ -1105,24 +1107,22 @@ class TestPrintTokenCommand:
         assert result.stderr == expected_stderr
         assert len(responses.calls) == 1
 
-    @responses.activate
     def test_proxy_check_waits_only_a_few_seconds_for_a_silent_proxy(self):
-        _register_models_answer("sk-stale-key", 200)
-
-        with patch(
+        with socket.create_server(("127.0.0.1", 0)) as silent_proxy, patch(
             "litellm.proxy.client.cli.commands.auth.load_cli_token",
             return_value=CliTokenRecord(
-                base_url=STALE_TOKEN_BASE_URL,
+                base_url=f"http://127.0.0.1:{silent_proxy.getsockname()[1]}",
                 key="sk-stale-key",
-                timestamp=time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600,
+                timestamp=STALE_TOKEN_TIMESTAMP,
             ),
         ):
+            started: Final = time.monotonic()
             result: Final = self.runner.invoke(print_token, obj={})
+            elapsed: Final = time.monotonic() - started
 
-        timeout: Final = responses.calls[0].request.req_kwargs["timeout"]
         assert result.exit_code == 0
-        assert isinstance(timeout, int | float)
-        assert 0 < timeout <= 5
+        assert result.stdout == "sk-stale-key\n"
+        assert elapsed < 5
 
 
 class TestPrintTokenWithConfigFile:
@@ -2082,8 +2082,8 @@ class TestPkcePrintToken:
                 return_value={
                     "key": "sk-classic",
                     "base_url": STALE_TOKEN_BASE_URL,
-                    "timestamp": time.time() - 3600,
-                    "expires_at": time.time() - 60,
+                    "timestamp": STALE_TOKEN_TIMESTAMP,
+                    "expires_at": STALE_TOKEN_TIMESTAMP + 3600,
                 },
             ),
             patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),

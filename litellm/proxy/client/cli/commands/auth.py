@@ -1035,10 +1035,10 @@ def print_token(ctx: click.Context):
 
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
-    contain only the token, so all diagnostics go to stderr. The proxy
-    decides when its token expires: once the token is older than
-    `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h), it is checked against
-    the proxy and refused only if the proxy rejects it. A `lite login --pkce`
+    contain only the token, so all diagnostics go to stderr. A token younger
+    than `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h) is printed without
+    asking the proxy. An older one is checked against the proxy and refused
+    only if the proxy rejects it. A `lite login --pkce`
     token renews itself here first, and once a token has expired for good,
     run the same `lite login` command again.
     """
