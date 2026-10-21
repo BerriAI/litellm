@@ -121,3 +121,86 @@ def test_a_rejection_logs_the_retry_and_advises_opting_out_only_when_native_outp
 
     assert _MODEL in caplog.text
     assert ("supports_bedrock_native_structured_output: false" in caplog.text) is advises_opting_out
+
+
+_STRICT_FALLBACK: Final = NativeOutputFallback(optional_params={"tools": "without_strict"}, litellm_params={})
+# Bedrock's 400s for strict tools, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-20 and quoted in issue #34388,
+# each answered 200 once the request dropped strict
+_STRICT_TOOLS_REJECTIONS: Final = tuple(
+    BedrockError(status_code=400, message=f'{{"message":"The model returned the following errors: {text}"}}')
+    for text in (
+        "Too many strict tools (21). The maximum number of strict tools supported is 20.",
+        "Schemas contains too many optional parameters (27), which would make grammar compilation inefficient.",
+        "Schemas contains too many parameters with union types (18 parameters with type arrays or anyOf). "
+        "This causes exponential compilation cost.",
+        "The compiled grammar is too large, which would cause performance issues.",
+        "tools.0.custom: Invalid schema: Schema type is missing for schema: {'description': 'tag'}",
+        "tools.3.custom: For 'integer' type, property 'minimum' is not supported",
+        "Compiled grammar size (410.4MB) exceeds maximum allowed size (300MB)",
+        "tools.1.custom.strict: Extra inputs are not permitted",
+    )
+)
+_TOO_MANY_STRICT_TOOLS: Final = _STRICT_TOOLS_REJECTIONS[0]
+
+
+def _call_with_strict_tools_fallback(
+    bedrock: ScriptedBedrock, fallback: NativeOutputFallback | None, strict_tools_fallback: NativeOutputFallback | None
+) -> object:
+    return _resolve(
+        call_with_native_output_fallback(
+            bedrock,
+            None if fallback is None else lambda: fallback,
+            _MODEL,
+            strict_tools_fallback=None if strict_tools_fallback is None else lambda: strict_tools_fallback,
+        )
+    )
+
+
+@_MODES
+@pytest.mark.parametrize("rejection", _STRICT_TOOLS_REJECTIONS, ids=lambda error: error.message[60:100])
+def test_a_strict_tools_rejection_is_sent_again_once_with_the_strict_tools_fallback(
+    asynchronous: bool, rejection: BedrockError
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(rejection, None), asynchronous=asynchronous)
+
+    response: Final = _call_with_strict_tools_fallback(bedrock, None, _STRICT_FALLBACK)
+
+    assert isinstance(response, ModelResponse) and response.id == "answer-2"
+    assert bedrock.sent == (None, _STRICT_FALLBACK)
+
+
+@_MODES
+@pytest.mark.parametrize(
+    ("error", "strict_tools_fallback"),
+    [
+        (_OTHER_400, _STRICT_FALLBACK),
+        (BedrockError(status_code=500, message=_TOO_MANY_STRICT_TOOLS.message), _STRICT_FALLBACK),
+        (_TOO_MANY_STRICT_TOOLS, None),
+    ],
+    ids=["other_400", "server_error", "no_strict_tools_fallback"],
+)
+def test_no_second_request_without_both_a_strict_tools_rejection_and_a_strict_tools_fallback(
+    asynchronous: bool, error: BedrockError, strict_tools_fallback: NativeOutputFallback | None
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(error,), asynchronous=asynchronous)
+
+    with pytest.raises(BedrockError) as raised:
+        _call_with_strict_tools_fallback(bedrock, None, strict_tools_fallback)
+
+    assert raised.value is error
+    assert bedrock.sent == (None,)
+
+
+@pytest.mark.parametrize(
+    ("error", "retried_with"),
+    [(_REJECTION, _FALLBACK), (_TOO_MANY_STRICT_TOOLS, _STRICT_FALLBACK)],
+    ids=["native_output_rejection", "strict_tools_rejection"],
+)
+def test_each_rejection_is_sent_again_with_its_own_fallback_when_both_are_set(
+    error: BedrockError, retried_with: NativeOutputFallback
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(error, None), asynchronous=False)
+
+    _call_with_strict_tools_fallback(bedrock, _FALLBACK, _STRICT_FALLBACK)
+
+    assert bedrock.sent == (None, retried_with)
