@@ -10,7 +10,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1036,17 +1036,12 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     return timestamp
 
 
-_RAW_QUERY_ROWS: Final[TypeAdapter[list[dict[str, object]] | None]] = TypeAdapter(
-    list[dict[str, object]] | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
-)
-
-
 async def _query_raw_rows(
     prisma_client: PrismaClient,
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    return _RAW_QUERY_ROWS.validate_python(await prisma_client.db.query_raw(sql_query, *args))
+    return await prisma_client.db.query_raw(sql_query, *args)
 
 
 async def get_spend_by_team(

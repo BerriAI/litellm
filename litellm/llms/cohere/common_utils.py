@@ -1,8 +1,6 @@
 import json
 from typing import Final, Literal
 
-from pydantic import ConfigDict, TypeAdapter
-
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -12,8 +10,6 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ProviderSpecificModelInfo,
 )
-
-_CHUNK_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class CohereError(BaseLLMException):
@@ -193,7 +189,7 @@ class ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = _CHUNK_OBJECT.validate_python(json.loads(str_line))
+        data_json: Final = json.loads(str_line)
         return self.chunk_parser(chunk=data_json)
 
     # Async iterator
@@ -385,7 +381,7 @@ class CohereV2ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = _CHUNK_OBJECT.validate_python(json.loads(str_line))
+        data_json: Final = json.loads(str_line)
         return self.chunk_parser(chunk=data_json)
 
     # Async iterator
