@@ -65,9 +65,11 @@ def _module(name: str) -> ModuleType:
 
 def _factory(module: ModuleType, name: str) -> Callable[..., object]:
     value: Final = getattr(module, name, None)
-    if not callable(value):
-        raise TypeError(f"{module.__name__}.{name} is missing. {INSTALL_HINT}")
-    return value
+    if callable(value):
+        return value
+    if hasattr(module, name):
+        raise TypeError(f"{module.__name__}.{name} is not callable. {INSTALL_HINT}")
+    raise RuntimeError(f"{module.__name__}.{name} is missing. {INSTALL_HINT}")
 
 
 def _narrow(value: object, kind: type[_Narrowed]) -> _Narrowed:
