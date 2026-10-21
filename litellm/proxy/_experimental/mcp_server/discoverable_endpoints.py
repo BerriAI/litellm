@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    JWT_BEARER_GRANT_TYPE,
     VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
@@ -70,6 +71,11 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     relative_request_url,
     revoke_refresh_token,
     supported_grant_types,
+)
+from litellm.proxy._experimental.mcp_server.id_jag_grant import (
+    basic_client_id,
+    jwt_bearer_available,
+    redeem_id_jag_assertion,
 )
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     exchange_idp_subject_token,
@@ -856,12 +862,17 @@ def _raise_unless_oauth2_discovery_server(
 
 def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
     """True when a DCR-bridge server relays client registration to the upstream authorization
-    server instead of short-circuiting to an admin-configured OAuth client. In the relay arm the
+    server instead of short-circuiting to the server's own OAuth client. In the relay arm the
     upstream holds each client's own registration, so the authorize and token relays pass the
     client's ``client_id`` and ``redirect_uri`` through verbatim and the authorization code
     returns directly to the client's redirect URI without transiting the gateway. Gateway-side
     redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
-    arm, where the upstream only knows the gateway's own callback."""
+    arm, where the upstream only knows the gateway's own callback.
+
+    Authorize and token decide per request from the server's current client: once the gateway
+    holds its shared client (registered at ``/register`` under ``PROXY_BASE_URL``, or entered by an
+    admin) every caller runs the gateway-callback arm, while a server that still has none keeps
+    relaying, so clients registered before the shared client existed keep their own binding."""
     return bool(
         mcp_server.is_dcr_bridge
         and mcp_server.effective_registration_url
@@ -872,6 +883,27 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
             )
         )
     )
+
+
+def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
+    """``/register`` relays the caller's own registration only when the gateway cannot keep a shared
+    client: with ``PROXY_BASE_URL`` set it registers one client bound to its own ``/callback`` and
+    keeps it as the server's client, so an upstream that restricts redirect domains (Atlassian)
+    never sees a laptop loopback redirect. Without a database the shared client would live only in
+    this process, so a database-free gateway keeps relaying as well."""
+    return _dcr_bridge_relays_client_registration(mcp_server) and (
+        configured_proxy_base_url() is None or not _shared_client_store_available()
+    )
+
+
+def _shared_client_store_available() -> bool:
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    try:
+        get_prisma_client_or_throw("Database not connected. Cannot keep the shared MCP OAuth client.")
+    except HTTPException:
+        return False
+    return True
 
 
 def _require_s256_pkce(
@@ -1022,6 +1054,17 @@ async def _managed_authorization_scope(
     return selected_scope, scope_user_id
 
 
+async def _hydrate_bridge_shared_client(mcp_server: MCPServer, request: Request) -> None:
+    """Whichever worker served ``/register`` persisted the bridge's shared gateway client; a worker
+    whose catalog snapshot predates that write still holds no ``client_id``, so the gateway-callback
+    arms load the persisted client before presenting one upstream. Callers that carry their own
+    client (a gateway-minted ephemeral client sealed into the state or the code) skip this, since the
+    upstream bound their code to that client."""
+    if not mcp_server.is_dcr_bridge or mcp_server.client_id:
+        return
+    await _reuse_persisted_dcr_client_if_available(mcp_server, f"{get_request_base_url(request)}/callback")
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1063,6 +1106,8 @@ async def authorize_with_server(
         # calling this for its enforcement side effect, then falls through to the gateway
         # /callback flow below, which reads the original code_challenge names.
         bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
+        if ephemeral_dcr_client is None:
+            await _hydrate_bridge_shared_client(resolved_server, request)
         # A gateway-minted ephemeral client is registered against {base}/callback, so its
         # flow must run the short-circuit arm; the relay arm is only for clients that
         # registered themselves through the front door and hold their own redirect binding.
@@ -1227,6 +1272,7 @@ async def exchange_token_with_server(
     refresh_token: str | None = None,
     scope: str | None = None,
     client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+    sealed_client: bool = False,
 ):
     raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
@@ -1276,11 +1322,14 @@ async def exchange_token_with_server(
     # recovered from a sealed code) must authenticate the way its own registration was granted,
     # not the way the server row is configured; callers that carry no method keep the row's method
     # as before.
-    resolved_client_id: Final = resolved_server.client_id if resolved_server.client_id else client_id
-    resolved_client_secret: Final = resolved_server.client_secret if resolved_server.client_id else client_secret
+    if not sealed_client:
+        await _hydrate_bridge_shared_client(resolved_server, request)
+    server_client_wins: Final = bool(resolved_server.client_id) and not sealed_client
+    resolved_client_id: Final = resolved_server.client_id if server_client_wins else client_id
+    resolved_client_secret: Final = resolved_server.client_secret if server_client_wins else client_secret
     resolved_auth_method: Final = (
         resolved_server.token_endpoint_auth_method
-        if resolved_server.client_id
+        if server_client_wins
         else (client_token_endpoint_auth_method or resolved_server.token_endpoint_auth_method)
     )
     try:
@@ -1824,10 +1873,13 @@ async def _persist_dcr_client_registration(
     empty and otherwise adopts whatever a concurrent registration persisted first.
 
     The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are skipped
-    unconditionally: the caller holds the upstream token and the gateway must hold no OAuth
-    client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
-    ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
-    fresh pass-through server read as gateway-authorized.
+    unless the server is a DCR bridge: the caller holds the upstream token and the gateway holds
+    no OAuth client identity for these servers, so persisting would stamp ``oauth2_flow`` and a
+    ``client_id`` onto a server whose mode promises the gateway stores nothing. A DCR bridge is
+    the exception by design: its gateway-hosted sign-in registers one shared client bound to the
+    gateway ``/callback`` (the same app an admin may enter by hand), and that client must survive
+    for every later caller's authorize and token exchange. ``oauth2_flow`` is still never stamped
+    on a client-forwarded row.
 
     ``redirect_uris`` records what the client is bound to so a later origin change can be
     detected as a positive mismatch and trigger re-registration instead of stranding the
@@ -1836,7 +1888,7 @@ async def _persist_dcr_client_registration(
     ``update_mcp_server`` merges credential blobs: a re-registered public client must not
     inherit the previous client's secret or auth method.
     """
-    if mcp_server.is_client_forwarded_token:
+    if mcp_server.is_client_forwarded_token and not mcp_server.is_dcr_bridge:
         return "skipped"
 
     try:
@@ -1904,20 +1956,23 @@ async def _persist_dcr_client_registration(
         ):
             await _refresh_persisted_dcr_server(stored)
             return "reused"
+        stamped_flow: Final[Literal["authorization_code"] | None] = (
+            None if mcp_server.is_client_forwarded_token else "authorization_code"
+        )
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,
             data=(
                 UpdateMCPServerRequest(
                     server_id=mcp_server.server_id,
                     credentials=credentials,
-                    oauth2_flow="authorization_code",
+                    oauth2_flow=stamped_flow,
                     token_url=mcp_server.token_url,
                 )
                 if mcp_server.token_url
                 else UpdateMCPServerRequest(
                     server_id=mcp_server.server_id,
                     credentials=credentials,
-                    oauth2_flow="authorization_code",
+                    oauth2_flow=stamped_flow,
                 )
             ),
             touched_by="mcp_oauth_dcr",
@@ -2205,7 +2260,7 @@ async def register_client_with_server(
             )
         return dummy_return
 
-    bridge_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
+    bridge_relay: Final = _register_relays_bridge_client(resolved_server)
     if bridge_relay and not client_redirect_uris:
         raise HTTPException(
             status_code=400,
@@ -2396,7 +2451,7 @@ async def token_endpoint(
     grant_type: str = Form(...),
     code: str = Form(None),
     redirect_uri: str = Form(None),
-    client_id: str = Form(...),
+    client_id: str | None = Form(None),
     client_secret: str | None = Form(None),
     code_verifier: str = Form(None),
     refresh_token: str | None = Form(None),
@@ -2405,6 +2460,7 @@ async def token_endpoint(
     subject_token: str | None = Form(None),
     subject_token_type: str | None = Form(None),
     requested_token_type: str | None = Form(None),
+    assertion: str | None = Form(None),
     mcp_server_name: str | None = None,
 ):
     """
@@ -2416,7 +2472,14 @@ async def token_endpoint(
     3. Return the token
     4. Return a virtual key in this response
     """
-    if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
+    presented_client_id: Final = client_id or basic_client_id(request.headers.get("authorization"))
+    if presented_client_id is None:
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_request", "error_description": "client_id is required"}
+        )
+    if mcp_server_name is None and (
+        is_gateway_dcr_client_id(presented_client_id) or grant_type == JWT_BEARER_GRANT_TYPE
+    ):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
             user_api_key_cache,
@@ -2427,7 +2490,7 @@ async def token_endpoint(
             grant_type=grant_type,
             code=code,
             redirect_uri=redirect_uri,
-            client_id=client_id,
+            client_id=presented_client_id,
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             master_key=master_key,
@@ -2439,9 +2502,12 @@ async def token_endpoint(
             subject_token_type=subject_token_type,
             requested_token_type=requested_token_type,
             exchange_subject_token=exchange_idp_subject_token,
+            assertion=assertion,
+            client_secret=client_secret,
+            redeem_assertion=redeem_id_jag_assertion,
         )
 
-    lookup_name: Final = mcp_server_name or client_id
+    lookup_name: Final = mcp_server_name or presented_client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = _resolve_mcp_server_by_name_or_id(lookup_name, client_ip)
     if mcp_server is None and mcp_server_name is None:
@@ -2454,7 +2520,7 @@ async def token_endpoint(
         grant_type=grant_type,
         code=code,
         redirect_uri=redirect_uri,
-        client_id=client_id,
+        client_id=presented_client_id,
         client_secret=client_secret,
         code_verifier=code_verifier,
         refresh_token=refresh_token,
@@ -2568,7 +2634,8 @@ async def native_client_auth_discovery(request: Request) -> JSONResponse:
     """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
     language) reads to sign a user in through the browser and obtain a proxy credential."""
     return JSONResponse(
-        native_client_auth_contract(request, token_exchange_available()), headers=TOKEN_NO_CACHE_HEADERS
+        native_client_auth_contract(request, token_exchange_available(), jwt_bearer_available()),
+        headers=TOKEN_NO_CACHE_HEADERS,
     )
 
 
@@ -3135,7 +3202,7 @@ def _aggregate_header_scopes(request: Request) -> tuple[str, ...]:
 
 
 def _build_aggregate_authorization_server_response(
-    request: Request, token_exchange_available: bool
+    request: Request, token_exchange_available: bool, jwt_bearer_available: bool = False
 ) -> dict[str, object]:
     """RFC 8414 metadata for the gateway as the aggregate authorization server.
 
@@ -3155,9 +3222,13 @@ def _build_aggregate_authorization_server_response(
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],
-        "grant_types_supported": supported_grant_types(token_exchange_available),
+        "grant_types_supported": supported_grant_types(token_exchange_available, jwt_bearer_available),
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "token_endpoint_auth_methods_supported": (
+            ["none", "client_secret_post", "client_secret_basic"]
+            if jwt_bearer_available
+            else ["none", "client_secret_post"]
+        ),
     }
 
 
@@ -3193,7 +3264,7 @@ async def oauth_authorization_server_aggregate(request: Request):
     per-server row win here instead would serve an issuer of {base} against a resource that
     advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
     """
-    return _build_aggregate_authorization_server_response(request, token_exchange_available())
+    return _build_aggregate_authorization_server_response(request, token_exchange_available(), jwt_bearer_available())
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -3273,6 +3344,10 @@ def _build_oauth_authorization_server_response(
         if explicitly_named
         else request_base_url
     )
+    # With no upstream resolved the document is the gateway's own: its issuer is the bare origin
+    # and its /token serves every grant the gateway does, including the ID-JAG jwt-bearer grant.
+    gateway_owned: Final = mcp_server_name is None and issuer_path is None
+    jwt_bearer: Final = gateway_owned and jwt_bearer_available()
 
     return {
         "issuer": issuer,
@@ -3280,9 +3355,15 @@ def _build_oauth_authorization_server_response(
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": (
+            list(supported_grant_types(token_exchange_available(), jwt_bearer))
+            if gateway_owned
+            else ["authorization_code", "refresh_token"]
+        ),
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        "token_endpoint_auth_methods_supported": (
+            ["none", "client_secret_post", "client_secret_basic"] if jwt_bearer else ["client_secret_post"]
+        ),
         # Claude expects a registration endpoint, even if we just fake it
         "registration_endpoint": (
             f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register"

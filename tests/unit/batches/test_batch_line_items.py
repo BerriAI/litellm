@@ -221,6 +221,31 @@ def test_vertex_lines_pair_with_the_input_row_that_carries_their_custom_id():
     ]
 
 
+def test_vertex_lines_on_a_regional_location_cost_the_uplift_over_global():
+    outputs = _jsonl(_success("vx-0", 100, 50))
+    model_info = ModelInfo(
+        input_cost_per_token_batches=INPUT_RATE,
+        output_cost_per_token_batches=OUTPUT_RATE,
+        regional_endpoint_uplift_multiplier=1.1,
+    )
+
+    def line_cost(vertex_location: str) -> float:
+        source = _source(
+            model="gemini-3.5-flash",
+            custom_llm_provider="vertex_ai",
+            cost_provider="vertex_ai",
+            model_info=model_info,
+            vertex_location=vertex_location,
+        )
+        (line,) = _whole_batch(source, b"", (outputs,))["lines"]
+        return line["response_cost"]
+
+    assert line_cost("global") == pytest.approx(100 * INPUT_RATE + 50 * OUTPUT_RATE)
+    assert line_cost("us-central1") == pytest.approx(
+        line_cost("global") * model_info["regional_endpoint_uplift_multiplier"]
+    )
+
+
 def test_a_vertex_embeddings_entry_split_into_several_rows_pairs_with_none_of_them():
     embeddings = {
         "custom_id": "emb-1",

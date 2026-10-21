@@ -27,6 +27,8 @@ litellm_settings:
   callbacks:
     - prometheus
     - otel
+  service_callback:
+    - prometheus_system
   require_auth_for_metrics_endpoint: false
   drop_params: true
   request_timeout: 120

@@ -64,15 +64,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+let signedInUser = { user_id: "first-admin", user_role: "proxy_admin" };
+
 function session(
   role = "proxy_admin",
   user = "first-admin",
   license: { premium_user?: boolean | null | string } = { premium_user: true },
+  key = `sk-session-${user}`,
 ) {
   const encode = (value: object) =>
     btoa(JSON.stringify(value)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
   const claims = {
-    key: `sk-session-${user}`,
+    key,
     user_id: user,
     user_role: role,
     ...license,
@@ -81,6 +84,7 @@ function session(
   };
   const token = `${encode({ alg: "none" })}.${encode(claims)}.test`;
   document.cookie = `token=${token}; Path=/`;
+  signedInUser = { user_id: user, user_role: role };
   return token;
 }
 
@@ -134,6 +138,7 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
     const recorded = { url: request.url, headers: request.headers, body, signal: request.signal };
     const path = new URL(request.url).pathname;
     if (path.endsWith("/ui/litellm-runtime-config.json")) return json({});
+    if (path.endsWith("/management/v1/users/me")) return json({ ...signedInUser, user_email: null });
     requests.push(recorded);
     if (path.endsWith("/litellm-ui-config"))
       return json({ proxy_base_url: MANAGEMENT, server_root_path: "", admin_ui_disabled: false });
@@ -1018,7 +1023,7 @@ describe("LiteAdmin in the gateway", () => {
         settings.target = `${INFERENCE}/updated`;
         await act(async () => view.client.invalidateQueries({ queryKey: ["proxySettings"] }));
       } else {
-        session("proxy_admin_viewer");
+        session("proxy_admin_viewer", "first-admin", { premium_user: true }, "sk-session-first-admin-viewer");
         view.refresh();
         expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
         expect(screen.queryByRole("region", { name: "Ask LiteAdmin", hidden: true })).not.toBeInTheDocument();
