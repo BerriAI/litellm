@@ -3109,7 +3109,7 @@ def test_reload_keeps_cost_map_when_router_starts_with_no_model_list():
                     input_cost_per_token=input_cost,
                     output_cost_per_token=output_cost,
                 ),
-                model_info=ModelInfo(id=deployment_id),
+                model_info=ModelInfo(id=deployment_id, supports_reasoning=True),
             )
         )
 
@@ -3117,6 +3117,7 @@ def test_reload_keeps_cost_map_when_router_starts_with_no_model_list():
         assert deployment_id in litellm.model_cost
         assert litellm.model_cost[deployment_id]["input_cost_per_token"] == input_cost
         assert litellm.model_cost[deployment_id]["output_cost_per_token"] == output_cost
+        assert litellm.model_cost[deployment_id]["supports_reasoning"] is True
 
         _simulate_price_data_reload(copy.deepcopy(fetched_catalog))
 
@@ -3124,6 +3125,7 @@ def test_reload_keeps_cost_map_when_router_starts_with_no_model_list():
         assert deployment_id in litellm.model_cost
         assert litellm.model_cost[deployment_id]["input_cost_per_token"] == input_cost
         assert litellm.model_cost[deployment_id]["output_cost_per_token"] == output_cost
+        assert litellm.model_cost[deployment_id]["supports_reasoning"] is True
         assert router.model_list
     finally:
         litellm.model_cost = saved_catalog  # test-quality-ok: restore shared catalog after empty-init reload regression
