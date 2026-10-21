@@ -2167,6 +2167,130 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
             p.stop()
 
 
+def _group_lookup_outcomes() -> list:
+    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError
+
+    return [
+        pytest.param({"side_effect": AccessGroupNotFoundError("ag-1")}, id="group-deleted"),
+        pytest.param({"side_effect": RuntimeError("database unreachable")}, id="lookup-fails"),
+        pytest.param({"return_value": _fake_access_group("ag-1", access_model_names=[])}, id="group-grants-nothing"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", _group_lookup_outcomes())
+@pytest.mark.parametrize("model", ["gpt-4", "claude-sonnet"])
+async def test_group_restricted_key_is_denied_when_groups_cannot_be_loaded(lookup, model):
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    key = UserAPIKeyAuth(token="test-token", models=[], access_group_ids=["ag-1"])
+    patches = _patch_proxy_server_globals() + [
+        patch("litellm.proxy.auth.auth_checks.get_access_object", new_callable=AsyncMock, **lookup)
+    ]
+    for p in patches:
+        p.start()
+    try:
+        with pytest.raises(ProxyException) as denial:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=[],
+                valid_token=key,
+                llm_router=_router_deploying("gpt-4", "claude-sonnet"),
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert (denial.value.type, denial.value.code) == (ProxyErrorTypes.key_model_access_denied, "403")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", _group_lookup_outcomes())
+@pytest.mark.parametrize("model", ["gpt-4", "claude-sonnet"])
+async def test_group_restricted_team_is_denied_when_groups_cannot_be_loaded(lookup, model):
+    team = LiteLLM_TeamTable(team_id="test-team", models=[], access_group_ids=["ag-1"])
+    patches = _patch_proxy_server_globals() + [
+        patch("litellm.proxy.auth.auth_checks.get_access_object", new_callable=AsyncMock, **lookup)
+    ]
+    for p in patches:
+        p.start()
+    try:
+        with pytest.raises(ProxyException) as denial:
+            await can_team_access_model(
+                model=model, team_object=team, llm_router=_router_deploying("gpt-4", "claude-sonnet")
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert (denial.value.type, denial.value.code) == (ProxyErrorTypes.team_model_access_denied, "403")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("database unreachable"), "group-deleted"])
+@pytest.mark.parametrize("object_type", ["key", "team"])
+async def test_group_restricted_object_is_denied_when_one_of_its_groups_cannot_be_loaded(failure, object_type):
+    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError, can_key_call_model
+
+    async def lookup(access_group_id: str, **_: object):
+        if access_group_id == "ag-ok":
+            return _fake_access_group("ag-ok", access_model_names=["gpt-4"])
+        raise AccessGroupNotFoundError(access_group_id) if failure == "group-deleted" else failure
+
+    router = _router_deploying("gpt-4", "claude-sonnet")
+    patches = _patch_proxy_server_globals() + [
+        patch("litellm.proxy.auth.auth_checks.get_access_object", side_effect=lookup)
+    ]
+    for p in patches:
+        p.start()
+    try:
+        with pytest.raises(ProxyException) as denial:
+            if object_type == "key":
+                key = UserAPIKeyAuth(token="test-token", models=[], access_group_ids=["ag-ok", "ag-1"])
+                await can_key_call_model(model="gpt-4", llm_model_list=[], valid_token=key, llm_router=router)
+            else:
+                team = LiteLLM_TeamTable(team_id="test-team", models=[], access_group_ids=["ag-ok", "ag-1"])
+                await can_team_access_model(model="gpt-4", team_object=team, llm_router=router)
+    finally:
+        for p in patches:
+            p.stop()
+
+    expected_type = {
+        "key": ProxyErrorTypes.key_model_access_denied,
+        "team": ProxyErrorTypes.team_model_access_denied,
+    }[object_type]
+    assert (denial.value.type, denial.value.code) == (expected_type, "403")
+
+
+@pytest.mark.asyncio
+async def test_natively_restricted_key_whose_group_fallback_fails_gets_the_native_denial():
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    key = UserAPIKeyAuth(token="test-token", models=["gpt-4"], access_group_ids=["ag-1"])
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("database unreachable"),
+        )
+    ]
+    for p in patches:
+        p.start()
+    try:
+        with pytest.raises(ProxyException) as denial:
+            await can_key_call_model(
+                model="claude-sonnet",
+                llm_model_list=[],
+                valid_token=key,
+                llm_router=_router_deploying("gpt-4", "claude-sonnet"),
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert (denial.value.type, denial.value.code) == (ProxyErrorTypes.key_model_access_denied, "403")
+
+
 @pytest.fixture
 def db_success_hook() -> Iterator[AsyncMock]:
     hook: Final = AsyncMock()

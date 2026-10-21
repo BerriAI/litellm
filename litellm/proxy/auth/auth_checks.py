@@ -4702,6 +4702,8 @@ async def get_models_from_access_groups(
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    strict_errors: bool = False,
 ) -> list[str]:
     """
     Collect model names from unified access groups.
@@ -4713,6 +4715,7 @@ async def get_models_from_access_groups(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        strict_errors=strict_errors,
     )
 
 
@@ -5486,10 +5489,14 @@ async def _models_granted_by_groups_only(
     prisma_client: DatabaseClient | None,
     object_type: Literal["key", "team"],
 ) -> tuple[str, ...]:
-    models_from_groups: Final = await get_models_from_access_groups(
-        access_group_ids=access_group_ids,
-        prisma_client=prisma_client,
-    )
+    try:
+        models_from_groups: Final = await get_models_from_access_groups(
+            access_group_ids=access_group_ids,
+            prisma_client=prisma_client,
+            strict_errors=True,
+        )
+    except Exception:  # noqa: BLE001  # fail-closed: a group that cannot be loaded must deny, never widen access
+        _raise_model_access_denied(model=str(model), models=(), object_type=object_type)
     if models_from_groups:
         return tuple(models_from_groups)
     _raise_model_access_denied(model=str(model), models=(), object_type=object_type)
