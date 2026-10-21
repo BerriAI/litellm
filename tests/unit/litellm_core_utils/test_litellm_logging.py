@@ -42,6 +42,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsSpend,
     Logging,
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
@@ -400,6 +401,32 @@ def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
         global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
     ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
+class _InputEventRecorder(CustomLogger):
+    def __init__(self, label: str, events: list[str]) -> None:
+        self._label = label
+        self.events = events
+
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object) -> None:
+        self.events.append(f"{self._label} pre")
+
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.events.append(f"{self._label} post")
+
+
+def test_input_events_reach_the_replacement_and_not_the_global_callback_it_replaced(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[list[str]] = []
+    monkeypatch.setattr(litellm, "input_callback", [_InputEventRecorder("global", events)])
+    logging_obj.replace_global_callback(_InputEventRecorder("replacement", events))
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    logging_obj.pre_call(input="", api_key="")
+    logging_obj.post_call(original_response="ok", input="", api_key="")
+
+    assert events == ["replacement pre", "replacement post"]
 
 
 def test_get_masked_api_base(logging_obj):
@@ -1822,13 +1849,19 @@ def test_mark_logging_complete_flags_by_stream_and_event(
         "async_failure",
         "sync_failure",
     )
+    attempt_marker: Final = datetime_unit_test(2026, 1, 1)
     logging_obj.stream = stream
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = attempt_marker
 
     logging_obj.mark_logging_complete(event_type=event)
 
     expected_to_run: Final = stream and event in ("async_success", "sync_success")
     assert logging_obj.should_run_logging(event_type=event) is expected_to_run
     assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
+    if event == "async_failure":
+        assert logging_obj.model_call_details["async_failure_logged_attempt"] is attempt_marker
+    else:
+        assert "async_failure_logged_attempt" not in logging_obj.model_call_details
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -6809,6 +6842,26 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["status"] == "failure"
     assert payload["response_cost"] == 0
     assert payload["total_tokens"] == 0
+
+
+def test_failure_after_earlier_rounds_bills_only_the_failed_round_when_it_priced_no_breakdown(
+    logging_obj: LitellmLogging,
+) -> None:
+    earlier_breakdown: Final = CostBreakdown(total_cost=0.3, margin_fixed_amount=0.1)
+    logging_obj.cost_breakdown = earlier_breakdown
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    logging_obj.record_failure_after_earlier_rounds(
+        BilledRoundsSpend(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.3, earlier_breakdown),
+        Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7),
+        0.0,
+    )
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "anthropic", "claude"), "tb")
+
+    row: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (7, 0)
+    assert row["response_cost"] == pytest.approx(0.0)
+    assert row.get("cost_breakdown") is None or row["cost_breakdown"]["total_cost"] == pytest.approx(0.0)
 
 
 def test_set_cost_breakdown_stores_reasoning_cost():
