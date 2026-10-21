@@ -14,7 +14,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
+
+import { ModelCustomTags, type ModelCustomMetadataValue } from "./ModelCustomMetadata";
 
 export interface ModelHubData {
   model_group: string;
@@ -32,6 +35,8 @@ export interface ModelHubData {
   supported_openai_params?: string[];
   is_public_model_group: boolean;
   description?: string;
+  custom_tags?: string[] | null;
+  custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
   [key: string]: any;
 }
 
@@ -128,7 +133,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   },
   {
     id: "mode",
-    accessorKey: "mode",
+    accessorFn: (row) => (row.mode ? displayMode(row.mode) : ""),
     meta: { title: "Mode", className: "hidden lg:table-cell" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
     size: 110,
@@ -136,7 +141,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
     sortingFn: "alphanumeric",
     cell: ({ row }) =>
       row.original.mode ? (
-        <span className="font-mono text-xs text-muted-foreground">{row.original.mode}</span>
+        <span className="font-mono text-xs text-muted-foreground">{displayMode(row.original.mode)}</span>
       ) : (
         <span className="text-xs text-muted-foreground">-</span>
       ),
@@ -207,6 +212,20 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
           ))}
         </div>
       );
+    },
+  },
+  {
+    id: "custom_tags",
+    meta: { title: "Tags", skeleton: "chips" },
+    header: "Tags",
+    size: 160,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const tags = row.original.custom_tags ?? [];
+      if (tags.length === 0) {
+        return <span className="text-xs text-muted-foreground">-</span>;
+      }
+      return <ModelCustomTags tags={tags} />;
     },
   },
   {

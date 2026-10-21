@@ -10,6 +10,7 @@ from typing import Any, Final, Protocol, TypedDict
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -90,12 +91,9 @@ async def ollama_aembeddings(
     logging_obj: object,
     encoding: TokenEncoder | None,
 ):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
-
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = await litellm.module_level_aclient.post(url=api_base, json=data)
+    response: Final = await litellm.module_level_aclient.post(url=ensure_api_route(api_base, "api/embed"), json=data)
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
@@ -117,12 +115,9 @@ def ollama_embeddings(
     logging_obj: object,
     encoding: TokenEncoder | None = None,
 ):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
-
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = litellm.module_level_client.post(url=api_base, json=data)
+    response: Final = litellm.module_level_client.post(url=ensure_api_route(api_base, "api/embed"), json=data)
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(

@@ -631,16 +631,23 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "probe" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(
-            scenario, peer, alias, auth_type="none", oauth_passthrough=True, extra_headers=["Authorization"]
+            scenario,
+            peer,
+            alias,
+            auth_type="none",
+            oauth_passthrough=True,
+            extra_headers=["Authorization", "x-integration-caller"],
         )
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         upstream_token: Final = "upstream-" + uuid.uuid4().hex
+        caller_trace: Final = "caller-" + uuid.uuid4().hex
         caller: Final = McpCaller(
             gateway,
             key,
             entry,
             alias,
             headers={
+                "x-integration-caller": caller_trace,
                 "Authorization": f"Bearer {upstream_token if forwarded_token else key}",
                 f"x-mcp-{alias}-authorization": "Bearer expired-token"
                 if forwarded_token
@@ -651,15 +658,28 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(
         outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry != "server_mcp" else None)
         assert outcome.ok, outcome.raw
         observed: Final = peer.drain()
+        forwarded: Final = f"Bearer {upstream_token}".encode()
         probes: Final = tuple(
             request
             for request in observed
             if TypeAdapter(dict[str, object]).validate_python(request["body"]).get("id") == "litellm-mcp-auth-probe"
         )
         assert probes, "expected an upstream initialize authentication probe"
-        assert all(_header(probe, b"authorization") == f"Bearer {upstream_token}".encode() for probe in probes)
+        assert all(_header(probe, b"authorization") == forwarded for probe in probes)
+        callers_own: Final = tuple(
+            request for request in observed if _header(request, b"x-integration-caller") == caller_trace.encode()
+        )
         assert len(tool_calls(observed)) == 1
-        assert all(_header(request, b"authorization") == f"Bearer {upstream_token}".encode() for request in observed)
+        assert len(tool_calls(callers_own)) == 1, "the tool call lost the caller's forwarded headers"
+        attributed: Final = probes + callers_own
+        foreign: Final = tuple(request for request in attributed if _header(request, b"authorization") != forwarded)
+        assert foreign == (), foreign
+        credentialed_background: Final = tuple(
+            request
+            for request in observed
+            if request not in attributed and _header(request, b"authorization") is not None
+        )
+        assert credentialed_background == (), credentialed_background
         header_sets: Final = tuple(
             TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
         )

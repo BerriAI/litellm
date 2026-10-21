@@ -6,6 +6,7 @@ import click
 import rich
 
 from ...http_client import HTTPClient
+from .auth import cli_context_obj
 
 
 @click.group()
@@ -39,7 +40,7 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
         lite encryption migrate --check   # attestation scan, no writes
         lite encryption migrate           # perform the migration
     """
-    client: Final = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = HTTPClient(cli_context_obj(ctx)["base_url"], ctx.obj["api_key"])
 
     if check_only:
         response = client.request("GET", "/credentials/migrate-encryption/check")

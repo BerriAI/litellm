@@ -1,11 +1,13 @@
 import base64
+import builtins
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -15,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
 )
@@ -34,12 +37,16 @@ from litellm.types.utils import (
     Function,
     FunctionCall,
     LlmProviders,
+    Logprobs,
+    Message,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
+    TextChoices,
     TextCompletionResponse,
+    UnreportedUsage,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
@@ -117,6 +124,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    provider_specific_fields: ReadOnly[Mapping[str, builtins.object] | None]
     service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
@@ -152,6 +160,15 @@ class _ToolCallChoice(TypedDict, total=False):
 
 
 _ToolCallKey: TypeAlias = tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallAccumulator:
+    id: str | None = None
+    name: str | None = None
+    type: str | None = None
+    custom_name: str | None = None
+    provider_specific_fields: Mapping[str, object] | None = None
 
 
 class _ToolCallChunk(TypedDict):
@@ -421,6 +438,11 @@ class ChunkProcessor:
                 "model": model,
                 "system_fingerprint": system_fingerprint,
                 **(
+                    {"provider_specific_fields": chunks[0].get("provider_specific_fields")}
+                    if system_fingerprint == "fp_ollama"
+                    else {}
+                ),
+                **(
                     MappingProxyType({"service_tier": service_tier})
                     if service_tier is not None
                     else MappingProxyType({})
@@ -503,7 +525,7 @@ class ChunkProcessor:
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
     ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
         tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
-        tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
+        tool_call_map: Final[dict[_ToolCallKey, _ToolCallAccumulator]] = {}
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -537,49 +559,43 @@ class ChunkProcessor:
                         index = (choice_index, getattr(tool_call, "index", 0))
 
                     if index not in tool_call_map:
-                        tool_call_map[index] = {
-                            "id": None,
-                            "name": None,
-                            "type": None,
-                            "custom_name": None,
-                            "provider_specific_fields": None,
-                        }
+                        tool_call_map[index] = _ToolCallAccumulator()
 
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
                         if fragment_id := tool_call.get("id"):
-                            tool_call_map[index]["id"] = fragment_id
+                            tool_call_map[index] = replace(tool_call_map[index], id=fragment_id)
                         if fragment_type := tool_call.get("type"):
-                            tool_call_map[index]["type"] = fragment_type
+                            tool_call_map[index] = replace(tool_call_map[index], type=fragment_type)
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
                             if fragment_name := function.get("name"):
-                                tool_call_map[index]["name"] = fragment_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=fragment_name)
                         else:
                             # function is an object
                             if function_name := getattr(function, "name", None):
-                                tool_call_map[index]["name"] = function_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=function_name)
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom_name := custom.get("name"):
-                                tool_call_map[index]["custom_name"] = custom_name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=custom_name)
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
-                            tool_call_map[index]["id"] = tool_call.id
+                            tool_call_map[index] = replace(tool_call_map[index], id=tool_call.id)
                         if hasattr(tool_call, "type") and tool_call.type:
-                            tool_call_map[index]["type"] = tool_call.type
+                            tool_call_map[index] = replace(tool_call_map[index], type=tool_call.type)
                         if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
-                            tool_call_map[index]["name"] = object_function_name
+                            tool_call_map[index] = replace(tool_call_map[index], name=object_function_name)
 
                         object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
                             tool_call, "custom", None
                         )
                         if object_custom is not None:
                             if getattr(object_custom, "name", None):
-                                tool_call_map[index]["custom_name"] = object_custom.name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=object_custom.name)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields: object = None
@@ -602,12 +618,14 @@ class ChunkProcessor:
 
                     if provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
-                        merged_provider_fields = tool_call_map[index]["provider_specific_fields"]
-                        if merged_provider_fields is None:
-                            merged_provider_fields = {}
-                            tool_call_map[index]["provider_specific_fields"] = merged_provider_fields
-                        if isinstance(provider_fields, dict):
-                            merged_provider_fields.update(provider_fields)
+                        tool_call_map[index] = replace(
+                            tool_call_map[index],
+                            provider_specific_fields=(
+                                {**(tool_call_map[index].provider_specific_fields or {}), **provider_fields}
+                                if isinstance(provider_fields, dict)
+                                else dict(tool_call_map[index].provider_specific_fields or {})
+                            ),
+                        )
 
         joined_fragments: Final = self._join_fragments_by_key_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)
@@ -616,37 +634,37 @@ class ChunkProcessor:
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
-            if tool_call_data["id"] and tool_call_data["custom_name"]:
+            if tool_call_data.id and tool_call_data.custom_name:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
-                        id=tool_call_data["id"],
+                        id=tool_call_data.id,
                         custom=ChatCompletionCustomToolCallPayload(
-                            name=tool_call_data["custom_name"],
+                            name=tool_call_data.custom_name,
                             input=joined_fragments.get((index, "custom_input"), ""),
                         ),
                     )
                 )
-            elif tool_call_data["id"] and tool_call_data["name"]:
+            elif tool_call_data.id and tool_call_data.name:
                 combined_arguments = joined_fragments.get((index, "arguments"), "") or "{}"
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
-                    name=tool_call_data["name"],
+                    name=tool_call_data.name,
                 )
 
                 # Prepare params for ChatCompletionMessageToolCall
-                tool_call_params = {
-                    "id": tool_call_data["id"],
-                    "function": function,
-                    "type": tool_call_data["type"] or "function",
-                }
-
                 # Add provider_specific_fields if present (for thought signatures in Gemini 3)
-                if tool_call_data.get("provider_specific_fields"):
-                    tool_call_params["provider_specific_fields"] = tool_call_data["provider_specific_fields"]
-
-                tool_call = ChatCompletionMessageToolCall(**tool_call_params)
+                tool_call = ChatCompletionMessageToolCall(
+                    id=tool_call_data.id,
+                    function=function,
+                    type=tool_call_data.type or "function",
+                    **(
+                        {"provider_specific_fields": dict(tool_call_data.provider_specific_fields)}
+                        if tool_call_data.provider_specific_fields
+                        else {}
+                    ),
+                )
                 tool_calls_list.append(tool_call)
 
         return tool_calls_list
@@ -844,7 +862,9 @@ class ChunkProcessor:
         return reasoning_tokens
 
     @staticmethod
-    def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
+    def extract_usage_chunk(
+        chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream | TextCompletionResponse",
+    ) -> Usage | None:
         usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
@@ -857,6 +877,8 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
+        if isinstance(usage_chunk, UnreportedUsage):
+            return None
         if usage_chunk is None or isinstance(usage_chunk, Usage):
             return usage_chunk
         return Usage(**usage_chunk.model_dump())
@@ -903,7 +925,7 @@ class ChunkProcessor:
         cost: float | None = None
 
         for chunk in chunks:
-            usage_chunk = self._extract_usage_chunk(chunk)
+            usage_chunk = self.extract_usage_chunk(chunk)
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
@@ -1000,7 +1022,7 @@ class ChunkProcessor:
         values: Final = [
             value
             for chunk in chunks
-            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            if (usage_chunk := self.extract_usage_chunk(chunk)) is not None
             and isinstance(value := getattr(usage_chunk, field, None), str)
         ]
         return values[-1] if values else None
@@ -1073,7 +1095,7 @@ class ChunkProcessor:
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         model: str,
         completion_output: str,
-        messages: Sequence | None = None,
+        messages: Sequence[object] | None = None,
         reasoning_tokens: int | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
     ) -> Usage:
@@ -1186,7 +1208,7 @@ class ChunkProcessor:
         return returned_usage
 
 
-def concatenate_base64_list(base64_strings: list[str]) -> str:
+def concatenate_base64_list(base64_strings: Sequence[str]) -> str:
     """
     Concatenates a list of base64-encoded strings.
 
@@ -1203,35 +1225,115 @@ def concatenate_base64_list(base64_strings: list[str]) -> str:
     return base64.b64encode(combined_bytes).decode("utf-8")
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
-    id: Final = chunks[0]["id"]
-    object: Final = chunks[0]["object"]
-    created: Final = chunks[0]["created"]
-    model: Final = chunks[0]["model"]
-    system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
-    finish_reason: Final = chunks[-1]["choices"][0]["finish_reason"]
-    logprobs: Final = chunks[-1]["choices"][0]["logprobs"]
+_CHOICE_DICTS: Final = TypeAdapter(list[dict[str, object]])
 
-    content_list: Final = []
-    for chunk in chunks:
-        choices = chunk["choices"]
-        for choice in choices:
-            if choice is not None and hasattr(choice, "text") and choice.get("text") is not None:
-                _choice = choice.get("text")
-                content_list.append(_choice)
 
-    # Combine the "content" strings into a single string || combine the 'function' strings into a single string
-    combined_content: Final = "".join(content_list)
-
+def _text_completion_chunk_from_mapping(chunk: Mapping[str, object]) -> TextCompletionResponse:
     try:
-        prompt_tokens = token_counter(model=model, messages=messages)
-    except Exception:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose("token_counter failed, assuming prompt tokens is 0")
-        prompt_tokens = 0
-    completion_tokens: Final = token_counter(
-        model=model,
-        text=combined_content,
-        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+        return TextCompletionResponse.model_validate(chunk)
+    except ValidationError:
+        choices: Final = _CHOICE_DICTS.validate_python(chunk.get("choices", []))
+        return TextCompletionResponse.model_validate(
+            {**chunk, "choices": [{**choice, "logprobs": None} for choice in choices]}
+        )
+
+
+def _as_text_completion_chunk(
+    chunk: TextCompletionResponse | ModelResponseStream | Mapping[str, object],
+) -> TextCompletionResponse:
+    if isinstance(chunk, TextCompletionResponse):
+        return chunk
+    if isinstance(chunk, ModelResponseStream):
+        return TextCompletionResponse(
+            id=chunk.id,
+            created=chunk.created,
+            model=chunk.model,
+            choices=[TextChoices(index=choice.index, finish_reason=choice.finish_reason) for choice in chunk.choices],
+            usage=ChunkProcessor.extract_usage_chunk(chunk),
+        )
+    return _text_completion_chunk_from_mapping(chunk)
+
+
+_LogprobsValue: Final = TypeVar("_LogprobsValue")
+
+
+def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_LogprobsValue] | None:
+    sent: Final = tuple(field for field in fields if field is not None)
+    return list(chain.from_iterable(sent)) if sent else None
+
+
+class _CarriesLogprobs(Protocol):
+    @property
+    def logprobs(self) -> object: ...
+
+
+def _sent_logprobs(choice: _CarriesLogprobs) -> object:
+    return choice.logprobs
+
+
+def _merged_logprobs(choices: Sequence[TextChoices]) -> object:
+    sent: Final = tuple(logprobs for logprobs in map(_sent_logprobs, choices) if logprobs is not None)
+    parts: Final = tuple(logprobs for logprobs in sent if isinstance(logprobs, Logprobs))
+    if len(parts) < len(sent):
+        return sent[-1]
+    if not parts:
+        return None
+    return Logprobs(
+        text_offset=_joined_or_none(part.text_offset for part in parts),
+        token_logprobs=_joined_or_none(part.token_logprobs for part in parts),
+        tokens=_joined_or_none(part.tokens for part in parts),
+        top_logprobs=_joined_or_none(part.top_logprobs for part in parts),
+    )
+
+
+def _text_of(choice: TextChoices) -> str:
+    return choice.text if isinstance(choice.text, str) else ""
+
+
+def _index_of(choice: TextChoices) -> int:
+    try:
+        return int(choice.index or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoices:
+    return TextChoices(
+        text="".join(map(_text_of, choices)),
+        index=index,
+        logprobs=_merged_logprobs(choices),
+        finish_reason=next((choice.finish_reason for choice in reversed(choices) if choice.finish_reason), None),
+    )
+
+
+def _reported_usage(chunk: TextCompletionResponse) -> Usage | None:
+    usage: Final = ChunkProcessor.extract_usage_chunk(chunk)
+    return usage if usage is not None and (usage.prompt_tokens or usage.completion_tokens) else None
+
+
+def stream_chunk_builder_text_completion(
+    chunks: Sequence[TextCompletionResponse | ModelResponseStream | Mapping[str, object]],
+    messages: Sequence[AllMessageValues | Message] | None = None,
+) -> TextCompletionResponse:
+    text_chunks: Final = tuple(_as_text_completion_chunk(chunk) for chunk in chunks)
+    id: Final = text_chunks[0].id
+    object: Final = text_chunks[0].object
+    created: Final = text_chunks[0].created
+    model: Final = text_chunks[0].model
+    system_fingerprint: Final = text_chunks[0].get("system_fingerprint", None)
+    all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
+    choices: Final = [
+        _rebuilt_text_choice(index, tuple(group))
+        for index, group in groupby(sorted(all_choices, key=_index_of), key=_index_of)
+    ] or [_rebuilt_text_choice(0, ())]
+    combined_content: Final = "".join(map(_text_of, choices))
+
+    reported_usages: Final = tuple(reported for reported in map(_reported_usage, text_chunks) if reported is not None)
+    usage: Final = ChunkProcessor(list(text_chunks), messages).calculate_usage(
+        chunks=tuple(_UsageBearingChunk(usage=reported) for reported in reported_usages),
+        model=model or "",
+        completion_output=combined_content,
+        messages=messages,
     )
 
     response: Final = {
@@ -1240,19 +1342,8 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
         "created": created,
         "model": model,
         "system_fingerprint": system_fingerprint,
-        "choices": [
-            {
-                "text": combined_content,
-                "index": 0,
-                "logprobs": logprobs,
-                "finish_reason": finish_reason,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "choices": choices,
+        "usage": usage,
     }
     return TextCompletionResponse(**response)
 
@@ -1300,12 +1391,16 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
         return None
 
 
+def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> None:
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
     if response_cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
-    hidden_params["response_cost"] = response_cost
+    _set_hidden_response_cost(response, response_cost)
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
@@ -1314,14 +1409,35 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
-        setattr(usage, "cost", computed_cost)
+    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+        return
+    setattr(usage, "cost", computed_cost)
+    _set_hidden_response_cost(response, float(computed_cost))
+
+
+def _field_of(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
+def _delta_reasoning_items(delta: object) -> Sequence[object]:
+    items: Final = _field_of(delta, "reasoning_items")
+    return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    choices: Final = _field_of(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
     "reasoning_content",
+    "reasoning_items",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1378,9 +1494,14 @@ def stream_chunk_builder(
             return None
         ## Route to the text completion logic
         first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), None)
-        if first_chunk_with_choices is not None and isinstance(
-            first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
-        ):  # route to the text completion logic
+        if first_chunk_with_choices is not None and (
+            isinstance(first_chunk_with_choices["choices"][0], TextChoices)
+            or (
+                isinstance(first_chunk_with_choices["choices"][0], Mapping)
+                and "text" in first_chunk_with_choices["choices"][0]
+                and "delta" not in first_chunk_with_choices["choices"][0]
+            )
+        ):
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
@@ -1497,6 +1618,11 @@ def stream_chunk_builder(
             response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
                 reasoning_chunks
             )
+
+        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+        if reasoning_items:
+            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 
         annotation_chunks: Final = [
             chunk

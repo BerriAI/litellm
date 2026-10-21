@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -196,7 +196,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             aws_region_name=self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=aws_region_name),
             endpoint_type="agent",
         )
-        return f"{endpoint_url}/knowledgebases"
+        return join_api_base(endpoint_url, "knowledgebases")
 
     def transform_search_vector_store_request(
         self,
@@ -212,7 +212,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
+        url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
         request_body: Final[dict[str, object]] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),

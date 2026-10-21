@@ -1366,10 +1366,8 @@ def vertex_client():
 @pytest.fixture
 def encoded_images():
     image_paths = [
-        "./tests/llm_translation/duck.png",
-        # "./duck.png",
-        "./tests/llm_translation/guinea.png",
-        # "./guinea.png",
+        "./tests/unit/llms/vertex_ai/fixtures/duck.png",
+        "./tests/unit/llms/vertex_ai/fixtures/guinea.png",
     ]
     return [encode_image_to_base64(path) for path in image_paths]
 
@@ -1816,8 +1814,8 @@ def test_gemini_nullable_object_tool_schema_httpx(
             "type": "object",
             "required": ["source"],
             "properties": {"source": {"type": "string"}},
+            "nullable": True,
         },
-        {"type": "null"},
     ]
 
 

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +27,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.langsmith import *
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+_RUN_RESPONSE: Final = TypeAdapter(object)
 
 
 def is_serializable(value):
@@ -524,7 +526,7 @@ class LangsmithLogger(CustomBatchLogger):
             # If we can't get an event loop, create a new one
             asyncio.run(self.async_send_batch())
 
-    def get_run_by_id(self, run_id):
+    def get_run_by_id(self, run_id) -> object:
         langsmith_api_key: Final = self.default_credentials["LANGSMITH_API_KEY"]
         langsmith_api_base: Final = self.default_credentials["LANGSMITH_BASE_URL"]
         langsmith_tenant_id: Final = self.default_credentials.get("LANGSMITH_TENANT_ID")
@@ -538,7 +540,7 @@ class LangsmithLogger(CustomBatchLogger):
             headers=headers,
         )
 
-        return response.json()
+        return _RUN_RESPONSE.validate_python(response.json())
 
     def make_dot_order(self, run_id: str):
         st: Final = datetime.now(timezone.utc)

@@ -5,12 +5,51 @@ setting ``base_model`` should drive model-type detection (o-series, gpt-5,
 etc.) so the correct config, supported params, and param mapping are used.
 """
 
+from typing import Final
+
+import httpx
+import openai
 import pytest
 
 import litellm
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.utils import ProviderConfigManager, get_optional_params
+from tests.unit.llms.bedrock.slow_upstream import STREAM_TIMEOUT_SECONDS, slow_upstream_transport
+
+_O3_STREAM_ANSWER: Final = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"o3",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("azure/chat", "azure/o3"), ("azure/gpt4o-pro1", "azure/gpt-4o")],
+    ids=["o3_base_model_streams_natively", "o_series_looking_deployment_of_a_non_o_series_base_model"],
+)
+def test_live_stream_on_a_deployment_named_apart_from_its_base_model_keeps_its_stream_timeout(
+    model: str, base_model: str
+) -> None:
+    client: Final = openai.AzureOpenAI(
+        api_key="test-key",
+        api_version="2024-12-01-preview",
+        azure_endpoint="https://example.openai.azure.com",
+        max_retries=0,
+        http_client=httpx.Client(transport=slow_upstream_transport(_O3_STREAM_ANSWER)),
+    )
+
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(
+            model=model,
+            base_model=base_model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            stream_timeout=STREAM_TIMEOUT_SECONDS,
+            timeout=30.0,
+            client=client,
+        )
 
 
 # ---------------------------------------------------------------------------
